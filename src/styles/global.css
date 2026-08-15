@@ -33,9 +33,11 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
+  gap: 1.5rem;
   padding: 2rem;
+}
+
+.app-header {
   text-align: center;
 }
 
@@ -50,4 +52,138 @@ body {
   color: var(--text-secondary);
   margin: 0;
   max-width: 32rem;
+}
+
+.parser,
+.roster,
+.warnings {
+  width: 100%;
+  max-width: 56rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  text-align: left;
+}
+
+.section-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  color: var(--text);
+}
+
+.hint {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}
+
+.paste-area {
+  width: 100%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.paste-area:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.meta {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.badge {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 0.2rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.warnings ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.grid-head,
+.grid-row {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(7, 1fr) 0.8fr;
+  gap: 2px;
+}
+
+.cell {
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+  min-height: 2.2rem;
+  display: flex;
+  align-items: center;
+}
+
+.cell.head {
+  color: var(--text-secondary);
+  font-weight: 600;
+  justify-content: center;
+}
+
+.cell.name {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+}
+
+.cell .role {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.cell.shift {
+  justify-content: center;
+  color: var(--text);
+}
+
+.cell.shift.bar {
+  background: #3a2f1f;
+  color: #e5c98a;
+}
+
+.cell.shift.kitchen {
+  background: #2a2f24;
+  color: #a8c98a;
+}
+
+.cell.shift.service {
+  background: #24303a;
+  color: #8ab8e5;
+}
+
+.cell.shift.other {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.cell.hours {
+  justify-content: flex-end;
+  color: var(--accent);
+  font-weight: 600;
 }
