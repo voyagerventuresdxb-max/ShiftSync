@@ -1,0 +1,1108 @@
+﻿node.exe : npm verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm verbose cli...\bin\npm-cli.js:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm info using npm@11.17.0
+npm info using node@v24.19.0
+npm silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+npm silly config load:file:C:\dev\ShiftSync\.npmrc
+npm silly config load:file:C:\Users\khloe\.npmrc
+npm silly config load:file:C:\Users\khloe\AppData\Roaming\npm\etc\npmrc
+npm verbose title npm install agent-reach
+npm verbose argv "install" "--save-dev" "agent-reach" "--no-audit" "--no-fund" "--loglevel" "silly" "--fetch-timeout" 
+"60000"
+npm verbose logfile logs-max:10 dir:C:\Users\khloe\AppData\Local\npm-cache\_logs\2026-08-15T11_12_35_380Z-
+npm verbose logfile C:\Users\khloe\AppData\Local\npm-cache\_logs\2026-08-15T11_12_35_380Z-debug-0.log
+npm silly logfile start cleaning logs, removing 1 files
+npm silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+npm silly logfile done cleaning log files
+npm silly idealTree buildDeps
+npm silly fetch manifest agent-reach@*
+npm silly packumentCache full:https://registry.npmjs.org/agent-reach cache-miss
+npm verbose shrinkwrap failed to load node_modules/.package-lock.json out of date, updated: node_modules
+npm http cache https://registry.npmjs.org/agent-reach 60ms (cache hit)
+npm silly packumentCache full:https://registry.npmjs.org/agent-reach set size:19262 disposed:false
+npm silly fetch manifest openclaw@>=2026.1.0
+npm silly packumentCache full:https://registry.npmjs.org/openclaw cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/openclaw 2304ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/openclaw set size:16278889 disposed:false
+npm silly placeDep ROOT agent-reach@0.3.4 OK for: shiftsync@0.1.0 want: *
+npm silly placeDep ROOT openclaw@2026.7.1 OK for: agent-reach@0.3.4 want: >=2026.1.0
+npm silly fetch manifest nostr-tools@^2.10.4
+npm silly packumentCache full:https://registry.npmjs.org/nostr-tools cache-miss
+npm silly fetch manifest ws@8.21.0
+npm silly packumentCache full:https://registry.npmjs.org/ws cache-miss
+npm silly fetch manifest tar@7.5.19
+npm silly packumentCache full:https://registry.npmjs.org/tar cache-miss
+npm silly fetch manifest zod@4.4.3
+npm silly packumentCache full:https://registry.npmjs.org/zod cache-miss
+npm silly fetch manifest diff@9.0.0
+npm silly packumentCache full:https://registry.npmjs.org/diff cache-miss
+npm silly fetch manifest glob@13.0.6
+npm silly packumentCache full:https://registry.npmjs.org/glob cache-miss
+npm silly fetch manifest jiti@2.7.0
+npm silly packumentCache full:https://registry.npmjs.org/jiti cache-miss
+npm silly fetch manifest chalk@5.6.2
+npm silly packumentCache full:https://registry.npmjs.org/chalk cache-miss
+npm silly fetch manifest jszip@3.10.1
+npm silly packumentCache full:https://registry.npmjs.org/jszip cache-miss
+npm silly fetch manifest tslog@4.10.2
+npm silly packumentCache full:https://registry.npmjs.org/tslog cache-miss
+npm silly fetch manifest croner@10.0.1
+npm silly packumentCache full:https://registry.npmjs.org/croner cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/chalk 2300ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/chalk set size:134775 disposed:false
+npm silly fetch manifest dotenv@17.4.2
+npm silly packumentCache full:https://registry.npmjs.org/dotenv cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/zod 2324ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/zod set size:3721026 disposed:false
+npm silly fetch manifest grammy@1.44.0
+npm silly packumentCache full:https://registry.npmjs.org/grammy cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/tar 2371ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/tar set size:591769 disposed:false
+npm silly fetch manifest ignore@7.0.5
+npm silly packumentCache full:https://registry.npmjs.org/ignore cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/glob 2392ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/glob set size:469465 disposed:false
+npm silly fetch manifest kysely@0.29.2
+npm silly packumentCache full:https://registry.npmjs.org/kysely cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/jszip 2406ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/jszip set size:98327 disposed:false
+npm silly fetch manifest openai@6.45.0
+npm silly packumentCache full:https://registry.npmjs.org/openai cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/jiti 2428ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/jiti set size:387989 disposed:false
+npm silly fetch manifest qrcode@1.5.4
+npm silly packumentCache full:https://registry.npmjs.org/qrcode cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/diff 2448ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/diff set size:154400 disposed:false
+npm silly fetch manifest undici@8.5.0
+npm silly packumentCache full:https://registry.npmjs.org/undici cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/ws 2465ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/ws set size:447661 disposed:false
+npm silly fetch manifest clawpdf@0.3.0
+npm silly packumentCache full:https://registry.npmjs.org/clawpdf cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/nostr-tools 2521ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/nostr-tools set size:901512 disposed:false
+npm silly fetch manifest typebox@1.3.3
+npm silly packumentCache full:https://registry.npmjs.org/typebox cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/dotenv 263ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/dotenv set size:277802 disposed:false
+npm silly fetch manifest chokidar@5.0.0
+npm silly packumentCache full:https://registry.npmjs.org/chokidar cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/ignore 212ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/ignore set size:240910 disposed:false
+npm silly fetch manifest linkedom@0.18.12
+npm silly packumentCache full:https://registry.npmjs.org/linkedom cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/tslog 2607ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/tslog set size:645166 disposed:false
+npm silly fetch manifest web-push@3.6.7
+npm silly packumentCache full:https://registry.npmjs.org/web-push cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/undici 185ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/undici set size:1531430 disposed:false
+npm silly fetch manifest commander@15.0.0
+npm silly packumentCache full:https://registry.npmjs.org/commander cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/croner 2657ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/croner set size:728690 disposed:false
+npm silly fetch manifest file-type@22.0.1
+npm silly packumentCache full:https://registry.npmjs.org/file-type cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/chokidar 122ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/chokidar set size:255902 disposed:false
+npm silly fetch manifest minimatch@10.2.5
+npm silly packumentCache full:https://registry.npmjs.org/minimatch cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/file-type 43ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/file-type set size:562034 disposed:false
+npm silly fetch manifest rastermill@0.3.1
+npm silly packumentCache full:https://registry.npmjs.org/rastermill cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/commander 77ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/commander set size:353115 disposed:false
+npm silly fetch manifest typescript@6.0.3
+npm silly packumentCache full:https://registry.npmjs.org/typescript cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/minimatch 56ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/minimatch set size:377924 disposed:false
+npm silly fetch manifest @clack/core@1.4.2
+npm silly packumentCache full:https://registry.npmjs.org/@clack%2fcore cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/typescript 78ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/typescript set size:15555816 disposed:false
+npm silly fetch manifest @openclaw/ai@2026.7.1
+npm silly packumentCache full:https://registry.npmjs.org/@openclaw%2fai cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/qrcode 499ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/qrcode set size:131489 disposed:false
+npm silly fetch manifest highlight.js@11.11.1
+npm silly packumentCache full:https://registry.npmjs.org/highlight.js cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/clawpdf 467ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/clawpdf set size:13491 disposed:false
+npm silly fetch manifest partial-json@0.1.7
+npm silly packumentCache full:https://registry.npmjs.org/partial-json cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/grammy 615ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/grammy set size:422751 disposed:false
+npm silly fetch manifest quickjs-wasi@3.0.2
+npm silly packumentCache full:https://registry.npmjs.org/quickjs-wasi cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/kysely 574ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/kysely set size:737388 disposed:false
+npm silly fetch manifest @google/genai@2.10.0
+npm silly packumentCache full:https://registry.npmjs.org/@google%2fgenai cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/openai 572ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/openai set size:4990507 disposed:false
+npm silly fetch manifest node-edge-tts@1.2.10
+npm silly packumentCache full:https://registry.npmjs.org/node-edge-tts cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/typebox 508ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/typebox set size:483302 disposed:false
+npm silly fetch manifest @clack/prompts@1.6.0
+npm silly packumentCache full:https://registry.npmjs.org/@clack%2fprompts cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/web-push 424ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/web-push set size:126295 disposed:false
+npm silly fetch manifest hosted-git-info@10.1.1
+npm silly packumentCache full:https://registry.npmjs.org/hosted-git-info cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/linkedom 457ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/linkedom set size:1008627 disposed:false
+npm silly fetch manifest playwright-core@1.61.1
+npm silly packumentCache full:https://registry.npmjs.org/playwright-core cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/rastermill 371ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/rastermill set size:15652 disposed:false
+npm silly fetch manifest proper-lockfile@4.1.2
+npm silly packumentCache full:https://registry.npmjs.org/proper-lockfile cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@clack%2fcore 347ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@clack%2fcore set size:146938 disposed:false
+npm silly fetch manifest web-tree-sitter@0.26.10
+npm silly packumentCache full:https://registry.npmjs.org/web-tree-sitter cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/highlight.js 193ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/highlight.js set size:1253828 disposed:false
+npm silly fetch manifest @grammyjs/runner@2.0.3
+npm silly packumentCache full:https://registry.npmjs.org/@grammyjs%2frunner cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/playwright-core 149ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/playwright-core set size:18332794 disposed:false
+npm silly fetch manifest @homebridge/ciao@1.3.9
+npm silly packumentCache full:https://registry.npmjs.org/@homebridge%2fciao cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/web-tree-sitter 228ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/web-tree-sitter set size:194002 disposed:false
+npm silly fetch manifest @lydell/node-pty@1.2.0-beta.12
+npm silly packumentCache full:https://registry.npmjs.org/@lydell%2fnode-pty cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@google%2fgenai 379ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@google%2fgenai set size:538949 disposed:false
+npm silly fetch manifest tree-sitter-bash@0.25.1
+npm silly packumentCache full:https://registry.npmjs.org/tree-sitter-bash cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/node-edge-tts 400ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/node-edge-tts set size:36689 disposed:false
+npm silly fetch manifest @anthropic-ai/sdk@0.109.1
+npm silly packumentCache full:https://registry.npmjs.org/@anthropic-ai%2fsdk cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/partial-json 462ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/partial-json set size:22637 disposed:false
+npm silly fetch manifest @openclaw/fs-safe@0.4.1
+npm silly packumentCache full:https://registry.npmjs.org/@openclaw%2ffs-safe cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/quickjs-wasi 458ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/quickjs-wasi set size:106473 disposed:false
+npm silly fetch manifest @openclaw/proxyline@0.3.3
+npm silly packumentCache full:https://registry.npmjs.org/@openclaw%2fproxyline cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/hosted-git-info 378ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/hosted-git-info set size:190140 disposed:false
+npm silly fetch manifest @mistralai/mistralai@2.4.0
+npm silly packumentCache full:https://registry.npmjs.org/@mistralai%2fmistralai cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@clack%2fprompts 400ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@clack%2fprompts set size:176111 disposed:false
+npm silly fetch manifest @mozilla/readability@0.6.0
+npm silly packumentCache full:https://registry.npmjs.org/@mozilla%2freadability cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/proper-lockfile 359ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/proper-lockfile set size:82421 disposed:false
+npm silly fetch manifest @earendil-works/pi-tui@0.80.3
+npm silly packumentCache full:https://registry.npmjs.org/@earendil-works%2fpi-tui cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@anthropic-ai%2fsdk 96ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@anthropic-ai%2fsdk set size:1000648 disposed:false
+npm silly fetch manifest @agentclientprotocol/sdk@1.1.0
+npm silly packumentCache full:https://registry.npmjs.org/@agentclientprotocol%2fsdk cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@lydell%2fnode-pty 215ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@lydell%2fnode-pty set size:36432 disposed:false
+npm silly fetch manifest @modelcontextprotocol/sdk@1.29.0
+npm silly packumentCache full:https://registry.npmjs.org/@modelcontextprotocol%2fsdk cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/tree-sitter-bash 343ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/tree-sitter-bash set size:100896 disposed:false
+npm silly fetch manifest @silvia-odwyer/photon-node@0.3.4
+npm silly packumentCache full:https://registry.npmjs.org/@silvia-odwyer%2fphoton-node cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@grammyjs%2frunner 597ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@grammyjs%2frunner set size:47308 disposed:false
+npm silly fetch manifest @grammyjs/transformer-throttler@1.2.1
+npm silly packumentCache full:https://registry.npmjs.org/@grammyjs%2ftransformer-throttler cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@modelcontextprotocol%2fsdk 206ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@modelcontextprotocol%2fsdk set size:302290 disposed:false
+npm silly fetch manifest sqlite-vec@0.1.9
+npm silly packumentCache full:https://registry.npmjs.org/sqlite-vec cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@homebridge%2fciao 748ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@homebridge%2fciao set size:651032 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/sqlite-vec 328ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/sqlite-vec set size:139261 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@mozilla%2freadability 721ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@mozilla%2freadability set size:33244 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@openclaw%2ffs-safe 755ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@openclaw%2ffs-safe set size:145724 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@openclaw%2fproxyline 753ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@openclaw%2fproxyline set size:32554 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@earendil-works%2fpi-tui 736ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@earendil-works%2fpi-tui set size:125180 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@openclaw%2fai 1324ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@openclaw%2fai set size:54280 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@mistralai%2fmistralai 769ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@mistralai%2fmistralai set size:203924 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@agentclientprotocol%2fsdk 704ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@agentclientprotocol%2fsdk set size:175431 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@grammyjs%2ftransformer-throttler 602ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@grammyjs%2ftransformer-throttler set size:30520 
+disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@silvia-odwyer%2fphoton-node 717ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@silvia-odwyer%2fphoton-node set size:23128 disposed:false
+npm silly fetch manifest @agntcy/slim-bindings-linux-arm64-musl@2.0.0-alpha.5
+npm silly packumentCache full:https://registry.npmjs.org/@agntcy%2fslim-bindings-linux-arm64-musl cache-miss
+npm http fetch GET 404 https://registry.npmjs.org/@agntcy%2fslim-bindings-linux-arm64-musl 17ms (cache skip)
+npm silly fetch manifest @agntcy/slim-bindings-linux-x64-musl@2.0.0-alpha.5
+npm silly packumentCache full:https://registry.npmjs.org/@agntcy%2fslim-bindings-linux-x64-musl cache-miss
+npm http fetch GET 404 https://registry.npmjs.org/@agntcy%2fslim-bindings-linux-x64-musl 21ms (cache skip)
+npm silly fetch manifest @agntcy/slim-bindings-win32-x64-gnu@2.0.0-alpha.5
+npm silly packumentCache full:https://registry.npmjs.org/@agntcy%2fslim-bindings-win32-x64-gnu cache-miss
+npm http fetch GET 404 https://registry.npmjs.org/@agntcy%2fslim-bindings-win32-x64-gnu 23ms (cache skip)
+npm silly placeDep node_modules/@agntcy/slim-bindings @agntcy/slim-bindings-linux-arm64-musl@ OK for: 
+@agntcy/slim-bindings@2.0.0-alpha.5 want: 2.0.0-alpha.5
+npm silly placeDep node_modules/@agntcy/slim-bindings @agntcy/slim-bindings-linux-x64-musl@ OK for: 
+@agntcy/slim-bindings@2.0.0-alpha.5 want: 2.0.0-alpha.5
+npm silly placeDep node_modules/@agntcy/slim-bindings @agntcy/slim-bindings-win32-x64-gnu@ OK for: 
+@agntcy/slim-bindings@2.0.0-alpha.5 want: 2.0.0-alpha.5
+npm silly fetch manifest typescript@>=5.0.0
+npm silly packumentCache full:https://registry.npmjs.org/typescript cache-miss
+npm http cache https://registry.npmjs.org/typescript 67ms (cache hit)
+npm silly packumentCache full:https://registry.npmjs.org/typescript set size:15555816 disposed:false
+npm silly placeDep ROOT nostr-tools@2.24.1 OK for: agent-reach@0.3.4 want: ^2.10.4
+npm silly fetch manifest @noble/ciphers@2.1.1
+npm silly packumentCache full:https://registry.npmjs.org/@noble%2fciphers cache-miss
+npm silly fetch manifest @noble/curves@2.0.1
+npm silly packumentCache full:https://registry.npmjs.org/@noble%2fcurves cache-miss
+npm silly fetch manifest @noble/hashes@2.0.1
+npm silly packumentCache full:https://registry.npmjs.org/@noble%2fhashes cache-miss
+npm silly fetch manifest @scure/base@2.0.0
+npm silly packumentCache full:https://registry.npmjs.org/@scure%2fbase cache-miss
+npm silly fetch manifest @scure/bip32@2.0.1
+npm silly packumentCache full:https://registry.npmjs.org/@scure%2fbip32 cache-miss
+npm silly fetch manifest @scure/bip39@2.0.1
+npm silly packumentCache full:https://registry.npmjs.org/@scure%2fbip39 cache-miss
+npm silly fetch manifest nostr-wasm@0.1.0
+npm silly packumentCache full:https://registry.npmjs.org/nostr-wasm cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/@noble%2fcurves 69ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@noble%2fcurves set size:319075 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@noble%2fhashes 186ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@noble%2fhashes set size:221571 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@noble%2fciphers 210ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@noble%2fciphers set size:129040 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/nostr-wasm 352ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/nostr-wasm set size:9467 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@scure%2fbip39 709ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@scure%2fbip39 set size:71624 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@scure%2fbase 727ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@scure%2fbase set size:70806 disposed:false
+npm http fetch GET 200 https://registry.npmjs.org/@scure%2fbip32 731ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/@scure%2fbip32 set size:72741 disposed:false
+npm silly placeDep ROOT @noble/ciphers@2.1.1 OK for: nostr-tools@2.24.1 want: 2.1.1
+npm silly placeDep ROOT @noble/curves@2.0.1 OK for: nostr-tools@2.24.1 want: 2.0.1
+npm silly placeDep ROOT @noble/hashes@2.0.1 OK for: nostr-tools@2.24.1 want: 2.0.1
+npm silly placeDep ROOT @scure/base@2.0.0 OK for: nostr-tools@2.24.1 want: 2.0.0
+npm silly placeDep ROOT @scure/bip32@2.0.1 OK for: nostr-tools@2.24.1 want: 2.0.1
+npm silly placeDep ROOT @scure/bip39@2.0.1 OK for: nostr-tools@2.24.1 want: 2.0.1
+npm silly placeDep ROOT nostr-wasm@0.1.0 OK for: nostr-tools@2.24.1 want: 0.1.0
+npm silly fetch manifest jose@^5.0.0
+npm silly packumentCache full:https://registry.npmjs.org/jose cache-miss
+npm http fetch GET 200 https://registry.npmjs.org/jose 49ms (cache revalidated)
+npm silly packumentCache full:https://registry.npmjs.org/jose set size:1446624 disposed:false
+npm silly placeDep node_modules/agentic-flow jose@5.10.0 OK for: fastmcp@3.35.0 want: ^5.0.0
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\agent-reach' ]
+npm silly reify mark retired [
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\openclaw',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\.bin\\openclaw',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\.bin\\openclaw.cmd',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\.bin\\openclaw.ps1'
+npm silly reify ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\nostr-tools' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\nostr-wasm' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\@noble\\hashes' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\@noble\\ciphers' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\@scure\\bip32' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\@scure\\base' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\@scure\\bip39' ]
+npm silly reify mark retired [ 'C:\\dev\\ShiftSync\\node_modules\\@noble\\curves' ]
+npm silly reify moves {
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\agent-reach': 
+'C:\\dev\\ShiftSync\\node_modules\\.agent-reach-FSJMBQl5',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\openclaw': 'C:\\dev\\ShiftSync\\node_modules\\.openclaw-UUTI3lqd',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\.bin\\openclaw': 
+'C:\\dev\\ShiftSync\\node_modules\\.bin\\.openclaw-SWDclrSm',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\.bin\\openclaw.cmd': 
+'C:\\dev\\ShiftSync\\node_modules\\.bin\\.openclaw.cmd-NY1B2p7A',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\.bin\\openclaw.ps1': 
+'C:\\dev\\ShiftSync\\node_modules\\.bin\\.openclaw.ps1-qcTLSz18',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\nostr-tools': 
+'C:\\dev\\ShiftSync\\node_modules\\.nostr-tools-Kuhh5cMZ',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\nostr-wasm': 
+'C:\\dev\\ShiftSync\\node_modules\\.nostr-wasm-gOv6Hh5N',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\@noble\\hashes': 
+'C:\\dev\\ShiftSync\\node_modules\\@noble\\.hashes-fTOcGn2M',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\@noble\\ciphers': 
+'C:\\dev\\ShiftSync\\node_modules\\@noble\\.ciphers-YuQWDCo8',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\@scure\\bip32': 
+'C:\\dev\\ShiftSync\\node_modules\\@scure\\.bip32-NG1kHxyX',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\@scure\\base': 
+'C:\\dev\\ShiftSync\\node_modules\\@scure\\.base-nuwS8tFP',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\@scure\\bip39': 
+'C:\\dev\\ShiftSync\\node_modules\\@scure\\.bip39-qrn5Qp2s',
+npm silly reify   'C:\\dev\\ShiftSync\\node_modules\\@noble\\curves': 
+'C:\\dev\\ShiftSync\\node_modules\\@noble\\.curves-OytM5AGp'
+npm silly reify }
+npm http cache openclaw@https://registry.npmjs.org/openclaw/-/openclaw-2026.7.1.tgz 0ms (cache hit)
+npm http cache @noble/ciphers@https://registry.npmjs.org/@noble/ciphers/-/ciphers-2.1.1.tgz 0ms (cache hit)
+npm http cache @scure/bip39@https://registry.npmjs.org/@scure/bip39/-/bip39-2.0.1.tgz 0ms (cache hit)
+npm http cache @scure/base@https://registry.npmjs.org/@scure/base/-/base-2.0.0.tgz 0ms (cache hit)
+npm http cache @noble/curves@https://registry.npmjs.org/@noble/curves/-/curves-2.0.1.tgz 0ms (cache hit)
+npm http cache @scure/bip32@https://registry.npmjs.org/@scure/bip32/-/bip32-2.0.1.tgz 0ms (cache hit)
+npm http cache @noble/hashes@https://registry.npmjs.org/@noble/hashes/-/hashes-2.0.1.tgz 0ms (cache hit)
+npm http cache @protobufjs/utf8@https://registry.npmjs.org/@protobufjs/utf8/-/utf8-1.1.1.tgz 0ms (cache hit)
+npm http cache nostr-wasm@https://registry.npmjs.org/nostr-wasm/-/nostr-wasm-0.1.0.tgz 0ms (cache hit)
+npm http cache agent-reach@https://registry.npmjs.org/agent-reach/-/agent-reach-0.3.4.tgz 0ms (cache hit)
+npm http cache nostr-tools@https://registry.npmjs.org/nostr-tools/-/nostr-tools-2.24.1.tgz 0ms (cache hit)
+npm http cache @types/node@https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz 0ms (cache hit)
+npm http cache @types/retry@https://registry.npmjs.org/@types/retry/-/retry-0.12.5.tgz 0ms (cache hit)
+npm http cache @tokenizer/token@https://registry.npmjs.org/@tokenizer/token/-/token-0.3.0.tgz 0ms (cache hit)
+npm http cache @tokenizer/inflate@https://registry.npmjs.org/@tokenizer/inflate/-/inflate-0.4.1.tgz 0ms (cache hit)
+npm http cache @protobufjs/fetch@https://registry.npmjs.org/@protobufjs/fetch/-/fetch-1.1.1.tgz 0ms (cache hit)
+npm http cache @protobufjs/path@https://registry.npmjs.org/@protobufjs/path/-/path-1.1.2.tgz 0ms (cache hit)
+npm http cache 
+@silvia-odwyer/photon-node@https://registry.npmjs.org/@silvia-odwyer/photon-node/-/photon-node-0.3.4.tgz 0ms (cache 
+hit)
+npm http cache @openclaw/fs-safe@https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.1.tgz 0ms (cache hit)
+npm http cache @stablelib/base64@https://registry.npmjs.org/@stablelib/base64/-/base64-1.0.1.tgz 0ms (cache hit)
+npm http cache @protobufjs/aspromise@https://registry.npmjs.org/@protobufjs/aspromise/-/aspromise-1.1.2.tgz 0ms (cache 
+hit)
+npm http cache @protobufjs/codegen@https://registry.npmjs.org/@protobufjs/codegen/-/codegen-2.0.5.tgz 0ms (cache hit)
+npm http cache @protobufjs/pool@https://registry.npmjs.org/@protobufjs/pool/-/pool-1.1.0.tgz 0ms (cache hit)
+npm http cache @protobufjs/inquire@https://registry.npmjs.org/@protobufjs/inquire/-/inquire-1.1.2.tgz 0ms (cache hit)
+npm http cache @openclaw/proxyline@https://registry.npmjs.org/@openclaw/proxyline/-/proxyline-0.3.3.tgz 0ms (cache hit)
+npm http cache @protobufjs/eventemitter@https://registry.npmjs.org/@protobufjs/eventemitter/-/eventemitter-1.1.1.tgz 
+0ms (cache hit)
+npm http cache @protobufjs/float@https://registry.npmjs.org/@protobufjs/float/-/float-1.0.2.tgz 0ms (cache hit)
+npm http cache @opentelemetry/semantic-conventions@https://registry.npmjs.org/@opentelemetry/semantic-conventions/-/sem
+antic-conventions-1.41.1.tgz 0ms (cache hit)
+npm http cache @openclaw/ai@https://registry.npmjs.org/@openclaw/ai/-/ai-2026.7.1.tgz 0ms (cache hit)
+npm http cache @mistralai/mistralai@https://registry.npmjs.org/@mistralai/mistralai/-/mistralai-2.4.0.tgz 0ms (cache 
+hit)
+npm http cache @modelcontextprotocol/sdk@https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.29.0.tgz 0ms 
+(cache hit)
+npm http cache @isaacs/fs-minipass@https://registry.npmjs.org/@isaacs/fs-minipass/-/fs-minipass-4.0.1.tgz 0ms (cache 
+hit)
+npm http cache @mozilla/readability@https://registry.npmjs.org/@mozilla/readability/-/readability-0.6.0.tgz 0ms (cache 
+hit)
+npm http cache @lydell/node-pty-win32-arm64@https://registry.npmjs.org/@lydell/node-pty-win32-arm64/-/node-pty-win32-ar
+m64-1.2.0-beta.12.tgz 1ms (cache hit)
+npm http cache @hono/node-server@https://registry.npmjs.org/@hono/node-server/-/node-server-1.19.14.tgz 0ms (cache hit)
+npm http cache @lydell/node-pty-win32-x64@https://registry.npmjs.org/@lydell/node-pty-win32-x64/-/node-pty-win32-x64-1.
+2.0-beta.12.tgz 0ms (cache hit)
+npm http cache @lydell/node-pty-darwin-x64@https://registry.npmjs.org/@lydell/node-pty-darwin-x64/-/node-pty-darwin-x64
+-1.2.0-beta.12.tgz 0ms (cache hit)
+npm http cache @protobufjs/base64@https://registry.npmjs.org/@protobufjs/base64/-/base64-1.1.2.tgz 0ms (cache hit)
+npm http cache @lydell/node-pty-linux-x64@https://registry.npmjs.org/@lydell/node-pty-linux-x64/-/node-pty-linux-x64-1.
+2.0-beta.12.tgz 0ms (cache hit)
+npm http cache @homebridge/ciao@https://registry.npmjs.org/@homebridge/ciao/-/ciao-1.3.9.tgz 0ms (cache hit)
+npm http cache @lydell/node-pty@https://registry.npmjs.org/@lydell/node-pty/-/node-pty-1.2.0-beta.12.tgz 0ms (cache 
+hit)
+npm http cache @lydell/node-pty-linux-arm64@https://registry.npmjs.org/@lydell/node-pty-linux-arm64/-/node-pty-linux-ar
+m64-1.2.0-beta.12.tgz 0ms (cache hit)
+npm http cache @lydell/node-pty-darwin-arm64@https://registry.npmjs.org/@lydell/node-pty-darwin-arm64/-/node-pty-darwin
+-arm64-1.2.0-beta.12.tgz 0ms (cache hit)
+npm http cache zod-to-json-schema@https://registry.npmjs.org/zod-to-json-schema/-/zod-to-json-schema-3.25.2.tgz 0ms 
+(cache hit)
+npm http cache @agentclientprotocol/sdk@https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-1.1.0.tgz 0ms (cache 
+hit)
+npm http cache @grammyjs/transformer-throttler@https://registry.npmjs.org/@grammyjs/transformer-throttler/-/transformer
+-throttler-1.2.1.tgz 0ms (cache hit)
+npm http cache @grammyjs/types@https://registry.npmjs.org/@grammyjs/types/-/types-3.28.0.tgz 0ms (cache hit)
+npm http cache @google/genai@https://registry.npmjs.org/@google/genai/-/genai-2.10.0.tgz 0ms (cache hit)
+npm http cache @borewit/text-codec@https://registry.npmjs.org/@borewit/text-codec/-/text-codec-0.2.2.tgz 0ms (cache 
+hit)
+npm http cache @clack/core@https://registry.npmjs.org/@clack/core/-/core-1.4.2.tgz 0ms (cache hit)
+npm http cache @grammyjs/runner@https://registry.npmjs.org/@grammyjs/runner/-/runner-2.0.3.tgz 0ms (cache hit)
+npm http cache @earendil-works/pi-tui@https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.3.tgz 0ms (cache 
+hit)
+npm http cache @babel/runtime@https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.7.tgz 0ms (cache hit)
+npm http cache @clack/prompts@https://registry.npmjs.org/@clack/prompts/-/prompts-1.6.0.tgz 0ms (cache hit)
+npm http cache @anthropic-ai/sdk@https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.109.1.tgz 0ms (cache hit)
+npm http cache yallist@https://registry.npmjs.org/yallist/-/yallist-5.0.0.tgz 0ms (cache hit)
+npm http cache zod@https://registry.npmjs.org/zod/-/zod-4.4.3.tgz 0ms (cache hit)
+npm http cache y18n@https://registry.npmjs.org/y18n/-/y18n-5.0.8.tgz 0ms (cache hit)
+npm http cache yargs@https://registry.npmjs.org/yargs/-/yargs-17.7.3.tgz 0ms (cache hit)
+npm http cache yargs-parser@https://registry.npmjs.org/yargs-parser/-/yargs-parser-21.1.1.tgz 0ms (cache hit)
+npm http cache yaml@https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz 0ms (cache hit)
+npm http cache ws@https://registry.npmjs.org/ws/-/ws-8.21.0.tgz 0ms (cache hit)
+npm http cache which-module@https://registry.npmjs.org/which-module/-/which-module-2.0.1.tgz 0ms (cache hit)
+npm http cache wrap-ansi@https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-7.0.0.tgz 0ms (cache hit)
+npm http cache which@https://registry.npmjs.org/which/-/which-2.0.2.tgz 0ms (cache hit)
+npm http cache whatwg-url@https://registry.npmjs.org/whatwg-url/-/whatwg-url-5.0.0.tgz 0ms (cache hit)
+npm http cache web-tree-sitter@https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.26.10.tgz 0ms (cache hit)
+npm http cache webidl-conversions@https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-3.0.1.tgz 0ms 
+(cache hit)
+npm http cache undici@https://registry.npmjs.org/undici/-/undici-8.5.0.tgz 0ms (cache hit)
+npm http cache web-push@https://registry.npmjs.org/web-push/-/web-push-3.6.7.tgz 0ms (cache hit)
+npm http cache undici-types@https://registry.npmjs.org/undici-types/-/undici-types-8.3.0.tgz 0ms (cache hit)
+npm http cache wrappy@https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz 0ms (cache hit)
+npm http cache util-deprecate@https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz 0ms (cache hit)
+npm http cache content-type@https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz 0ms (cache hit)
+npm http cache unpipe@https://registry.npmjs.org/unpipe/-/unpipe-1.0.0.tgz 0ms (cache hit)
+npm http cache web-streams-polyfill@https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-3.3.3.tgz 
+0ms (cache hit)
+npm http cache vary@https://registry.npmjs.org/vary/-/vary-1.1.2.tgz 0ms (cache hit)
+npm http cache type-is@https://registry.npmjs.org/type-is/-/type-is-2.1.0.tgz 0ms (cache hit)
+npm http cache tar@https://registry.npmjs.org/tar/-/tar-7.5.19.tgz 0ms (cache hit)
+npm http cache uhyphen@https://registry.npmjs.org/uhyphen/-/uhyphen-0.2.0.tgz 0ms (cache hit)
+npm http cache uint8array-extras@https://registry.npmjs.org/uint8array-extras/-/uint8array-extras-1.5.0.tgz 0ms (cache 
+hit)
+npm http cache typescript@https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz 0ms (cache hit)
+npm http cache tr46@https://registry.npmjs.org/tr46/-/tr46-0.0.3.tgz 0ms (cache hit)
+npm http cache tslog@https://registry.npmjs.org/tslog/-/tslog-4.10.2.tgz 0ms (cache hit)
+npm http cache toidentifier@https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz 0ms (cache hit)
+npm http cache safe-buffer@https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz 0ms (cache hit)
+npm http cache typebox@https://registry.npmjs.org/typebox/-/typebox-1.3.3.tgz 0ms (cache hit)
+npm http cache strip-ansi@https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz 0ms (cache hit)
+npm http cache tslib@https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz 0ms (cache hit)
+npm http cache ts-algebra@https://registry.npmjs.org/ts-algebra/-/ts-algebra-2.0.0.tgz 0ms (cache hit)
+npm http cache token-types@https://registry.npmjs.org/token-types/-/token-types-6.1.2.tgz 0ms (cache hit)
+npm http cache strtok3@https://registry.npmjs.org/strtok3/-/strtok3-10.3.5.tgz 0ms (cache hit)
+npm http cache string_decoder@https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz 0ms (cache hit)
+npm http cache string-width@https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz 0ms (cache hit)
+npm http cache tree-sitter-bash@https://registry.npmjs.org/tree-sitter-bash/-/tree-sitter-bash-0.25.1.tgz 0ms (cache 
+hit)
+npm http cache sqlite-vec-linux-x64@https://registry.npmjs.org/sqlite-vec-linux-x64/-/sqlite-vec-linux-x64-0.1.9.tgz 
+0ms (cache hit)
+npm http cache standardwebhooks@https://registry.npmjs.org/standardwebhooks/-/standardwebhooks-1.0.0.tgz 0ms (cache 
+hit)
+npm http cache 
+sqlite-vec-windows-x64@https://registry.npmjs.org/sqlite-vec-windows-x64/-/sqlite-vec-windows-x64-0.1.9.tgz 0ms (cache 
+hit)
+npm http cache statuses@https://registry.npmjs.org/statuses/-/statuses-2.0.2.tgz 0ms (cache hit)
+npm http cache 
+sqlite-vec-darwin-arm64@https://registry.npmjs.org/sqlite-vec-darwin-arm64/-/sqlite-vec-darwin-arm64-0.1.9.tgz 0ms 
+(cache hit)
+npm http cache 
+sqlite-vec-darwin-x64@https://registry.npmjs.org/sqlite-vec-darwin-x64/-/sqlite-vec-darwin-x64-0.1.9.tgz 0ms (cache 
+hit)
+npm http cache sqlite-vec@https://registry.npmjs.org/sqlite-vec/-/sqlite-vec-0.1.9.tgz 0ms (cache hit)
+npm http cache 
+sqlite-vec-linux-arm64@https://registry.npmjs.org/sqlite-vec-linux-arm64/-/sqlite-vec-linux-arm64-0.1.9.tgz 0ms (cache 
+hit)
+npm http cache side-channel-map@https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz 0ms (cache 
+hit)
+npm http cache source-map@https://registry.npmjs.org/source-map/-/source-map-0.6.1.tgz 0ms (cache hit)
+npm http cache side-channel@https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz 0ms (cache hit)
+npm http cache source-map-support@https://registry.npmjs.org/source-map-support/-/source-map-support-0.5.21.tgz 0ms 
+(cache hit)
+npm http cache signal-exit@https://registry.npmjs.org/signal-exit/-/signal-exit-3.0.7.tgz 0ms (cache hit)
+npm http cache side-channel-list@https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.1.tgz 0ms (cache 
+hit)
+npm http cache sisteransi@https://registry.npmjs.org/sisteransi/-/sisteransi-1.0.5.tgz 0ms (cache hit)
+npm http cache side-channel-weakmap@https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz 
+0ms (cache hit)
+npm http cache shebang-regex@https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz 0ms (cache hit)
+npm http cache send@https://registry.npmjs.org/send/-/send-1.2.1.tgz 0ms (cache hit)
+npm http cache shebang-command@https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz 0ms (cache hit)
+npm http cache setimmediate@https://registry.npmjs.org/setimmediate/-/setimmediate-1.0.5.tgz 0ms (cache hit)
+npm http cache set-blocking@https://registry.npmjs.org/set-blocking/-/set-blocking-2.0.0.tgz 0ms (cache hit)
+npm http cache setprototypeof@https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz 0ms (cache hit)
+npm http cache router@https://registry.npmjs.org/router/-/router-2.2.0.tgz 0ms (cache hit)
+npm http cache 
+require-main-filename@https://registry.npmjs.org/require-main-filename/-/require-main-filename-2.0.0.tgz 0ms (cache 
+hit)
+npm http cache quickjs-wasi@https://registry.npmjs.org/quickjs-wasi/-/quickjs-wasi-3.0.2.tgz 0ms (cache hit)
+npm http cache safe-buffer@https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz 0ms (cache hit)
+npm http cache safe-buffer@https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz 0ms (cache hit)
+npm http cache readdirp@https://registry.npmjs.org/readdirp/-/readdirp-5.0.0.tgz 0ms (cache hit)
+npm http cache safer-buffer@https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz 0ms (cache hit)
+npm http cache require-from-string@https://registry.npmjs.org/require-from-string/-/require-from-string-2.0.2.tgz 0ms 
+(cache hit)
+npm http cache serve-static@https://registry.npmjs.org/serve-static/-/serve-static-2.2.1.tgz 0ms (cache hit)
+npm http cache range-parser@https://registry.npmjs.org/range-parser/-/range-parser-1.3.0.tgz 0ms (cache hit)
+npm http cache require-directory@https://registry.npmjs.org/require-directory/-/require-directory-2.1.1.tgz 0ms (cache 
+hit)
+npm http cache yargs@https://registry.npmjs.org/yargs/-/yargs-15.4.1.tgz 0ms (cache hit)
+npm http cache yargs-parser@https://registry.npmjs.org/yargs-parser/-/yargs-parser-18.1.3.tgz 0ms (cache hit)
+npm http cache retry@https://registry.npmjs.org/retry/-/retry-0.13.1.tgz 0ms (cache hit)
+npm http cache wrap-ansi@https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-6.2.0.tgz 0ms (cache hit)
+npm http cache readable-stream@https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz 0ms (cache hit)
+npm http cache qrcode@https://registry.npmjs.org/qrcode/-/qrcode-1.5.4.tgz 0ms (cache hit)
+npm http cache y18n@https://registry.npmjs.org/y18n/-/y18n-4.0.3.tgz 0ms (cache hit)
+npm http cache cliui@https://registry.npmjs.org/cliui/-/cliui-6.0.0.tgz 0ms (cache hit)
+npm http cache qs@https://registry.npmjs.org/qs/-/qs-6.15.2.tgz 0ms (cache hit)
+npm http cache retry@https://registry.npmjs.org/retry/-/retry-0.12.0.tgz 0ms (cache hit)
+npm http cache rastermill@https://registry.npmjs.org/rastermill/-/rastermill-0.3.1.tgz 0ms (cache hit)
+npm http cache raw-body@https://registry.npmjs.org/raw-body/-/raw-body-3.0.2.tgz 0ms (cache hit)
+npm http cache proper-lockfile@https://registry.npmjs.org/proper-lockfile/-/proper-lockfile-4.1.2.tgz 0ms (cache hit)
+npm http cache process-nextick-args@https://registry.npmjs.org/process-nextick-args/-/process-nextick-args-2.0.1.tgz 
+0ms (cache hit)
+npm http cache proxy-addr@https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.7.tgz 0ms (cache hit)
+npm http cache path-scurry@https://registry.npmjs.org/path-scurry/-/path-scurry-2.0.2.tgz 0ms (cache hit)
+npm http cache protobufjs@https://registry.npmjs.org/protobufjs/-/protobufjs-7.6.3.tgz 0ms (cache hit)
+npm http cache pkce-challenge@https://registry.npmjs.org/pkce-challenge/-/pkce-challenge-5.0.1.tgz 0ms (cache hit)
+npm http cache playwright-core@https://registry.npmjs.org/playwright-core/-/playwright-core-1.61.1.tgz 0ms (cache hit)
+npm http cache pngjs@https://registry.npmjs.org/pngjs/-/pngjs-5.0.0.tgz 0ms (cache hit)
+npm http cache partial-json@https://registry.npmjs.org/partial-json/-/partial-json-0.1.7.tgz 0ms (cache hit)
+npm http cache path-to-regexp@https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-8.4.0.tgz 0ms (cache hit)
+npm http cache path-key@https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz 0ms (cache hit)
+npm http cache pako@https://registry.npmjs.org/pako/-/pako-1.0.11.tgz 0ms (cache hit)
+npm http cache path-exists@https://registry.npmjs.org/path-exists/-/path-exists-4.0.0.tgz 0ms (cache hit)
+npm http cache p-locate@https://registry.npmjs.org/p-locate/-/p-locate-4.1.0.tgz 0ms (cache hit)
+npm http cache p-try@https://registry.npmjs.org/p-try/-/p-try-2.2.0.tgz 0ms (cache hit)
+npm http cache object-assign@https://registry.npmjs.org/object-assign/-/object-assign-4.1.1.tgz 0ms (cache hit)
+npm http cache node-addon-api@https://registry.npmjs.org/node-addon-api/-/node-addon-api-8.9.0.tgz 0ms (cache hit)
+npm http cache p-retry@https://registry.npmjs.org/p-retry/-/p-retry-4.6.2.tgz 0ms (cache hit)
+npm http cache p-limit@https://registry.npmjs.org/p-limit/-/p-limit-2.3.0.tgz 0ms (cache hit)
+npm http cache parseurl@https://registry.npmjs.org/parseurl/-/parseurl-1.3.3.tgz 0ms (cache hit)
+npm http cache openai@https://registry.npmjs.org/openai/-/openai-6.45.0.tgz 0ms (cache hit)
+npm http cache once@https://registry.npmjs.org/once/-/once-1.4.0.tgz 0ms (cache hit)
+npm http cache on-finished@https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz 0ms (cache hit)
+npm http cache nth-check@https://registry.npmjs.org/nth-check/-/nth-check-2.1.1.tgz 0ms (cache hit)
+npm http cache minizlib@https://registry.npmjs.org/minizlib/-/minizlib-3.1.0.tgz 0ms (cache hit)
+npm http cache node-edge-tts@https://registry.npmjs.org/node-edge-tts/-/node-edge-tts-1.2.10.tgz 0ms (cache hit)
+npm http cache minipass@https://registry.npmjs.org/minipass/-/minipass-7.1.3.tgz 0ms (cache hit)
+npm http cache object-inspect@https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz 0ms (cache hit)
+npm http cache node-gyp-build@https://registry.npmjs.org/node-gyp-build/-/node-gyp-build-4.8.4.tgz 0ms (cache hit)
+npm http cache minimatch@https://registry.npmjs.org/minimatch/-/minimatch-10.2.5.tgz 0ms (cache hit)
+npm http cache negotiator@https://registry.npmjs.org/negotiator/-/negotiator-1.0.0.tgz 0ms (cache hit)
+npm http cache node-fetch@https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz 0ms (cache hit)
+npm http cache node-domexception@https://registry.npmjs.org/@nolyfill/domexception/-/domexception-1.0.28.tgz 0ms 
+(cache hit)
+npm http cache mime-types@https://registry.npmjs.org/mime-types/-/mime-types-3.0.2.tgz 0ms (cache hit)
+npm http cache ms@https://registry.npmjs.org/ms/-/ms-2.1.3.tgz 0ms (cache hit)
+npm http cache linkedom@https://registry.npmjs.org/linkedom/-/linkedom-0.18.12.tgz 0ms (cache hit)
+npm http cache minimist@https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz 0ms (cache hit)
+npm http cache minimalistic-assert@https://registry.npmjs.org/minimalistic-assert/-/minimalistic-assert-1.0.1.tgz 0ms 
+(cache hit)
+npm http cache mime-db@https://registry.npmjs.org/mime-db/-/mime-db-1.54.0.tgz 0ms (cache hit)
+npm http cache merge-descriptors@https://registry.npmjs.org/merge-descriptors/-/merge-descriptors-2.0.0.tgz 0ms (cache 
+hit)
+npm http cache media-typer@https://registry.npmjs.org/media-typer/-/media-typer-1.1.0.tgz 0ms (cache hit)
+npm http cache long@https://registry.npmjs.org/long/-/long-5.3.2.tgz 0ms (cache hit)
+npm http cache jose@https://registry.npmjs.org/jose/-/jose-6.2.3.tgz 0ms (cache hit)
+npm http cache marked@https://registry.npmjs.org/marked/-/marked-18.0.5.tgz 0ms (cache hit)
+npm http cache math-intrinsics@https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz 0ms (cache hit)
+npm http cache lru-cache@https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz 0ms (cache hit)
+npm http cache locate-path@https://registry.npmjs.org/locate-path/-/locate-path-5.0.0.tgz 0ms (cache hit)
+npm http cache jws@https://registry.npmjs.org/jws/-/jws-4.0.1.tgz 0ms (cache hit)
+npm http cache lie@https://registry.npmjs.org/lie/-/lie-3.3.0.tgz 0ms (cache hit)
+npm http cache json-schema-typed@https://registry.npmjs.org/json-schema-typed/-/json-schema-typed-8.0.2.tgz 0ms (cache 
+hit)
+npm http cache json5@https://registry.npmjs.org/json5/-/json5-2.2.3.tgz 0ms (cache hit)
+npm http cache kysely@https://registry.npmjs.org/kysely/-/kysely-0.29.2.tgz 0ms (cache hit)
+npm http cache jiti@https://registry.npmjs.org/jiti/-/jiti-2.7.0.tgz 0ms (cache hit)
+npm http cache jwa@https://registry.npmjs.org/jwa/-/jwa-2.0.1.tgz 0ms (cache hit)
+npm http cache json-schema-traverse@https://registry.npmjs.org/json-schema-traverse/-/json-schema-traverse-1.0.0.tgz 
+0ms (cache hit)
+npm http cache jszip@https://registry.npmjs.org/jszip/-/jszip-3.10.1.tgz 0ms (cache hit)
+npm http cache isarray@https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz 0ms (cache hit)
+npm http cache isexe@https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz 0ms (cache hit)
+npm http cache json-schema-to-ts@https://registry.npmjs.org/json-schema-to-ts/-/json-schema-to-ts-3.1.1.tgz 0ms (cache 
+hit)
+npm http cache inherits@https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz 0ms (cache hit)
+npm http cache json-bigint@https://registry.npmjs.org/json-bigint/-/json-bigint-1.0.0.tgz 0ms (cache hit)
+npm http cache entities@https://registry.npmjs.org/entities/-/entities-7.0.1.tgz 0ms (cache hit)
+npm http cache is-promise@https://registry.npmjs.org/is-promise/-/is-promise-4.0.0.tgz 0ms (cache hit)
+npm http cache ieee754@https://registry.npmjs.org/ieee754/-/ieee754-1.2.1.tgz 0ms (cache hit)
+npm http cache ip-address@https://registry.npmjs.org/ip-address/-/ip-address-10.2.0.tgz 0ms (cache hit)
+npm http cache htmlparser2@https://registry.npmjs.org/htmlparser2/-/htmlparser2-10.1.0.tgz 0ms (cache hit)
+npm http cache ipaddr.js@https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz 0ms (cache hit)
+npm http cache immediate@https://registry.npmjs.org/immediate/-/immediate-3.0.6.tgz 0ms (cache hit)
+npm http cache ignore@https://registry.npmjs.org/ignore/-/ignore-7.0.5.tgz 0ms (cache hit)
+npm http cache hono@https://registry.npmjs.org/hono/-/hono-4.12.25.tgz 0ms (cache hit)
+npm http cache iconv-lite@https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.7.2.tgz 0ms (cache hit)
+npm http cache hosted-git-info@https://registry.npmjs.org/hosted-git-info/-/hosted-git-info-10.1.1.tgz 0ms (cache hit)
+npm http cache 
+is-fullwidth-code-point@https://registry.npmjs.org/is-fullwidth-code-point/-/is-fullwidth-code-point-3.0.0.tgz 0ms 
+(cache hit)
+npm http cache https-proxy-agent@https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz 0ms (cache 
+hit)
+npm http cache http_ece@https://registry.npmjs.org/http_ece/-/http_ece-1.2.0.tgz 0ms (cache hit)
+npm http cache highlight.js@https://registry.npmjs.org/highlight.js/-/highlight.js-11.11.1.tgz 0ms (cache hit)
+npm http cache http-errors@https://registry.npmjs.org/http-errors/-/http-errors-2.0.1.tgz 0ms (cache hit)
+npm http cache html-escaper@https://registry.npmjs.org/html-escaper/-/html-escaper-3.0.3.tgz 0ms (cache hit)
+npm http cache node-fetch@https://registry.npmjs.org/node-fetch/-/node-fetch-2.7.0.tgz 0ms (cache hit)
+npm http cache get-intrinsic@https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz 0ms (cache hit)
+npm http cache glob@https://registry.npmjs.org/glob/-/glob-13.0.6.tgz 0ms (cache hit)
+npm http cache grammy@https://registry.npmjs.org/grammy/-/grammy-1.44.0.tgz 0ms (cache hit)
+npm http cache hasown@https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz 0ms (cache hit)
+npm http cache gopd@https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz 0ms (cache hit)
+npm http cache google-auth-library@https://registry.npmjs.org/google-auth-library/-/google-auth-library-10.9.0.tgz 0ms 
+(cache hit)
+npm http cache graceful-fs@https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz 0ms (cache hit)
+npm http cache has-symbols@https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz 0ms (cache hit)
+npm http cache google-logging-utils@https://registry.npmjs.org/google-logging-utils/-/google-logging-utils-1.1.3.tgz 
+0ms (cache hit)
+npm http cache get-proto@https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz 0ms (cache hit)
+npm http cache gaxios@https://registry.npmjs.org/gaxios/-/gaxios-7.1.5.tgz 0ms (cache hit)
+npm http cache gcp-metadata@https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-8.1.2.tgz 0ms (cache hit)
+npm http cache get-caller-file@https://registry.npmjs.org/get-caller-file/-/get-caller-file-2.0.5.tgz 0ms (cache hit)
+npm http cache function-bind@https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz 0ms (cache hit)
+npm http cache file-type@https://registry.npmjs.org/file-type/-/file-type-22.0.1.tgz 0ms (cache hit)
+npm http cache fresh@https://registry.npmjs.org/fresh/-/fresh-2.0.0.tgz 0ms (cache hit)
+npm http cache formdata-polyfill@https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz 0ms 
+(cache hit)
+npm http cache finalhandler@https://registry.npmjs.org/finalhandler/-/finalhandler-2.1.1.tgz 0ms (cache hit)
+npm http cache forwarded@https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz 0ms (cache hit)
+npm http cache get-east-asian-width@https://registry.npmjs.org/get-east-asian-width/-/get-east-asian-width-1.6.0.tgz 
+0ms (cache hit)
+npm http cache fast-wrap-ansi@https://registry.npmjs.org/fast-wrap-ansi/-/fast-wrap-ansi-0.2.2.tgz 0ms (cache hit)
+npm http cache find-up@https://registry.npmjs.org/find-up/-/find-up-4.1.0.tgz 0ms (cache hit)
+npm http cache fast-uri@https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.2.tgz 0ms (cache hit)
+npm http cache fetch-blob@https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz 0ms (cache hit)
+npm http cache express-rate-limit@https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.5.2.tgz 0ms 
+(cache hit)
+npm http cache eventsource@https://registry.npmjs.org/eventsource/-/eventsource-3.0.7.tgz 0ms (cache hit)
+npm http cache fast-string-truncated-width@https://registry.npmjs.org/fast-string-truncated-width/-/fast-string-truncat
+ed-width-3.0.3.tgz 0ms (cache hit)
+npm http cache fast-sha256@https://registry.npmjs.org/fast-sha256/-/fast-sha256-1.3.0.tgz 0ms (cache hit)
+npm http cache extend@https://registry.npmjs.org/extend/-/extend-3.0.2.tgz 0ms (cache hit)
+npm http cache event-target-shim@https://registry.npmjs.org/event-target-shim/-/event-target-shim-5.0.1.tgz 0ms (cache 
+hit)
+npm http cache fast-deep-equal@https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz 0ms (cache hit)
+npm http cache etag@https://registry.npmjs.org/etag/-/etag-1.8.1.tgz 0ms (cache hit)
+npm http cache escalade@https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz 0ms (cache hit)
+npm http cache express@https://registry.npmjs.org/express/-/express-5.2.1.tgz 0ms (cache hit)
+npm http cache es-object-atoms@https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz 0ms (cache hit)
+npm http cache escape-html@https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz 0ms (cache hit)
+npm http cache entities@https://registry.npmjs.org/entities/-/entities-4.5.0.tgz 0ms (cache hit)
+npm http cache eventsource-parser@https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.1.0.tgz 0ms 
+(cache hit)
+npm http cache es-define-property@https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz 0ms 
+(cache hit)
+npm http cache es-errors@https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz 0ms (cache hit)
+npm http cache encodeurl@https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.0.tgz 0ms (cache hit)
+npm http cache ecdsa-sig-formatter@https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz 0ms 
+(cache hit)
+npm http cache ee-first@https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz 0ms (cache hit)
+npm http cache dunder-proto@https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz 0ms (cache hit)
+npm http cache dotenv@https://registry.npmjs.org/dotenv/-/dotenv-17.4.2.tgz 0ms (cache hit)
+npm http cache emoji-regex@https://registry.npmjs.org/emoji-regex/-/emoji-regex-8.0.0.tgz 0ms (cache hit)
+npm http cache domutils@https://registry.npmjs.org/domutils/-/domutils-3.2.2.tgz 0ms (cache hit)
+npm http cache dijkstrajs@https://registry.npmjs.org/dijkstrajs/-/dijkstrajs-1.0.3.tgz 0ms (cache hit)
+npm http cache domhandler@https://registry.npmjs.org/domhandler/-/domhandler-5.0.3.tgz 0ms (cache hit)
+npm http cache domelementtype@https://registry.npmjs.org/domelementtype/-/domelementtype-2.3.0.tgz 0ms (cache hit)
+npm http cache dom-serializer@https://registry.npmjs.org/dom-serializer/-/dom-serializer-2.0.0.tgz 0ms (cache hit)
+npm http cache cssom@https://registry.npmjs.org/cssom/-/cssom-0.5.0.tgz 0ms (cache hit)
+npm http cache decamelize@https://registry.npmjs.org/decamelize/-/decamelize-1.2.0.tgz 0ms (cache hit)
+npm http cache fast-string-width@https://registry.npmjs.org/fast-string-width/-/fast-string-width-3.0.2.tgz 0ms (cache 
+hit)
+npm http cache diff@https://registry.npmjs.org/diff/-/diff-9.0.0.tgz 0ms (cache hit)
+npm http cache depd@https://registry.npmjs.org/depd/-/depd-2.0.0.tgz 0ms (cache hit)
+npm http cache css-what@https://registry.npmjs.org/css-what/-/css-what-6.2.2.tgz 0ms (cache hit)
+npm http cache cors@https://registry.npmjs.org/cors/-/cors-2.8.6.tgz 0ms (cache hit)
+npm http cache data-uri-to-buffer@https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz 0ms 
+(cache hit)
+npm http cache css-select@https://registry.npmjs.org/css-select/-/css-select-5.2.2.tgz 0ms (cache hit)
+npm http cache core-util-is@https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.3.tgz 0ms (cache hit)
+npm http cache brace-expansion@https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.7.tgz 0ms (cache hit)
+npm http cache cross-spawn@https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz 0ms (cache hit)
+npm http cache croner@https://registry.npmjs.org/croner/-/croner-10.0.1.tgz 0ms (cache hit)
+npm http cache color-name@https://registry.npmjs.org/color-name/-/color-name-1.1.4.tgz 0ms (cache hit)
+npm http cache cookie@https://registry.npmjs.org/cookie/-/cookie-0.7.2.tgz 0ms (cache hit)
+npm http cache cliui@https://registry.npmjs.org/cliui/-/cliui-8.0.1.tgz 0ms (cache hit)
+npm http cache debug@https://registry.npmjs.org/debug/-/debug-4.4.3.tgz 0ms (cache hit)
+npm http cache content-type@https://registry.npmjs.org/content-type/-/content-type-1.0.5.tgz 0ms (cache hit)
+npm http cache content-disposition@https://registry.npmjs.org/content-disposition/-/content-disposition-1.1.0.tgz 0ms 
+(cache hit)
+npm http cache camelcase@https://registry.npmjs.org/camelcase/-/camelcase-5.3.1.tgz 0ms (cache hit)
+npm http cache commander@https://registry.npmjs.org/commander/-/commander-15.0.0.tgz 0ms (cache hit)
+npm http cache color-convert@https://registry.npmjs.org/color-convert/-/color-convert-2.0.1.tgz 0ms (cache hit)
+npm http cache cookie-signature@https://registry.npmjs.org/cookie-signature/-/cookie-signature-1.2.2.tgz 0ms (cache 
+hit)
+npm http cache clawpdf@https://registry.npmjs.org/clawpdf/-/clawpdf-0.3.0.tgz 0ms (cache hit)
+npm http cache bytes@https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz 0ms (cache hit)
+npm http cache chokidar@https://registry.npmjs.org/chokidar/-/chokidar-5.0.0.tgz 0ms (cache hit)
+npm http cache chownr@https://registry.npmjs.org/chownr/-/chownr-3.0.0.tgz 0ms (cache hit)
+npm http cache 
+call-bind-apply-helpers@https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz 0ms 
+(cache hit)
+npm http cache buffer-equal-constant-time@https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant
+-time-1.0.1.tgz 0ms (cache hit)
+npm http cache content-type@https://registry.npmjs.org/content-type/-/content-type-2.0.0.tgz 0ms (cache hit)
+npm http cache bottleneck@https://registry.npmjs.org/bottleneck/-/bottleneck-2.19.5.tgz 0ms (cache hit)
+npm http cache call-bound@https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz 0ms (cache hit)
+npm http cache balanced-match@https://registry.npmjs.org/balanced-match/-/balanced-match-4.0.4.tgz 0ms (cache hit)
+npm http cache chalk@https://registry.npmjs.org/chalk/-/chalk-5.6.2.tgz 0ms (cache hit)
+npm http cache buffer-from@https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz 0ms (cache hit)
+npm http cache base64-js@https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz 0ms (cache hit)
+npm http cache boolbase@https://registry.npmjs.org/boolbase/-/boolbase-1.0.0.tgz 0ms (cache hit)
+npm http cache bn.js@https://registry.npmjs.org/bn.js/-/bn.js-4.12.4.tgz 0ms (cache hit)
+npm http cache ansi-styles@https://registry.npmjs.org/ansi-styles/-/ansi-styles-4.3.0.tgz 0ms (cache hit)
+npm http cache ajv-formats@https://registry.npmjs.org/ajv-formats/-/ajv-formats-3.0.1.tgz 0ms (cache hit)
+npm http cache body-parser@https://registry.npmjs.org/body-parser/-/body-parser-2.3.0.tgz 0ms (cache hit)
+npm http cache ajv@https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz 0ms (cache hit)
+npm http cache agent-base@https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz 0ms (cache hit)
+npm http cache bignumber.js@https://registry.npmjs.org/bignumber.js/-/bignumber.js-9.3.1.tgz 0ms (cache hit)
+npm http cache ansi-regex@https://registry.npmjs.org/ansi-regex/-/ansi-regex-5.0.1.tgz 0ms (cache hit)
+npm http cache asn1.js@https://registry.npmjs.org/asn1.js/-/asn1.js-5.4.1.tgz 0ms (cache hit)
+npm http cache accepts@https://registry.npmjs.org/accepts/-/accepts-2.0.0.tgz 0ms (cache hit)
+npm http cache abort-controller@https://registry.npmjs.org/abort-controller/-/abort-controller-3.0.0.tgz 0ms (cache 
+hit)
+npm warn deprecated agent-reach@0.3.4: Use openclaw-agent-reach instead
+npm info run openclaw@2026.7.1 preinstall node_modules/openclaw node scripts/preinstall-package-manager-warning.mjs
+npm info run @google/genai@2.10.0 preinstall node_modules/openclaw/node_modules/@google/genai echo 'preinstall: no-op'
+npm info run @google/genai@2.10.0 preinstall { code: 0, signal: null }
+npm info run openclaw@2026.7.1 preinstall { code: 0, signal: null }
+npm info run tree-sitter-bash@0.25.1 install node_modules/openclaw/node_modules/tree-sitter-bash node-gyp-build
+npm info run tree-sitter-bash@0.25.1 install { code: 0, signal: null }
+npm info run openclaw@2026.7.1 postinstall node_modules/openclaw node scripts/postinstall-bundled-plugins.mjs
+npm info run protobufjs@7.6.3 postinstall node_modules/openclaw/node_modules/protobufjs node scripts/postinstall
+npm info run protobufjs@7.6.3 postinstall { code: 0, signal: null }
+npm info run openclaw@2026.7.1 postinstall { code: 0, signal: null }
+npm silly CHANGE node_modules/@noble/curves
+npm silly CHANGE node_modules/@scure/bip39
+npm silly CHANGE node_modules/@scure/base
+npm silly CHANGE node_modules/@scure/bip32
+npm silly CHANGE node_modules/@noble/ciphers
+npm silly CHANGE node_modules/@noble/hashes
+npm silly CHANGE node_modules/nostr-wasm
+npm silly CHANGE node_modules/nostr-tools
+npm silly CHANGE node_modules/openclaw
+npm silly CHANGE node_modules/openclaw/node_modules/@types/node
+npm silly CHANGE node_modules/openclaw/node_modules/@types/retry
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/utf8
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/fetch
+npm silly CHANGE node_modules/openclaw/node_modules/@silvia-odwyer/photon-node
+npm silly CHANGE node_modules/openclaw/node_modules/@tokenizer/token
+npm silly CHANGE node_modules/openclaw/node_modules/@tokenizer/inflate
+npm silly CHANGE node_modules/openclaw/node_modules/@stablelib/base64
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/path
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/pool
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/aspromise
+npm silly CHANGE node_modules/openclaw/node_modules/@openclaw/fs-safe
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/inquire
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/eventemitter
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/codegen
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/float
+npm silly CHANGE node_modules/openclaw/node_modules/@opentelemetry/semantic-conventions
+npm silly CHANGE node_modules/openclaw/node_modules/@openclaw/proxyline
+npm silly CHANGE node_modules/openclaw/node_modules/@protobufjs/base64
+npm silly CHANGE node_modules/openclaw/node_modules/@modelcontextprotocol/sdk
+npm silly CHANGE node_modules/openclaw/node_modules/@mistralai/mistralai
+npm silly CHANGE node_modules/openclaw/node_modules/@openclaw/ai
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty-win32-x64
+npm silly CHANGE node_modules/openclaw/node_modules/@mozilla/readability
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty-win32-arm64
+npm silly CHANGE node_modules/openclaw/node_modules/@isaacs/fs-minipass
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty-darwin-x64
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty-linux-x64
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty-darwin-arm64
+npm silly CHANGE node_modules/openclaw/node_modules/@hono/node-server
+npm silly CHANGE node_modules/openclaw/node_modules/@lydell/node-pty-linux-arm64
+npm silly CHANGE node_modules/openclaw/node_modules/@homebridge/ciao
+npm silly CHANGE node_modules/openclaw/node_modules/@agentclientprotocol/sdk
+npm silly CHANGE node_modules/openclaw/node_modules/@grammyjs/transformer-throttler
+npm silly CHANGE node_modules/openclaw/node_modules/@grammyjs/types
+npm silly CHANGE node_modules/openclaw/node_modules/@earendil-works/pi-tui
+npm silly CHANGE node_modules/openclaw/node_modules/zod-to-json-schema
+npm silly CHANGE node_modules/openclaw/node_modules/@grammyjs/runner
+npm silly CHANGE node_modules/openclaw/node_modules/@google/genai
+npm silly CHANGE node_modules/openclaw/node_modules/@clack/prompts
+npm silly CHANGE node_modules/openclaw/node_modules/@clack/core
+npm silly CHANGE node_modules/openclaw/node_modules/@babel/runtime
+npm silly CHANGE node_modules/openclaw/node_modules/@borewit/text-codec
+npm silly CHANGE node_modules/openclaw/node_modules/yaml
+npm silly CHANGE node_modules/openclaw/node_modules/@anthropic-ai/sdk
+npm silly CHANGE node_modules/openclaw/node_modules/y18n
+npm silly CHANGE node_modules/openclaw/node_modules/zod
+npm silly CHANGE node_modules/openclaw/node_modules/yallist
+npm silly CHANGE node_modules/openclaw/node_modules/yargs-parser
+npm silly CHANGE node_modules/openclaw/node_modules/yargs
+npm silly CHANGE node_modules/openclaw/node_modules/ws
+npm silly CHANGE node_modules/openclaw/node_modules/web-tree-sitter
+npm silly CHANGE node_modules/openclaw/node_modules/wrappy
+npm silly CHANGE node_modules/openclaw/node_modules/which-module
+npm silly CHANGE node_modules/openclaw/node_modules/which
+npm silly CHANGE node_modules/openclaw/node_modules/wrap-ansi
+npm silly CHANGE node_modules/openclaw/node_modules/whatwg-url
+npm silly CHANGE node_modules/openclaw/node_modules/webidl-conversions
+npm silly CHANGE node_modules/openclaw/node_modules/undici
+npm silly CHANGE node_modules/openclaw/node_modules/web-streams-polyfill
+npm silly CHANGE node_modules/openclaw/node_modules/web-push
+npm silly CHANGE node_modules/openclaw/node_modules/util-deprecate
+npm silly CHANGE node_modules/openclaw/node_modules/undici-types
+npm silly CHANGE node_modules/openclaw/node_modules/unpipe
+npm silly CHANGE node_modules/openclaw/node_modules/tar
+npm silly CHANGE node_modules/openclaw/node_modules/vary
+npm silly CHANGE node_modules/openclaw/node_modules/type-is
+npm silly CHANGE node_modules/openclaw/node_modules/type-is/node_modules/content-type
+npm silly CHANGE node_modules/openclaw/node_modules/uint8array-extras
+npm silly CHANGE node_modules/openclaw/node_modules/uhyphen
+npm silly CHANGE node_modules/openclaw/node_modules/typescript
+npm silly CHANGE node_modules/openclaw/node_modules/typebox
+npm silly CHANGE node_modules/openclaw/node_modules/tr46
+npm silly CHANGE node_modules/openclaw/node_modules/toidentifier
+npm silly CHANGE node_modules/openclaw/node_modules/tslog
+npm silly CHANGE node_modules/openclaw/node_modules/ts-algebra
+npm silly CHANGE node_modules/openclaw/node_modules/tslib
+npm silly CHANGE node_modules/openclaw/node_modules/strip-ansi
+npm silly CHANGE node_modules/openclaw/node_modules/tree-sitter-bash
+npm silly CHANGE node_modules/openclaw/node_modules/token-types
+npm silly CHANGE node_modules/openclaw/node_modules/string_decoder
+npm silly CHANGE node_modules/openclaw/node_modules/string_decoder/node_modules/safe-buffer
+npm silly CHANGE node_modules/openclaw/node_modules/standardwebhooks
+npm silly CHANGE node_modules/openclaw/node_modules/strtok3
+npm silly CHANGE node_modules/openclaw/node_modules/sqlite-vec-windows-x64
+npm silly CHANGE node_modules/openclaw/node_modules/string-width
+npm silly CHANGE node_modules/openclaw/node_modules/sqlite-vec-linux-x64
+npm silly CHANGE node_modules/openclaw/node_modules/statuses
+npm silly CHANGE node_modules/openclaw/node_modules/sqlite-vec-darwin-arm64
+npm silly CHANGE node_modules/openclaw/node_modules/sqlite-vec
+npm silly CHANGE node_modules/openclaw/node_modules/sqlite-vec-linux-arm64
+npm silly CHANGE node_modules/openclaw/node_modules/sqlite-vec-darwin-x64
+npm silly CHANGE node_modules/openclaw/node_modules/source-map
+npm silly CHANGE node_modules/openclaw/node_modules/side-channel
+npm silly CHANGE node_modules/openclaw/node_modules/signal-exit
+npm silly CHANGE node_modules/openclaw/node_modules/side-channel-map
+npm silly CHANGE node_modules/openclaw/node_modules/source-map-support
+npm silly CHANGE node_modules/openclaw/node_modules/side-channel-list
+npm silly CHANGE node_modules/openclaw/node_modules/sisteransi
+npm silly CHANGE node_modules/openclaw/node_modules/side-channel-weakmap
+npm silly CHANGE node_modules/openclaw/node_modules/send
+npm silly CHANGE node_modules/openclaw/node_modules/shebang-regex
+npm silly CHANGE node_modules/openclaw/node_modules/shebang-command
+npm silly CHANGE node_modules/openclaw/node_modules/setimmediate
+npm silly CHANGE node_modules/openclaw/node_modules/quickjs-wasi
+npm silly CHANGE node_modules/openclaw/node_modules/setprototypeof
+npm silly CHANGE node_modules/openclaw/node_modules/set-blocking
+npm silly CHANGE node_modules/openclaw/node_modules/safe-buffer
+npm silly CHANGE node_modules/openclaw/node_modules/router
+npm silly CHANGE node_modules/openclaw/node_modules/require-main-filename
+npm silly CHANGE node_modules/openclaw/node_modules/readdirp
+npm silly CHANGE node_modules/openclaw/node_modules/safer-buffer
+npm silly CHANGE node_modules/openclaw/node_modules/serve-static
+npm silly CHANGE node_modules/openclaw/node_modules/require-from-string
+npm silly CHANGE node_modules/openclaw/node_modules/retry
+npm silly CHANGE node_modules/openclaw/node_modules/readable-stream
+npm silly CHANGE node_modules/openclaw/node_modules/readable-stream/node_modules/safe-buffer
+npm silly CHANGE node_modules/openclaw/node_modules/require-directory
+npm silly CHANGE node_modules/openclaw/node_modules/range-parser
+npm silly CHANGE node_modules/openclaw/node_modules/qs
+npm silly CHANGE node_modules/openclaw/node_modules/qrcode
+npm silly CHANGE node_modules/openclaw/node_modules/qrcode/node_modules/yargs
+npm silly CHANGE node_modules/openclaw/node_modules/qrcode/node_modules/yargs-parser
+npm silly CHANGE node_modules/openclaw/node_modules/qrcode/node_modules/wrap-ansi
+npm silly CHANGE node_modules/openclaw/node_modules/qrcode/node_modules/y18n
+npm silly CHANGE node_modules/openclaw/node_modules/qrcode/node_modules/cliui
+npm silly CHANGE node_modules/openclaw/node_modules/raw-body
+npm silly CHANGE node_modules/openclaw/node_modules/rastermill
+npm silly CHANGE node_modules/openclaw/node_modules/proper-lockfile
+npm silly CHANGE node_modules/openclaw/node_modules/proper-lockfile/node_modules/retry
+npm silly CHANGE node_modules/openclaw/node_modules/process-nextick-args
+npm silly CHANGE node_modules/openclaw/node_modules/proxy-addr
+npm silly CHANGE node_modules/openclaw/node_modules/protobufjs
+npm silly CHANGE node_modules/openclaw/node_modules/pkce-challenge
+npm silly CHANGE node_modules/openclaw/node_modules/pngjs
+npm silly CHANGE node_modules/openclaw/node_modules/path-scurry
+npm silly CHANGE node_modules/openclaw/node_modules/playwright-core
+npm silly CHANGE node_modules/openclaw/node_modules/path-to-regexp
+npm silly CHANGE node_modules/openclaw/node_modules/path-key
+npm silly CHANGE node_modules/openclaw/node_modules/partial-json
+npm silly CHANGE node_modules/openclaw/node_modules/pako
+npm silly CHANGE node_modules/openclaw/node_modules/path-exists
+npm silly CHANGE node_modules/openclaw/node_modules/p-try
+npm silly CHANGE node_modules/openclaw/node_modules/p-locate
+npm silly CHANGE node_modules/openclaw/node_modules/parseurl
+npm silly CHANGE node_modules/openclaw/node_modules/node-addon-api
+npm silly CHANGE node_modules/openclaw/node_modules/object-assign
+npm silly CHANGE node_modules/openclaw/node_modules/openai
+npm silly CHANGE node_modules/openclaw/node_modules/p-limit
+npm silly CHANGE node_modules/openclaw/node_modules/once
+npm silly CHANGE node_modules/openclaw/node_modules/p-retry
+npm silly CHANGE node_modules/openclaw/node_modules/on-finished
+npm silly CHANGE node_modules/openclaw/node_modules/nth-check
+npm silly CHANGE node_modules/openclaw/node_modules/minizlib
+npm silly CHANGE node_modules/openclaw/node_modules/object-inspect
+npm silly CHANGE node_modules/openclaw/node_modules/node-edge-tts
+npm silly CHANGE node_modules/openclaw/node_modules/node-gyp-build
+npm silly CHANGE node_modules/openclaw/node_modules/node-fetch
+npm silly CHANGE node_modules/openclaw/node_modules/minipass
+npm silly CHANGE node_modules/openclaw/node_modules/node-domexception
+npm silly CHANGE node_modules/openclaw/node_modules/minimatch
+npm silly CHANGE node_modules/openclaw/node_modules/ms
+npm silly CHANGE node_modules/openclaw/node_modules/negotiator
+npm silly CHANGE node_modules/openclaw/node_modules/minimalistic-assert
+npm silly CHANGE node_modules/openclaw/node_modules/mime-types
+npm silly CHANGE node_modules/openclaw/node_modules/minimist
+npm silly CHANGE node_modules/openclaw/node_modules/linkedom
+npm silly CHANGE node_modules/openclaw/node_modules/mime-db
+npm silly CHANGE node_modules/openclaw/node_modules/merge-descriptors
+npm silly CHANGE node_modules/openclaw/node_modules/media-typer
+npm silly CHANGE node_modules/openclaw/node_modules/math-intrinsics
+npm silly CHANGE node_modules/openclaw/node_modules/marked
+npm silly CHANGE node_modules/openclaw/node_modules/long
+npm silly CHANGE node_modules/openclaw/node_modules/lru-cache
+npm silly CHANGE node_modules/openclaw/node_modules/jose
+npm silly CHANGE node_modules/openclaw/node_modules/locate-path
+npm silly CHANGE node_modules/openclaw/node_modules/lie
+npm silly CHANGE node_modules/openclaw/node_modules/json5
+npm silly CHANGE node_modules/openclaw/node_modules/jws
+npm silly CHANGE node_modules/openclaw/node_modules/json-schema-typed
+npm silly CHANGE node_modules/openclaw/node_modules/jwa
+npm silly CHANGE node_modules/openclaw/node_modules/kysely
+npm silly CHANGE node_modules/openclaw/node_modules/json-schema-traverse
+npm silly CHANGE node_modules/openclaw/node_modules/jiti
+npm silly CHANGE node_modules/openclaw/node_modules/jszip
+npm silly CHANGE node_modules/openclaw/node_modules/json-schema-to-ts
+npm silly CHANGE node_modules/openclaw/node_modules/isexe
+npm silly CHANGE node_modules/openclaw/node_modules/isarray
+npm silly CHANGE node_modules/openclaw/node_modules/json-bigint
+npm silly CHANGE node_modules/openclaw/node_modules/ipaddr.js
+npm silly CHANGE node_modules/openclaw/node_modules/inherits
+npm silly CHANGE node_modules/openclaw/node_modules/ip-address
+npm silly CHANGE node_modules/openclaw/node_modules/is-promise
+npm silly CHANGE node_modules/openclaw/node_modules/htmlparser2
+npm silly CHANGE node_modules/openclaw/node_modules/htmlparser2/node_modules/entities
+npm silly CHANGE node_modules/openclaw/node_modules/is-fullwidth-code-point
+npm silly CHANGE node_modules/openclaw/node_modules/ignore
+npm silly CHANGE node_modules/openclaw/node_modules/ieee754
+npm silly CHANGE node_modules/openclaw/node_modules/immediate
+npm silly CHANGE node_modules/openclaw/node_modules/hono
+npm silly CHANGE node_modules/openclaw/node_modules/iconv-lite
+npm silly CHANGE node_modules/openclaw/node_modules/http_ece
+npm silly CHANGE node_modules/openclaw/node_modules/hosted-git-info
+npm silly CHANGE node_modules/openclaw/node_modules/http-errors
+npm silly CHANGE node_modules/openclaw/node_modules/https-proxy-agent
+npm silly CHANGE node_modules/openclaw/node_modules/highlight.js
+npm silly CHANGE node_modules/openclaw/node_modules/html-escaper
+npm silly CHANGE node_modules/openclaw/node_modules/get-intrinsic
+npm silly CHANGE node_modules/openclaw/node_modules/glob
+npm silly CHANGE node_modules/openclaw/node_modules/has-symbols
+npm silly CHANGE node_modules/openclaw/node_modules/grammy
+npm silly CHANGE node_modules/openclaw/node_modules/grammy/node_modules/node-fetch
+npm silly CHANGE node_modules/openclaw/node_modules/gopd
+npm silly CHANGE node_modules/openclaw/node_modules/hasown
+npm silly CHANGE node_modules/openclaw/node_modules/graceful-fs
+npm silly CHANGE node_modules/openclaw/node_modules/google-auth-library
+npm silly CHANGE node_modules/openclaw/node_modules/google-logging-utils
+npm silly CHANGE node_modules/openclaw/node_modules/get-proto
+npm silly CHANGE node_modules/openclaw/node_modules/get-caller-file
+npm silly CHANGE node_modules/openclaw/node_modules/gaxios
+npm silly CHANGE node_modules/openclaw/node_modules/function-bind
+npm silly CHANGE node_modules/openclaw/node_modules/get-east-asian-width
+npm silly CHANGE node_modules/openclaw/node_modules/gcp-metadata
+npm silly CHANGE node_modules/openclaw/node_modules/file-type
+npm silly CHANGE node_modules/openclaw/node_modules/forwarded
+npm silly CHANGE node_modules/openclaw/node_modules/fresh
+npm silly CHANGE node_modules/openclaw/node_modules/fast-wrap-ansi
+npm silly CHANGE node_modules/openclaw/node_modules/formdata-polyfill
+npm silly CHANGE node_modules/openclaw/node_modules/finalhandler
+npm silly CHANGE node_modules/openclaw/node_modules/find-up
+npm silly CHANGE node_modules/openclaw/node_modules/fast-uri
+npm silly CHANGE node_modules/openclaw/node_modules/fetch-blob
+npm silly CHANGE node_modules/openclaw/node_modules/fast-string-width
+npm silly CHANGE node_modules/openclaw/node_modules/eventsource
+npm silly CHANGE node_modules/openclaw/node_modules/fast-string-truncated-width
+npm silly CHANGE node_modules/openclaw/node_modules/express-rate-limit
+npm silly CHANGE node_modules/openclaw/node_modules/fast-sha256
+npm silly CHANGE node_modules/openclaw/node_modules/fast-deep-equal
+npm silly CHANGE node_modules/openclaw/node_modules/event-target-shim
+npm silly CHANGE node_modules/openclaw/node_modules/extend
+npm silly CHANGE node_modules/openclaw/node_modules/express
+npm silly CHANGE node_modules/openclaw/node_modules/eventsource-parser
+npm silly CHANGE node_modules/openclaw/node_modules/etag
+npm silly CHANGE node_modules/openclaw/node_modules/escalade
+npm silly CHANGE node_modules/openclaw/node_modules/escape-html
+npm silly CHANGE node_modules/openclaw/node_modules/es-object-atoms
+npm silly CHANGE node_modules/openclaw/node_modules/entities
+npm silly CHANGE node_modules/openclaw/node_modules/es-define-property
+npm silly CHANGE node_modules/openclaw/node_modules/es-errors
+npm silly CHANGE node_modules/openclaw/node_modules/emoji-regex
+npm silly CHANGE node_modules/openclaw/node_modules/ee-first
+npm silly CHANGE node_modules/openclaw/node_modules/encodeurl
+npm silly CHANGE node_modules/openclaw/node_modules/ecdsa-sig-formatter
+npm silly CHANGE node_modules/openclaw/node_modules/domutils
+npm silly CHANGE node_modules/openclaw/node_modules/dunder-proto
+npm silly CHANGE node_modules/openclaw/node_modules/dotenv
+npm silly CHANGE node_modules/openclaw/node_modules/domhandler
+npm silly CHANGE node_modules/openclaw/node_modules/dom-serializer
+npm silly CHANGE node_modules/openclaw/node_modules/domelementtype
+npm silly CHANGE node_modules/openclaw/node_modules/dijkstrajs
+npm silly CHANGE node_modules/openclaw/node_modules/cssom
+npm silly CHANGE node_modules/openclaw/node_modules/decamelize
+npm silly CHANGE node_modules/openclaw/node_modules/depd
+npm silly CHANGE node_modules/openclaw/node_modules/diff
+npm silly CHANGE node_modules/openclaw/node_modules/debug
+npm silly CHANGE node_modules/openclaw/node_modules/css-what
+npm silly CHANGE node_modules/openclaw/node_modules/data-uri-to-buffer
+npm silly CHANGE node_modules/openclaw/node_modules/css-select
+npm silly CHANGE node_modules/openclaw/node_modules/cors
+npm silly CHANGE node_modules/openclaw/node_modules/brace-expansion
+npm silly CHANGE node_modules/openclaw/node_modules/core-util-is
+npm silly CHANGE node_modules/openclaw/node_modules/cross-spawn
+npm silly CHANGE node_modules/openclaw/node_modules/croner
+npm silly CHANGE node_modules/openclaw/node_modules/content-type
+npm silly CHANGE node_modules/openclaw/node_modules/cookie
+npm silly CHANGE node_modules/openclaw/node_modules/color-name
+npm silly CHANGE node_modules/openclaw/node_modules/cliui
+npm silly CHANGE node_modules/openclaw/node_modules/cookie-signature
+npm silly CHANGE node_modules/openclaw/node_modules/content-disposition
+npm silly CHANGE node_modules/openclaw/node_modules/chokidar
+npm silly CHANGE node_modules/openclaw/node_modules/clawpdf
+npm silly CHANGE node_modules/openclaw/node_modules/commander
+npm silly CHANGE node_modules/openclaw/node_modules/color-convert
+npm silly CHANGE node_modules/openclaw/node_modules/camelcase
+npm silly CHANGE node_modules/openclaw/node_modules/chownr
+npm silly CHANGE node_modules/openclaw/node_modules/call-bound
+npm silly CHANGE node_modules/openclaw/node_modules/call-bind-apply-helpers
+npm silly CHANGE node_modules/openclaw/node_modules/chalk
+npm silly CHANGE node_modules/openclaw/node_modules/buffer-equal-constant-time
+npm silly CHANGE node_modules/openclaw/node_modules/bytes
+npm silly CHANGE node_modules/openclaw/node_modules/bottleneck
+npm silly CHANGE node_modules/openclaw/node_modules/balanced-match
+npm silly CHANGE node_modules/openclaw/node_modules/buffer-from
+npm silly CHANGE node_modules/openclaw/node_modules/body-parser
+npm silly CHANGE node_modules/openclaw/node_modules/body-parser/node_modules/content-type
+npm silly CHANGE node_modules/openclaw/node_modules/base64-js
+npm silly CHANGE node_modules/openclaw/node_modules/boolbase
+npm silly CHANGE node_modules/openclaw/node_modules/bn.js
+npm silly CHANGE node_modules/openclaw/node_modules/asn1.js
+npm silly CHANGE node_modules/openclaw/node_modules/bignumber.js
+npm silly CHANGE node_modules/openclaw/node_modules/ansi-styles
+npm silly CHANGE node_modules/openclaw/node_modules/ansi-regex
+npm silly CHANGE node_modules/openclaw/node_modules/ajv-formats
+npm silly CHANGE node_modules/openclaw/node_modules/ajv
+npm silly CHANGE node_modules/openclaw/node_modules/agent-base
+npm silly CHANGE node_modules/openclaw/node_modules/accepts
+npm silly CHANGE node_modules/openclaw/node_modules/abort-controller
+npm silly CHANGE node_modules/agent-reach
+
+changed 318 packages in 10m
+npm warn allow-scripts 21 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   @claude-flow/cli@3.38.11 (postinstall: node ./scripts/postinstall.cjs)
+npm warn allow-scripts   @google/genai@1.52.0 (preinstall: echo 'preinstall: no-op')
+npm warn allow-scripts   sharp@0.32.6 (install: node-gyp rebuild)
+npm warn allow-scripts   agentdb@3.0.0-alpha.20 (postinstall: node scripts/postinstall.cjs || true)
+npm warn allow-scripts   better-sqlite3@11.10.0 (install: node-gyp rebuild)
+npm warn allow-scripts   agentic-flow@3.0.0-alpha.2 (postinstall: node scripts/postinstall.js || true)
+npm warn allow-scripts   agentdb@1.6.1 (postinstall: node scripts/postinstall.cjs || true)
+npm warn allow-scripts   better-sqlite3@11.10.0 (install: node-gyp rebuild)
+npm warn allow-scripts   argon2@0.44.0 (install: node-gyp rebuild)
+npm warn allow-scripts   better-sqlite3@12.11.1 (install: node-gyp rebuild)
+npm warn allow-scripts   esbuild@0.25.12 (postinstall: node install.js)
+npm warn allow-scripts   hnswlib-node@3.0.0 (install: node-gyp rebuild)
+npm warn allow-scripts   protobufjs@6.11.6 (postinstall: node scripts/postinstall)
+npm warn allow-scripts   onnxruntime-node@1.24.3 (postinstall: node ./script/install)
+npm warn allow-scripts   protobufjs@7.6.5 (postinstall: node scripts/postinstall)
+npm warn allow-scripts   sharp@0.34.5 (install: node install/check.js || npm run build)
+npm warn allow-scripts   tldjs@2.3.2 (postinstall: node ./bin/postinstall.js)
+npm warn allow-scripts   openclaw@2026.7.1 (preinstall: node scripts/preinstall-package-manager-warning.mjs; 
+postinstall: node scripts/postinstall-bundled-plugins.mjs)
+npm warn allow-scripts   @google/genai@2.10.0 (preinstall: echo 'preinstall: no-op')
+npm warn allow-scripts   protobufjs@7.6.3 (postinstall: node scripts/postinstall)
+npm warn allow-scripts   tree-sitter-bash@0.25.1 (install: node-gyp-build)
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to 
+allow.
+npm verbose cwd C:\dev\ShiftSync
+npm verbose os Windows_NT 10.0.26200
+npm verbose node v24.19.0
+npm verbose npm  v11.17.0
+npm verbose exit 0
+npm info ok
