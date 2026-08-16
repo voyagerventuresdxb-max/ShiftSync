@@ -10,6 +10,8 @@
 - [x] Core parser engine built (src/engine/): canonical data contract (types.ts), time/date helpers (time.ts), text-block parser (parser.ts) with multi-language name/role/shift-type tokenization
 - [x] Parser unit tests (src/engine/parser.test.ts) via node:test + tsx — 8 tests passing
 - [x] Minimal dark-mode paste→preview→share UI wired in App.tsx (live roster grid, warnings, unparsed lines)
+- [x] Psychological & behavioral framework spec written at ShiftSync/PSYCH_BEHAVIORAL_FRAMEWORK.md (cognitive-load/relief architecture for Web, Hook-model habit design for Mobile, cross-platform trust mirroring, payroll/WPS trust architecture)
+- [x] Framework extended with fine-dining behavioral layer (clopening/VIP/pool-equity triggers), viral habit-loop instrumentation (K-factor + north-star metric), and behavioral risk register (10 adoption failure modes)
 
 ## Next Sprint Goals
 - Extend parser to Excel (.xlsx) and screenshot/OCR ingestion paths
