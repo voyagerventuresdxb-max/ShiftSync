@@ -1,0 +1,178 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Award, Plus, X } from 'lucide-react';
+import { fetchShoutouts, postShoutout, type ShoutoutDto } from '@/api/shoutouts';
+import { useAppState } from '@/state/AppStateContext';
+import { weekdayOf } from '@/engine/rosterView';
+
+function initials(name: string): string {
+  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? '').join('');
+}
+
+function timeAgo(iso: string): string {
+  const hours = Math.floor((Date.now() - new Date(iso).getTime()) / 3600000);
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+export function Shoutouts() {
+  const { mergedRoster, currentEmployeeId } = useAppState();
+  const [items, setItems] = useState<ShoutoutDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [employeeId, setEmployeeId] = useState('');
+  const [shiftId, setShiftId] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchShoutouts('seed-location')
+      .then((list) => {
+        if (!cancelled) setItems(list);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load shoutouts.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const shiftsForEmployee = useMemo(
+    () => mergedRoster.shifts.filter((s) => s.employeeId === employeeId).sort((a, b) => b.date.localeCompare(a.date)),
+    [mergedRoster.shifts, employeeId],
+  );
+
+  async function submit() {
+    if (!employeeId || !shiftId || !note.trim()) return;
+    const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
+    const snapshot = shift ? `${weekdayOf(shift.date)} · ${shift.start}–${shift.end} · ${shift.requiredRole ?? ''}`.trim() : undefined;
+    setSaving(true);
+    setError(null);
+    try {
+      const created = await postShoutout({
+        locationId: 'seed-location',
+        employeeId,
+        authorId: currentEmployeeId,
+        shiftSnapshot: snapshot,
+        note: note.trim(),
+      });
+      setItems((prev) => [created, ...prev]);
+      setOpen(false);
+      setEmployeeId('');
+      setShiftId('');
+      setNote('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save the shoutout.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="panel animate-rise p-4 sm:p-5">
+      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <div className="min-w-0">
+          <p className="eyebrow">Recognition</p>
+          <h2 className="truncate text-base font-semibold tracking-tight">Shoutouts</h2>
+        </div>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/20"
+        >
+          {open ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+          {open ? 'Close' : 'Tag a shift'}
+        </button>
+      </header>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Tied to the colleague and the exact shift — appears in their shift history.
+      </p>
+
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+
+      {open && (
+        <div className="mt-4 space-y-3 rounded-xl border border-accent/25 bg-accent/5 p-3">
+          <label className="block">
+            <span className="eyebrow">Colleague</span>
+            <select
+              value={employeeId}
+              onChange={(e) => {
+                setEmployeeId(e.target.value);
+                setShiftId('');
+              }}
+              className="mt-1 w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Select team member…</option>
+              {mergedRoster.employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.name} · {e.role}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="eyebrow">Shift</span>
+            <select
+              value={shiftId}
+              onChange={(e) => setShiftId(e.target.value)}
+              disabled={!employeeId}
+              className="mt-1 w-full rounded-lg border border-input bg-background/60 px-3 py-2 text-sm focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-40"
+            >
+              <option value="">{employeeId ? (shiftsForEmployee.length ? 'Select a shift…' : 'No assigned shifts yet') : 'Pick a colleague first'}</option>
+              {shiftsForEmployee.map((s) => (
+                <option key={s.id} value={s.id}>{s.date} · {s.start}–{s.end}</option>
+              ))}
+            </select>
+          </label>
+
+          <textarea
+            rows={3}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="What did they do brilliantly on that shift?"
+            className="w-full resize-none rounded-lg border border-input bg-background/60 p-3 text-sm placeholder:text-muted-foreground focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <button
+            onClick={() => void submit()}
+            disabled={!employeeId || !shiftId || !note.trim() || saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Award className="h-3.5 w-3.5" /> {saving ? 'Saving…' : 'Give shoutout'}
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="mt-4 text-sm text-muted-foreground">Loading shoutouts…</p>
+      ) : (
+        <ul className="mt-4 space-y-3">
+          {items.map((s) => (
+            <li key={s.id} className="rounded-xl border border-border bg-background/40 p-3">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent">
+                  {initials(s.employeeName)}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{s.employeeName}</p>
+                  <p className="text-sm text-muted-foreground">{s.note}</p>
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    {s.shiftSnapshot ?? 'Shift no longer on the rota'} · {s.authorName ?? 'Manager'} · {timeAgo(s.createdAt)}
+                  </p>
+                </div>
+              </div>
+            </li>
+          ))}
+          {items.length === 0 && (
+            <li className="rounded-xl border border-border p-4 text-center text-sm text-muted-foreground">
+              No shoutouts yet — recognise someone's shift.
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
+}
