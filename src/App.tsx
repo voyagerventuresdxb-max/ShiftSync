@@ -2,69 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { DEFAULT_MAINLAND_RULES, type Employee, type Roster, type Shift, type SwapRequest, type VenueConfig } from './engine/types';
 import { shiftHours } from './engine/time';
 import { periodOf, weekdayOf } from './engine/rosterView';
+import { groupIntoSections, nameKey } from './engine/roleGrouping';
 import ShiftUpload from './components/ShiftUpload';
 import Dashboard from './components/Dashboard';
 import StaffDirectory from './components/StaffDirectory';
 import FloorPlanTab from './components/FloorPlan/FloorPlanTab';
 import type { PreviewRow } from './api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from './api/staffDirectory';
-
-/**
- * Ordered role sections for the categorized roster grid, matching the
- * 7shifts-style mobile reference layout. Staff are grouped under these
- * headers in this order; any role not listed falls into "Other".
- *
- * The "manager" (Management) tier is deliberately populated two ways: the
- * usual match against a parsed role string below, PLUS a direct
- * cross-reference against the Staff Directory (see sectionForEmployee) —
- * a venue's own job title is authoritative over whatever (if anything) an
- * uploaded roster happened to resolve for that person, and catches staff
- * the parser correctly left unlabeled (no section header for them in the
- * source file) rather than guessed.
- */
-const ROLE_SECTIONS: { key: string; label: string; match: string[] }[] = [
-  { key: 'manager', label: 'Management', match: ['management', 'manager', 'gm', 'floor manager', 'general manager', 'restaurant manager', 'duty manager', 'operations manager', 'assistant manager'] },
-  { key: 'supervisor', label: 'Supervisor', match: ['supervisor', 'supervisors', 'team leader', 'team lead', 'shift supervisor', 'floor supervisor'] },
-  { key: 'head-waiter', label: 'Head Waiter', match: ['head waiter', 'head waiters', 'head server', 'senior waiter'] },
-  { key: 'waiter', label: 'Waiter', match: ['waiter', 'waiters', 'server', 'servers', 'wait staff', 'waiting staff', 'floor', 'floor staff', 'floor team', 'floor service'] },
-  { key: 'runner', label: 'Runner', match: ['runner', 'runners', 'food runner', 'bar runner'] },
-];
-
-/** Normalize a role string for section matching (lowercase, alnum+space). */
-function roleKey(role: string): string {
-  return role.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
-/** Normalize a person's name for Staff Directory lookup (lowercase, trimmed). */
-function nameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-/** True when a Staff Directory job title indicates Management — pattern-based, not a fixed word list, so any venue's own manager-ish title works. */
-function isManagementTitle(jobTitle: string): boolean {
-  return /manager|management/i.test(jobTitle);
-}
-
-/** Resolve an employee's role to a section key, defaulting to 'other'. */
-function sectionForRole(role: string): string {
-  const key = roleKey(role);
-  for (const section of ROLE_SECTIONS) {
-    if (section.match.some((m) => roleKey(m) === key)) return section.key;
-  }
-  return 'other';
-}
-
-/**
- * Resolve an employee to a grid section, cross-referencing the Staff
- * Directory FIRST — a venue-confirmed job title always wins over whatever
- * the parser resolved (or didn't) for this person, per the explicit
- * "not inferred from the uploaded roster" requirement.
- */
-function sectionForEmployee(emp: Employee, staffDirectoryByName: Map<string, StaffDirectoryEntry>): string {
-  const entry = staffDirectoryByName.get(nameKey(emp.name));
-  if (entry?.jobTitle && isManagementTitle(entry.jobTitle)) return 'manager';
-  return sectionForRole(emp.role);
-}
 
 const config: VenueConfig = {
   id: 'venue-1',
@@ -192,29 +136,9 @@ export default function App() {
   // would bury exactly the row that needs the manager's attention. They get
   // their own dedicated, visually-flagged section instead, shown first.
   const sections = useMemo(() => {
-    const needsReview = mergedRoster.employees.filter((e) => e.needsRoleReview);
-    const grouped = new Map<string, Employee[]>();
-    for (const emp of mergedRoster.employees) {
-      if (emp.needsRoleReview) continue;
-      const key = sectionForEmployee(emp, staffDirectoryByName);
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key)!.push(emp);
-    }
-    const ordered: { key: string; label: string; employees: Employee[]; flagged?: boolean }[] = [];
-    if (needsReview.length > 0) {
-      ordered.push({ key: 'needs-review', label: 'Needs Review — Role Unresolved', employees: needsReview, flagged: true });
-    }
-    for (const section of ROLE_SECTIONS) {
-      const emps = grouped.get(section.key);
-      if (emps && emps.length > 0) {
-        ordered.push({ key: section.key, label: section.label, employees: emps });
-      }
-    }
-    const other = grouped.get('other');
-    if (other && other.length > 0) {
-      ordered.push({ key: 'other', label: 'Other', employees: other });
-    }
-    return ordered;
+    const jobTitleByName = new Map<string, string | null | undefined>();
+    for (const [key, entry] of staffDirectoryByName) jobTitleByName.set(key, entry.jobTitle);
+    return groupIntoSections(mergedRoster.employees, jobTitleByName);
   }, [mergedRoster.employees, staffDirectoryByName]);
 
   const handleCommitted = (rows: PreviewRow[], batchId: string) => {
