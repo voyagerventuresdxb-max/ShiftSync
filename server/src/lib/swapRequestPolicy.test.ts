@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextRequestWindowClose, isRequestLocked } from './swapRequestPolicy.ts';
+import { nextRequestWindowClose, isRequestLocked } from './swapRequestPolicy.js';
 
 test('nextRequestWindowClose rolls forward to the next Wednesday 17:00 Asia/Dubai', () => {
   // Monday 2026-08-24 10:00 Asia/Dubai (UTC+4) -> Wed 2026-08-26 17:00 Asia/Dubai
