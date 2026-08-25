@@ -19,16 +19,19 @@ export function SafetyValve() {
 
       {sent ? (
         <p className="mt-4 rounded-lg border border-signal/25 bg-signal/10 p-3 text-sm text-signal">
-          Sent anonymously.
+          Sent anonymously. Ops leadership reviews floor feedback every Monday briefing.
         </p>
       ) : (
         <>
+          <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
+            Feedback should be constructive and specific — please don't submit anything intended to harm, harass, or target a colleague.
+          </p>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={4}
             placeholder="Share a concern about scheduling, breaks, or the floor — safely and anonymously."
-            className="mt-4 w-full resize-none rounded-lg border border-input bg-background/60 p-3 text-sm placeholder:text-muted-foreground focus:border-signal/50 focus:outline-none focus:ring-2 focus:ring-ring"
+            className="mt-2.5 w-full resize-none rounded-lg border border-input bg-background/60 p-3 text-sm placeholder:text-muted-foreground focus:border-signal/50 focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <button
             disabled={!text.trim()}
