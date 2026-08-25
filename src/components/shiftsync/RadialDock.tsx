@@ -10,8 +10,8 @@ const tabs = [
   { to: '/people', label: 'People', icon: Users },
 ] as const;
 
-/** dial geometry: 5 stations across a ~140° arc, station 0 = focused (under keystone) */
-const STATIONS = 5;
+/** dial geometry: one station per tab across the arc, station 0 = focused (under keystone) */
+const STATIONS = tabs.length;
 const STEP_DEG = 35;
 const RX = 34; // horizontal spread, % of dock width
 const RY = 14; // vertical sag in px
@@ -88,12 +88,14 @@ export function RadialDock({
 }) {
   const navigate = useNavigate();
   const pathname = useLocation().pathname;
-  const activeIndex = Math.max(
-    0,
-    tabs.findIndex((t) => (t.to === '/' ? pathname === '/' : pathname.startsWith(t.to))),
-  );
+  /**
+   * -1 when the current route is not one of the dial's tabs (e.g. /profile).
+   * Kept separate from the dial's numeric spring target below: an unmatched
+   * route must not render Home as the focused/current tab.
+   */
+  const activeIndex = tabs.findIndex((t) => (t.to === '/' ? pathname === '/' : pathname.startsWith(t.to)));
 
-  const dial = useDial(activeIndex);
+  const dial = useDial(Math.max(0, activeIndex));
   const drag = useRef<{
     id: number;
     x: number;
@@ -106,8 +108,10 @@ export function RadialDock({
   const [dragging, setDragging] = useState(false);
   const [pulseIndex, setPulseIndex] = useState<number | null>(null);
 
-  // keep the dial locked onto the active route (spring easing)
+  // keep the dial locked onto the active route (spring easing).
+  // On a non-tab route the dial simply rests where it is — nothing to lock onto.
   useEffect(() => {
+    if (activeIndex < 0) return;
     const from = dial.current();
     const target = from + wrapStation(activeIndex - from);
     dial.animateTo(target);
