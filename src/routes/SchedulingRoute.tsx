@@ -1,16 +1,16 @@
-import { AppShell } from '../components/shiftsync/AppShell';
 import ShiftUpload from '../components/ShiftUpload';
+import { nameKey } from '../engine/roleGrouping';
 import { periodOf, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
 import { useAppState } from '../state/AppStateContext';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
-export default function SchedulingRoute() {
+export default function SchedulingContent() {
   const { mergedRoster, sections, collapsed, setCollapsed, handleCommitted, staffDirectoryByName } = useAppState();
 
   return (
-    <AppShell title="Scheduling">
+    <>
       <ShiftUpload locationId="seed-location" onCommitted={handleCommitted} />
 
       <section className="roster">
@@ -45,7 +45,7 @@ export default function SchedulingRoute() {
                         <span className="cell name">
                           {emp.name}
                           <span className="role">
-                            {staffDirectoryByName.get(emp.name.trim().toLowerCase())?.jobTitle || emp.role}
+                            {staffDirectoryByName.get(nameKey(emp.name))?.jobTitle || emp.role}
                           </span>
                           {emp.needsRoleReview && (
                             <span className="badge badge-warn" title="This shift is not saved. Fix the role in the source file (or add it to the Staff Directory) and re-upload.">
@@ -83,6 +83,6 @@ export default function SchedulingRoute() {
           })}
         </div>
       </section>
-    </AppShell>
+    </>
   );
 }

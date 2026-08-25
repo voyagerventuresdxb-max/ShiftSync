@@ -1,14 +1,35 @@
 import { createBrowserRouter } from 'react-router-dom';
-import HomeRoute from './routes/HomeRoute';
-import SchedulingRoute from './routes/SchedulingRoute';
-import FloorPlanRoute from './routes/FloorPlanRoute';
-import PeopleRoute from './routes/PeopleRoute';
-import ProfileRoute from './routes/ProfileRoute';
+import { AppShell, type RouteHandle } from './components/shiftsync/AppShell';
+import HomeContent from './routes/HomeRoute';
+import SchedulingContent from './routes/SchedulingRoute';
+import FloorPlanContent from './routes/FloorPlanRoute';
+import PeopleContent from './routes/PeopleRoute';
+import ProfileContent from './routes/ProfileRoute';
 
+/** Header text per route, read by AppShell via useMatches(). */
+const handles = {
+  home: { title: 'ShiftSync' },
+  scheduling: { title: 'Scheduling' },
+  floorPlan: { title: 'Floor plan' },
+  people: { title: 'People' },
+  profile: { title: 'Profile' },
+} satisfies Record<string, RouteHandle>;
+
+/**
+ * AppShell is a pathless layout route wrapping every page, so exactly one
+ * AppShell (and therefore one RadialDock) exists in the tree and survives
+ * navigation between children — the dial's spring animation, the voice
+ * toggle and the notification state all persist across route changes.
+ */
 export const router = createBrowserRouter([
-  { path: '/', element: <HomeRoute /> },
-  { path: '/scheduling', element: <SchedulingRoute /> },
-  { path: '/floor-plan', element: <FloorPlanRoute /> },
-  { path: '/people', element: <PeopleRoute /> },
-  { path: '/profile', element: <ProfileRoute /> },
+  {
+    element: <AppShell />,
+    children: [
+      { path: '/', element: <HomeContent />, handle: handles.home },
+      { path: '/scheduling', element: <SchedulingContent />, handle: handles.scheduling },
+      { path: '/floor-plan', element: <FloorPlanContent />, handle: handles.floorPlan },
+      { path: '/people', element: <PeopleContent />, handle: handles.people },
+      { path: '/profile', element: <ProfileContent />, handle: handles.profile },
+    ],
+  },
 ]);
