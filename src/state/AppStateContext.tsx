@@ -140,12 +140,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const handleDecideRequest = useCallback(async (requestId: string, decision: 'approved' | 'denied') => {
+    // Whatever happens to THIS request, a decide attempt can change the
+    // `locked` status of every sibling request on the same shift (the
+    // server auto-locks the losing requests once one approval reassigns the
+    // shift). Patching only the one row we just decided leaves those
+    // siblings showing stale `locked: false` in local state until a full
+    // reload — so a manager could click Approve on an already-locked
+    // request and get a silent 409 with no visible feedback. Re-fetching
+    // the full list after every attempt (success or failure) keeps the
+    // client's view self-correcting instead.
     try {
-      const updated = await decideSwapRequest(requestId, decision);
-      setSwapRequests((prev) => prev.map((r) => (r.id === requestId ? updated : r)));
+      await decideSwapRequest(requestId, decision);
     } catch {
-      // Surfacing this cleanly (e.g. a locked-request 409) is ApprovalsPanel's
-      // job in a follow-up — for now a failed decide leaves the row as-is.
+      // Surfacing a dedicated error message (e.g. for a locked-request 409)
+      // is ApprovalsPanel's job in a follow-up — the refetch below already
+      // makes the failure visible by flipping the row back to its true
+      // (now-locked) state instead of silently doing nothing.
+    } finally {
+      try {
+        const fresh = await fetchSwapRequests('seed-location');
+        setSwapRequests(fresh);
+      } catch {
+        // Load-error UI for this list is ApprovalsPanel's concern; leave the
+        // previous (possibly stale) list in place rather than clearing it.
+      }
     }
   }, []);
 
