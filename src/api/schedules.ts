@@ -71,7 +71,7 @@ export interface ConfirmResponse {
   message: string;
   createdCount: number;
   skippedCount: number;
-  shiftIds: string[];
+  rows: { rowNumber: number; shiftId: string; userId: string | null }[];
 }
 
 export class ApiError extends Error {

@@ -27,7 +27,7 @@ interface Props {
    * its own resets per file, so two uploads confirmed in the same session
    * can otherwise collide and silently drop a shift during the merge.
    */
-  onCommitted?: (rows: PreviewRow[], batchId: string) => void;
+  onCommitted?: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
 }
 
 export default function ShiftUpload({ locationId, createdById, onCommitted }: Props) {
@@ -89,6 +89,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       onCommitted?.(
         data.preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role'),
         data.batchId,
+        res.rows,
       );
     } catch (err) {
       // A 404 on confirm means the batchId is missing or expired (the upload

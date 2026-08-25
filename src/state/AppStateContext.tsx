@@ -28,7 +28,7 @@ interface AppStateValue {
   setStaffDirectory: React.Dispatch<React.SetStateAction<StaffDirectoryEntry[]>>;
   handleRequestCover: (shiftId: string, coveringEmployeeId: string) => void;
   handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => void;
-  handleCommitted: (rows: PreviewRow[], batchId: string) => void;
+  handleCommitted: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
 }
 
 const AppStateCtx = createContext<AppStateValue | null>(null);
@@ -131,39 +131,56 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [swapRequests],
   );
 
-  const handleCommitted = useCallback((rows: PreviewRow[], batchId: string) => {
-    const employees: Employee[] = [];
-    const shifts: Shift[] = [];
-    const seen = new Set<string>();
-    for (const row of rows) {
-      const empId = `upload-emp-${row.employeeName}`;
-      if (!seen.has(empId)) {
-        seen.add(empId);
-        employees.push({
-          id: empId,
-          name: row.employeeName,
-          role: row.role || 'staff',
-          status: 'active',
-          needsRoleReview: row.status === 'unmatched_role',
+  const handleCommitted = useCallback(
+    (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => {
+      const persistedByRow = new Map(persisted.map((p) => [p.rowNumber, p]));
+      const employees: Employee[] = [];
+      const shifts: Shift[] = [];
+      const seen = new Set<string>();
+      for (const row of rows) {
+        // A row that was actually written to the DB carries its real User.id
+        // (or null if the employee matched a role but not a specific person —
+        // "new_employee, imported unassigned"). A row that was never
+        // persisted (unmatched_role) has no real id at all, and keeps the
+        // synthetic per-name fallback so it still renders, flagged as
+        // "not saved", exactly as before.
+        const realUserId = persistedByRow.get(row.rowNumber)?.userId ?? null;
+        const empId = realUserId ?? `upload-emp-${row.employeeName}`;
+        if (!seen.has(empId)) {
+          seen.add(empId);
+          employees.push({
+            id: empId,
+            name: row.employeeName,
+            role: row.role || 'staff',
+            status: 'active',
+            needsRoleReview: row.status === 'unmatched_role',
+          });
+        }
+        const realShiftId = persistedByRow.get(row.rowNumber)?.shiftId;
+        shifts.push({
+          // Real DB id when this row was actually persisted; the previous
+          // synthetic fallback only for rows that were never written
+          // (unmatched_role) — see the ShiftUpload confirm-flow comment for
+          // why those still need to render, unsaved-flagged, rather than
+          // vanish.
+          id: realShiftId ?? `upload-shift-${batchId}-${row.rowNumber}`,
+          employeeId: empId,
+          date: row.date,
+          start: row.startTime,
+          end: row.endTime,
+          type: 'service',
+          overnight: row.overnight,
+          requiredRole: row.role || undefined,
+          source: `Uploaded roster (${row.role || 'role unknown'})`,
         });
       }
-      shifts.push({
-        id: `upload-shift-${batchId}-${row.rowNumber}`,
-        employeeId: empId,
-        date: row.date,
-        start: row.startTime,
-        end: row.endTime,
-        type: 'service',
-        overnight: row.overnight,
-        requiredRole: row.role || undefined,
-        source: `Uploaded roster (${row.role || 'role unknown'})`,
-      });
-    }
-    setCommitted((prev) => ({
-      employees: [...prev.employees, ...employees],
-      shifts: [...prev.shifts, ...shifts],
-    }));
-  }, []);
+      setCommitted((prev) => ({
+        employees: [...prev.employees, ...employees],
+        shifts: [...prev.shifts, ...shifts],
+      }));
+    },
+    [],
+  );
 
   // setCollapsed/setStaffDirectory are useState setters — stable by definition,
   // and `config` is a module constant, so neither needs to be a dependency.
