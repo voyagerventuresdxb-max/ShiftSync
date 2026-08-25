@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { DEFAULT_MAINLAND_RULES, type Employee, type Roster, type Shift, type SwapRequest, type VenueConfig } from '../engine/types';
 import { groupIntoSections, nameKey, type GroupedSection } from '../engine/roleGrouping';
 import type { PreviewRow } from '../api/schedules';
@@ -100,32 +100,38 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return groupIntoSections(mergedRoster.employees, jobTitleByName);
   }, [mergedRoster.employees, staffDirectoryByName]);
 
-  const handleRequestCover = (shiftId: string, coveringEmployeeId: string) => {
-    const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
-    if (!shift) return;
-    const request: SwapRequest = {
-      id: `swap-${shiftId}-${Date.now()}`,
-      shiftId,
-      requestedBy: shift.employeeId,
-      coveringEmployeeId,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-    };
-    setSwapRequests((prev) => [...prev, request]);
-  };
+  const handleRequestCover = useCallback(
+    (shiftId: string, coveringEmployeeId: string) => {
+      const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
+      if (!shift) return;
+      const request: SwapRequest = {
+        id: `swap-${shiftId}-${Date.now()}`,
+        shiftId,
+        requestedBy: shift.employeeId,
+        coveringEmployeeId,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+      setSwapRequests((prev) => [...prev, request]);
+    },
+    [mergedRoster.shifts],
+  );
 
-  const handleDecideRequest = (requestId: string, decision: 'approved' | 'denied') => {
-    const request = swapRequests.find((r) => r.id === requestId);
-    if (!request || request.status !== 'pending') return;
-    setSwapRequests((prev) =>
-      prev.map((r) => (r.id === requestId ? { ...r, status: decision, decidedAt: new Date().toISOString() } : r)),
-    );
-    if (decision === 'approved') {
-      setReassignments((prev) => ({ ...prev, [request.shiftId]: request.coveringEmployeeId }));
-    }
-  };
+  const handleDecideRequest = useCallback(
+    (requestId: string, decision: 'approved' | 'denied') => {
+      const request = swapRequests.find((r) => r.id === requestId);
+      if (!request || request.status !== 'pending') return;
+      setSwapRequests((prev) =>
+        prev.map((r) => (r.id === requestId ? { ...r, status: decision, decidedAt: new Date().toISOString() } : r)),
+      );
+      if (decision === 'approved') {
+        setReassignments((prev) => ({ ...prev, [request.shiftId]: request.coveringEmployeeId }));
+      }
+    },
+    [swapRequests],
+  );
 
-  const handleCommitted = (rows: PreviewRow[], batchId: string) => {
+  const handleCommitted = useCallback((rows: PreviewRow[], batchId: string) => {
     const employees: Employee[] = [];
     const shifts: Shift[] = [];
     const seen = new Set<string>();
@@ -157,22 +163,37 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       employees: [...prev.employees, ...employees],
       shifts: [...prev.shifts, ...shifts],
     }));
-  };
+  }, []);
 
-  const value: AppStateValue = {
-    config,
-    mergedRoster,
-    swapRequests,
-    staffDirectory,
-    staffDirectoryByName,
-    sections,
-    collapsed,
-    setCollapsed,
-    setStaffDirectory,
-    handleRequestCover,
-    handleDecideRequest,
-    handleCommitted,
-  };
+  // setCollapsed/setStaffDirectory are useState setters — stable by definition,
+  // and `config` is a module constant, so neither needs to be a dependency.
+  const value: AppStateValue = useMemo(
+    () => ({
+      config,
+      mergedRoster,
+      swapRequests,
+      staffDirectory,
+      staffDirectoryByName,
+      sections,
+      collapsed,
+      setCollapsed,
+      setStaffDirectory,
+      handleRequestCover,
+      handleDecideRequest,
+      handleCommitted,
+    }),
+    [
+      mergedRoster,
+      swapRequests,
+      staffDirectory,
+      staffDirectoryByName,
+      sections,
+      collapsed,
+      handleRequestCover,
+      handleDecideRequest,
+      handleCommitted,
+    ],
+  );
 
   return <AppStateCtx.Provider value={value}>{children}</AppStateCtx.Provider>;
 }
