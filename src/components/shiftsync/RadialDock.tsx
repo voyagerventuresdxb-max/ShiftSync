@@ -19,7 +19,7 @@ const DRAG_PX_PER_STATION = 46; // shorter drag distance per tab
 const SNAP_DISTANCE = 0.24; // ~24% of station spacing commits a move
 const FLICK_VELOCITY = 2.2; // stations / second
 
-/** wrap a station offset into (-2.5, 2.5] so icons travel around the dial */
+/** wrap a station offset into (-STATIONS/2, STATIONS/2] so icons travel around the dial */
 function wrapStation(v: number) {
   const m = ((v % STATIONS) + STATIONS) % STATIONS;
   return m > STATIONS / 2 ? m - STATIONS : m;
