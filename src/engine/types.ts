@@ -132,6 +132,12 @@ export interface SwapRequest {
   status: SwapRequestStatus;
   createdAt: string;
   decidedAt?: string;
+  /** ISO datetime the request window closes — drives the countdown timer. */
+  expiresAt: string;
+  /** True when a different approved request already reassigned this shift out from under this one. */
+  locked: boolean;
+  /** Human-readable audit line (e.g. "Approved · shift reassigned to Priya"). */
+  auditNote?: string;
 }
 
 /** Result of a parse operation. */

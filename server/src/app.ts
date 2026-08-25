@@ -6,6 +6,7 @@ import { staffDirectoryRouter } from './routes/staffDirectory.js';
 import { floorPlanRouter } from './routes/floorPlan.js';
 import { announcementsRouter } from './routes/announcements.js';
 import { shoutoutsRouter } from './routes/shoutouts.js';
+import { swapRequestsRouter } from './routes/swapRequests.js';
 
 export function createApp() {
   const app = express();
@@ -24,6 +25,7 @@ export function createApp() {
   app.use('/api/floor-plan', floorPlanRouter);
   app.use('/api/announcements', announcementsRouter);
   app.use('/api/shoutouts', shoutoutsRouter);
+  app.use('/api/swap-requests', swapRequestsRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {

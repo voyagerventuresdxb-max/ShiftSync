@@ -3,6 +3,7 @@ import { DEFAULT_MAINLAND_RULES, type Employee, type Roster, type Shift, type Sw
 import { groupIntoSections, nameKey, type GroupedSection } from '../engine/roleGrouping';
 import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
+import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 
 const config: VenueConfig = {
   id: 'venue-1',
@@ -28,8 +29,8 @@ interface AppStateValue {
   setStaffDirectory: React.Dispatch<React.SetStateAction<StaffDirectoryEntry[]>>;
   currentEmployeeId: string | undefined;
   setCurrentEmployeeId: React.Dispatch<React.SetStateAction<string | undefined>>;
-  handleRequestCover: (shiftId: string, coveringEmployeeId: string) => void;
-  handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => void;
+  handleRequestCover: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
+  handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => Promise<void>;
   handleCommitted: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
 }
 
@@ -52,7 +53,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     employees: [],
     shifts: [],
   });
-  const [reassignments, setReassignments] = useState<Record<string, string>>({});
   const [swapRequests, setSwapRequests] = useState<SwapRequest[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
@@ -71,11 +71,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (!shifts.some((x) => x.id === s.id)) shifts.push(s);
       }
     }
-    if (Object.keys(reassignments).length > 0) {
-      shifts = shifts.map((s) => (reassignments[s.id] ? { ...s, employeeId: reassignments[s.id] } : s));
-    }
     return { ...roster, employees, shifts };
-  }, [roster, committed, reassignments]);
+  }, [roster, committed]);
 
   const staffDirectoryByName = useMemo(() => {
     const map = new Map<string, StaffDirectoryEntry>();
@@ -103,6 +100,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   }, [currentEmployeeId, mergedRoster.employees]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchSwapRequests('seed-location')
+      .then((list) => {
+        if (!cancelled) setSwapRequests(list);
+      })
+      .catch(() => {
+        // ApprovalsPanel surfaces its own load error when rendered; nothing to show here.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const sections = useMemo(() => {
     const jobTitleByName = new Map<string, string | null | undefined>();
     for (const [key, entry] of staffDirectoryByName) jobTitleByName.set(key, entry.jobTitle);
@@ -110,35 +121,33 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [mergedRoster.employees, staffDirectoryByName]);
 
   const handleRequestCover = useCallback(
-    (shiftId: string, coveringEmployeeId: string) => {
+    async (shiftId: string, coveringEmployeeId: string) => {
       const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
       if (!shift) return;
-      const request: SwapRequest = {
-        id: `swap-${shiftId}-${Date.now()}`,
-        shiftId,
-        requestedBy: shift.employeeId,
-        coveringEmployeeId,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      };
-      setSwapRequests((prev) => [...prev, request]);
+      try {
+        const request = await createSwapRequest({
+          shiftId,
+          requestedById: shift.employeeId,
+          targetUserId: coveringEmployeeId,
+        });
+        setSwapRequests((prev) => [...prev, request]);
+      } catch {
+        // PersonalRota's cover-request UI has no error slot today — a follow-up
+        // phase can surface this; for now the request simply doesn't appear.
+      }
     },
     [mergedRoster.shifts],
   );
 
-  const handleDecideRequest = useCallback(
-    (requestId: string, decision: 'approved' | 'denied') => {
-      const request = swapRequests.find((r) => r.id === requestId);
-      if (!request || request.status !== 'pending') return;
-      setSwapRequests((prev) =>
-        prev.map((r) => (r.id === requestId ? { ...r, status: decision, decidedAt: new Date().toISOString() } : r)),
-      );
-      if (decision === 'approved') {
-        setReassignments((prev) => ({ ...prev, [request.shiftId]: request.coveringEmployeeId }));
-      }
-    },
-    [swapRequests],
-  );
+  const handleDecideRequest = useCallback(async (requestId: string, decision: 'approved' | 'denied') => {
+    try {
+      const updated = await decideSwapRequest(requestId, decision);
+      setSwapRequests((prev) => prev.map((r) => (r.id === requestId ? updated : r)));
+    } catch {
+      // Surfacing this cleanly (e.g. a locked-request 409) is ApprovalsPanel's
+      // job in a follow-up — for now a failed decide leaves the row as-is.
+    }
+  }, []);
 
   const handleCommitted = useCallback(
     (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => {
