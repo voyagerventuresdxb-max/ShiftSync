@@ -26,6 +26,8 @@ interface AppStateValue {
   collapsed: Record<string, boolean>;
   setCollapsed: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setStaffDirectory: React.Dispatch<React.SetStateAction<StaffDirectoryEntry[]>>;
+  currentEmployeeId: string | undefined;
+  setCurrentEmployeeId: React.Dispatch<React.SetStateAction<string | undefined>>;
   handleRequestCover: (shiftId: string, coveringEmployeeId: string) => void;
   handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => void;
   handleCommitted: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
@@ -54,6 +56,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [swapRequests, setSwapRequests] = useState<SwapRequest[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
 
   const mergedRoster: Roster = useMemo(() => {
     let employees = roster.employees;
@@ -93,6 +96,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (currentEmployeeId === undefined && mergedRoster.employees.length > 0) {
+      setCurrentEmployeeId(mergedRoster.employees[0]!.id);
+    }
+  }, [currentEmployeeId, mergedRoster.employees]);
 
   const sections = useMemo(() => {
     const jobTitleByName = new Map<string, string | null | undefined>();
@@ -195,6 +204,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       collapsed,
       setCollapsed,
       setStaffDirectory,
+      currentEmployeeId,
+      setCurrentEmployeeId,
       handleRequestCover,
       handleDecideRequest,
       handleCommitted,
@@ -206,6 +217,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       staffDirectoryByName,
       sections,
       collapsed,
+      currentEmployeeId,
       handleRequestCover,
       handleDecideRequest,
       handleCommitted,

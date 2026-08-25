@@ -1,15 +1,3 @@
-import Dashboard from '../components/Dashboard';
-import { useAppState } from '../state/AppStateContext';
-
 export default function HomeContent() {
-  const { mergedRoster, config, swapRequests, handleRequestCover, handleDecideRequest } = useAppState();
-  return (
-    <Dashboard
-      roster={mergedRoster}
-      config={config}
-      swapRequests={swapRequests}
-      onRequestCover={handleRequestCover}
-      onDecideRequest={handleDecideRequest}
-    />
-  );
+  return <p className="panel p-5 text-sm text-muted-foreground">Home feed — under construction.</p>;
 }
