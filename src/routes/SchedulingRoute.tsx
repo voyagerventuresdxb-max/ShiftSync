@@ -1,7 +1,6 @@
-import { useMemo } from 'react';
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
-import { periodOf, shiftsFor, totalHours, weekDates, weekdayOf } from '../engine/rosterView';
+import { periodOf, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
 import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
@@ -10,6 +9,7 @@ import { HourTracker } from '../components/shiftsync/HourTracker';
 import ShiftUpload from '../components/ShiftUpload';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
+import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -109,12 +109,43 @@ export default function SchedulingContent() {
     });
   });
 
-  const hourStaff = mergedRoster.employees.map((emp) => ({
-    id: emp.id,
-    name: emp.name,
-    hours: totalHours(shiftsFor(mergedRoster, emp.id)),
-    contract: config.compliance.maxWeeklyHours,
-  }));
+  const [hourStaff, setHourStaff] = useState<{ id: string; name: string; hours: number; contract: number }[]>([]);
+  const [clockedIn, setClockedIn] = useState(false);
+
+  const refreshHours = useCallback(() => {
+    fetchWeeklyHours('seed-location', mergedRoster.weekStart)
+      .then((entries) => {
+        const byId = new Map(entries.map((e) => [e.id, e.hours]));
+        setHourStaff(
+          mergedRoster.employees.map((emp) => ({
+            id: emp.id,
+            name: emp.name,
+            hours: byId.get(emp.id) ?? 0,
+            contract: config.compliance.maxWeeklyHours,
+          })),
+        );
+      })
+      .catch(() => setHourStaff([]));
+  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours]);
+
+  useEffect(() => {
+    refreshHours();
+  }, [refreshHours]);
+
+  const handleClockIn = () => {
+    if (!activeEmployee) return;
+    clockIn(activeEmployee.id).then(() => {
+      setClockedIn(true);
+      refreshHours();
+    });
+  };
+  const handleClockOut = () => {
+    if (!activeEmployee) return;
+    clockOut(activeEmployee.id).then(() => {
+      setClockedIn(false);
+      refreshHours();
+    });
+  };
 
   return (
     <>
@@ -170,7 +201,13 @@ export default function SchedulingContent() {
         </div>
 
         <aside className="min-w-0 space-y-5">
-          <HourTracker staff={hourStaff} />
+          <HourTracker
+            staff={hourStaff}
+            currentEmployeeName={activeEmployee?.name}
+            clockedIn={clockedIn}
+            onClockIn={handleClockIn}
+            onClockOut={handleClockOut}
+          />
         </aside>
       </div>
 

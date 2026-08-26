@@ -1,4 +1,4 @@
-import { Gauge } from 'lucide-react';
+import { Gauge, LogIn, LogOut } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 export interface HourTrackerStaff {
@@ -8,16 +8,43 @@ export interface HourTrackerStaff {
   contract: number;
 }
 
-export function HourTracker({ staff }: { staff: HourTrackerStaff[] }) {
+export function HourTracker({
+  staff,
+  currentEmployeeName,
+  clockedIn,
+  onClockIn,
+  onClockOut,
+}: {
+  staff: HourTrackerStaff[];
+  currentEmployeeName?: string;
+  clockedIn?: boolean;
+  onClockIn?: () => void;
+  onClockOut?: () => void;
+}) {
   return (
     <section className="panel animate-rise p-4 sm:p-5">
       <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
         <div className="min-w-0">
-          <p className="eyebrow">Compliance</p>
-          <h2 className="truncate text-base font-semibold tracking-tight">Hour Transparency</h2>
+          <p className="eyebrow">Real hours, not the schedule</p>
+          <h2 className="truncate text-base font-semibold tracking-tight">Hour Tracking</h2>
         </div>
         <Gauge className="h-5 w-5 shrink-0 text-accent" />
       </header>
+
+      {currentEmployeeName && (onClockIn || onClockOut) && (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/40 p-3">
+          <span className="min-w-0 truncate text-sm font-medium">{currentEmployeeName}</span>
+          {clockedIn ? (
+            <button onClick={onClockOut} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/10">
+              <LogOut className="h-3.5 w-3.5" /> Clock out
+            </button>
+          ) : (
+            <button onClick={onClockIn} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground">
+              <LogIn className="h-3.5 w-3.5" /> Clock in
+            </button>
+          )}
+        </div>
+      )}
 
       {staff.length === 0 ? (
         <p className="mt-4 text-sm text-muted-foreground">No staff parsed yet.</p>
