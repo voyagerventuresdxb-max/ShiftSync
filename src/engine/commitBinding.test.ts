@@ -1,69 +1,41 @@
 /**
- * Smoke test for the "Confirm & Commit" state-binding logic.
+ * Tests for the "Confirm & Commit" state-binding logic.
  *
  * Verifies that the reviewed shift rows flushed from the upload preview
  * (via `onCommitted`) are converted into Employee/Shift objects and merged
  * into the main roster state so the grid and weekly totals populate.
  *
- * This mirrors the exact conversion + merge logic in `src/App.tsx`
- * (`handleCommitted` + `mergedRoster`) and `src/components/ShiftUpload.tsx`
- * (`onCommitted?.(data.preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role'))`).
+ * These exercise the REAL functions (`buildCommitted` / `mergeCommitted` in
+ * `./commitBinding`) that `src/state/AppStateContext.tsx` calls from
+ * `handleCommitted` and its `mergedRoster` memo — not a local copy. An earlier
+ * version of this file mirrored the logic privately and silently went stale
+ * when the real code gained the `persisted` real-id parameter.
+ *
+ * `src/components/ShiftUpload.tsx` decides what gets flushed:
+ * `onCommitted?.(data.preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role'))`.
  * `unmatched_role` rows ARE flushed (not persisted server-side, but shown
  * flagged so they don't silently vanish from the manager's view) — see the
  * "needsRoleReview" tests below.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Employee, Roster, Shift } from './types';
+import type { Roster } from './types';
 import type { PreviewRow } from '../api/schedules';
 import { shiftHours } from './time';
+import { buildCommitted, mergeCommitted, type PersistedRow } from './commitBinding';
 
-/** Mirrors App.tsx handleCommitted: (PreviewRow[], batchId) -> { employees, shifts }. */
-function toCommitted(rows: PreviewRow[], batchId: string): { employees: Employee[]; shifts: Shift[] } {
-  const employees: Employee[] = [];
-  const shifts: Shift[] = [];
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const empId = `upload-emp-${row.employeeName}`;
-    if (!seen.has(empId)) {
-      seen.add(empId);
-      employees.push({
-        id: empId,
-        name: row.employeeName,
-        role: row.role || 'staff',
-        status: 'active',
-        needsRoleReview: row.status === 'unmatched_role',
-      });
-    }
-    shifts.push({
-      // Namespaced by batchId so two batches sharing a rowNumber don't collide.
-      id: `upload-shift-${batchId}-${row.rowNumber}`,
-      employeeId: empId,
-      date: row.date,
-      start: row.startTime,
-      end: row.endTime,
-      type: 'service',
-      overnight: row.overnight,
-      source: `Uploaded roster (${row.role || 'role unknown'})`,
-    });
-  }
-  return { employees, shifts };
-}
-
-/** Mirrors App.tsx mergedRoster: base roster + committed -> merged Roster. */
-function mergeRoster(base: Roster, committed: { employees: Employee[]; shifts: Shift[] }): Roster {
-  if (committed.employees.length === 0 && committed.shifts.length === 0) {
-    return base;
-  }
-  const employees = [...base.employees];
-  const shifts = [...base.shifts];
-  for (const emp of committed.employees) {
-    if (!employees.some((e) => e.id === emp.id)) employees.push(emp);
-  }
-  for (const s of committed.shifts) {
-    if (!shifts.some((x) => x.id === s.id)) shifts.push(s);
-  }
-  return { ...base, employees, shifts };
+/**
+ * Server response for rows that really were written to the DB. Mirrors what
+ * `persistShifts` returns, correlated by `rowNumber`.
+ */
+function persistedFor(rows: PreviewRow[]): PersistedRow[] {
+  return rows
+    .filter((r) => r.status === 'matched')
+    .map((r) => ({
+      rowNumber: r.rowNumber,
+      shiftId: `db-shift-${r.rowNumber}`,
+      userId: `db-user-${r.employeeName}`,
+    }));
 }
 
 /** Build a realistic 116-shift preview payload across a 7-day week. */
@@ -140,9 +112,20 @@ test('Confirm & Commit flushes matched preview rows into the roster state', () =
   const committedRows = preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role');
   assert.equal(committedRows.length, 116);
 
-  const committed = toCommitted(committedRows, 'batch-1');
+  const committed = buildCommitted(committedRows, 'batch-1', persistedFor(committedRows));
   assert.equal(committed.employees.length, 8, '8 unique staff members');
   assert.equal(committed.shifts.length, 116, '116 shifts flushed');
+
+  // Every row here was persisted, so every id must be the REAL database id —
+  // the synthetic `upload-` fallback must not appear at all.
+  assert.ok(
+    committed.employees.every((e) => e.id.startsWith('db-user-')),
+    'persisted rows use real User ids, not synthetic upload-emp- ids',
+  );
+  assert.ok(
+    committed.shifts.every((s) => s.id.startsWith('db-shift-')),
+    'persisted rows use real Shift ids, not synthetic upload-shift- ids',
+  );
 
   // Base roster (empty text parse) + committed -> merged roster.
   const base: Roster = {
@@ -153,7 +136,7 @@ test('Confirm & Commit flushes matched preview rows into the roster state', () =
     shifts: [],
     createdAt: new Date().toISOString(),
   };
-  const merged = mergeRoster(base, committed);
+  const merged = mergeCommitted(base, committed);
 
   // The grid renders mergedRoster.employees / mergedRoster.shifts.
   assert.equal(merged.employees.length, 8);
@@ -176,8 +159,20 @@ test('unmatched-role rows ARE flushed, flagged needsRoleReview, not silently dro
   const committedRows = preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role');
   assert.equal(committedRows.length, 116, 'the unmatched row is still flushed, not excluded');
 
-  const committed = toCommitted(committedRows, 'batch-1');
+  // The unmatched_role row is NOT persisted, so it is absent from `persisted`
+  // and must fall back to synthetic ids while every other row gets real ones.
+  const committed = buildCommitted(committedRows, 'batch-1', persistedFor(committedRows));
   assert.equal(committed.shifts.length, 116, 'all 116 shifts present, including the unresolved one');
+
+  const unsavedShift = committed.shifts.find((s) => s.id === 'upload-shift-batch-1-1');
+  assert.ok(unsavedShift, 'the unpersisted row keeps the synthetic shift id fallback');
+  assert.equal(unsavedShift!.employeeId, 'upload-emp-Alessandro', 'and the synthetic employee id fallback');
+
+  const savedShifts = committed.shifts.filter((s) => s.id !== 'upload-shift-batch-1-1');
+  assert.ok(
+    savedShifts.every((s) => s.id.startsWith('db-shift-')),
+    'every persisted row still uses its real Shift id',
+  );
 
   const flagged = committed.employees.find((e) => e.name === 'Alessandro');
   assert.ok(flagged, 'Alessandro is present');
@@ -225,8 +220,10 @@ test('two separate upload batches with overlapping rowNumbers do not collide (re
     },
   ];
 
-  const committedA = toCommitted(batchARows, 'batch-aaa');
-  const committedB = toCommitted(batchBRows, 'batch-bbb');
+  // Neither batch was persisted (empty `persisted`), so both fall back to the
+  // synthetic ids — exactly the path where the collision bug lived.
+  const committedA = buildCommitted(batchARows, 'batch-aaa', []);
+  const committedB = buildCommitted(batchBRows, 'batch-bbb', []);
 
   assert.notEqual(
     committedA.shifts[0].id,
@@ -242,8 +239,8 @@ test('two separate upload batches with overlapping rowNumbers do not collide (re
     shifts: [],
     createdAt: new Date().toISOString(),
   };
-  const afterA = mergeRoster(base, committedA);
-  const afterB = mergeRoster(afterA, committedB);
+  const afterA = mergeCommitted(base, committedA);
+  const afterB = mergeCommitted(afterA, committedB);
 
   assert.equal(afterB.employees.length, 2, 'both Person A and Person B present');
   assert.equal(afterB.shifts.length, 2, 'both shifts present -- neither silently dropped');
@@ -253,7 +250,8 @@ test('two separate upload batches with overlapping rowNumbers do not collide (re
 
 test('committed shifts merge into an existing text-parsed roster without duplication', () => {
   const preview = build116ShiftPreview();
-  const committed = toCommitted(preview.filter((r) => r.status === 'matched'), 'batch-1');
+  const matched = preview.filter((r) => r.status === 'matched');
+  const committed = buildCommitted(matched, 'batch-1', persistedFor(matched));
 
   // Base roster already has one employee + one shift from the text parser.
   const base: Roster = {
@@ -267,8 +265,8 @@ test('committed shifts merge into an existing text-parsed roster without duplica
     createdAt: new Date().toISOString(),
   };
 
-  const merged = mergeRoster(base, committed);
-  // Maria exists in both base (emp-1) and committed (upload-emp-Maria) — both
+  const merged = mergeCommitted(base, committed);
+  // Maria exists in both base (emp-1) and committed (db-user-Maria) — both
   // are distinct ids, so both rows appear (no id collision). Shifts: base 1 +
   // committed 116 = 117, no dedup collision because ids differ.
   assert.equal(merged.employees.length, 9);

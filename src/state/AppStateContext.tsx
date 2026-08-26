@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { DEFAULT_MAINLAND_RULES, type Employee, type Roster, type Shift, type SwapRequest, type VenueConfig } from '../engine/types';
 import { groupIntoSections, nameKey, type GroupedSection } from '../engine/roleGrouping';
+import { buildCommitted, mergeCommitted, type PersistedRow } from '../engine/commitBinding';
 import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
@@ -31,7 +32,7 @@ interface AppStateValue {
   setCurrentEmployeeId: React.Dispatch<React.SetStateAction<string | undefined>>;
   handleRequestCover: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
   handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => Promise<void>;
-  handleCommitted: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
+  handleCommitted: (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => void;
 }
 
 const AppStateCtx = createContext<AppStateValue | null>(null);
@@ -58,21 +59,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
 
-  const mergedRoster: Roster = useMemo(() => {
-    let employees = roster.employees;
-    let shifts = roster.shifts;
-    if (committed.employees.length > 0 || committed.shifts.length > 0) {
-      employees = [...roster.employees];
-      shifts = [...roster.shifts];
-      for (const emp of committed.employees) {
-        if (!employees.some((e) => e.id === emp.id)) employees.push(emp);
-      }
-      for (const s of committed.shifts) {
-        if (!shifts.some((x) => x.id === s.id)) shifts.push(s);
-      }
-    }
-    return { ...roster, employees, shifts };
-  }, [roster, committed]);
+  const mergedRoster: Roster = useMemo(() => mergeCommitted(roster, committed), [roster, committed]);
 
   const staffDirectoryByName = useMemo(() => {
     const map = new Map<string, StaffDirectoryEntry>();
@@ -168,48 +155,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleCommitted = useCallback(
-    (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => {
-      const persistedByRow = new Map(persisted.map((p) => [p.rowNumber, p]));
-      const employees: Employee[] = [];
-      const shifts: Shift[] = [];
-      const seen = new Set<string>();
-      for (const row of rows) {
-        // A row that was actually written to the DB carries its real User.id
-        // (or null if the employee matched a role but not a specific person —
-        // "new_employee, imported unassigned"). A row that was never
-        // persisted (unmatched_role) has no real id at all, and keeps the
-        // synthetic per-name fallback so it still renders, flagged as
-        // "not saved", exactly as before.
-        const realUserId = persistedByRow.get(row.rowNumber)?.userId ?? null;
-        const empId = realUserId ?? `upload-emp-${row.employeeName}`;
-        if (!seen.has(empId)) {
-          seen.add(empId);
-          employees.push({
-            id: empId,
-            name: row.employeeName,
-            role: row.role || 'staff',
-            status: 'active',
-            needsRoleReview: row.status === 'unmatched_role',
-          });
-        }
-        const realShiftId = persistedByRow.get(row.rowNumber)?.shiftId;
-        shifts.push({
-          // Real DB id when this row was actually persisted; the previous
-          // synthetic fallback only for rows that were never written
-          // (unmatched_role) — see the ShiftUpload confirm-flow comment for
-          // why those still need to render, unsaved-flagged, rather than
-          // vanish.
-          id: realShiftId ?? `upload-shift-${batchId}-${row.rowNumber}`,
-          employeeId: empId,
-          date: row.date,
-          start: row.startTime,
-          end: row.endTime,
-          type: 'service',
-          overnight: row.overnight,
-          requiredRole: row.role || undefined,
-          source: `Uploaded roster (${row.role || 'role unknown'})`,
-        });
-      }
+    (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => {
+      // Conversion lives in engine/commitBinding so it is directly unit-testable
+      // (see commitBinding.test.ts) instead of being mirrored by the tests.
+      const { employees, shifts } = buildCommitted(rows, batchId, persisted);
       setCommitted((prev) => ({
         employees: [...prev.employees, ...employees],
         shifts: [...prev.shifts, ...shifts],
