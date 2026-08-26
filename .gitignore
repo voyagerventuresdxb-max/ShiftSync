@@ -1,6 +1,9 @@
 # dependencies
 node_modules/
 .node/
+server/docling-sidecar/.venv/
+server/docling-sidecar/__pycache__/
+*.pyc
 
 # build output
 dist/
@@ -30,6 +33,8 @@ pnpm-debug.log*
 .DS_Store
 
 # runtime state (regenerated per project)
+.upload-cache.json
+server/uploads/
 .claude-flow/logs/
 .claude-flow/metrics/
 .claude-flow/sessions/
