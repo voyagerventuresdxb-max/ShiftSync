@@ -1,8 +1,38 @@
 import { Router } from 'express';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../lib/prisma.js';
 import { isRequestLocked, nextRequestWindowClose } from '../lib/swapRequestPolicy.js';
 
+dayjs.extend(utc);
+
 export const swapRequestsRouter = Router();
+
+/**
+ * The Prisma `include` every swap-request read uses. Kept in one place so the
+ * list/create/decide paths can never drift apart on which relation fields
+ * `toDto` is allowed to read.
+ */
+const SWAP_REQUEST_INCLUDE = {
+  requestedBy: { select: { fullName: true } },
+  targetUser: { select: { fullName: true } },
+  shift: { select: { userId: true, date: true, startTime: true, endTime: true } },
+} as const;
+
+/**
+ * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00".
+ *
+ * Built server-side so the Approvals panel does not depend on an in-memory
+ * roster that is empty on a fresh page load. Formatted in UTC (same rationale
+ * as `parsing/normalize.ts`): the stored wall-clock date/time is what matters,
+ * not how the server's local timezone happens to render it.
+ */
+function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date }): string {
+  const day = dayjs.utc(shift.date).format('ddd D MMM');
+  const start = dayjs.utc(shift.startTime).format('HH:mm');
+  const end = dayjs.utc(shift.endTime).format('HH:mm');
+  return `${day} · ${start}–${end}`;
+}
 
 /**
  * Thrown inside the decide transaction when the atomic `shift.updateMany`
@@ -27,7 +57,7 @@ function toDto(
     reviewedAt: Date | null;
     requestedBy: { fullName: string };
     targetUser: { fullName: string } | null;
-    shift: { userId: string | null };
+    shift: { userId: string | null; date: Date; startTime: Date; endTime: Date };
   },
 ) {
   const statusMap: Record<string, 'pending' | 'approved' | 'denied'> = {
@@ -40,6 +70,11 @@ function toDto(
     shiftId: r.shiftId,
     requestedBy: r.requestedById,
     coveringEmployeeId: r.targetUserId,
+    // Names and label are resolved server-side from the included relations so
+    // the client never has to look them up in a roster it may not have loaded.
+    requesterName: r.requestedBy.fullName,
+    coveringName: r.targetUser?.fullName ?? null,
+    shiftLabel: shiftLabelOf(r.shift),
     status: statusMap[r.status] ?? 'pending',
     createdAt: r.createdAt.toISOString(),
     decidedAt: r.reviewedAt?.toISOString(),
@@ -56,11 +91,7 @@ swapRequestsRouter.get('/:locationId', async (req, res) => {
     const rows = await prisma.shiftSwapRequest.findMany({
       where: { shift: { locationId } },
       orderBy: { createdAt: 'desc' },
-      include: {
-        requestedBy: { select: { fullName: true } },
-        targetUser: { select: { fullName: true } },
-        shift: { select: { userId: true } },
-      },
+      include: SWAP_REQUEST_INCLUDE,
     });
     return res.status(200).json({ requests: rows.map(toDto) });
   } catch (err) {
@@ -94,11 +125,7 @@ swapRequestsRouter.post('/', async (req, res) => {
         reason,
         expiresAt: nextRequestWindowClose(),
       },
-      include: {
-        requestedBy: { select: { fullName: true } },
-        targetUser: { select: { fullName: true } },
-        shift: { select: { userId: true } },
-      },
+      include: SWAP_REQUEST_INCLUDE,
     });
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {
@@ -161,11 +188,7 @@ swapRequestsRouter.patch('/:id', async (req, res) => {
         const updatedRequest = await tx.shiftSwapRequest.update({
           where: { id },
           data: { status, reviewedById, reviewedAt: new Date(), managerNote },
-          include: {
-            requestedBy: { select: { fullName: true } },
-            targetUser: { select: { fullName: true } },
-            shift: { select: { userId: true } },
-          },
+          include: SWAP_REQUEST_INCLUDE,
         });
 
         await tx.auditLog.create({

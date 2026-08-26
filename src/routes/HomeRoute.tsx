@@ -20,15 +20,21 @@ export default function HomeContent() {
     .slice()
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((r) => {
+      // Prefer the names/label the server resolved from the database. The
+      // roster lookup below is only a fallback for requests that lack them,
+      // and cannot work on a fresh load anyway (mergedRoster is populated by
+      // this session's own uploads, not fetched from the server).
       const shift = mergedRoster.shifts.find((s) => s.id === r.shiftId);
-      const shiftLabel = shift
-        ? `${weekdayOf(shift.date)} ${formatDayMonth(shift.date)} · ${shift.start}–${shift.end}`
-        : 'Shift no longer in roster';
+      const shiftLabel =
+        r.shiftLabel ??
+        (shift
+          ? `${weekdayOf(shift.date)} ${formatDayMonth(shift.date)} · ${shift.start}–${shift.end}`
+          : 'Shift no longer in roster');
       return {
         id: r.id,
         status: r.status,
-        requesterName: employeeName(r.requestedBy),
-        coveringName: employeeName(r.coveringEmployeeId),
+        requesterName: r.requesterName ?? employeeName(r.requestedBy),
+        coveringName: r.coveringName ?? employeeName(r.coveringEmployeeId),
         shiftLabel,
         requestedAt: r.createdAt,
         expiresAt: r.expiresAt,

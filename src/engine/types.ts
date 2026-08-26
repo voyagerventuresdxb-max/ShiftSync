@@ -138,6 +138,15 @@ export interface SwapRequest {
   locked: boolean;
   /** Human-readable audit line (e.g. "Approved · shift reassigned to Priya"). */
   auditNote?: string;
+  /**
+   * Display fields resolved server-side, so the Approvals panel can render real
+   * names/times without depending on an in-memory roster that is empty on a
+   * fresh page load. Optional because cached or locally-constructed requests
+   * may predate them; consumers fall back to a roster lookup when absent.
+   */
+  requesterName?: string;
+  coveringName?: string;
+  shiftLabel?: string;
 }
 
 /** Result of a parse operation. */
