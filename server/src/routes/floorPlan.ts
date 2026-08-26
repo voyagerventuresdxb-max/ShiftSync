@@ -229,18 +229,21 @@ floorPlanRouter.get('/:locationId', async (req, res) => {
 });
 
 /**
- * GET /api/floor-plan/:locationId/assignments?date=YYYY-MM-DD
+ * GET /api/floor-plan/:locationId/assignments?date=YYYY-MM-DD&period=AM|PM
  *
  * Returns every section for the location's current floor plan, each with
- * its assignments for that date embedded — the daily assignment screen
- * renders straight from this, no client-side joining needed.
+ * its assignments for that date AND period embedded.
  */
 floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
   try {
     const { locationId } = req.params;
     const date = String(req.query.date ?? '').trim();
+    const period = String(req.query.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: 'date query param is required, as YYYY-MM-DD.' });
+    }
+    if (period !== 'AM' && period !== 'PM') {
+      return res.status(400).json({ error: 'period query param is required, as AM or PM.' });
     }
     const shiftDate = new Date(`${date}T00:00:00.000Z`);
 
@@ -255,7 +258,7 @@ floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
       orderBy: { sortOrder: 'asc' },
       include: {
         assignments: {
-          where: { shiftDate },
+          where: { shiftDate, period: period as 'AM' | 'PM' },
           include: { staff: { select: { id: true, fullName: true } } },
           orderBy: { createdAt: 'asc' },
         },
@@ -274,6 +277,7 @@ floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
         staffName: a.staff.fullName,
         dutyLabel: a.dutyLabel,
         status: a.status,
+        notifiedAt: a.notifiedAt ? a.notifiedAt.toISOString() : null,
       })),
     }));
 
@@ -286,18 +290,14 @@ floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
 
 /**
  * POST /api/floor-plan/assignments
- * body: { sectionId, staffId, shiftDate, dutyLabel?, createdById? }
- *
- * Shared write path for both drag-and-drop and tap-to-pick. Upserts on the
- * (sectionId, staffId, shiftDate) unique constraint so re-assigning the
- * same person to the same section on the same day is a no-op update
- * (e.g. changing the duty label) instead of a duplicate-key error.
+ * body: { sectionId, staffId, shiftDate, period, dutyLabel?, createdById? }
  */
 floorPlanRouter.post('/assignments', async (req, res) => {
   try {
     const sectionId = String(req.body?.sectionId ?? '').trim();
     const staffId = String(req.body?.staffId ?? '').trim();
     const dateStr = String(req.body?.shiftDate ?? '').trim();
+    const period = String(req.body?.period ?? '').trim().toUpperCase();
     const dutyLabel = req.body?.dutyLabel ? String(req.body.dutyLabel).trim() : null;
     const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
 
@@ -306,18 +306,35 @@ floorPlanRouter.post('/assignments', async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       return res.status(400).json({ error: 'shiftDate is required, as YYYY-MM-DD.' });
     }
+    if (period !== 'AM' && period !== 'PM') {
+      return res.status(400).json({ error: 'period is required, as AM or PM.' });
+    }
     const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
 
     const section = await prisma.floorSection.findUnique({ where: { id: sectionId } });
     if (!section) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
     const staff = await prisma.user.findUnique({ where: { id: staffId } });
-    if (!staff) return res.status(404).json({ error: `Staff member "${staffId}" not found.` });
+    if (!staff || staff.locationId !== section.locationId) {
+      return res.status(404).json({ error: `Staff member "${staffId}" not found.` });
+    }
 
     const assignment = await prisma.sectionAssignment.upsert({
-      where: { sectionId_staffId_shiftDate: { sectionId, staffId, shiftDate } },
-      create: { sectionId, staffId, shiftDate, dutyLabel, createdById },
+      where: { sectionId_staffId_shiftDate_period: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM' } },
+      create: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById },
       update: { dutyLabel },
       include: { staff: { select: { id: true, fullName: true } } },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        locationId: section.locationId,
+        actorId: createdById,
+        shiftId: null,
+        action: 'SHIFT_ASSIGNED',
+        entityType: 'SectionAssignment',
+        entityId: assignment.id,
+        note: `${staff.fullName} assigned to ${section.label} (${period})${dutyLabel ? ` — ${dutyLabel}` : ''}`,
+      },
     });
 
     return res.status(201).json({
@@ -328,6 +345,7 @@ floorPlanRouter.post('/assignments', async (req, res) => {
         staffName: assignment.staff.fullName,
         dutyLabel: assignment.dutyLabel,
         status: assignment.status,
+        notifiedAt: assignment.notifiedAt ? assignment.notifiedAt.toISOString() : null,
       },
     });
   } catch (err) {
@@ -336,12 +354,29 @@ floorPlanRouter.post('/assignments', async (req, res) => {
   }
 });
 
-/** DELETE /api/floor-plan/assignments/:assignmentId — unassign. */
+/** DELETE /api/floor-plan/assignments/:assignmentId — unassign. body (optional): { actorId } */
 floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
   try {
     const { assignmentId } = req.params;
-    const existing = await prisma.sectionAssignment.findUnique({ where: { id: assignmentId } });
+    const existing = await prisma.sectionAssignment.findUnique({
+      where: { id: assignmentId },
+      include: { section: true, staff: { select: { fullName: true } } },
+    });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+
+    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    await prisma.auditLog.create({
+      data: {
+        locationId: existing.section.locationId,
+        actorId,
+        shiftId: null,
+        action: 'SHIFT_ASSIGNED',
+        entityType: 'SectionAssignment',
+        entityId: assignmentId,
+        note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
+      },
+    });
+
     await prisma.sectionAssignment.delete({ where: { id: assignmentId } });
     return res.status(204).send();
   } catch (err) {
@@ -351,26 +386,90 @@ floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
 });
 
 /**
- * POST /api/floor-plan/:locationId/publish
- * body: { shiftDate }
+ * PATCH /api/floor-plan/assignments/:assignmentId/notify
+ * body: { actorId? }
  *
- * Flips every DRAFT assignment for the location's sections on that date to
- * PUBLISHED. Assignment writes only — no notification is sent (that's
- * gated behind the separate build-vs-OneSignal decision).
+ * Stamps `notifiedAt` for one assignment — a manager-initiated, honest
+ * tracking event (no real push/SMS/WhatsApp send exists in this codebase).
+ */
+floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
+  try {
+    const { assignmentId } = req.params;
+    const existing = await prisma.sectionAssignment.findUnique({
+      where: { id: assignmentId },
+      include: { section: true, staff: { select: { fullName: true } } },
+    });
+    if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+
+    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const notifiedAt = new Date();
+    const updated = await prisma.sectionAssignment.update({
+      where: { id: assignmentId },
+      data: { notifiedAt },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        locationId: existing.section.locationId,
+        actorId,
+        shiftId: null,
+        action: 'ASSIGNMENT_NOTIFIED',
+        entityType: 'SectionAssignment',
+        entityId: assignmentId,
+        note: `${existing.staff.fullName} marked notified for ${existing.section.label} (${existing.period})`,
+      },
+    });
+
+    return res.status(200).json({ notifiedAt: updated.notifiedAt!.toISOString() });
+  } catch (err) {
+    console.error('[floorPlan.assignments.notify] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while marking the assignment notified.' });
+  }
+});
+
+/**
+ * POST /api/floor-plan/:locationId/publish
+ * body: { shiftDate, period, actorId? }
+ *
+ * Flips every DRAFT assignment for the location's sections on that date +
+ * period to PUBLISHED, and stamps `notifiedAt` on each one at the same
+ * moment — publishing IS the notify event for a freshly-published
+ * assignment. A manager can still individually re-notify one person later
+ * (e.g. after a reassignment) via the per-assignment notify endpoint.
  */
 floorPlanRouter.post('/:locationId/publish', async (req, res) => {
   try {
     const { locationId } = req.params;
     const dateStr = String(req.body?.shiftDate ?? '').trim();
+    const period = String(req.body?.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
       return res.status(400).json({ error: 'shiftDate is required, as YYYY-MM-DD.' });
     }
+    if (period !== 'AM' && period !== 'PM') {
+      return res.status(400).json({ error: 'period is required, as AM or PM.' });
+    }
     const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
+    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const now = new Date();
 
     const result = await prisma.sectionAssignment.updateMany({
-      where: { shiftDate, status: 'DRAFT', section: { locationId } },
-      data: { status: 'PUBLISHED', publishedAt: new Date() },
+      where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
+      data: { status: 'PUBLISHED', publishedAt: now, notifiedAt: now },
     });
+
+    if (result.count > 0) {
+      await prisma.auditLog.create({
+        data: {
+          locationId,
+          actorId,
+          shiftId: null,
+          action: 'ASSIGNMENT_NOTIFIED',
+          entityType: 'SectionAssignment',
+          entityId: locationId,
+          note: `Published & notified ${result.count} assignment${result.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
+        },
+      });
+    }
 
     return res.status(200).json({ publishedCount: result.count });
   } catch (err) {
