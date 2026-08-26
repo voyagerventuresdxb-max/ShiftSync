@@ -55,6 +55,7 @@ interface Props {
  */
 export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   const [date, setDate] = useState(todayIso());
+  const [period, setPeriod] = useState<'AM' | 'PM'>('AM');
   const [image, setImage] = useState<FloorPlanImageDto | null>(null);
   const [sections, setSections] = useState<AssignmentSectionDto[]>([]);
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
@@ -69,7 +70,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([fetchAssignments(locationId, date), fetchStaffDirectory(locationId)])
+    Promise.all([fetchAssignments(locationId, date, period), fetchStaffDirectory(locationId)])
       .then(([data, staffList]) => {
         setImage(data.image);
         setSections(data.sections);
@@ -77,22 +78,22 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load the floor plan.'))
       .finally(() => setLoading(false));
-  }, [locationId, date]);
+  }, [locationId, date, period]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const handleAssign = useCallback(
-    async (sectionId: string, staffId: string) => {
+    async (sectionId: string, staffId: string, dutyLabel?: string | null) => {
       try {
-        await assignStaff({ sectionId, staffId, shiftDate: date });
+        await assignStaff({ sectionId, staffId, shiftDate: date, period, dutyLabel: dutyLabel ?? null });
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not assign staff.');
       }
     },
-    [date, load],
+    [date, period, load],
   );
 
   const handleRemove = useCallback(
@@ -111,7 +112,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     setPublishing(true);
     setPublishResult(null);
     try {
-      const res = await publishAssignments(locationId, date);
+      const res = await publishAssignments(locationId, date, period);
       setPublishResult(res.publishedCount);
       load();
     } catch (err) {
@@ -119,7 +120,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     } finally {
       setPublishing(false);
     }
-  }, [locationId, date, load]);
+  }, [locationId, date, period, load]);
 
   // Soft pax-capacity warning: flag a high-capacity section whose
   // assigned-headcount ratio looks thin next to sections that do have
@@ -185,11 +186,24 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     <div className="fp-board">
       <div className="fp-toolbar">
         <input type="date" className="staff-directory-input" value={date} onChange={(e) => setDate(e.target.value)} />
+        <div className="fp-period-toggle" role="tablist" aria-label="Period">
+          {(['AM', 'PM'] as const).map((p) => (
+            <button
+              key={p}
+              role="tab"
+              aria-selected={period === p}
+              className={`chip${period === p ? ' chip-active' : ''}`}
+              onClick={() => setPeriod(p)}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
         <button className="btn btn-ghost" onClick={onEditSections}>
           Edit sections
         </button>
         <button className="btn btn-primary" onClick={() => void handlePublish()} disabled={publishing}>
-          {publishing ? 'Publishing…' : 'Publish day'}
+          {publishing ? 'Publishing…' : 'Publish & notify'}
         </button>
       </div>
 
@@ -201,10 +215,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
 
       {publishResult !== null && (
         <div className="success-block" role="status">
-          <p>
-            {publishResult} assignment{publishResult === 1 ? '' : 's'} published for {date}.{' '}
-            <span className="success-warn">Notifications aren't wired up yet.</span>
-          </p>
+          <p>{publishResult} assignment{publishResult === 1 ? '' : 's'} published and marked notified for {date} ({period}).</p>
         </div>
       )}
 
@@ -264,8 +275,8 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         <SectionPicker
           sectionLabel={pickerSection.label}
           staff={staff}
-          onPick={(staffId) => {
-            void handleAssign(pickerSection.id, staffId);
+          onPick={(staffId, dutyLabel) => {
+            void handleAssign(pickerSection.id, staffId, dutyLabel);
             setPickerSectionId(null);
           }}
           onClose={() => setPickerSectionId(null)}

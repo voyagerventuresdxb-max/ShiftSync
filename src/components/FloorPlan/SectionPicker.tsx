@@ -5,13 +5,14 @@ import { initials } from './staffFormat';
 interface Props {
   sectionLabel: string;
   staff: StaffDirectoryEntry[];
-  onPick: (staffId: string) => void;
+  onPick: (staffId: string, dutyLabel: string | null) => void;
   onClose: () => void;
 }
 
 /** Tap-to-pick search-select — the faster default for one-thumb floor-side use. */
 export default function SectionPicker({ sectionLabel, staff, onPick, onClose }: Props) {
   const [query, setQuery] = useState('');
+  const [dutyLabel, setDutyLabel] = useState('');
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return staff;
@@ -29,6 +30,12 @@ export default function SectionPicker({ sectionLabel, staff, onPick, onClose }: 
         </header>
         <input
           className="staff-directory-input"
+          placeholder="Duty (optional) — e.g. Expo, Bar-back"
+          value={dutyLabel}
+          onChange={(e) => setDutyLabel(e.target.value)}
+        />
+        <input
+          className="staff-directory-input"
           autoFocus
           placeholder="Search staff…"
           value={query}
@@ -36,7 +43,7 @@ export default function SectionPicker({ sectionLabel, staff, onPick, onClose }: 
         />
         <div className="fp-picker-list">
           {filtered.map((s) => (
-            <button key={s.id} className="fp-picker-item" onClick={() => onPick(s.id)}>
+            <button key={s.id} className="fp-picker-item" onClick={() => onPick(s.id, dutyLabel.trim() || null)}>
               <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border-strong bg-muted text-[10px] font-semibold">
                 {initials(s.fullName)}
               </span>
