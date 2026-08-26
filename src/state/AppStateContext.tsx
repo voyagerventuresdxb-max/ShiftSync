@@ -90,7 +90,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         })),
       );
     } catch {
-      // RotaBuilder/Team Matrix render their own empty state; nothing to show here.
+      // A failed fetch for the new week must not leave the previous week's
+      // shifts rendered (that would look like correct data for the wrong
+      // week) — clear to empty so RotaBuilder/Team Matrix show their own
+      // empty state instead of stale data.
+      setWeekShifts([]);
     }
   }, [weekStart]);
 
