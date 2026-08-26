@@ -131,8 +131,25 @@ shiftsRouter.patch('/:id', async (req, res) => {
 
     const timezone = await venueTimezone(existing.locationId);
     const data: Record<string, unknown> = {};
-    if (req.body?.roleId !== undefined) data.roleId = String(req.body.roleId);
-    if (req.body?.userId !== undefined) data.userId = req.body.userId ? String(req.body.userId) : null;
+    // Same existence + same-location checks POST / already applies — without
+    // these, PATCH could silently reassign a shift to a role/user from a
+    // different location, or hit a raw FK-violation 500 instead of a clean 404.
+    if (req.body?.roleId !== undefined) {
+      const roleId = String(req.body.roleId);
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role || role.locationId !== existing.locationId) return res.status(404).json({ error: `Role "${roleId}" not found.` });
+      data.roleId = roleId;
+    }
+    if (req.body?.userId !== undefined) {
+      if (req.body.userId) {
+        const userId = String(req.body.userId);
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user || user.locationId !== existing.locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+        data.userId = userId;
+      } else {
+        data.userId = null;
+      }
+    }
     if (req.body?.breakMinutes !== undefined) data.breakMinutes = Number(req.body.breakMinutes);
     if (req.body?.briefingNote !== undefined) data.managerNotes = req.body.briefingNote ? String(req.body.briefingNote) : null;
     if (req.body?.sidework !== undefined) data.sidework = Array.isArray(req.body.sidework) ? req.body.sidework.map(String) : [];
@@ -182,19 +199,46 @@ shiftsRouter.post('/bulk', async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
-    const rows = Array.isArray(req.body?.shifts) ? req.body.shifts : [];
+    type BulkShiftRow = { roleId?: unknown; userId?: unknown; date: string; start: string; end: string; breakMinutes?: number };
+    const rows = (Array.isArray(req.body?.shifts) ? req.body.shifts : []) as BulkShiftRow[];
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (rows.length === 0) return res.status(400).json({ error: 'shifts must be a non-empty array.' });
 
+    // Validate every row's roleId/userId up front — same existence + same-
+    // location checks POST / applies — so one bad id in the batch rejects
+    // the whole request with a clean 404 instead of a raw FK-violation 500
+    // thrown mid-transaction after some rows may already have committed.
+    for (const r of rows) {
+      if (!r?.roleId) return res.status(400).json({ error: 'Every row in shifts must include a roleId.' });
+    }
+    const roleIds: string[] = [...new Set(rows.map((r) => String(r.roleId)))];
+    const userIds: string[] = [...new Set(rows.map((r) => (r.userId ? String(r.userId) : null)).filter((v): v is string => v !== null))];
+
+    const roles = await prisma.role.findMany({ where: { id: { in: roleIds } } });
+    const rolesById = new Map(roles.map((r) => [r.id, r]));
+    for (const roleId of roleIds) {
+      const role = rolesById.get(roleId);
+      if (!role || role.locationId !== locationId) return res.status(404).json({ error: `Role "${roleId}" not found.` });
+    }
+
+    if (userIds.length > 0) {
+      const users = await prisma.user.findMany({ where: { id: { in: userIds } } });
+      const usersById = new Map(users.map((u) => [u.id, u]));
+      for (const userId of userIds) {
+        const user = usersById.get(userId);
+        if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+      }
+    }
+
     const timezone = await venueTimezone(locationId);
     const created = await prisma.$transaction(
-      rows.map((r: { roleId: string; userId?: string | null; date: string; start: string; end: string; breakMinutes?: number }) => {
+      rows.map((r) => {
         const overnight = r.end <= r.start;
         return prisma.shift.create({
           data: {
             locationId,
-            roleId: r.roleId,
-            userId: r.userId ?? null,
+            roleId: String(r.roleId),
+            userId: r.userId ? String(r.userId) : null,
             createdById,
             date: new Date(`${r.date}T00:00:00.000Z`),
             startTime: combineDateAndTime(r.date, r.start, timezone),
