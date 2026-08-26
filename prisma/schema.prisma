@@ -49,6 +49,8 @@ model Location {
   floorSections   FloorSection[]
   announcements   Announcement[]
   shoutouts       Shoutout[]
+  rotaTemplates   RotaTemplate[]
+  rotaPublishes   RotaPublish[]
 
   @@index([organizationId])
   @@map("locations")
@@ -123,6 +125,8 @@ model User {
   announcements           Announcement[]
   shoutoutsReceived       Shoutout[]                 @relation("ShoutoutRecipient")
   shoutoutsAuthored       Shoutout[]                 @relation("ShoutoutAuthor")
+  rotaTemplatesCreated    RotaTemplate[]
+  rotaPublishesMade       RotaPublish[]
 
   @@index([locationId])
   @@index([roleId])
@@ -152,6 +156,7 @@ model Shift {
   breakMinutes Int         @default(0) @map("break_minutes")
   status       ShiftStatus @default(DRAFT)
   managerNotes String?     @map("manager_notes") @db.Text // floor directives / side-work notes
+  sidework     String[]    @default([]) @map("sidework") // discrete checklist items, e.g. ["Polish glassware", "Restock ice"]
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
@@ -443,4 +448,49 @@ model Shoutout {
   @@index([locationId, createdAt])
   @@index([employeeId])
   @@map("shoutouts")
+}
+
+// ---------------------------------------------------------------------------
+// 8. ROTA BUILDER — reusable week templates + per-week publish tracking
+// ---------------------------------------------------------------------------
+
+// A reusable weekly shift pattern, applied to any week from RotaBuilder's
+// "Templates" sheet. `entries` is a JSON array of
+// `{ dayOffset: 0-6, roleId: string, userId: string | null, start: "HH:MM",
+//   end: "HH:MM", note?: string }` — role/user ids are real FKs to look up
+// at apply-time, not denormalized names, so a template stays valid even if
+// a role is renamed after the template was saved.
+model RotaTemplate {
+  id          String   @id @default(cuid())
+  locationId  String   @map("location_id")
+  name        String
+  entries     Json
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([locationId])
+  @@map("rota_templates")
+}
+
+// One row per (location, week) once that week has been published at least
+// once. `publishedAt` is compared against each shift's own `updatedAt` to
+// tell RotaBuilder whether a published week has unpublished edits sitting
+// on top of it — a week can have shifts added/edited after publishing
+// without a second model per shift to track that.
+model RotaPublish {
+  id            String   @id @default(cuid())
+  locationId    String   @map("location_id")
+  weekStart     DateTime @db.Date @map("week_start")
+  publishedAt   DateTime @map("published_at")
+  publishedById String?  @map("published_by_id")
+  notifiedCount Int      @default(0) @map("notified_count")
+
+  location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  publishedBy User?     @relation(fields: [publishedById], references: [id], onDelete: SetNull)
+
+  @@unique([locationId, weekStart])
+  @@map("rota_publishes")
 }
