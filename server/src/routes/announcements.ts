@@ -40,6 +40,15 @@ announcementsRouter.post('/', async (req, res) => {
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
+    // authorId is optional, but when supplied it carries an FK constraint —
+    // validate it here so a non-User id (e.g. the client's synthetic
+    // `upload-emp-<name>` fallback) gets a clear 404 rather than an opaque 500
+    // from the raw FK violation.
+    if (authorId) {
+      const author = await prisma.user.findUnique({ where: { id: authorId } });
+      if (!author) return res.status(404).json({ error: `Author "${authorId}" not found.` });
+    }
+
     const created = await prisma.announcement.create({
       data: { locationId, authorId, body },
       include: { author: { select: { fullName: true } } },

@@ -115,6 +115,16 @@ swapRequestsRouter.post('/', async (req, res) => {
     const shift = await prisma.shift.findUnique({ where: { id: shiftId }, select: { id: true, userId: true } });
     if (!shift) return res.status(404).json({ error: `Shift "${shiftId}" not found.` });
 
+    // Validate both user ids before writing. Without this, an id that is not a
+    // real User (e.g. the client's synthetic `upload-emp-<name>` fallback for an
+    // unresolved roster row) reaches the FK constraint and surfaces as an opaque
+    // 500 instead of telling the caller which id was wrong.
+    const requester = await prisma.user.findUnique({ where: { id: requestedById }, select: { id: true } });
+    if (!requester) return res.status(404).json({ error: `Requesting user "${requestedById}" not found.` });
+
+    const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } });
+    if (!target) return res.status(404).json({ error: `Target user "${targetUserId}" not found.` });
+
     const created = await prisma.shiftSwapRequest.create({
       data: {
         shiftId,
