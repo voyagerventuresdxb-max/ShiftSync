@@ -5,6 +5,7 @@ import {
   ApiError,
   assignStaff,
   fetchAssignments,
+  notifyAssignment,
   publishAssignments,
   removeAssignment,
   type AssignmentSectionDto,
@@ -106,6 +107,39 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
       }
     },
     [load],
+  );
+
+  const handleNotify = useCallback(
+    async (assignmentId: string) => {
+      try {
+        await notifyAssignment(assignmentId);
+        load();
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Could not mark this assignment notified.');
+      }
+    },
+    [load],
+  );
+
+  const handleUpdateDutyLabel = useCallback(
+    async (assignmentId: string, dutyLabel: string) => {
+      // Duty-label edits reuse the same upsert-friendly assign endpoint the
+      // Task 5 picker already writes through — but an edit must target the
+      // EXISTING assignment's own section/staff/date/period, not re-derive
+      // them, since this handler only ever receives an assignmentId. Look
+      // the assignment up in current `sections` state to get its real
+      // sectionId/staffId before calling assignStaff.
+      const owning = sections.find((s) => s.assignments.some((a) => a.id === assignmentId));
+      const assignment = owning?.assignments.find((a) => a.id === assignmentId);
+      if (!owning || !assignment) return;
+      try {
+        await assignStaff({ sectionId: owning.id, staffId: assignment.staffId, shiftDate: date, period, dutyLabel });
+        load();
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : 'Could not update the duty label.');
+      }
+    },
+    [sections, date, period, load],
   );
 
   const handlePublish = useCallback(async () => {
@@ -268,6 +302,8 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
             setExpandedSectionId(null);
           }}
           onRemoveAssignment={(assignmentId) => void handleRemove(assignmentId)}
+          onNotify={(assignmentId) => void handleNotify(assignmentId)}
+          onUpdateDutyLabel={(assignmentId, dutyLabel) => void handleUpdateDutyLabel(assignmentId, dutyLabel)}
         />
       )}
 
