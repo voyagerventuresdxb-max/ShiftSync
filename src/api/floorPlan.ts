@@ -39,6 +39,7 @@ export interface AssignmentDto {
   staffName: string;
   dutyLabel: string | null;
   status: 'DRAFT' | 'PUBLISHED';
+  notifiedAt: string | null;
 }
 
 export interface AssignmentSectionDto {
@@ -119,19 +120,21 @@ export async function deleteFloorSection(sectionId: string): Promise<void> {
   await request(`/api/floor-plan/sections/${sectionId}`, { method: 'DELETE' });
 }
 
-/** GET /api/floor-plan/:locationId/assignments?date=YYYY-MM-DD */
+/** GET /api/floor-plan/:locationId/assignments?date=YYYY-MM-DD&period=AM|PM */
 export async function fetchAssignments(
   locationId: string,
   date: string,
+  period: 'AM' | 'PM',
 ): Promise<{ image: FloorPlanImageDto | null; sections: AssignmentSectionDto[] }> {
-  return request(`/api/floor-plan/${locationId}/assignments?date=${date}`);
+  return request(`/api/floor-plan/${locationId}/assignments?date=${date}&period=${period}`);
 }
 
-/** POST /api/floor-plan/assignments — assign staff to a section for a date (drag-drop or tap-to-pick). */
+/** POST /api/floor-plan/assignments — assign staff to a section for a date+period (drag-drop or tap-to-pick). */
 export async function assignStaff(input: {
   sectionId: string;
   staffId: string;
   shiftDate: string;
+  period: 'AM' | 'PM';
   dutyLabel?: string | null;
   createdById?: string;
 }): Promise<AssignmentDto> {
@@ -144,18 +147,33 @@ export async function assignStaff(input: {
 }
 
 /** DELETE /api/floor-plan/assignments/:id — unassign. */
-export async function removeAssignment(assignmentId: string): Promise<void> {
-  await request(`/api/floor-plan/assignments/${assignmentId}`, { method: 'DELETE' });
+export async function removeAssignment(assignmentId: string, actorId?: string): Promise<void> {
+  await request(`/api/floor-plan/assignments/${assignmentId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actorId: actorId ?? null }),
+  });
 }
 
-/** POST /api/floor-plan/:locationId/publish — assignment writes only, no notification. */
+/** PATCH /api/floor-plan/assignments/:id/notify — stamp notifiedAt for one assignment. */
+export async function notifyAssignment(assignmentId: string, actorId?: string): Promise<{ notifiedAt: string }> {
+  return request(`/api/floor-plan/assignments/${assignmentId}/notify`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actorId: actorId ?? null }),
+  });
+}
+
+/** POST /api/floor-plan/:locationId/publish — publishes AND stamps notifiedAt for the given date+period. */
 export async function publishAssignments(
   locationId: string,
   shiftDate: string,
+  period: 'AM' | 'PM',
+  actorId?: string,
 ): Promise<{ publishedCount: number }> {
   return request(`/api/floor-plan/${locationId}/publish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ shiftDate }),
+    body: JSON.stringify({ shiftDate, period, actorId: actorId ?? null }),
   });
 }
