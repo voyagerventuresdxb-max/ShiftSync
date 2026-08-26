@@ -19,8 +19,8 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { weekDates, weekdayOf } from '@/engine/rosterView';
-import { roleKey } from '@/engine/roleGrouping';
-import type { Shift } from '@/engine/types';
+import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
+import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
 import { ApiError } from '@/api/schedules';
 import {
@@ -73,6 +73,7 @@ export function RotaBuilder() {
     setWeekStart,
     mergedRoster,
     sections,
+    staffDirectory,
     createRotaShift,
     updateRotaShift,
     deleteRotaShift,
@@ -90,15 +91,16 @@ export function RotaBuilder() {
   const [suppressClick, setSuppressClick] = useState(false);
 
   // `Shift` (engine/types) deliberately carries only a human-readable
-  // `requiredRole`, but every write endpoint keys off the DB `roleId`. There
-  // is no roles-list endpoint yet (see the report for this task), so the
-  // week's raw ShiftDtos are fetched here purely as a role sidecar: they are
-  // the only place a real roleId is exposed to the client. `roleOptions`
-  // accumulates across visited weeks so an empty week can still be built on
-  // roles discovered elsewhere in the session.
+  // `requiredRole`, but every write endpoint keys off the DB `roleId`. The
+  // staff directory is the primary source for that id (it is fetched
+  // unconditionally on mount, independent of any week's shifts) — the week's
+  // raw ShiftDtos are fetched here only as a *supplement*, so an existing
+  // shift's own role can be prefilled when its role is edited and so roles
+  // that no current staff member holds still appear. Creating a new shift
+  // never depends on this sidecar.
   const [dataVersion, setDataVersion] = useState(0);
   const [roleIdByShiftId, setRoleIdByShiftId] = useState<Record<string, string>>({});
-  const [roleOptions, setRoleOptions] = useState<RoleOption[]>([]);
+  const [shiftRoleOptions, setShiftRoleOptions] = useState<RoleOption[]>([]);
 
   const days = useMemo(() => weekDates(weekStart), [weekStart]);
   const weekShifts = mergedRoster.shifts.filter((s) => days.includes(s.date));
@@ -125,7 +127,7 @@ export function RotaBuilder() {
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
-        setRoleOptions((prev) => {
+        setShiftRoleOptions((prev) => {
           const byId = new Map(prev.map((r) => [r.id, r]));
           for (const d of dtos) byId.set(d.roleId, { id: d.roleId, name: d.roleName });
           return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -138,6 +140,37 @@ export function RotaBuilder() {
       cancelled = true;
     };
   }, [weekStart, dataVersion]);
+
+  // Every role a staff member actually holds, plus any extra role seen on
+  // this week's shifts. Directory-first means a location with staff on
+  // roles can build a brand-new week from cold, with no shifts to learn from.
+  const roleOptions = useMemo(() => {
+    const byId = new Map<string, RoleOption>();
+    for (const s of staffDirectory) {
+      if (s.roleId && s.roleName) byId.set(s.roleId, { id: s.roleId, name: s.roleName });
+    }
+    for (const r of shiftRoleOptions) byId.set(r.id, r);
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [staffDirectory, shiftRoleOptions]);
+
+  // `sections` is derived from `mergedRoster.employees`, which only ever
+  // contains people with an in-session upload commit or a shift THIS week.
+  // On an empty week — the normal state of "next week", exactly when a
+  // manager opens the builder — that is nobody, leaving a grid with no rows
+  // to add a shift to. Every active staff member therefore gets a row,
+  // grouped by the same shared role-grouping module so directory-only staff
+  // land in their real section rather than a flat bucket.
+  const gridSections = useMemo(() => {
+    const seenIds = new Set(mergedRoster.employees.map((e) => e.id));
+    const seenNames = new Set(mergedRoster.employees.map((e) => nameKey(e.name)));
+    const extras: Employee[] = staffDirectory
+      .filter((s) => !seenIds.has(s.id) && !seenNames.has(nameKey(s.fullName)))
+      .map((s) => ({ id: s.id, name: s.fullName, role: s.roleName ?? 'staff', status: 'active' }));
+    if (extras.length === 0) return sections;
+    const jobTitleByName = new Map<string, string | null | undefined>();
+    for (const entry of staffDirectory) jobTitleByName.set(nameKey(entry.fullName), entry.jobTitle);
+    return groupIntoSections([...mergedRoster.employees, ...extras], jobTitleByName);
+  }, [sections, mergedRoster.employees, staffDirectory]);
 
   const say = (msg: string) => {
     setFlash(msg);
@@ -152,11 +185,15 @@ export function RotaBuilder() {
     weekShifts.filter((s) => s.date === date && (userId === null ? s.employeeId.startsWith('open-') : s.employeeId === userId));
 
   const openNew = (date: string, userId: string | null) => {
-    const employee = mergedRoster.employees.find((e) => e.id === userId);
-    const employeeRole = employee?.role ?? '';
-    // Pre-select the role option whose name matches this person's own role;
-    // fall back to the first known role so the sheet is never unsaveable.
-    const guessed = roleOptions.find((r) => roleKey(r.name) === roleKey(employeeRole)) ?? roleOptions[0];
+    const directoryEntry = userId ? staffDirectory.find((s) => s.id === userId) : undefined;
+    const employeeRole = directoryEntry?.roleName ?? mergedRoster.employees.find((e) => e.id === userId)?.role ?? '';
+    // Prefer this person's own assigned role, then a role whose name matches
+    // theirs. If neither resolves, leave it blank: `saveDraft`'s
+    // `!draft.roleId && !draft.id` guard then makes the manager pick one,
+    // rather than silently filing the shift under an arbitrary role.
+    const guessed =
+      (directoryEntry?.roleId ? roleOptions.find((r) => r.id === directoryEntry.roleId) : undefined) ??
+      roleOptions.find((r) => roleKey(r.name) === roleKey(employeeRole));
     setSheet({
       kind: 'shift',
       draft: {
@@ -295,7 +332,7 @@ export function RotaBuilder() {
   };
 
   const rows: { key: string; label: string; flagged?: boolean; people: { id: string; name: string; userId: string | null }[] }[] = [
-    ...sections.map((section) => ({
+    ...gridSections.map((section) => ({
       key: section.key,
       label: section.label,
       flagged: section.flagged,
@@ -589,7 +626,7 @@ function ShiftSheet({
           <span className={label}>Role</span>
           {roleOptions.length === 0 ? (
             <p className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
-              No roles found for this venue yet — add a shift through an uploaded roster first.
+              No roles found for this venue yet — assign roles to staff in the Staff Directory first.
             </p>
           ) : (
             <select

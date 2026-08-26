@@ -25,6 +25,11 @@ staffDirectoryRouter.get('/:locationId', async (req, res) => {
         id: u.id,
         fullName: u.fullName,
         jobTitle: u.jobTitle,
+        // roleId is what every shift-write endpoint keys off. Exposing it
+        // here (the query already joins `role`) is what lets RotaBuilder
+        // offer a role picker for a location whose current week has no
+        // shifts yet — without it, a new week can't be built at all.
+        roleId: u.role?.id ?? null,
         roleName: u.role?.name ?? null,
       })),
     });
@@ -49,7 +54,7 @@ staffDirectoryRouter.post('/', async (req, res) => {
     const user = await prisma.user.create({
       data: { locationId, fullName, jobTitle },
     });
-    return res.status(201).json({ id: user.id, fullName: user.fullName, jobTitle: user.jobTitle, roleName: null });
+    return res.status(201).json({ id: user.id, fullName: user.fullName, jobTitle: user.jobTitle, roleId: null, roleName: null });
   } catch (err) {
     console.error('[staffDirectory.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while adding the staff member.' });
@@ -78,7 +83,7 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
     if (!existing) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
 
     const user = await prisma.user.update({ where: { id: userId }, data, include: { role: true } });
-    return res.status(200).json({ id: user.id, fullName: user.fullName, jobTitle: user.jobTitle, roleName: user.role?.name ?? null });
+    return res.status(200).json({ id: user.id, fullName: user.fullName, jobTitle: user.jobTitle, roleId: user.role?.id ?? null, roleName: user.role?.name ?? null });
   } catch (err) {
     console.error('[staffDirectory.update] failed', err);
     return res.status(500).json({ error: 'Unexpected error while updating the staff member.' });

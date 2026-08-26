@@ -9,6 +9,8 @@ export interface StaffDirectoryEntry {
   id: string;
   fullName: string;
   jobTitle: string | null;
+  /** The venue Role's DB id — what every shift-write endpoint requires. Null for staff with no role assigned yet. */
+  roleId: string | null;
   roleName: string | null;
 }
 
