@@ -6,6 +6,7 @@ import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
 import { TeamMatrix, type MatrixCell, type MatrixMember } from '../components/shiftsync/TeamMatrix';
 import { HourTracker } from '../components/shiftsync/HourTracker';
+import { RotaBuilder } from '../components/shiftsync/RotaBuilder';
 import ShiftUpload from '../components/ShiftUpload';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
@@ -220,6 +221,10 @@ export default function SchedulingContent() {
             onClockOut={handleClockOut}
           />
         </aside>
+      </div>
+
+      <div className="mt-5">
+        <RotaBuilder />
       </div>
 
       <div className="mt-5">
