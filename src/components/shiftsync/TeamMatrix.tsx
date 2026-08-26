@@ -78,7 +78,7 @@ export function TeamMatrix({ venueName, days, members, matrix }: TeamMatrixProps
                   <div
                     title={cell.requiredRole}
                     className={cn(
-                      'grid h-10 min-w-[4.5rem] place-items-center rounded-md border px-1 text-[10px] font-semibold tracking-wide transition-transform duration-200 hover:scale-[1.06]',
+                      'grid min-h-10 min-w-[4.5rem] place-items-center rounded-md border px-1 text-center text-[10px] font-semibold tracking-wide transition-transform duration-200 hover:scale-[1.06]',
                       kindStyles[cell.kind],
                     )}
                   >
