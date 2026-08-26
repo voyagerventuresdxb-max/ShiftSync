@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import {
@@ -78,13 +78,14 @@ export function RotaBuilder() {
     updateRotaShift,
     deleteRotaShift,
     publishCurrentWeek,
-    fetchCurrentWeekPublishStatus,
+    publishInfo,
+    weekLocked: locked,
+    refreshPublishInfo,
     refetchWeekShifts,
     currentEmployeeId,
   } = useAppState();
 
   const [cardOpen, setCardOpen] = useState(true);
-  const [publishInfo, setPublishInfo] = useState<{ publishedAt: string | null; notifiedCount: number; hasUnpublishedChanges: boolean } | null>(null);
   const [templates, setTemplates] = useState<RotaTemplateDto[]>([]);
   const [sheet, setSheet] = useState<Sheet>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -107,16 +108,6 @@ export function RotaBuilder() {
 
   const bump = () => setDataVersion((v) => v + 1);
 
-  const refreshPublishInfo = useCallback(() => {
-    fetchCurrentWeekPublishStatus()
-      .then(setPublishInfo)
-      .catch(() => setPublishInfo(null));
-  }, [fetchCurrentWeekPublishStatus]);
-
-  useEffect(() => {
-    refreshPublishInfo();
-  }, [refreshPublishInfo]);
-
   useEffect(() => {
     fetchRotaTemplates('seed-location').then(setTemplates).catch(() => setTemplates([]));
   }, []);
@@ -134,7 +125,10 @@ export function RotaBuilder() {
         });
       })
       .catch(() => {
-        if (!cancelled) setRoleIdByShiftId({});
+        // Deliberately a no-op: this sidecar is only a supplement, and
+        // clearing it would blank the role on every edit sheet and make
+        // "Save as template" report already-known shifts as skipped. Keeping
+        // the last good map is strictly better than losing all of it.
       });
     return () => {
       cancelled = true;
@@ -178,8 +172,6 @@ export function RotaBuilder() {
   };
 
   const fail = (err: unknown, fallback: string) => say(err instanceof ApiError ? err.message : fallback);
-
-  const locked = Boolean(publishInfo?.publishedAt) && !publishInfo?.hasUnpublishedChanges;
 
   const cellShifts = (date: string, userId: string | null) =>
     weekShifts.filter((s) => s.date === date && (userId === null ? s.employeeId.startsWith('open-') : s.employeeId === userId));

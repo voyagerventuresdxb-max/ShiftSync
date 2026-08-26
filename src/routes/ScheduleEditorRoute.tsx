@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { CalendarPlus, Clock, Trash2 } from 'lucide-react';
+import { CalendarPlus, Clock, Lock, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { weekDates, weekdayOf } from '../engine/rosterView';
 import { useAppState } from '../state/AppStateContext';
+import { ApiError } from '../api/schedules';
 
 interface RoleOption {
   id: string;
@@ -10,10 +11,44 @@ interface RoleOption {
 }
 
 export default function ScheduleEditorContent() {
-  const { weekStart, mergedRoster, sections, staffDirectory, createRotaShift, updateRotaShift, deleteRotaShift, currentEmployeeId } = useAppState();
+  const {
+    weekStart,
+    mergedRoster,
+    sections,
+    staffDirectory,
+    createRotaShift,
+    updateRotaShift,
+    deleteRotaShift,
+    currentEmployeeId,
+    weekLocked,
+    refreshPublishInfo,
+  } = useAppState();
   const days = useMemo(() => weekDates(weekStart), [weekStart]);
   const [activeDate, setActiveDate] = useState(days[0]!);
   const [draft, setDraft] = useState<{ id?: string; userId: string | null; roleId: string; start: string; end: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Every mutation here goes through the same wrapper: a failed write leaves
+  // the sheet open with the server's own message showing, instead of the
+  // previous bare `void mutate(...)` + unconditional close, which reported
+  // success for a 404/409/500 and left an unhandled rejection behind. Publish
+  // status is re-fetched on success because a create/update/delete is exactly
+  // what flips the week back to "unpublished changes" — the same contract
+  // RotaBuilder honours.
+  const run = async (mutate: () => Promise<void>, fallback: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await mutate();
+      refreshPublishInfo();
+      setDraft(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : fallback);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const dayShifts = mergedRoster.shifts.filter((s) => s.date === activeDate).sort((a, b) => a.start.localeCompare(b.start));
   const staffOptions = sections.flatMap((s) => s.employees);
@@ -71,9 +106,17 @@ export default function ScheduleEditorContent() {
         })}
       </div>
 
+      {weekLocked && (
+        <p className="flex items-center gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
+          <Lock className="h-3.5 w-3.5 shrink-0" />
+          This week is published and locked — publish again from the rota builder after making changes to unlock it.
+        </p>
+      )}
+
       <button
+        disabled={weekLocked}
         onClick={() => setDraft({ userId: null, roleId: roleOptions[0]?.id ?? '', start: '16:00', end: '23:30' })}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground shadow-lux"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground shadow-lux disabled:cursor-not-allowed disabled:opacity-50"
       >
         <CalendarPlus className="h-4 w-4" /> New shift · {weekdayOf(activeDate)}
       </button>
@@ -110,31 +153,58 @@ export default function ScheduleEditorContent() {
                 )}
               </select>
             )}
+            {error && (
+              <div className="error-block mt-3" role="alert">
+                <p>{error}</p>
+              </div>
+            )}
+            {weekLocked && (
+              <p className="mt-3 flex items-center gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
+                <Lock className="h-3.5 w-3.5 shrink-0" />
+                Locked — this week is published with no pending changes.
+              </p>
+            )}
             <div className="mt-3 flex gap-2">
               {draft.id && (
                 <button
-                  onClick={() => {
-                    void deleteRotaShift(draft.id!, currentEmployeeId);
-                    setDraft(null);
-                  }}
-                  className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive"
+                  disabled={weekLocked || busy}
+                  onClick={() => void run(() => deleteRotaShift(draft.id!, currentEmployeeId), 'Could not delete that shift.')}
+                  aria-label="Delete shift"
+                  className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               )}
               <button
-                disabled={!draft.id && !draft.roleId}
+                disabled={weekLocked || busy || (!draft.id && !draft.roleId)}
                 onClick={() => {
                   if (draft.id) {
-                    void updateRotaShift(draft.id, { userId: draft.userId, start: draft.start, end: draft.end, actorId: currentEmployeeId });
+                    void run(
+                      () => updateRotaShift(draft.id!, { userId: draft.userId, start: draft.start, end: draft.end, actorId: currentEmployeeId }),
+                      'Could not save that shift.',
+                    );
                   } else if (draft.roleId) {
-                    void createRotaShift({ roleId: draft.roleId, userId: draft.userId, date: activeDate, start: draft.start, end: draft.end, createdById: currentEmployeeId });
+                    void run(
+                      () => createRotaShift({ roleId: draft.roleId, userId: draft.userId, date: activeDate, start: draft.start, end: draft.end, createdById: currentEmployeeId }),
+                      'Could not create that shift.',
+                    );
                   }
-                  setDraft(null);
                 }}
                 className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {draft.id ? 'Save changes' : 'Publish shift'}
+              </button>
+              {/* Save/delete used to be the only ways out of this sheet. Now
+                  that both can be disabled (locked week, in-flight write), it
+                  needs its own exit or the manager is stuck in the modal. */}
+              <button
+                onClick={() => {
+                  setDraft(null);
+                  setError(null);
+                }}
+                className="shrink-0 rounded-xl border border-border-strong px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
               </button>
             </div>
           </div>

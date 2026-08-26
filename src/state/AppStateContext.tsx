@@ -41,7 +41,16 @@ interface AppStateValue {
   deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
   bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => Promise<void>;
   publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
-  fetchCurrentWeekPublishStatus: () => Promise<{ publishedAt: string | null; notifiedCount: number; hasUnpublishedChanges: boolean }>;
+  publishInfo: PublishInfo | null;
+  /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
+  weekLocked: boolean;
+  refreshPublishInfo: () => void;
+}
+
+interface PublishInfo {
+  publishedAt: string | null;
+  notifiedCount: number;
+  hasUnpublishedChanges: boolean;
 }
 
 const AppStateCtx = createContext<AppStateValue | null>(null);
@@ -70,6 +79,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
   const [weekShifts, setWeekShifts] = useState<Shift[]>([]);
+  const [publishInfo, setPublishInfo] = useState<PublishInfo | null>(null);
 
   // Week navigation (RotaBuilder's prev/next buttons) can fire `setWeekStart`
   // faster than the network answers. Without a guard, an older week's
@@ -121,7 +131,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // for the currently-viewed week — merged in alongside upload-committed
     // shifts so Personal Rota/Team Matrix/the roster grid see both sources
     // without caring which one a given shift came from.
-    const shifts = [...withCommitted.shifts];
+    //
+    // `committed` is a snapshot taken at upload-confirm time and never
+    // refreshed, while `weekShifts` is re-fetched from the server after every
+    // mutation. Because `buildCommitted` stamps the REAL persisted `Shift.id`
+    // onto a confirmed upload row, the same shift can appear in both buckets
+    // under the same id — so keying by id and letting `weekShifts` overwrite
+    // is what makes server truth win. Skipping a duplicate instead (the old
+    // behaviour) pinned the stale upload copy in place forever: an edited
+    // briefing note never appeared and a deleted shift's chip never left the
+    // grid.
+    //
+    // Overwriting by id fixes edits, but a DELETE has no `weekShifts` entry
+    // left to overwrite with — a shift that only exists in `committed` is
+    // (correctly) still kept here, because that is also how a genuinely
+    // unsaved `unmatched_role` row and any committed row outside the
+    // currently-viewed week survive. `deleteRotaShift` therefore prunes the
+    // deleted id out of `committed` itself, which is precise (it targets the
+    // one row the user actually deleted) and race-free (no dependency on a
+    // fetch landing).
+    const byId = new Map(withCommitted.shifts.map((s) => [s.id, s]));
     const employees = [...withCommitted.employees];
     const seenEmployeeIds = new Set(employees.map((e) => e.id));
     for (const shift of weekShifts) {
@@ -139,9 +168,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         });
         seenEmployeeIds.add(shift.employeeId);
       }
-      if (!shifts.some((s) => s.id === shift.id)) shifts.push(shift);
+      byId.set(shift.id, shift);
     }
-    return { ...withCommitted, employees, shifts };
+    return { ...withCommitted, employees, shifts: [...byId.values()] };
   }, [roster, committed, weekShifts, staffDirectory]);
 
   const staffDirectoryByName = useMemo(() => {
@@ -269,6 +298,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const deleteRotaShift = useCallback(
     async (id: string, actorId?: string) => {
       await deleteShift(id, actorId);
+      // `buildCommitted` stamps the real persisted `Shift.id` onto a confirmed
+      // upload row, so the row just deleted from the DB may also be sitting in
+      // the never-refreshed `committed` snapshot. Refetching `weekShifts`
+      // cannot clear that copy (a deleted row simply stops arriving), so drop
+      // it here — otherwise a deleted upload-committed shift's chip stays on
+      // the grid forever. Returns `prev` untouched when there is nothing to
+      // prune, so the common rota-builder-only delete re-renders nothing extra.
+      setCommitted((prev) =>
+        prev.shifts.some((s) => s.id === id) ? { ...prev, shifts: prev.shifts.filter((s) => s.id !== id) } : prev,
+      );
       await refetchWeekShifts();
     },
     [refetchWeekShifts],
@@ -294,7 +333,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [weekStart, refetchWeekShifts],
   );
 
-  const fetchCurrentWeekPublishStatus = useCallback(() => fetchPublishStatus('seed-location', weekStart), [weekStart]);
+  // Publish/lock state is shared, not RotaBuilder-local: the Shift Editor
+  // route edits exactly the same shifts and has to honour exactly the same
+  // lock, so both read this one value. Fetched on the same `weekStart`-keyed
+  // pattern as `refetchWeekShifts` above, and re-fetched by every editor
+  // after a mutation (a create/update/delete flips `hasUnpublishedChanges`).
+  const refreshPublishInfo = useCallback(() => {
+    fetchPublishStatus('seed-location', weekStart)
+      .then(setPublishInfo)
+      .catch(() => setPublishInfo(null));
+  }, [weekStart]);
+
+  useEffect(() => {
+    refreshPublishInfo();
+  }, [refreshPublishInfo]);
+
+  const weekLocked = Boolean(publishInfo?.publishedAt) && !publishInfo?.hasUnpublishedChanges;
 
   // setCollapsed/setStaffDirectory are useState setters — stable by definition,
   // and `config` is a module constant, so neither needs to be a dependency.
@@ -322,7 +376,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       deleteRotaShift,
       bulkCreateRotaShifts,
       publishCurrentWeek,
-      fetchCurrentWeekPublishStatus,
+      publishInfo,
+      weekLocked,
+      refreshPublishInfo,
     }),
     [
       mergedRoster,
@@ -342,7 +398,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       deleteRotaShift,
       bulkCreateRotaShifts,
       publishCurrentWeek,
-      fetchCurrentWeekPublishStatus,
+      publishInfo,
+      weekLocked,
+      refreshPublishInfo,
     ],
   );
 

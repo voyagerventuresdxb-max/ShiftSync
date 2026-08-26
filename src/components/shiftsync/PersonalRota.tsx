@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowLeftRight, CheckCircle2, Clock, MapPin, Moon, StickyNote } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export type RotaStatus = 'confirmed' | 'off' | 'swap-pending';
+export type RotaStatus = 'confirmed' | 'draft' | 'off' | 'swap-pending';
 
 export interface RotaCard {
   id: string;
@@ -25,6 +25,9 @@ export interface CoverCandidate {
 
 const statusMeta: Record<RotaStatus, { label: string; className: string }> = {
   confirmed: { label: 'Confirmed', className: 'bg-success/12 text-success border-success/25' },
+  // An unpublished shift is not a promise yet — it shares the warning tone
+  // with 'swap-pending' so "do not rely on this line" reads the same way.
+  draft: { label: 'Draft — not yet published', className: 'bg-warning/12 text-warning border-warning/25' },
   off: { label: 'Rest day', className: 'bg-muted text-muted-foreground border-border' },
   'swap-pending': { label: 'Swap pending', className: 'bg-warning/12 text-warning border-warning/25' },
 };

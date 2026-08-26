@@ -47,6 +47,11 @@ export default function SchedulingContent() {
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
 
+  // The rota builder's prev/next-week buttons move `weekStart`, which silently
+  // retargets the hours panel too — so it has to say which week it is showing,
+  // or a future week's 0.0h everywhere reads as a broken fetch.
+  const weekLabel = `${formatDayMonth(dates[0]!)} – ${formatDayMonth(dates[6]!)}`;
+
   const rotaCards: RotaCard[] = useMemo(() => {
     if (!activeEmployee) return [];
     const shifts = shiftsFor(mergedRoster, activeEmployee.id);
@@ -66,6 +71,10 @@ export default function SchedulingContent() {
         };
       }
       const isPendingSwap = swapRequests.some((r) => r.shiftId === dayShifts[0].id && r.status === 'pending');
+      // A day's card summarises every shift on it, so ANY unpublished shift
+      // makes the whole card provisional. Upload-committed shifts carry no
+      // `status` at all — those stay 'confirmed', exactly as before.
+      const isDraft = dayShifts.some((s) => s.status === 'draft');
       return {
         id: dayShifts[0].id,
         day: weekdayOf(date),
@@ -75,7 +84,10 @@ export default function SchedulingContent() {
         start: dayShifts.map((s) => s.start).join(' / '),
         end: dayShifts.map((s) => s.end).join(' / '),
         hours: dayShifts.reduce((sum, s) => sum + shiftHours(s.start, s.end), 0),
-        status: isPendingSwap ? 'swap-pending' : 'confirmed',
+        // Draft outranks swap-pending: an unpublished line can still move or
+        // vanish entirely, so "this isn't live yet" is the more urgent signal —
+        // approving a cover for a shift that was never published is premature.
+        status: isDraft ? 'draft' : isPendingSwap ? 'swap-pending' : 'confirmed',
         briefingNote: dayShifts[0].briefingNote,
         sidework: dayShifts[0].sidework,
       };
@@ -215,6 +227,7 @@ export default function SchedulingContent() {
           )}
           <HourTracker
             staff={hourStaff}
+            weekLabel={weekLabel}
             currentEmployeeName={activeEmployee?.name}
             clockedIn={clockedIn}
             onClockIn={handleClockIn}

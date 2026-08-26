@@ -10,12 +10,15 @@ export interface HourTrackerStaff {
 
 export function HourTracker({
   staff,
+  weekLabel,
   currentEmployeeName,
   clockedIn,
   onClockIn,
   onClockOut,
 }: {
   staff: HourTrackerStaff[];
+  /** Week these hours belong to. The rota builder's week nav retargets this panel, so without it a future week's 0.0h reads as a bug. */
+  weekLabel?: string;
   currentEmployeeName?: string;
   clockedIn?: boolean;
   onClockIn?: () => void;
@@ -27,6 +30,7 @@ export function HourTracker({
         <div className="min-w-0">
           <p className="eyebrow">Real hours, not the schedule</p>
           <h2 className="truncate text-base font-semibold tracking-tight">Hour Tracking</h2>
+          {weekLabel && <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground">{weekLabel}</p>}
         </div>
         <Gauge className="h-5 w-5 shrink-0 text-accent" />
       </header>

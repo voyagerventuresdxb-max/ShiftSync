@@ -265,6 +265,9 @@ shiftsRouter.post('/:locationId/publish', async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
     const publishedById = req.body?.publishedById ? String(req.body.publishedById).trim() : null;
 
+    const location = await prisma.location.findUnique({ where: { id: locationId } });
+    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
+
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 7);
