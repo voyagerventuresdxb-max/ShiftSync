@@ -9,6 +9,7 @@ import { shoutoutsRouter } from './routes/shoutouts.js';
 import { swapRequestsRouter } from './routes/swapRequests.js';
 import { shiftsRouter } from './routes/shifts.js';
 import { rotaTemplatesRouter } from './routes/rotaTemplates.js';
+import { attendanceRouter } from './routes/attendance.js';
 
 export function createApp() {
   const app = express();
@@ -30,6 +31,7 @@ export function createApp() {
   app.use('/api/swap-requests', swapRequestsRouter);
   app.use('/api/shifts', shiftsRouter);
   app.use('/api/rota-templates', rotaTemplatesRouter);
+  app.use('/api/attendance', attendanceRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
