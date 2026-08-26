@@ -298,7 +298,14 @@ floorPlanRouter.post('/assignments', async (req, res) => {
     const staffId = String(req.body?.staffId ?? '').trim();
     const dateStr = String(req.body?.shiftDate ?? '').trim();
     const period = String(req.body?.period ?? '').trim().toUpperCase();
-    const dutyLabel = req.body?.dutyLabel ? String(req.body.dutyLabel).trim() : null;
+    // Distinguish "no dutyLabel key sent at all" (a plain drag-drop/tap
+    // reassign — leave whatever label is already on the row alone) from
+    // "dutyLabel explicitly sent, even empty/null" (a real clear or edit —
+    // apply it). A truthy-or-null coercion can't tell these apart, and
+    // conflating them means every re-assign of an already-labeled staff
+    // member silently wipes their label.
+    const hasDutyLabelKey = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'dutyLabel');
+    const dutyLabel = hasDutyLabelKey && req.body.dutyLabel ? String(req.body.dutyLabel).trim() : null;
     const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
 
     if (!sectionId) return res.status(400).json({ error: 'sectionId is required.' });
@@ -321,7 +328,10 @@ floorPlanRouter.post('/assignments', async (req, res) => {
     const assignment = await prisma.sectionAssignment.upsert({
       where: { sectionId_staffId_shiftDate_period: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM' } },
       create: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById },
-      update: { dutyLabel },
+      // Only touch dutyLabel on an existing row when the request actually
+      // sent the key — a plain re-assign (drag-drop, or tap-to-pick with no
+      // label typed) must not clobber a label set earlier via inline edit.
+      update: hasDutyLabelKey ? { dutyLabel } : {},
       include: { staff: { select: { id: true, fullName: true } } },
     });
 

@@ -10,10 +10,16 @@ interface Props {
   onClose: () => void;
   onAssign: () => void;
   onRemoveAssignment: (assignmentId: string) => void;
-  onNotify: (assignmentId: string) => void;
+  onNotify: (assignmentId: string) => Promise<void>;
   onUpdateDutyLabel: (assignmentId: string, dutyLabel: string) => void;
 }
 
+/**
+ * Full detail for one section, opened by tapping its pin on the canvas —
+ * label, note, pax ratio (with the same warning reasoning shown as text,
+ * not just a color), the full assignee list with per-person unassign, and
+ * an entry point into the existing tap-to-pick staff picker.
+ */
 export default function SectionDetail({
   section,
   warn,
@@ -25,6 +31,7 @@ export default function SectionDetail({
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState('');
+  const [notifyingId, setNotifyingId] = useState<string | null>(null);
 
   return (
     <div className="fp-picker-backdrop" onClick={onClose}>
@@ -72,7 +79,13 @@ export default function SectionDetail({
                       value={draftLabel}
                       onChange={(e) => setDraftLabel(e.target.value)}
                       onBlur={() => {
-                        onUpdateDutyLabel(a.id, draftLabel.trim());
+                        const trimmed = draftLabel.trim();
+                        // Skip the write entirely when nothing actually
+                        // changed — a plain tap-to-view-then-click-away
+                        // shouldn't write an audit row or trigger a refetch.
+                        if (trimmed !== (a.dutyLabel ?? '')) {
+                          onUpdateDutyLabel(a.id, trimmed);
+                        }
                         setEditingId(null);
                       }}
                       onKeyDown={(e) => {
@@ -111,10 +124,19 @@ export default function SectionDetail({
                 </span>
                 {!a.notifiedAt && (
                   <button
-                    onClick={() => onNotify(a.id)}
-                    className="text-[10px] font-medium text-accent hover:underline"
+                    onClick={async () => {
+                      setNotifyingId(a.id);
+                      try {
+                        await onNotify(a.id);
+                      } finally {
+                        setNotifyingId(null);
+                      }
+                    }}
+                    disabled={notifyingId === a.id}
+                    aria-label={`Notify ${a.staffName}`}
+                    className="text-[10px] font-medium text-accent hover:underline disabled:opacity-50 disabled:pointer-events-none"
                   >
-                    Notify
+                    {notifyingId === a.id ? 'Notifying…' : 'Notify'}
                   </button>
                 )}
               </div>

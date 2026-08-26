@@ -42,13 +42,28 @@ export interface AssignmentDto {
   notifiedAt: string | null;
 }
 
+/**
+ * Shape of an assignment as it comes back nested inside
+ * `AssignmentSectionDto.assignments[]` from `fetchAssignments` — unlike the
+ * top-level `AssignmentDto` returned by `assignStaff`, the list endpoint
+ * does not (and doesn't need to) repeat the owning section's id on each
+ * assignment, since the section is already the object it's nested under.
+ * Kept as a distinct type — rather than making `AssignmentDto.sectionId`
+ * optional everywhere — so any future code reading `.sectionId` off a
+ * nested assignment fails to compile instead of silently reading
+ * `undefined`. Callers that need the owning section's id for a nested
+ * assignment (see `AssignmentBoard.tsx`'s `handleUpdateDutyLabel`) must
+ * get it from the enclosing `AssignmentSectionDto.id` instead.
+ */
+export type NestedAssignmentDto = Omit<AssignmentDto, 'sectionId'>;
+
 export interface AssignmentSectionDto {
   id: string;
   label: string;
   polygon: Point[];
   paxCapacity: number;
   notes: string | null;
-  assignments: AssignmentDto[];
+  assignments: NestedAssignmentDto[];
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

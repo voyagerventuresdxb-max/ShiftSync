@@ -88,7 +88,19 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   const handleAssign = useCallback(
     async (sectionId: string, staffId: string, dutyLabel?: string | null) => {
       try {
-        await assignStaff({ sectionId, staffId, shiftDate: date, period, dutyLabel: dutyLabel ?? null });
+        // Only send the dutyLabel key when the caller actually gave one
+        // (the tap-to-pick picker, with something typed). A plain
+        // drag-drop assign — or a picker pick with the duty field left
+        // blank — omits the key entirely, so the server's upsert leaves
+        // any label already on that row untouched instead of wiping it
+        // back to null on every re-assign.
+        await assignStaff({
+          sectionId,
+          staffId,
+          shiftDate: date,
+          period,
+          ...(dutyLabel ? { dutyLabel } : {}),
+        });
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not assign staff.');
@@ -302,7 +314,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
             setExpandedSectionId(null);
           }}
           onRemoveAssignment={(assignmentId) => void handleRemove(assignmentId)}
-          onNotify={(assignmentId) => void handleNotify(assignmentId)}
+          onNotify={handleNotify}
           onUpdateDutyLabel={(assignmentId, dutyLabel) => void handleUpdateDutyLabel(assignmentId, dutyLabel)}
         />
       )}
