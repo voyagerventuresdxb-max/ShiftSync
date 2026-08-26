@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError, fetchFloorPlan, type FloorPlanImageDto, type FloorSectionDto } from '../../api/floorPlan';
 import SectionEditor from './SectionEditor';
 import AssignmentBoard from './AssignmentBoard';
+import EightySixBoard from './EightySixBoard';
 
 interface Props {
   locationId: string;
 }
 
-type Mode = 'assign' | 'setup';
+type Mode = 'assign' | 'setup' | '86';
 
 /**
  * Floor Plan tab — Phase 1 (draw sections, admin setup) and Phase 2 (daily
@@ -76,6 +77,9 @@ export default function FloorPlanTab({ locationId }: Props) {
             <button className={`chip${mode === 'setup' ? ' chip-active' : ''}`} onClick={() => setMode('setup')}>
               Sections
             </button>
+            <button className={`chip${mode === '86' ? ' chip-active' : ''}`} onClick={() => setMode('86')}>
+              86 List
+            </button>
           </div>
         )}
       </header>
@@ -94,6 +98,8 @@ export default function FloorPlanTab({ locationId }: Props) {
           onChanged={handleChanged}
           onDone={() => setMode('assign')}
         />
+      ) : mode === '86' ? (
+        <EightySixBoard locationId={locationId} />
       ) : (
         <AssignmentBoard locationId={locationId} onEditSections={() => setMode('setup')} />
       )}
