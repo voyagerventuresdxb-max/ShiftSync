@@ -51,6 +51,7 @@ model Location {
   shoutouts       Shoutout[]
   rotaTemplates   RotaTemplate[]
   rotaPublishes   RotaPublish[]
+  eightySixItems  EightySixItem[]
 
   @@index([organizationId])
   @@map("locations")
@@ -127,6 +128,8 @@ model User {
   shoutoutsAuthored       Shoutout[]                 @relation("ShoutoutAuthor")
   rotaTemplatesCreated    RotaTemplate[]
   rotaPublishesMade       RotaPublish[]
+  eightySixItemsCreated   EightySixItem[]            @relation("EightySixCreatedBy")
+  eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
 
   @@index([locationId])
   @@index([roleId])
@@ -255,6 +258,9 @@ enum AuditAction {
   TIME_OFF_APPROVED
   TIME_OFF_DECLINED
   MANUAL_OVERRIDE
+  ASSIGNMENT_NOTIFIED
+  ITEM_86D
+  ITEM_BACK_ON
 }
 
 model AuditLog {
@@ -380,6 +386,11 @@ enum AssignmentStatus {
   PUBLISHED
 }
 
+enum AssignmentPeriod {
+  AM
+  PM
+}
+
 // A staff member assigned to a floor section for one shift date. Written by
 // both the drag-and-drop and tap-to-pick interaction paths (same table,
 // different trigger). `status` starts DRAFT and flips to PUBLISHED by the
@@ -390,10 +401,12 @@ model SectionAssignment {
   sectionId   String           @map("section_id")
   staffId     String           @map("staff_id")
   shiftDate   DateTime         @db.Date @map("shift_date")
+  period      AssignmentPeriod @default(AM)
   dutyLabel   String?          @map("duty_label")
   status      AssignmentStatus @default(DRAFT)
   createdById String?          @map("created_by_id")
   publishedAt DateTime?        @map("published_at")
+  notifiedAt  DateTime?        @map("notified_at")
   createdAt   DateTime         @default(now()) @map("created_at")
   updatedAt   DateTime         @updatedAt @map("updated_at")
 
@@ -401,10 +414,47 @@ model SectionAssignment {
   staff     User         @relation("SectionAssignmentStaff", fields: [staffId], references: [id], onDelete: Cascade)
   createdBy User?        @relation("SectionAssignmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  @@unique([sectionId, staffId, shiftDate])
+  @@unique([sectionId, staffId, shiftDate, period])
   @@index([shiftDate])
   @@index([staffId])
   @@map("section_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// 9. 86 LIST — real shared out-of-stock board by station
+// ---------------------------------------------------------------------------
+
+enum EightySixStatus {
+  EIGHTY_SIXED
+  BACK_ON
+}
+
+// A single out-of-stock item, tracked by kitchen/bar station. `station` is a
+// free-text label (not a foreign key to FloorSection — floor sections are
+// staff-assignment zones, not kitchen prep stations; a venue's station
+// vocabulary is its own, separate thing this model doesn't otherwise model).
+// Rows are never deleted — a resolved (`BACK_ON`) row is the item's own
+// audit trail entry, alongside the mirrored AuditLog writes every mutation
+// makes for cross-feature consistency with the rest of this codebase.
+model EightySixItem {
+  id            String          @id @default(cuid())
+  locationId    String          @map("location_id")
+  itemName      String          @map("item_name")
+  station       String
+  status        EightySixStatus @default(EIGHTY_SIXED)
+  note          String?         @db.Text
+  createdById   String?         @map("created_by_id")
+  backOnById    String?         @map("back_on_by_id")
+  eightySixedAt DateTime        @default(now()) @map("eighty_sixed_at")
+  backOnAt      DateTime?       @map("back_on_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("EightySixCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  backOnBy  User?    @relation("EightySixBackOnBy", fields: [backOnById], references: [id], onDelete: SetNull)
+
+  @@index([locationId, status])
+  @@map("eighty_six_items")
 }
 
 // ---------------------------------------------------------------------------
