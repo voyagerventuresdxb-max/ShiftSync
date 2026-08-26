@@ -118,13 +118,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // requiredRole doubles as a display role here since RotaBuilder's own
         // shift-role assignment is the only role signal for a person who has
         // never appeared in an uploaded roster.
-        employees.push({ id: shift.employeeId, name: shift.employeeId, role: shift.requiredRole ?? 'staff', status: 'active' });
+        employees.push({
+          id: shift.employeeId,
+          name: staffDirectory.find((s) => s.id === shift.employeeId)?.fullName ?? shift.employeeId,
+          role: shift.requiredRole ?? 'staff',
+          status: 'active',
+        });
         seenEmployeeIds.add(shift.employeeId);
       }
       if (!shifts.some((s) => s.id === shift.id)) shifts.push(shift);
     }
     return { ...withCommitted, employees, shifts };
-  }, [roster, committed, weekShifts]);
+  }, [roster, committed, weekShifts, staffDirectory]);
 
   const staffDirectoryByName = useMemo(() => {
     const map = new Map<string, StaffDirectoryEntry>();

@@ -36,6 +36,7 @@ export default function SchedulingContent() {
     setCollapsed,
     handleCommitted,
     staffDirectoryByName,
+    swapRequests,
   } = useAppState();
 
   const [mode, setMode] = useState<Mode>('personal');
@@ -62,6 +63,7 @@ export default function SchedulingContent() {
           status: 'off',
         };
       }
+      const isPendingSwap = swapRequests.some((r) => r.shiftId === dayShifts[0].id && r.status === 'pending');
       return {
         id: dayShifts[0].id,
         day: weekdayOf(date),
@@ -71,10 +73,12 @@ export default function SchedulingContent() {
         start: dayShifts.map((s) => s.start).join(' / '),
         end: dayShifts.map((s) => s.end).join(' / '),
         hours: dayShifts.reduce((sum, s) => sum + shiftHours(s.start, s.end), 0),
-        status: 'confirmed',
+        status: isPendingSwap ? 'swap-pending' : 'confirmed',
+        briefingNote: dayShifts[0].briefingNote,
+        sidework: dayShifts[0].sidework,
       };
     });
-  }, [mergedRoster, activeEmployee, dates, config.name]);
+  }, [mergedRoster, activeEmployee, dates, config.name, swapRequests]);
 
   const coverCandidates: CoverCandidate[] = activeEmployee
     ? mergedRoster.employees.filter((e) => e.id !== activeEmployee.id).map((e) => ({ id: e.id, name: e.name }))

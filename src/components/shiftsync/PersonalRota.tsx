@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { ArrowLeftRight, Clock, MapPin, Moon } from 'lucide-react';
+import { ArrowLeftRight, CheckCircle2, Clock, MapPin, Moon, StickyNote } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export type RotaStatus = 'confirmed' | 'off';
+export type RotaStatus = 'confirmed' | 'off' | 'swap-pending';
 
 export interface RotaCard {
   id: string;
@@ -14,6 +14,8 @@ export interface RotaCard {
   end: string;
   hours: number;
   status: RotaStatus;
+  briefingNote?: string;
+  sidework?: string[];
 }
 
 export interface CoverCandidate {
@@ -24,6 +26,7 @@ export interface CoverCandidate {
 const statusMeta: Record<RotaStatus, { label: string; className: string }> = {
   confirmed: { label: 'Confirmed', className: 'bg-success/12 text-success border-success/25' },
   off: { label: 'Rest day', className: 'bg-muted text-muted-foreground border-border' },
+  'swap-pending': { label: 'Swap pending', className: 'bg-warning/12 text-warning border-warning/25' },
 };
 
 function ShiftCard({
@@ -97,6 +100,26 @@ function ShiftCard({
                 </span>
                 <span className="text-muted-foreground tabular-nums">{shift.hours.toFixed(1)}h</span>
               </p>
+
+              {shift.briefingNote && (
+                <div className="mt-3 rounded-lg border border-border bg-background/50 p-3">
+                  <p className="eyebrow flex items-center gap-1.5">
+                    <StickyNote className="h-3 w-3" /> Briefing
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{shift.briefingNote}</p>
+                </div>
+              )}
+
+              {shift.sidework && shift.sidework.length > 0 && (
+                <ul className="mt-3 space-y-1.5">
+                  {shift.sidework.map((task) => (
+                    <li key={task} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-signal" />
+                      <span>{task}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
               {onRequestCover && coverCandidates.length > 0 && (
                 <div className="mt-3">
