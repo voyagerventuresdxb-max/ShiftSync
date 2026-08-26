@@ -2,9 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { DEFAULT_MAINLAND_RULES, type Employee, type Roster, type Shift, type SwapRequest, type VenueConfig } from '../engine/types';
 import { groupIntoSections, nameKey, type GroupedSection } from '../engine/roleGrouping';
 import { buildCommitted, mergeCommitted, type PersistedRow } from '../engine/commitBinding';
+import { currentWeekStart } from '../engine/weekStart';
 import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
+import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
 
 const config: VenueConfig = {
   id: 'venue-1',
@@ -15,8 +17,6 @@ const config: VenueConfig = {
   roleLabels: ['bartender', 'server', 'chef', 'host'],
   knownStaff: ['Maria', 'Jose', 'Ahmed', 'Priya'],
 };
-
-const WEEK_START = '2026-08-17';
 
 interface AppStateValue {
   config: VenueConfig;
@@ -33,21 +33,32 @@ interface AppStateValue {
   handleRequestCover: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
   handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => Promise<void>;
   handleCommitted: (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => void;
+  weekStart: string;
+  setWeekStart: React.Dispatch<React.SetStateAction<string>>;
+  refetchWeekShifts: () => Promise<void>;
+  createRotaShift: (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => Promise<void>;
+  updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[1]) => Promise<void>;
+  deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
+  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts']) => Promise<void>;
+  publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
+  fetchCurrentWeekPublishStatus: () => Promise<{ publishedAt: string | null; notifiedCount: number; hasUnpublishedChanges: boolean }>;
 }
 
 const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const [weekStart, setWeekStart] = useState(currentWeekStart());
+
   const roster: Roster = useMemo(
     () => ({
-      id: `roster-${WEEK_START}`,
+      id: `roster-${weekStart}`,
       venueId: config.id,
-      weekStart: WEEK_START,
+      weekStart,
       employees: [],
       shifts: [],
       createdAt: new Date().toISOString(),
     }),
-    [],
+    [weekStart],
   );
 
   const [committed, setCommitted] = useState<{ employees: Employee[]; shifts: Shift[] }>({
@@ -58,8 +69,58 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
+  const [weekShifts, setWeekShifts] = useState<Shift[]>([]);
 
-  const mergedRoster: Roster = useMemo(() => mergeCommitted(roster, committed), [roster, committed]);
+  const refetchWeekShifts = useCallback(async () => {
+    try {
+      const dtos = await fetchWeekShifts('seed-location', weekStart);
+      setWeekShifts(
+        dtos.map((s) => ({
+          id: s.id,
+          employeeId: s.employeeId ?? `open-${s.id}`,
+          date: s.date,
+          start: s.start,
+          end: s.end,
+          type: 'service',
+          overnight: s.end <= s.start,
+          requiredRole: s.roleName,
+          status: s.status,
+          briefingNote: s.briefingNote ?? undefined,
+          sidework: s.sidework,
+        })),
+      );
+    } catch {
+      // RotaBuilder/Team Matrix render their own empty state; nothing to show here.
+    }
+  }, [weekStart]);
+
+  useEffect(() => {
+    void refetchWeekShifts();
+  }, [refetchWeekShifts]);
+
+  const mergedRoster: Roster = useMemo(() => {
+    const withCommitted = mergeCommitted(roster, committed);
+    // weekShifts are real, already-persisted rota-builder/shift-editor shifts
+    // for the currently-viewed week — merged in alongside upload-committed
+    // shifts so Personal Rota/Team Matrix/the roster grid see both sources
+    // without caring which one a given shift came from.
+    const shifts = [...withCommitted.shifts];
+    const employees = [...withCommitted.employees];
+    const seenEmployeeIds = new Set(employees.map((e) => e.id));
+    for (const shift of weekShifts) {
+      if (!shift.employeeId.startsWith('open-') && !seenEmployeeIds.has(shift.employeeId)) {
+        // A real assigned user with no upload-derived Employee record yet —
+        // synthesize a minimal one so the roster grid/matrix can render them.
+        // requiredRole doubles as a display role here since RotaBuilder's own
+        // shift-role assignment is the only role signal for a person who has
+        // never appeared in an uploaded roster.
+        employees.push({ id: shift.employeeId, name: shift.employeeId, role: shift.requiredRole ?? 'staff', status: 'active' });
+        seenEmployeeIds.add(shift.employeeId);
+      }
+      if (!shifts.some((s) => s.id === shift.id)) shifts.push(shift);
+    }
+    return { ...withCommitted, employees, shifts };
+  }, [roster, committed, weekShifts]);
 
   const staffDirectoryByName = useMemo(() => {
     const map = new Map<string, StaffDirectoryEntry>();
@@ -167,6 +228,49 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const createRotaShift = useCallback(
+    async (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => {
+      await createShift({ ...input, locationId: 'seed-location' });
+      await refetchWeekShifts();
+    },
+    [refetchWeekShifts],
+  );
+
+  const updateRotaShift = useCallback(
+    async (id: string, patch: Parameters<typeof updateShift>[1]) => {
+      await updateShift(id, patch);
+      await refetchWeekShifts();
+    },
+    [refetchWeekShifts],
+  );
+
+  const deleteRotaShift = useCallback(
+    async (id: string, actorId?: string) => {
+      await deleteShift(id, actorId);
+      await refetchWeekShifts();
+    },
+    [refetchWeekShifts],
+  );
+
+  const bulkCreateRotaShifts = useCallback(
+    async (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts']) => {
+      await bulkCreateShifts({ locationId: 'seed-location', shifts });
+      await refetchWeekShifts();
+    },
+    [refetchWeekShifts],
+  );
+
+  const publishCurrentWeek = useCallback(
+    async (publishedById?: string) => {
+      const result = await publishWeek('seed-location', weekStart, publishedById);
+      await refetchWeekShifts();
+      return result;
+    },
+    [weekStart, refetchWeekShifts],
+  );
+
+  const fetchCurrentWeekPublishStatus = useCallback(() => fetchPublishStatus('seed-location', weekStart), [weekStart]);
+
   // setCollapsed/setStaffDirectory are useState setters — stable by definition,
   // and `config` is a module constant, so neither needs to be a dependency.
   const value: AppStateValue = useMemo(
@@ -185,6 +289,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       handleRequestCover,
       handleDecideRequest,
       handleCommitted,
+      weekStart,
+      setWeekStart,
+      refetchWeekShifts,
+      createRotaShift,
+      updateRotaShift,
+      deleteRotaShift,
+      bulkCreateRotaShifts,
+      publishCurrentWeek,
+      fetchCurrentWeekPublishStatus,
     }),
     [
       mergedRoster,
@@ -197,6 +310,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       handleRequestCover,
       handleDecideRequest,
       handleCommitted,
+      weekStart,
+      refetchWeekShifts,
+      createRotaShift,
+      updateRotaShift,
+      deleteRotaShift,
+      bulkCreateRotaShifts,
+      publishCurrentWeek,
+      fetchCurrentWeekPublishStatus,
     ],
   );
 
