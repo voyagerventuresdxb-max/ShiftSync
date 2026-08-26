@@ -10,6 +10,7 @@ import ShiftUpload from '../components/ShiftUpload';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
+import { ApiError } from '../api/schedules';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -111,22 +112,27 @@ export default function SchedulingContent() {
 
   const [hourStaff, setHourStaff] = useState<{ id: string; name: string; hours: number; contract: number }[]>([]);
   const [clockedIn, setClockedIn] = useState(false);
+  const [clockError, setClockError] = useState<string | null>(null);
 
   const refreshHours = useCallback(() => {
     fetchWeeklyHours('seed-location', mergedRoster.weekStart)
       .then((entries) => {
-        const byId = new Map(entries.map((e) => [e.id, e.hours]));
+        const byId = new Map(entries.map((e) => [e.id, e]));
         setHourStaff(
           mergedRoster.employees.map((emp) => ({
             id: emp.id,
             name: emp.name,
-            hours: byId.get(emp.id) ?? 0,
+            hours: byId.get(emp.id)?.hours ?? 0,
             contract: config.compliance.maxWeeklyHours,
           })),
         );
+        // Resync from server truth — not a local flip — so reloading the page
+        // or switching the "Viewing" employee always reflects whether that
+        // person actually has an open attendance log right now.
+        setClockedIn(activeEmployee ? (byId.get(activeEmployee.id)?.clockedIn ?? false) : false);
       })
       .catch(() => setHourStaff([]));
-  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours]);
+  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee]);
 
   useEffect(() => {
     refreshHours();
@@ -134,17 +140,17 @@ export default function SchedulingContent() {
 
   const handleClockIn = () => {
     if (!activeEmployee) return;
-    clockIn(activeEmployee.id).then(() => {
-      setClockedIn(true);
-      refreshHours();
-    });
+    setClockError(null);
+    clockIn(activeEmployee.id)
+      .then(() => refreshHours())
+      .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock in.'));
   };
   const handleClockOut = () => {
     if (!activeEmployee) return;
-    clockOut(activeEmployee.id).then(() => {
-      setClockedIn(false);
-      refreshHours();
-    });
+    setClockError(null);
+    clockOut(activeEmployee.id)
+      .then(() => refreshHours())
+      .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock out.'));
   };
 
   return (
@@ -201,6 +207,11 @@ export default function SchedulingContent() {
         </div>
 
         <aside className="min-w-0 space-y-5">
+          {clockError && (
+            <div className="error-block" role="alert">
+              <p>{clockError}</p>
+            </div>
+          )}
           <HourTracker
             staff={hourStaff}
             currentEmployeeName={activeEmployee?.name}

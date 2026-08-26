@@ -4,6 +4,7 @@ export interface HourStaffEntry {
   id: string;
   name: string;
   hours: number;
+  clockedIn: boolean;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

@@ -63,9 +63,19 @@ attendanceRouter.get('/:locationId/weekly-hours', async (req, res) => {
     end.setUTCDate(end.getUTCDate() + 7);
 
     const users = await prisma.user.findMany({ where: { locationId, isActive: true }, select: { id: true, fullName: true } });
+    const userIds = users.map((u) => u.id);
     const logs = await prisma.attendanceLog.findMany({
-      where: { userId: { in: users.map((u) => u.id) }, clockInAt: { gte: start, lt: end } },
+      where: { userId: { in: userIds }, clockInAt: { gte: start, lt: end } },
     });
+
+    // "Currently clocked in" is independent of the viewed week — an open log
+    // started in a prior week (or spanning midnight into this one) still
+    // means the employee is clocked in right now.
+    const openLogs = await prisma.attendanceLog.findMany({
+      where: { userId: { in: userIds }, clockOutAt: null },
+      select: { userId: true },
+    });
+    const clockedInUserIds = new Set(openLogs.map((l) => l.userId));
 
     const now = Date.now();
     const hoursByUser = new Map<string, number>();
@@ -77,7 +87,12 @@ attendanceRouter.get('/:locationId/weekly-hours', async (req, res) => {
     }
 
     return res.status(200).json({
-      staff: users.map((u) => ({ id: u.id, name: u.fullName, hours: Math.round((hoursByUser.get(u.id) ?? 0) * 100) / 100 })),
+      staff: users.map((u) => ({
+        id: u.id,
+        name: u.fullName,
+        hours: Math.round((hoursByUser.get(u.id) ?? 0) * 100) / 100,
+        clockedIn: clockedInUserIds.has(u.id),
+      })),
     });
   } catch (err) {
     console.error('[attendance.weeklyHours] failed', err);
