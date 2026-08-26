@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_MAINLAND_RULES, type Employee, type Roster, type Shift, type SwapRequest, type VenueConfig } from '../engine/types';
 import { groupIntoSections, nameKey, type GroupedSection } from '../engine/roleGrouping';
 import { buildCommitted, mergeCommitted, type PersistedRow } from '../engine/commitBinding';
@@ -39,7 +39,7 @@ interface AppStateValue {
   createRotaShift: (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => Promise<void>;
   updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[1]) => Promise<void>;
   deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
-  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts']) => Promise<void>;
+  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => Promise<void>;
   publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
   fetchCurrentWeekPublishStatus: () => Promise<{ publishedAt: string | null; notifiedCount: number; hasUnpublishedChanges: boolean }>;
 }
@@ -71,9 +71,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
   const [weekShifts, setWeekShifts] = useState<Shift[]>([]);
 
+  // Week navigation (RotaBuilder's prev/next buttons) can fire `setWeekStart`
+  // faster than the network answers. Without a guard, an older week's
+  // response can land after a newer one and paint stale shifts underneath the
+  // current week's header — data that looks correct but belongs to a
+  // different week. Every request takes a sequence number and discards itself
+  // if a newer request has started since.
+  const reqSeqRef = useRef(0);
+
   const refetchWeekShifts = useCallback(async () => {
+    const seq = ++reqSeqRef.current;
     try {
       const dtos = await fetchWeekShifts('seed-location', weekStart);
+      if (seq !== reqSeqRef.current) return;
       setWeekShifts(
         dtos.map((s) => ({
           id: s.id,
@@ -93,7 +103,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // A failed fetch for the new week must not leave the previous week's
       // shifts rendered (that would look like correct data for the wrong
       // week) — clear to empty so RotaBuilder/Team Matrix show their own
-      // empty state instead of stale data.
+      // empty state instead of stale data. A stale failure is discarded for
+      // the same reason a stale success is: it must not clear a newer week's
+      // freshly-loaded shifts.
+      if (seq !== reqSeqRef.current) return;
       setWeekShifts([]);
     }
   }, [weekStart]);
@@ -262,8 +275,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const bulkCreateRotaShifts = useCallback(
-    async (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts']) => {
-      await bulkCreateShifts({ locationId: 'seed-location', shifts });
+    // `createdById` is threaded through so bulk-created shifts get a real
+    // actor in the AuditLog — the underlying client has always accepted it,
+    // this wrapper just never passed it on.
+    async (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => {
+      await bulkCreateShifts({ locationId: 'seed-location', createdById, shifts });
       await refetchWeekShifts();
     },
     [refetchWeekShifts],
