@@ -60,6 +60,12 @@ export interface Shift {
   requiredRole?: string;
   /** Raw source text this shift was parsed from (for audit/debug). */
   source?: string;
+  /** DRAFT/PUBLISHED from the real backend — undefined for shifts that only ever came from the upload flow (not built via RotaBuilder/Shift Editor). */
+  status?: 'draft' | 'published';
+  /** Manager's floor directive for this specific shift (backed by Shift.managerNotes). */
+  briefingNote?: string;
+  /** Discrete side-work checklist items for this shift. */
+  sidework?: string[];
 }
 
 /** A weekly roster: employees + their shifts for a date range. */
