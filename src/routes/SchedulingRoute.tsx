@@ -100,11 +100,12 @@ export default function SchedulingContent() {
       if (dayShifts.length === 0) return { code: 'OFF', kind: 'off' };
       if (dayShifts.length > 1) {
         const roles = [...new Set(dayShifts.map((s) => s.requiredRole).filter(Boolean))];
-        return { code: 'D', kind: 'double', requiredRole: roles.join(' + ') || undefined };
+        const times = dayShifts.map((s) => `${s.start}–${s.end}`).join(', ');
+        return { code: times, kind: 'double', requiredRole: roles.join(' + ') || undefined };
       }
-      const period = periodOf(dayShifts[0]);
-      const isAm = period ? period === 'AM' : Number(dayShifts[0].start.split(':')[0]) < 12;
-      return { code: isAm ? 'AM' : 'PM', kind: isAm ? 'am' : 'pm', requiredRole: dayShifts[0].requiredRole };
+      const s = dayShifts[0];
+      const code = s.overnight ? `${s.start}–${s.end} +1` : `${s.start}–${s.end}`;
+      return { code, kind: 'shift', requiredRole: s.requiredRole };
     });
   });
 

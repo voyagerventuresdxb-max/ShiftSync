@@ -1,6 +1,6 @@
 import { cn } from '../../lib/utils';
 
-export type CellKind = 'am' | 'pm' | 'double' | 'off';
+export type CellKind = 'shift' | 'double' | 'off';
 
 export interface MatrixCell {
   code: string;
@@ -25,15 +25,13 @@ interface TeamMatrixProps {
 }
 
 const kindStyles: Record<CellKind, string> = {
-  am: 'bg-signal/15 text-signal border-signal/25',
-  pm: 'bg-accent/15 text-accent border-accent/25',
+  shift: 'bg-accent/15 text-accent border-accent/25',
   double: 'bg-accent text-accent-foreground border-accent',
   off: 'bg-muted text-muted-foreground border-border',
 };
 
 const legend: { label: string; kind: CellKind }[] = [
-  { label: 'AM', kind: 'am' },
-  { label: 'PM', kind: 'pm' },
+  { label: 'Shift', kind: 'shift' },
   { label: 'Double', kind: 'double' },
   { label: 'Off', kind: 'off' },
 ];
@@ -80,7 +78,7 @@ export function TeamMatrix({ venueName, days, members, matrix }: TeamMatrixProps
                   <div
                     title={cell.requiredRole}
                     className={cn(
-                      'grid h-10 place-items-center rounded-md border text-[11px] font-semibold tracking-wide transition-transform duration-200 hover:scale-[1.06]',
+                      'grid h-10 min-w-[4.5rem] place-items-center rounded-md border px-1 text-[10px] font-semibold tracking-wide transition-transform duration-200 hover:scale-[1.06]',
                       kindStyles[cell.kind],
                     )}
                   >
