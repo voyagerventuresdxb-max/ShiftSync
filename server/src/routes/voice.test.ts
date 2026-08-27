@@ -413,6 +413,80 @@ test('POST /api/voice/execute: DECLINE_SWAP from a MANAGER session declines a re
   }
 });
 
+test('POST /api/voice/execute: APPROVE_SWAP on an already-DECLINED swap request gets a real 409 and changes nothing', async () => {
+  const location = await prisma.location.findFirst();
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const requester = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ already-decided requester', systemRole: 'STAFF' },
+  });
+  const target = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ already-decided target', systemRole: 'STAFF' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ already-decided manager', systemRole: 'MANAGER' },
+  });
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location!.id,
+      roleId: role!.id,
+      userId: requester.id,
+      date: new Date('2026-09-08T00:00:00.000Z'),
+      startTime: new Date('2026-09-08T09:00:00.000Z'),
+      endTime: new Date('2026-09-08T17:00:00.000Z'),
+      status: 'PUBLISHED',
+    },
+  });
+  // Already decided — DECLINED, and (as a declined request must) the shift was
+  // never reassigned. decideSwapRequest's own 'conflict' result does NOT cover
+  // this case (isRequestLocked returns false for any non-PENDING request), so
+  // without the route's explicit status guard voice could flip this to
+  // APPROVED and reassign the shift out from under the earlier decision.
+  const swapRequest = await prisma.shiftSwapRequest.create({
+    data: {
+      shiftId: shift.id,
+      requestedById: requester.id,
+      targetUserId: target.id,
+      type: 'COVER',
+      status: 'DECLINED',
+      reviewedById: manager.id,
+      expiresAt: new Date('2026-12-31T00:00:00.000Z'),
+    },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'actually approve that swap after all',
+          intent: { intent: 'APPROVE_SWAP', swapRequestId: swapRequest.id, summary: 'Approve the swap.' },
+        }),
+      });
+      assert.equal(res.status, 409, 'an already-decided swap request must not be re-decided by voice');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /already declined/i, 'the 409 copy must name the real, accurate reason');
+    });
+
+    const unchanged = await prisma.shiftSwapRequest.findUnique({ where: { id: swapRequest.id } });
+    assert.equal(unchanged!.status, 'DECLINED', 'the request must still be DECLINED — voice must not flip an existing decision');
+    const unchangedShift = await prisma.shift.findUnique({ where: { id: shift.id } });
+    assert.equal(unchangedShift!.userId, requester.id, 'the shift must not have been reassigned');
+    const auditRows = await prisma.auditLog.findMany({ where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id } });
+    assert.equal(auditRows.length, 0, 'no AuditLog row may exist for a re-decision that was rejected');
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id } });
+    await prisma.shiftSwapRequest.delete({ where: { id: swapRequest.id } }).catch(() => {});
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: target.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: requester.id } }).catch(() => {});
+  }
+});
+
 test('POST /api/voice/execute: APPROVE_JOIN from a MANAGER session creates a real User from the join request', async () => {
   const location = await prisma.location.findFirst();
   assert.ok(location, 'seed data (location) must exist to run this test');

@@ -29,6 +29,17 @@ function isNonEmptyString(v: unknown): v is string {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * What the END USER is told when the Gemini-backed half of the pipeline is
+ * unavailable. VoiceTranscriptionError/VoiceIntentError messages are written
+ * for OPERATORS — they name internals ("GEMINI_API_KEY is not configured on
+ * the server…", raw upstream status codes and provider messages) — and were
+ * previously returned verbatim, so an env-var name surfaced in the app's own
+ * error banner. The detailed message still goes to the server log below;
+ * only this generic line crosses the wire.
+ */
+const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
+
+/**
  * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
  * the narrowing style parseIntent.ts's normalizeParsedIntent already uses
  * for Gemini's own output, just applied here to whatever a caller's request
@@ -93,7 +104,10 @@ voiceRouter.post('/transcribe', requireSession, upload.single('audio'), async (r
     const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype);
     return res.status(200).json({ transcript });
   } catch (err) {
-    if (err instanceof VoiceTranscriptionError) return res.status(503).json({ error: err.message });
+    if (err instanceof VoiceTranscriptionError) {
+      console.error('[voice.transcribe] unavailable', err);
+      return res.status(503).json({ error: VOICE_UNAVAILABLE });
+    }
     console.error('[voice.transcribe] failed', err);
     return res.status(500).json({ error: 'Unexpected error while transcribing audio.' });
   }
@@ -113,7 +127,10 @@ voiceRouter.post('/parse-intent', requireSession, async (req, res) => {
     });
     return res.status(200).json({ transcript, intent });
   } catch (err) {
-    if (err instanceof VoiceIntentError) return res.status(503).json({ error: err.message });
+    if (err instanceof VoiceIntentError) {
+      console.error('[voice.parseIntent] unavailable', err);
+      return res.status(503).json({ error: VOICE_UNAVAILABLE });
+    }
     console.error('[voice.parseIntent] failed', err);
     return res.status(500).json({ error: 'Unexpected error while parsing the voice command.' });
   }
@@ -214,16 +231,29 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // shifts (above); this is the same treatment for the decide path.
         const sr = await prisma.shiftSwapRequest.findUnique({
           where: { id: intent.swapRequestId },
-          select: { shift: { select: { locationId: true } } },
+          select: { status: true, shift: { select: { locationId: true } } },
         });
         if (!sr || sr.shift.locationId !== locationId) {
           return res.status(404).json({ error: 'That swap request could not be found.' });
+        }
+        // decideSwapRequest's 'conflict' result means specifically "a DIFFERENT
+        // request already reassigned this shift" — it does NOT catch "this
+        // exact request was already approved or declined", so without this
+        // guard voice could flip an already-DECLINED request to APPROVED.
+        // Mirrors the sibling join path's `already_reviewed` handling below.
+        if (sr.status !== 'PENDING') {
+          return res.status(409).json({ error: `That swap request was already ${sr.status.toLowerCase()}.` });
         }
 
         const decision = intent.intent === 'APPROVE_SWAP' ? 'approved' : 'declined';
         const result = await decideSwapRequest({ id: intent.swapRequestId, decision, reviewedById: actorId });
         if (result.result === 'not_found') return res.status(404).json({ error: 'That swap request could not be found.' });
-        if (result.result === 'conflict') return res.status(409).json({ error: 'That swap request was already decided.' });
+        // 'conflict' is NOT "already decided" (the PENDING guard above covers
+        // that) — isRequestLocked() only ever fires on a still-PENDING request
+        // whose shift a DIFFERENT approved request already reassigned.
+        if (result.result === 'conflict') {
+          return res.status(409).json({ error: 'That shift was already reassigned by another swap request.' });
+        }
         // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
         // SWAP_DECLINED) inside its transaction — append the voice transcript by
         // writing a SECOND, linked row rather than mutating the first, keeping
