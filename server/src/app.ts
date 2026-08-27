@@ -11,6 +11,8 @@ import { shiftsRouter } from './routes/shifts.js';
 import { rotaTemplatesRouter } from './routes/rotaTemplates.js';
 import { attendanceRouter } from './routes/attendance.js';
 import { eightySixRouter } from './routes/eightySix.js';
+import { identityRouter } from './routes/identity.js';
+import { joinRouter } from './routes/join.js';
 
 export function createApp() {
   const app = express();
@@ -34,6 +36,8 @@ export function createApp() {
   app.use('/api/rota-templates', rotaTemplatesRouter);
   app.use('/api/attendance', attendanceRouter);
   app.use('/api/eighty-six', eightySixRouter);
+  app.use('/api/identity', identityRouter);
+  app.use('/api/join', joinRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {

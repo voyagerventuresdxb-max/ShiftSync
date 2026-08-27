@@ -6,6 +6,17 @@ const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — long-lived, no refresh flow in this lightweight model
 const MAX_OTP_ATTEMPTS = 5;
 
+/**
+ * Digits only, dropping a leading international-dialing prefix so
+ * "+971 50 123 4567", "00971501234567", and "0501234567" can all match the
+ * same stored number. Shared by identity.ts (login) and join.ts
+ * (self-registration) so phone matching stays consistent between the two.
+ */
+export function phoneDigits(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  return digits.replace(/^00/, '').replace(/^971/, '');
+}
+
 /** Real 6-digit numeric code. Never logged/returned in production (see the request-otp routes). */
 export function generateOtp(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, '0');
