@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   fetchStaffDirectory,
   addStaffMember,
@@ -13,12 +13,20 @@ interface StaffDirectoryProps {
   onChanged?: (staff: StaffDirectoryEntry[]) => void;
 }
 
+type EditableFieldUpdates = Partial<
+  Pick<StaffDirectoryEntry, 'jobTitle' | 'phone' | 'preferredLanguage' | 'hiredAt' | 'isActive'>
+>;
+
 /**
  * Staff Directory — a simple add/edit UI for the venue-configured
  * staff-name -> job-title mapping. Deliberately NOT tied to roster
  * parsing: this is set once by the venue and read by the roster grid to
  * populate the Management tier, independent of whatever an upload
  * resolved for that person's role.
+ *
+ * Also carries phone, preferred language, start date (hiredAt), and
+ * employment status (isActive) — all editable here — plus a read-only
+ * venue column (joined server-side from Location.name).
  */
 export default function StaffDirectory({ locationId, onChanged }: StaffDirectoryProps) {
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
@@ -52,11 +60,17 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     };
   }, [locationId, onChanged]);
 
-  const handleTitleBlur = async (entry: StaffDirectoryEntry, jobTitle: string) => {
-    if (jobTitle === (entry.jobTitle ?? '')) return; // unchanged, no request needed
+  // Previously-seen preferred languages, for the datalist autocomplete —
+  // same idea as the 86 List's station autocomplete (EightySixBoard.tsx).
+  const knownLanguages = useMemo(
+    () => [...new Set(staff.map((s) => s.preferredLanguage).filter((v): v is string => !!v))].sort(),
+    [staff],
+  );
+
+  const handleFieldSave = async (entry: StaffDirectoryEntry, updates: EditableFieldUpdates, errorMessage: string) => {
     setSavingId(entry.id);
     try {
-      const updated = await updateStaffMember(entry.id, { jobTitle: jobTitle || null });
+      const updated = await updateStaffMember(entry.id, updates);
       setStaff((prev) => {
         const next = prev.map((s) => (s.id === entry.id ? updated : s));
         onChanged?.(next);
@@ -64,7 +78,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
       });
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not save that job title.');
+      setError(err instanceof ApiError ? err.message : errorMessage);
     } finally {
       setSavingId(null);
     }
@@ -75,7 +89,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     if (!fullName) return;
     setAdding(true);
     try {
-      const created = await addStaffMember(locationId, fullName, newTitle.trim());
+      const created = await addStaffMember({ locationId, fullName, jobTitle: newTitle.trim() || null });
       setStaff((prev) => {
         const next = [...prev, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
         onChanged?.(next);
@@ -117,6 +131,12 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
             </div>
           )}
 
+          <datalist id="staff-directory-languages">
+            {knownLanguages.map((lang) => (
+              <option key={lang} value={lang} />
+            ))}
+          </datalist>
+
           {loading ? (
             <div className="status-block">
               <span className="spinner" aria-hidden />
@@ -129,6 +149,11 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                   <tr>
                     <th>Name</th>
                     <th>Job title</th>
+                    <th>Phone</th>
+                    <th>Preferred language</th>
+                    <th>Start date</th>
+                    <th>Status</th>
+                    <th>Venue</th>
                     <th>Parsed role</th>
                   </tr>
                 </thead>
@@ -138,12 +163,12 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                       key={entry.id}
                       entry={entry}
                       saving={savingId === entry.id}
-                      onBlurTitle={(title) => handleTitleBlur(entry, title)}
+                      onSave={(updates, errorMessage) => handleFieldSave(entry, updates, errorMessage)}
                     />
                   ))}
                   {staff.length === 0 && (
                     <tr>
-                      <td colSpan={3} className="cell-num">
+                      <td colSpan={8} className="cell-num">
                         No staff yet — add one below.
                       </td>
                     </tr>
@@ -181,17 +206,32 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
 function StaffRow({
   entry,
   saving,
-  onBlurTitle,
+  onSave,
 }: {
   entry: StaffDirectoryEntry;
   saving: boolean;
-  onBlurTitle: (title: string) => void;
+  onSave: (updates: EditableFieldUpdates, errorMessage: string) => void;
 }) {
   const [title, setTitle] = useState(entry.jobTitle ?? '');
+  const [phone, setPhone] = useState(entry.phone ?? '');
+  const [preferredLanguage, setPreferredLanguage] = useState(entry.preferredLanguage ?? '');
+  const [hiredAt, setHiredAt] = useState(entry.hiredAt ?? '');
 
   useEffect(() => {
     setTitle(entry.jobTitle ?? '');
   }, [entry.jobTitle]);
+
+  useEffect(() => {
+    setPhone(entry.phone ?? '');
+  }, [entry.phone]);
+
+  useEffect(() => {
+    setPreferredLanguage(entry.preferredLanguage ?? '');
+  }, [entry.preferredLanguage]);
+
+  useEffect(() => {
+    setHiredAt(entry.hiredAt ?? '');
+  }, [entry.hiredAt]);
 
   return (
     <tr>
@@ -201,11 +241,65 @@ function StaffRow({
           className="staff-directory-input staff-directory-input-inline"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          onBlur={() => onBlurTitle(title)}
+          onBlur={() => {
+            if (title === (entry.jobTitle ?? '')) return;
+            onSave({ jobTitle: title || null }, 'Could not save that job title.');
+          }}
           placeholder="Not set"
           disabled={saving}
         />
       </td>
+      <td>
+        <input
+          className="staff-directory-input staff-directory-input-inline"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          onBlur={() => {
+            if (phone === (entry.phone ?? '')) return;
+            onSave({ phone: phone || null }, 'Could not save that phone number.');
+          }}
+          placeholder="Not set"
+          disabled={saving}
+        />
+      </td>
+      <td>
+        <input
+          className="staff-directory-input staff-directory-input-inline"
+          list="staff-directory-languages"
+          value={preferredLanguage}
+          onChange={(e) => setPreferredLanguage(e.target.value)}
+          onBlur={() => {
+            if (preferredLanguage === (entry.preferredLanguage ?? '')) return;
+            onSave({ preferredLanguage: preferredLanguage || null }, 'Could not save that preferred language.');
+          }}
+          placeholder="Not set"
+          disabled={saving}
+        />
+      </td>
+      <td>
+        <input
+          type="date"
+          className="staff-directory-input staff-directory-input-inline"
+          value={hiredAt}
+          onChange={(e) => setHiredAt(e.target.value)}
+          onBlur={() => {
+            if (hiredAt === (entry.hiredAt ?? '')) return;
+            onSave({ hiredAt: hiredAt || null }, 'Could not save that start date.');
+          }}
+          disabled={saving}
+        />
+      </td>
+      <td>
+        <button
+          type="button"
+          className={`chip${entry.isActive ? ' chip-active' : ''}`}
+          disabled={saving}
+          onClick={() => onSave({ isActive: !entry.isActive }, 'Could not update employment status.')}
+        >
+          {entry.isActive ? 'Active' : 'Inactive'}
+        </button>
+      </td>
+      <td className="cell-num">{entry.venueName}</td>
       <td className="cell-num">{entry.roleName ?? '—'}</td>
     </tr>
   );
