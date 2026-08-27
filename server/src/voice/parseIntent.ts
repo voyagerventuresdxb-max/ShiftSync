@@ -3,6 +3,8 @@ import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { intentSchemaFor, type ParsedIntent } from './intentSchema.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
+import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
+import { voiceModel } from './model.js';
 
 export class VoiceIntentError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -23,7 +25,14 @@ export class VoiceIntentError extends Error {
 let client: GoogleGenAI | null = null;
 
 async function buildContext(user: { id: string; systemRole: SystemRole; fullName: string; locationId: string }): Promise<PromptContext> {
-  const today = new Date().toISOString().slice(0, 10);
+  // Everything the model is told about "now" must be in the VENUE's local
+  // zone, not UTC. A Dubai (UTC+4) venue's 00:00-04:00 — exactly when a
+  // closing shift ends — is still the previous UTC day, so a UTC "today"
+  // would make a spoken "tomorrow" resolve one calendar day early. That
+  // wrong date is still a syntactically valid one, so /execute's
+  // round-trip validity check cannot catch it: it has to be right here.
+  const timezone = await venueTimezoneFor(user.locationId);
+  const today = venueToday(timezone);
   const staff = await prisma.user.findMany({
     where: { locationId: user.locationId, isActive: true },
     select: { id: true, fullName: true },
@@ -42,11 +51,15 @@ async function buildContext(user: { id: string; systemRole: SystemRole; fullName
     orderBy: { date: 'asc' },
     take: 10,
   });
+  // `date` is stored as UTC-midnight-of-the-venue-local-day, so slicing it
+  // directly is already the venue-local calendar day. The start/end INSTANTS
+  // are not — they go through the same `formatVenueTime` the REST shift DTO
+  // (server/src/routes/shifts.ts) uses.
   ctx.callerShifts = shifts.map((s) => ({
     id: s.id,
     date: s.date.toISOString().slice(0, 10),
-    startTime: s.startTime.toISOString().slice(11, 16),
-    endTime: s.endTime.toISOString().slice(11, 16),
+    startTime: formatVenueTime(s.startTime, timezone),
+    endTime: formatVenueTime(s.endTime, timezone),
   }));
 
   // Pending decisions are only ever surfaced to manager-tier callers — a
@@ -61,7 +74,7 @@ async function buildContext(user: { id: string; systemRole: SystemRole; fullName
     ctx.pendingSwapRequests = pendingSwaps.map((r) => ({
       id: r.id,
       requesterName: r.requestedBy.fullName,
-      shiftLabel: `${r.shift.date.toISOString().slice(0, 10)} ${r.shift.startTime.toISOString().slice(11, 16)}-${r.shift.endTime.toISOString().slice(11, 16)}`,
+      shiftLabel: `${r.shift.date.toISOString().slice(0, 10)} ${formatVenueTime(r.shift.startTime, timezone)}-${formatVenueTime(r.shift.endTime, timezone)}`,
     }));
 
     const pendingJoins = await prisma.joinRequest.findMany({
@@ -97,7 +110,7 @@ export async function parseVoiceIntent(
 
   try {
     const response = await client.models.generateContent({
-      model: process.env.VOICE_MODEL || 'gemini-3.6-flash',
+      model: voiceModel(),
       contents: [{ role: 'user', parts: [{ text: transcript }] }],
       config: {
         systemInstruction: systemPrompt,

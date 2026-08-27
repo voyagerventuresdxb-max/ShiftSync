@@ -1,4 +1,5 @@
 import { GoogleGenAI, ApiError } from '@google/genai';
+import { voiceModel } from './model.js';
 
 export class VoiceTranscriptionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -43,7 +44,7 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string): Promise
 
   try {
     const response = await genai.models.generateContent({
-      model: process.env.VOICE_MODEL || 'gemini-3.6-flash',
+      model: voiceModel(),
       contents: [
         {
           role: 'user',
