@@ -14,7 +14,8 @@ const MAX_OTP_ATTEMPTS = 5;
  */
 export function phoneDigits(raw: string): string {
   const digits = raw.replace(/\D/g, '');
-  return digits.replace(/^00/, '').replace(/^971/, '');
+  const withoutIntlPrefix = digits.replace(/^00/, '').replace(/^971/, '');
+  return withoutIntlPrefix.replace(/^0/, '');
 }
 
 /** Real 6-digit numeric code. Never logged/returned in production (see the request-otp routes). */

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateOtp, hashOtp } from './identity.js';
+import { generateOtp, hashOtp, phoneDigits } from './identity.js';
 
 test('generateOtp returns a 6-digit numeric string', () => {
   const code = generateOtp();
@@ -22,4 +22,20 @@ test('hashOtp is deterministic for the same input and never returns the plaintex
 
 test('hashOtp produces different hashes for different codes', () => {
   assert.notEqual(hashOtp('123456'), hashOtp('654321'));
+});
+
+test('phoneDigits normalizes local, international, and 00-prefixed formats to the same value', () => {
+  // The same real number, entered three different ways — local trunk-0
+  // format, international +971 format (with spaces), and the 00-dialing-
+  // prefix format. All three must collapse to one canonical value, since
+  // this is the entire login/join phone-matching mechanism.
+  const local = phoneDigits('0501234567');
+  const intl = phoneDigits('+971 50 123 4567');
+  const zeroZero = phoneDigits('00971501234567');
+
+  assert.equal(local, '501234567');
+  assert.equal(intl, '501234567');
+  assert.equal(zeroZero, '501234567');
+  assert.equal(local, intl);
+  assert.equal(intl, zeroZero);
 });
