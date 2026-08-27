@@ -226,8 +226,26 @@ function PreviewReview({
 }) {
   const { preview, summary, templateDetected, parseIssues, anomalies, leaveRecords, legend } = data;
   const [filter, setFilter] = useState<'all' | 'error' | 'new_employee' | 'unmatched_role'>('all');
+  const [reviewed, setReviewed] = useState<Set<number>>(new Set());
 
-  const visible = preview.filter((r) => filter === 'all' || r.status === filter);
+  const needsReview = preview.filter((r) => r.status !== 'matched');
+  const matched = preview.filter((r) => r.status === 'matched');
+  const visibleNeedsReview = needsReview.filter((r) => filter === 'all' || r.status === filter);
+
+  const outstanding = needsReview.filter((r) => !reviewed.has(r.rowNumber)).length;
+
+  const toggleReviewed = (rowNumber: number) => {
+    setReviewed((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowNumber)) next.delete(rowNumber);
+      else next.add(rowNumber);
+      return next;
+    });
+  };
+
+  const markAllReviewed = () => {
+    setReviewed(new Set(needsReview.map((r) => r.rowNumber)));
+  };
 
   return (
     <div className="preview">
@@ -307,60 +325,133 @@ function PreviewReview({
         </div>
       )}
 
-      <div className="filter-bar">
-        {(
-          [
-            ['all', 'All'],
-            ['error', 'Errors'],
-            ['new_employee', 'New staff'],
-            ['unmatched_role', 'Unmatched role'],
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            className={`chip${filter === key ? ' chip-active' : ''}`}
-            onClick={() => setFilter(key)}
-          >
-            {label}
+      <section className="preview-section preview-section-review">
+        <header className="preview-section-header">
+          <div>
+            <p className="eyebrow">Needs Review</p>
+            <p className="hint">
+              These rows won't be turned into shifts automatically. Look them over, then mark each
+              reviewed (or all at once) to unlock committing the roster.{' '}
+              {needsReview.length > 0 && 'To correct a name or role, fix the source file and re-upload — inline edits aren\'t supported here.'}
+            </p>
+          </div>
+          {needsReview.length > 0 && (
+            <button className="btn btn-ghost" onClick={markAllReviewed} disabled={outstanding === 0}>
+              Mark all reviewed
+            </button>
+          )}
+        </header>
+
+        {needsReview.length === 0 ? (
+          <p className="hint px-1">Nothing needs review — every row matched cleanly.</p>
+        ) : (
+          <>
+            <div className="filter-bar">
+              {(
+                [
+                  ['all', 'All'],
+                  ['error', 'Errors'],
+                  ['new_employee', 'New staff'],
+                  ['unmatched_role', 'Unmatched role'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  className={`chip${filter === key ? ' chip-active' : ''}`}
+                  onClick={() => setFilter(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="preview-table-wrap">
+              <table className="preview-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Staff</th>
+                    <th>Role</th>
+                    <th>Date</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Break</th>
+                    <th>Status</th>
+                    <th>Reviewed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleNeedsReview.map((row) => (
+                    <PreviewRowRow
+                      key={row.rowNumber}
+                      row={row}
+                      reviewed={reviewed.has(row.rowNumber)}
+                      onToggleReviewed={() => toggleReviewed(row.rowNumber)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="preview-section preview-section-matched">
+        <header className="preview-section-header">
+          <p className="eyebrow">Matched — will be committed</p>
+        </header>
+        <div className="preview-table-wrap">
+          <table className="preview-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Staff</th>
+                <th>Role</th>
+                <th>Date</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Break</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matched.map((row) => (
+                <PreviewRowRow key={row.rowNumber} row={row} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div className="preview-sticky-bar">
+        <p className="preview-sticky-count">
+          {outstanding > 0
+            ? `${outstanding} needs-review row${outstanding === 1 ? '' : 's'} left`
+            : needsReview.length > 0
+              ? 'All needs-review rows reviewed'
+              : null}
+        </p>
+        <div className="preview-actions">
+          <button className="btn btn-ghost" onClick={onReset}>
+            Discard
           </button>
-        ))}
-      </div>
-
-      <div className="preview-table-wrap">
-        <table className="preview-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Staff</th>
-              <th>Role</th>
-              <th>Date</th>
-              <th>Start</th>
-              <th>End</th>
-              <th>Break</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((row) => (
-              <PreviewRowRow key={row.rowNumber} row={row} />
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="preview-actions">
-        <button className="btn btn-ghost" onClick={onReset}>
-          Discard
-        </button>
-        <button className="btn btn-primary" onClick={onConfirm}>
-          Confirm &amp; commit {summary.totalRows} shifts
-        </button>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={outstanding > 0}>
+            Confirm &amp; Commit {summary.matchedRows} shift{summary.matchedRows === 1 ? '' : 's'}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function PreviewRowRow({ row }: { row: PreviewRow }) {
+function PreviewRowRow({
+  row,
+  reviewed,
+  onToggleReviewed,
+}: {
+  row: PreviewRow;
+  reviewed?: boolean;
+  onToggleReviewed?: () => void;
+}) {
   const statusLabel: Record<PreviewRow['status'], string> = {
     matched: 'Matched',
     new_employee: 'New staff',
@@ -387,6 +478,17 @@ function PreviewRowRow({ row }: { row: PreviewRow }) {
           </span>
         )}
       </td>
+      {onToggleReviewed && (
+        <td>
+          <button
+            className={`chip${reviewed ? ' chip-active' : ''}`}
+            onClick={onToggleReviewed}
+            aria-pressed={reviewed}
+          >
+            {reviewed ? 'Reviewed' : 'Mark reviewed'}
+          </button>
+        </td>
+      )}
     </tr>
   );
 }
