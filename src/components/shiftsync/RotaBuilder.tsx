@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import {
+  Ban,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Layers,
   Lock,
+  Moon,
   PencilLine,
   Plus,
   Save,
@@ -32,6 +34,7 @@ import {
   type TemplateEntryInput,
 } from '@/api/rotaTemplates';
 import { fetchWeekShifts } from '@/api/shifts';
+import { fetchAvailability, type AvailabilityMarkDto } from '@/api/availability';
 
 /** dnd-kit sensor config, matching FloorPlan/AssignmentBoard.tsx exactly: touch gets a delay so scrolling doesn't start a drag, mouse gets a distance threshold. */
 const sensors = [
@@ -106,6 +109,19 @@ export function RotaBuilder() {
   const days = useMemo(() => weekDates(weekStart), [weekStart]);
   const weekShifts = mergedRoster.shifts.filter((s) => days.includes(s.date));
 
+  // Availability marks (unavailable/preferred-off) for every staff member
+  // actually assigned a shift in the visible week, keyed as `${userId}|${date}`
+  // for O(1) lookup per cell. Purely informational — see the badge in `Cell`
+  // below, which never disables drag/assign/save.
+  const [availabilityByKey, setAvailabilityByKey] = useState<Record<string, AvailabilityMarkDto | undefined>>({});
+  const assignedUserIdsKey = useMemo(() => {
+    const ids = new Set<string>();
+    for (const s of weekShifts) {
+      if (!s.employeeId.startsWith('open-')) ids.add(s.employeeId);
+    }
+    return [...ids].sort().join(',');
+  }, [weekShifts]);
+
   const bump = () => setDataVersion((v) => v + 1);
 
   useEffect(() => {
@@ -134,6 +150,38 @@ export function RotaBuilder() {
       cancelled = true;
     };
   }, [weekStart, dataVersion]);
+
+  useEffect(() => {
+    const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
+    if (userIds.length === 0) {
+      setAvailabilityByKey({});
+      return;
+    }
+    let cancelled = false;
+    // One fetchAvailability call per assigned staff member (N calls, not a
+    // batched endpoint) — see the ruling note in the Task 11 report: at this
+    // app's real staff-directory scale (~20 people per location, and only
+    // those actually assigned a shift this week are fetched here), N small
+    // per-person requests are simpler and sufficiently fast; this keeps the
+    // change frontend-only rather than adding a new backend endpoint.
+    Promise.all(
+      userIds.map((userId) =>
+        fetchAvailability(userId, weekStart)
+          .then((marks) => ({ userId, marks }))
+          .catch(() => ({ userId, marks: [] as AvailabilityMarkDto[] })),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const byKey: Record<string, AvailabilityMarkDto> = {};
+      for (const { userId, marks } of results) {
+        for (const m of marks) byKey[`${userId}|${m.date}`] = m;
+      }
+      setAvailabilityByKey(byKey);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [weekStart, assignedUserIdsKey]);
 
   // Every role a staff member actually holds, plus any extra role seen on
   // this week's shifts. Directory-first means a location with staff on
@@ -421,6 +469,7 @@ export function RotaBuilder() {
                             onEdit={openEdit}
                             locked={locked}
                             suppressClick={suppressClick}
+                            availabilityMark={person.userId ? availabilityByKey[`${person.userId}|${d}`] : undefined}
                           />
                         ))}
                       </div>
@@ -546,6 +595,7 @@ function Cell({
   onEdit,
   locked,
   suppressClick,
+  availabilityMark,
 }: {
   date: string;
   userId: string | null;
@@ -554,16 +604,18 @@ function Cell({
   onEdit: (s: Shift) => void;
   locked: boolean;
   suppressClick: boolean;
+  availabilityMark?: AvailabilityMarkDto;
 }) {
   const { ref, isDropTarget } = useDroppable({ id: `${date}|${userId ?? OPEN_ROW}` });
   return (
     <div
       ref={ref}
       className={cn(
-        'min-h-[64px] space-y-1 border-l border-border/40 p-1.5 transition-colors',
+        'relative min-h-[64px] space-y-1 border-l border-border/40 p-1.5 transition-colors',
         isDropTarget && 'bg-accent/10 ring-1 ring-inset ring-accent/40',
       )}
     >
+      {availabilityMark && <AvailabilityBadge mark={availabilityMark} />}
       {shifts.map((s) => (
         <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
       ))}
@@ -573,6 +625,31 @@ function Cell({
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * A purely informational badge shown when the person assigned to this cell
+ * has marked this day unavailable or preferred-off. It is never a drop
+ * target, never intercepts clicks, and carries no `disabled`/gating logic —
+ * assignment, dragging, and saving all proceed exactly as if it weren't
+ * there. See Task 11: "an informational warning... not a hard compliance
+ * block."
+ */
+function AvailabilityBadge({ mark }: { mark: AvailabilityMarkDto }) {
+  const isUnavailable = mark.type === 'UNAVAILABLE';
+  const title = isUnavailable ? 'Marked unavailable this day' : 'Marked preferred day off';
+  return (
+    <span
+      title={title}
+      aria-label={title}
+      className={cn(
+        'pointer-events-none absolute right-1 top-1 z-[1] inline-flex h-4 w-4 items-center justify-center rounded-full border',
+        isUnavailable ? 'border-destructive/30 bg-destructive/15 text-destructive' : 'border-warning/30 bg-warning/15 text-warning',
+      )}
+    >
+      {isUnavailable ? <Ban className="h-2.5 w-2.5" /> : <Moon className="h-2.5 w-2.5" />}
+    </span>
   );
 }
 
