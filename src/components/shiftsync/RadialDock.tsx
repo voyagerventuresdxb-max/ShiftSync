@@ -83,11 +83,14 @@ export function RadialDock({
   listening,
   onToggleListening,
   processing = false,
+  starting = false,
 }: {
   listening: boolean;
   onToggleListening: () => void;
   /** True while a captured command is transcribing/parsing — a distinct visual state from "still recording". */
   processing?: boolean;
+  /** True between the first tap and the mic actually going live (the browser's permission prompt) — the button must not be re-tappable. */
+  starting?: boolean;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation().pathname;
@@ -263,26 +266,39 @@ export function RadialDock({
           type="button"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onToggleListening}
-          disabled={processing}
+          disabled={processing || starting}
           aria-pressed={listening}
-          aria-label={processing ? 'Processing voice command' : listening ? 'Stop recording voice command' : 'Toggle AI voice assistant'}
+          // Idle copy is "start recording", not "toggle assistant": this is
+          // tap-to-record / tap-to-stop, not an always-on listener.
+          aria-label={
+            processing
+              ? 'Processing voice command'
+              : starting
+                ? 'Waiting for microphone permission'
+                : listening
+                  ? 'Stop recording voice command'
+                  : 'Start recording a voice command'
+          }
           className={cn(
             'glass-bar absolute left-1/2 top-[-26px] grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full transition-all duration-300',
-            listening || processing ? 'text-accent-foreground' : 'text-accent hover:brightness-125',
-            processing && 'cursor-wait',
+            listening || processing || starting ? 'text-accent-foreground' : 'text-accent hover:brightness-125',
+            (processing || starting) && 'cursor-wait',
           )}
           style={{
             backgroundImage:
-              listening || processing
+              listening || processing || starting
                 ? 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, var(--accent) 92%, transparent), color-mix(in oklab, var(--accent) 62%, transparent))'
                 : 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, oklch(1 0 0) 16%, transparent), color-mix(in oklab, var(--accent) 12%, transparent))',
             // processing gets a quicker pulse than plain "still listening" — a
             // distinct-but-related visual state, not a static icon swap.
-            animation: processing ? 'breathe 0.9s ease-in-out infinite' : listening ? 'breathe 2.4s ease-in-out infinite' : undefined,
+            // `starting` (awaiting the mic permission prompt) borrows the same
+            // quick pulse: both mean "busy, don't tap again".
+            animation:
+              processing || starting ? 'breathe 0.9s ease-in-out infinite' : listening ? 'breathe 2.4s ease-in-out infinite' : undefined,
             transitionTimingFunction: 'cubic-bezier(0.34,1.56,0.64,1)',
           }}
         >
-          {processing ? (
+          {processing || starting ? (
             <LoaderCircle className="h-[18px] w-[18px] animate-spin" />
           ) : listening ? (
             <Mic className="h-[18px] w-[18px]" />

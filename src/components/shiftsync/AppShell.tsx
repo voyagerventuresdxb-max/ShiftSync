@@ -11,32 +11,52 @@ import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type P
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
  *
- * Gemini's documented audio-input formats do NOT include `audio/webm`, but
- * `audio/webm;codecs=opus` is what Chrome/Firefox's MediaRecorder defaults
- * to. `audio/ogg;codecs=opus` is the best candidate that is BOTH
- * browser-recordable (Firefox, and Chromium builds that support it) AND in
- * Gemini's documented list (audio/wav, audio/mp3, audio/aiff, audio/aac,
- * audio/ogg, audio/flac) — so it is tried first. The webm variants are kept
- * as a last-resort fallback rather than refused outright: a client-side
- * mimetype allowlist that blocks recording entirely on browsers that only
- * support webm would turn "might not decode" (unverified either way — see
- * server/src/routes/voice.ts's own comment on this) into a guaranteed,
- * silent "voice commands don't work here" for the common case. If the
- * upload genuinely fails to transcribe, that already surfaces as a normal,
- * visible error banner via the existing ApiError/error-block path below —
- * so the "honest failure" this judgment call has to weigh isn't between
- * "silent" and "blocked", it's between "sometimes retry with an error
- * message" and "never try at all for a browser that might have worked".
+ * The list is split in two, strictly: every entry in the first group is in
+ * Gemini's documented audio-input list (audio/wav, audio/mp3, audio/aiff,
+ * audio/aac, audio/ogg, audio/flac); every entry in the second group is
+ * NOT, and is an unconfirmed bet kept only as a fallback.
+ *
+ * `audio/ogg;codecs=opus` leads because it is the best candidate that is
+ * BOTH browser-recordable (Firefox, and Chromium builds that support it)
+ * AND documented. The unconfirmed group holds `audio/webm;codecs=opus`
+ * (Chrome/Firefox's MediaRecorder default) and `audio/mp4` (Safari's only
+ * native recording format) — neither appears in Gemini's documented list,
+ * so neither is a better bet than the other and both sort below every
+ * documented type. `audio/mp4` previously sat ABOVE the webm entries
+ * despite the same "documented first" rationale that demoted webm.
+ *
+ * They are kept rather than refused outright: a client-side mimetype
+ * allowlist that blocks recording entirely on browsers that only support
+ * webm (or, for Safari, only mp4) would turn "might not decode"
+ * (unverified either way — see server/src/routes/voice.ts's own comment on
+ * this) into a guaranteed, silent "voice commands don't work here" for the
+ * common case. If the upload genuinely fails to transcribe, that already
+ * surfaces as a normal, visible error banner via the existing
+ * ApiError/error-block path below — so the "honest failure" this judgment
+ * call has to weigh isn't between "silent" and "blocked", it's between
+ * "sometimes retry with an error message" and "never try at all for a
+ * browser that might have worked".
  */
 const RECORDER_MIME_CANDIDATES = [
+  // In Gemini's documented audio-input list:
   'audio/ogg;codecs=opus',
   'audio/ogg',
   'audio/wav',
   'audio/aac',
-  'audio/mp4',
+  // Not in Gemini's documented list — unconfirmed fallbacks, equal footing:
   'audio/webm;codecs=opus',
   'audio/webm',
+  'audio/mp4',
 ];
+
+/**
+ * Hard stop for a single voice command. Nothing else auto-stops the
+ * MediaRecorder, so a tap-and-forget would otherwise record until the tab
+ * closed — with the only backstop being multer's 10MB upload cap, which
+ * surfaces as a confusing generic "File too large" AFTER the whole
+ * recording is discarded. 45s is far beyond any real spoken command.
+ */
+const MAX_RECORDING_MS = 45_000;
 
 function pickRecorderMimeType(): string {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
@@ -98,6 +118,11 @@ export function AppShell() {
   // round trip after the second tap stops the recording. RadialDock renders
   // a distinct visual for each rather than collapsing them into one boolean.
   const [voiceOn, setVoiceOn] = useState(false);
+  // `voiceStarting` covers the gap between the first tap and the mic actually
+  // being live — i.e. while the browser's permission prompt is up, which can
+  // be seconds on first use. See `voiceStartingRef` below for why both a ref
+  // and a state value exist.
+  const [voiceStarting, setVoiceStarting] = useState(false);
   const [voiceProcessing, setVoiceProcessing] = useState(false);
   const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
@@ -105,12 +130,32 @@ export function AppShell() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  /**
+   * The real double-tap guard, deliberately a ref and not the `voiceStarting`
+   * state: a second tap can land in the same tick as the first, before React
+   * has re-rendered with the new state, and both calls would then sail past a
+   * state-based check. Two concurrent `getUserMedia` calls both resolve,
+   * `mediaRecorderRef` can only hold one of them, and the loser's MediaStream
+   * stays open with nothing left able to stop it — the tab's mic indicator
+   * stays lit until a reload. The state value exists only to drive the
+   * button's disabled/visual treatment.
+   */
+  const voiceStartingRef = useRef(false);
+  const maxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearMaxDurationTimer = useCallback(() => {
+    if (maxDurationTimerRef.current !== null) {
+      clearTimeout(maxDurationTimerRef.current);
+      maxDurationTimerRef.current = null;
+    }
+  }, []);
 
   // Stop released the tab's mic indicator too, not just our own state —
   // matters if the user navigates away mid-recording (AppShell itself never
   // unmounts, since it's the layout route, but this is cheap insurance).
   useEffect(() => {
     return () => {
+      if (maxDurationTimerRef.current !== null) clearTimeout(maxDurationTimerRef.current);
       mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
     };
   }, []);
@@ -141,7 +186,18 @@ export function AppShell() {
     [session],
   );
 
+  /** The single stop-and-process path — a manual second tap and the max-duration timer both land here. */
+  const stopVoiceRecording = useCallback(() => {
+    clearMaxDurationTimer();
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    setVoiceOn(false);
+  }, [clearMaxDurationTimer]);
+
   const startVoiceRecording = useCallback(async () => {
+    // Synchronous guard first: everything below this line is async, and a
+    // second tap during the permission prompt must be a hard no-op.
+    if (voiceStartingRef.current) return;
     if (!session) {
       setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
       return;
@@ -151,6 +207,8 @@ export function AppShell() {
       return;
     }
     setVoiceBanner(null);
+    voiceStartingRef.current = true;
+    setVoiceStarting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = pickRecorderMimeType();
@@ -169,25 +227,33 @@ export function AppShell() {
       mediaRecorderRef.current = recorder;
       recorder.start();
       setVoiceOn(true);
+      // Auto-stop through the exact same path a manual second tap takes, so a
+      // tap-and-forget still produces a normal, processable recording.
+      clearMaxDurationTimer();
+      maxDurationTimerRef.current = setTimeout(() => {
+        maxDurationTimerRef.current = null;
+        stopVoiceRecording();
+      }, MAX_RECORDING_MS);
     } catch {
       setVoiceBanner({ kind: 'error', message: 'Microphone access was denied or unavailable.' });
+    } finally {
+      // Cleared on BOTH paths — a denied/failed prompt must leave the button
+      // tappable again, not permanently stuck in the "starting" state.
+      voiceStartingRef.current = false;
+      setVoiceStarting(false);
     }
-  }, [session, handleRecordingComplete]);
-
-  const stopVoiceRecording = useCallback(() => {
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current = null;
-    setVoiceOn(false);
-  }, []);
+  }, [session, handleRecordingComplete, clearMaxDurationTimer, stopVoiceRecording]);
 
   const handleToggleVoice = useCallback(() => {
-    if (voiceProcessing) return; // already disabled on the button itself; guarded here too against a stray keyboard activation
+    // Both already disable the button itself; guarded here too against a stray
+    // keyboard activation (and, for `voiceStarting`, a same-tick double tap).
+    if (voiceProcessing || voiceStarting) return;
     if (voiceOn) {
       stopVoiceRecording();
     } else {
       void startVoiceRecording();
     }
-  }, [voiceOn, voiceProcessing, startVoiceRecording, stopVoiceRecording]);
+  }, [voiceOn, voiceProcessing, voiceStarting, startVoiceRecording, stopVoiceRecording]);
 
   const handleVoiceCancel = useCallback(() => {
     setVoiceResult(null);
@@ -294,12 +360,13 @@ export function AppShell() {
 
       <VoiceCommandSheet
         intent={voiceResult?.intent ?? null}
+        transcript={voiceResult?.transcript ?? ''}
         onConfirm={handleVoiceConfirm}
         onCancel={handleVoiceCancel}
         executing={voiceExecuting}
       />
 
-      <RadialDock listening={voiceOn} processing={voiceProcessing} onToggleListening={handleToggleVoice} />
+      <RadialDock listening={voiceOn} starting={voiceStarting} processing={voiceProcessing} onToggleListening={handleToggleVoice} />
     </div>
   );
 }
