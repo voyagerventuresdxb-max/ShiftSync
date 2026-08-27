@@ -100,6 +100,7 @@ model User {
   jobTitle          String?    @map("job_title")
   email             String?    @unique
   phone             String?
+  preferredLanguage String?    @map("preferred_language")
   emiratesIdNumber  String?    @map("emirates_id_number")
   laborCardNumber   String?    @map("labor_card_number")
   baseMonthlySalary Decimal    @default(0) @map("base_monthly_salary") @db.Decimal(10, 2)
