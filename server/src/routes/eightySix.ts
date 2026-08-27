@@ -27,15 +27,33 @@ function itemToDto(item: {
  * GET /api/eighty-six/:locationId?includeResolved=1
  * Active (EIGHTY_SIXED) items always included; resolved (BACK_ON) items only
  * when includeResolved is set — the default view is "what's out right now."
+ *
+ * Active and resolved items are fetched as two queries rather than one,
+ * because each group's meaningful recency is a *different* column: an active
+ * item is "most recently 86'd", a resolved one is "most recently back on"
+ * (which is what the client's "Recently back on" heading promises). A single
+ * `orderBy: [status, backOnAt, eightySixedAt]` would happen to work today
+ * only because every EIGHTY_SIXED row has a null backOnAt — an invariant
+ * nothing in the schema enforces. Active always comes first in the response,
+ * preserving the previous `status: 'asc'` group order.
  */
 eightySixRouter.get('/:locationId', async (req, res) => {
   try {
     const { locationId } = req.params;
     const includeResolved = req.query.includeResolved === '1';
-    const items = await prisma.eightySixItem.findMany({
-      where: includeResolved ? { locationId } : { locationId, status: 'EIGHTY_SIXED' },
-      orderBy: [{ status: 'asc' }, { eightySixedAt: 'desc' }],
+
+    const active = await prisma.eightySixItem.findMany({
+      where: { locationId, status: 'EIGHTY_SIXED' },
+      orderBy: { eightySixedAt: 'desc' },
     });
+    const resolved = includeResolved
+      ? await prisma.eightySixItem.findMany({
+          where: { locationId, status: 'BACK_ON' },
+          orderBy: { backOnAt: 'desc' },
+        })
+      : [];
+
+    const items = [...active, ...resolved];
     return res.status(200).json({ items: items.map(itemToDto) });
   } catch (err) {
     console.error('[eightySix.list] failed', err);

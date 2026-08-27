@@ -784,3 +784,63 @@ body {
   resize: vertical;
   font-family: inherit;
 }
+
+/* AM/PM period toggle on the daily assignment board — same chip-row
+   language as the tab's own .fp-mode-toggle. */
+.fp-period-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* 86 List — container/section spacing mirrors .fp-board, header mirrors
+   .fp-tab-header, and the history block uses the same secondary-section
+   top rule as .staff-directory-body. */
+.fp-86-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.fp-86-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.fp-86-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.fp-86-add {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.fp-86-add .staff-directory-input {
+  min-width: 0;
+}
+
+.fp-86-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.fp-86-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.fp-86-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}

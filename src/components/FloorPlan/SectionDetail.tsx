@@ -122,23 +122,25 @@ export default function SectionDetail({
                   {a.notifiedAt ? <Check className="h-2.5 w-2.5" /> : <BellRing className="h-2.5 w-2.5" />}
                   {a.notifiedAt ? 'Notified' : 'Not sent'}
                 </span>
-                {!a.notifiedAt && (
-                  <button
-                    onClick={async () => {
-                      setNotifyingId(a.id);
-                      try {
-                        await onNotify(a.id);
-                      } finally {
-                        setNotifyingId(null);
-                      }
-                    }}
-                    disabled={notifyingId === a.id}
-                    aria-label={`Notify ${a.staffName}`}
-                    className="text-[10px] font-medium text-accent hover:underline disabled:opacity-50 disabled:pointer-events-none"
-                  >
-                    {notifyingId === a.id ? 'Notifying…' : 'Notify'}
-                  </button>
-                )}
+                {/* Always available: after a reassignment (or a later shift
+                    change) a manager needs to be able to notify the same
+                    person again — the badge to the left, not this button's
+                    presence, is what reports notification status. */}
+                <button
+                  onClick={async () => {
+                    setNotifyingId(a.id);
+                    try {
+                      await onNotify(a.id);
+                    } finally {
+                      setNotifyingId(null);
+                    }
+                  }}
+                  disabled={notifyingId === a.id}
+                  aria-label={`${a.notifiedAt ? 'Re-notify' : 'Notify'} ${a.staffName}`}
+                  className="text-[10px] font-medium text-accent hover:underline disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {notifyingId === a.id ? 'Notifying…' : a.notifiedAt ? 'Re-notify' : 'Notify'}
+                </button>
               </div>
             </li>
           ))}

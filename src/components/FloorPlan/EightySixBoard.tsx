@@ -8,6 +8,7 @@ import {
   markBackOn,
   type EightySixItemDto,
 } from '../../api/eightySix';
+import { useAppState } from '../../state/AppStateContext';
 
 interface Props {
   locationId: string;
@@ -20,6 +21,10 @@ interface Props {
  * not real-time push (no websocket infra exists anywhere in this codebase).
  */
 export default function EightySixBoard({ locationId }: Props) {
+  // Same shared-app-state read the rest of the app's audit-writing
+  // components do — both 86 and back-on write AuditLog rows, and those
+  // rows are only worth keeping if they name who did it.
+  const { currentEmployeeId } = useAppState();
   const [items, setItems] = useState<EightySixItemDto[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -27,6 +32,10 @@ export default function EightySixBoard({ locationId }: Props) {
   const [itemName, setItemName] = useState('');
   const [station, setStation] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // In-flight guard, mirroring SectionDetail's `notifyingId`: a double-click
+  // would otherwise fire markBackOn twice, and the second call 409s ("already
+  // back on") — surfacing a red error banner for an action that succeeded.
+  const [backOnId, setBackOnId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -63,7 +72,12 @@ export default function EightySixBoard({ locationId }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      await eightySixItem({ locationId, itemName: trimmedName, station: trimmedStation });
+      await eightySixItem({
+        locationId,
+        itemName: trimmedName,
+        station: trimmedStation,
+        createdById: currentEmployeeId,
+      });
       setItemName('');
       setStation('');
       load();
@@ -72,18 +86,25 @@ export default function EightySixBoard({ locationId }: Props) {
     } finally {
       setSubmitting(false);
     }
-  }, [locationId, itemName, station, load]);
+  }, [locationId, itemName, station, load, currentEmployeeId]);
 
   const handleBackOn = useCallback(
     async (itemId: string) => {
+      // Only this item's own request is guarded — a different item's "Back
+      // on" stays clickable, exactly like SectionDetail's per-assignment
+      // notify guard.
+      if (backOnId === itemId) return;
+      setBackOnId(itemId);
       try {
-        await markBackOn(itemId);
+        await markBackOn(itemId, currentEmployeeId);
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not mark this item back on.');
+      } finally {
+        setBackOnId(null);
       }
     },
-    [load],
+    [load, currentEmployeeId, backOnId],
   );
 
   return (
@@ -153,9 +174,10 @@ export default function EightySixBoard({ locationId }: Props) {
                     </span>
                     <button
                       onClick={() => void handleBackOn(item.id)}
-                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-success/30 px-2 py-1 text-xs font-medium text-success hover:bg-success/10"
+                      disabled={backOnId === item.id}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-success/30 px-2 py-1 text-xs font-medium text-success hover:bg-success/10 disabled:pointer-events-none disabled:opacity-50"
                     >
-                      <Check className="h-3 w-3" /> Back on
+                      <Check className="h-3 w-3" /> {backOnId === item.id ? 'Marking…' : 'Back on'}
                     </button>
                   </li>
                 ))}

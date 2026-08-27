@@ -12,6 +12,7 @@ import {
   type FloorPlanImageDto,
 } from '../../api/floorPlan';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../../api/staffDirectory';
+import { useAppState } from '../../state/AppStateContext';
 import StaffChip from './StaffChip';
 import SectionOverlay from './SectionOverlay';
 import SectionDetail from './SectionDetail';
@@ -55,6 +56,11 @@ interface Props {
  * same `assignStaff` call.
  */
 export default function AssignmentBoard({ locationId, onEditSections }: Props) {
+  // The signed-in manager, read straight from the shared app state the same
+  // way RotaBuilder/ScheduleEditorRoute/Announcements do — every mutation
+  // below writes an AuditLog row, and a compliance audit trail with a null
+  // actor is worthless.
+  const { currentEmployeeId } = useAppState();
   const [date, setDate] = useState(todayIso());
   const [period, setPeriod] = useState<'AM' | 'PM'>('AM');
   const [image, setImage] = useState<FloorPlanImageDto | null>(null);
@@ -65,7 +71,10 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(null);
   const [pickerSectionId, setPickerSectionId] = useState<string | null>(null);
   const [suppressClick, setSuppressClick] = useState(false);
-  const [publishResult, setPublishResult] = useState<number | null>(null);
+  // Capture the date/period the publish actually ran against alongside its
+  // count, so switching date or AM/PM afterwards can't leave the banner
+  // describing a publish that never happened for the newly-selected key.
+  const [publishResult, setPublishResult] = useState<{ count: number; date: string; period: 'AM' | 'PM' } | null>(null);
   const [publishing, setPublishing] = useState(false);
 
   const load = useCallback(() => {
@@ -99,6 +108,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
           staffId,
           shiftDate: date,
           period,
+          createdById: currentEmployeeId,
           ...(dutyLabel ? { dutyLabel } : {}),
         });
         load();
@@ -106,31 +116,31 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         setError(err instanceof ApiError ? err.message : 'Could not assign staff.');
       }
     },
-    [date, period, load],
+    [date, period, load, currentEmployeeId],
   );
 
   const handleRemove = useCallback(
     async (assignmentId: string) => {
       try {
-        await removeAssignment(assignmentId);
+        await removeAssignment(assignmentId, currentEmployeeId);
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not remove that assignment.');
       }
     },
-    [load],
+    [load, currentEmployeeId],
   );
 
   const handleNotify = useCallback(
     async (assignmentId: string) => {
       try {
-        await notifyAssignment(assignmentId);
+        await notifyAssignment(assignmentId, currentEmployeeId);
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not mark this assignment notified.');
       }
     },
-    [load],
+    [load, currentEmployeeId],
   );
 
   const handleUpdateDutyLabel = useCallback(
@@ -145,28 +155,35 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
       const assignment = owning?.assignments.find((a) => a.id === assignmentId);
       if (!owning || !assignment) return;
       try {
-        await assignStaff({ sectionId: owning.id, staffId: assignment.staffId, shiftDate: date, period, dutyLabel });
+        await assignStaff({
+          sectionId: owning.id,
+          staffId: assignment.staffId,
+          shiftDate: date,
+          period,
+          dutyLabel,
+          createdById: currentEmployeeId,
+        });
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not update the duty label.');
       }
     },
-    [sections, date, period, load],
+    [sections, date, period, load, currentEmployeeId],
   );
 
   const handlePublish = useCallback(async () => {
     setPublishing(true);
     setPublishResult(null);
     try {
-      const res = await publishAssignments(locationId, date, period);
-      setPublishResult(res.publishedCount);
+      const res = await publishAssignments(locationId, date, period, currentEmployeeId);
+      setPublishResult({ count: res.publishedCount, date, period });
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not publish assignments.');
     } finally {
       setPublishing(false);
     }
-  }, [locationId, date, period, load]);
+  }, [locationId, date, period, load, currentEmployeeId]);
 
   // Soft pax-capacity warning: flag a high-capacity section whose
   // assigned-headcount ratio looks thin next to sections that do have
@@ -261,7 +278,10 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
 
       {publishResult !== null && (
         <div className="success-block" role="status">
-          <p>{publishResult} assignment{publishResult === 1 ? '' : 's'} published and marked notified for {date} ({period}).</p>
+          <p>
+            {publishResult.count} assignment{publishResult.count === 1 ? '' : 's'} published and marked notified for{' '}
+            {publishResult.date} ({publishResult.period}).
+          </p>
         </div>
       )}
 
