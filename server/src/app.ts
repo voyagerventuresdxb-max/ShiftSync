@@ -13,6 +13,9 @@ import { attendanceRouter } from './routes/attendance.js';
 import { eightySixRouter } from './routes/eightySix.js';
 import { identityRouter } from './routes/identity.js';
 import { joinRouter } from './routes/join.js';
+import { myShiftsRouter } from './routes/myShifts.js';
+import { availabilityRouter } from './routes/availability.js';
+import { policyDocumentsRouter } from './routes/policyDocuments.js';
 
 export function createApp() {
   const app = express();
@@ -38,6 +41,9 @@ export function createApp() {
   app.use('/api/eighty-six', eightySixRouter);
   app.use('/api/identity', identityRouter);
   app.use('/api/join', joinRouter);
+  app.use('/api/my-shifts', myShiftsRouter);
+  app.use('/api/availability', availabilityRouter);
+  app.use('/api/policy-documents', policyDocumentsRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
