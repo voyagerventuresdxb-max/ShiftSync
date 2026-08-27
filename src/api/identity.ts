@@ -27,22 +27,46 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** POST /api/identity/request-otp — login path. `devCode` is only ever present outside production. */
-export async function requestLoginOtp(phone: string): Promise<{ expiresAt: string; devCode?: string }> {
+/**
+ * POST /api/identity/request-otp — login path. `locationId` is required: the
+ * server scopes the phone lookup to one venue rather than scanning every user
+ * in the database. `devCode` is only present when the server has the opt-in
+ * ALLOW_DEV_OTP_ECHO flag set.
+ */
+export async function requestLoginOtp(locationId: string, phone: string): Promise<{ expiresAt: string; devCode?: string }> {
   return request('/api/identity/request-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone }),
+    body: JSON.stringify({ locationId, phone }),
   });
 }
 
 /** POST /api/identity/verify-otp */
-export async function verifyLoginOtp(phone: string, code: string): Promise<{ token: string; expiresAt: string; user: SessionUser }> {
+export async function verifyLoginOtp(
+  locationId: string,
+  phone: string,
+  code: string,
+): Promise<{ token: string; expiresAt: string; user: SessionUser }> {
   return request('/api/identity/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone, code }),
+    body: JSON.stringify({ locationId, phone, code }),
   });
+}
+
+/**
+ * DELETE /api/identity/session — revokes the session server-side on sign-out.
+ * Without this the 30-day token stays valid even after the browser forgets
+ * it, which matters on the shared venue devices this app actually runs on.
+ */
+export async function revokeSession(token: string): Promise<void> {
+  const res = await fetch('/api/identity/session', {
+    method: 'DELETE',
+    headers: withAuth(token),
+  });
+  if (!res.ok && res.status !== 401) {
+    throw new ApiError(`Request failed (${res.status})`, res.status);
+  }
 }
 
 const SESSION_STORAGE_KEY = 'shiftsync.session';

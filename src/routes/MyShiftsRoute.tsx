@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { fetchMyShifts, ApiError, type MyShiftEntry } from '../api/myShifts';
 import { fetchAvailability, setAvailability, removeAvailability, type AvailabilityMarkDto } from '../api/availability';
@@ -9,7 +10,7 @@ import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { cn } from '../lib/utils';
 
 export default function MyShiftsContent() {
-  const { session } = useIdentity();
+  const { session, logout } = useIdentity();
   const [pendingApproval, setPendingApproval] = useState(false);
   const [shifts, setShifts] = useState<MyShiftEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +30,14 @@ export default function MyShiftsContent() {
       })
       .catch((err) => {
         if (cancelled) return;
+        // A 401 means the stored token is expired or was revoked. Clearing it
+        // drops us into the not-signed-in state below, which offers a real way
+        // back in — otherwise the user is stuck staring at an error with a
+        // dead session they have no way to discard.
+        if (err instanceof ApiError && err.status === 401) {
+          logout();
+          return;
+        }
         setError(err instanceof ApiError ? err.message : 'Could not load your shifts.');
       })
       .finally(() => {
@@ -37,12 +46,18 @@ export default function MyShiftsContent() {
     return () => {
       cancelled = true;
     };
+    // `logout` is stable for this provider's lifetime; re-running on it would
+    // re-fetch pointlessly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
   if (!session) {
     return (
-      <div className="status-block">
-        <p>You're not signed in. Head to Join or log in with your phone number to see your shifts.</p>
+      <div className="status-block space-y-3">
+        <p>You're not signed in. Sign in with your phone number to see your shifts.</p>
+        <Link to="/join" className="btn btn-primary inline-flex">
+          Join or log in
+        </Link>
       </div>
     );
   }
@@ -82,7 +97,7 @@ export default function MyShiftsContent() {
         )}
       </section>
 
-      <AvailabilityWidget userId={session.user.id} />
+      <AvailabilityWidget userId={session.user.id} token={session.token} />
 
       <Announcements />
       <Shoutouts />
@@ -97,8 +112,13 @@ export default function MyShiftsContent() {
  * availability API, scoped to this user and the real current week via the
  * app's shared week-math helpers (`currentWeekStart`/`weekDates`) rather
  * than reinventing date arithmetic here.
+ *
+ * The reads are open (managers read other people's marks too), but every
+ * write carries the session token — the server derives the owner from it and
+ * ignores any userId a client might send. `userId` here is only for reading
+ * this user's own marks back.
  */
-function AvailabilityWidget({ userId }: { userId: string }) {
+function AvailabilityWidget({ userId, token }: { userId: string; token: string }) {
   const weekStart = currentWeekStart();
   const days = weekDates(weekStart);
   const [marks, setMarks] = useState<Record<string, AvailabilityMarkDto | undefined>>({});
@@ -133,15 +153,15 @@ function AvailabilityWidget({ userId }: { userId: string }) {
     try {
       if (!current) {
         // unmarked -> unavailable
-        const created = await setAvailability({ userId, date, type: 'UNAVAILABLE' });
+        const created = await setAvailability(token, { date, type: 'UNAVAILABLE' });
         setMarks((prev) => ({ ...prev, [date]: created }));
       } else if (current.type === 'UNAVAILABLE') {
         // unavailable -> preferred off
-        const updated = await setAvailability({ userId, date, type: 'PREFERRED_OFF' });
+        const updated = await setAvailability(token, { date, type: 'PREFERRED_OFF' });
         setMarks((prev) => ({ ...prev, [date]: updated }));
       } else {
         // preferred off -> unmarked
-        await removeAvailability(current.id);
+        await removeAvailability(token, current.id);
         setMarks((prev) => {
           const next = { ...prev };
           delete next[date];

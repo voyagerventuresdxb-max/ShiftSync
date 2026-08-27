@@ -11,6 +11,8 @@ interface Invite {
 
 export default function OnboardingWizard({ locationId }: { locationId: string }) {
   const [step, setStep] = useState<Step>('venue');
+  /** Whether the roster step actually committed an import, or was skipped — the review copy must not claim an import that never happened. */
+  const [rosterImported, setRosterImported] = useState(false);
   const [invite, setInvite] = useState<Invite | null>(null);
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
 
       {step === 'venue' && (
         <section className="panel p-5">
-          <p className="hint">Confirm your venue details, then move on to importing your existing roster.</p>
+          <p className="hint">Set up your venue's onboarding — next, import your existing roster.</p>
           <button className="btn btn-primary mt-4" onClick={() => setStep('roster')}>
             Continue
           </button>
@@ -65,7 +67,13 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
             Upload your existing roster (Excel, CSV, PDF, or a photo) — this uses the same real parser as the
             Scheduling page's upload tool, not a separate mock.
           </p>
-          <ShiftUpload locationId={locationId} onCommitted={() => setStep('review')} />
+          <ShiftUpload
+            locationId={locationId}
+            onCommitted={() => {
+              setRosterImported(true);
+              setStep('review');
+            }}
+          />
           <button className="btn btn-ghost mt-4" onClick={() => setStep('review')}>
             Skip for now
           </button>
@@ -74,7 +82,12 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
 
       {step === 'review' && (
         <section className="panel p-5">
-          <p className="hint">Your roster has been imported. When you're ready, generate an invite link for your team to join.</p>
+          <p className="hint">
+            {rosterImported
+              ? 'Your roster has been imported.'
+              : 'You can import your roster later from the Scheduling page.'}{' '}
+            When you're ready, generate an invite link for your team to join.
+          </p>
           <button className="btn btn-primary mt-4" onClick={() => void loadInvite()} disabled={loadingInvite}>
             {loadingInvite ? 'Generating…' : 'Generate invite'}
           </button>

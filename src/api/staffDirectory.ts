@@ -20,7 +20,10 @@ export interface StaffDirectoryEntry {
   preferredLanguage: string | null;
   /** ISO date, YYYY-MM-DD, or null if never set. */
   hiredAt: string | null;
+  /** Employment status is the isActive + terminatedAt pair, not a separate enum. */
   isActive: boolean;
+  /** ISO date, YYYY-MM-DD, set when isActive flips to false and cleared when it flips back. */
+  terminatedAt: string | null;
   /** Read-only, joined from Location.name. */
   venueName: string;
 }

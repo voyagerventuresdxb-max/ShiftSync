@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
-import { Bell } from 'lucide-react';
-import { Link, Outlet, useMatches } from 'react-router-dom';
+import { Bell, CalendarCheck } from 'lucide-react';
+import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
 import { useAppState } from '@/state/AppStateContext';
@@ -44,6 +44,11 @@ export function AppShell() {
   const [voiceOn, setVoiceOn] = useState(false);
   const [unread, setUnread] = useState(true);
 
+  // My Shifts is the staff-facing home screen, so it needs a real destination
+  // in the shell chrome exactly like /profile has — the four-tab RadialDock is
+  // the manager-side nav and has no room for it.
+  const onMyShifts = useLocation().pathname === '/my-shifts';
+
   return (
     <div className="min-h-screen bg-background pb-24">
       <header className="sticky top-0 z-20 px-3 pt-3 sm:px-4">
@@ -64,6 +69,19 @@ export function AppShell() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {action}
+            <Link
+              to="/my-shifts"
+              aria-label="Open My Shifts"
+              aria-current={onMyShifts ? 'page' : undefined}
+              className={cn(
+                'grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
+                onMyShifts
+                  ? 'glow-gold border-accent/50 bg-accent/15 text-accent'
+                  : 'border-border text-foreground/40 hover:text-foreground/70',
+              )}
+            >
+              <CalendarCheck className="h-4 w-4" strokeWidth={onMyShifts ? 2.4 : 1.6} />
+            </Link>
             <button
               onClick={() => setUnread((u) => !u)}
               aria-label={unread ? 'Unread notifications' : 'Notifications'}

@@ -1,5 +1,5 @@
 import { createBrowserRouter, Link } from 'react-router-dom';
-import { Pencil } from 'lucide-react';
+import { Pencil, Rocket } from 'lucide-react';
 import { AppShell, type RouteHandle } from './components/shiftsync/AppShell';
 import HomeContent from './routes/HomeRoute';
 import SchedulingContent from './routes/SchedulingRoute';
@@ -15,7 +15,6 @@ import OnboardingContent from './routes/OnboardingRoute';
 const handles = {
   home: { title: 'ShiftSync' },
   floorPlan: { title: 'Floor plan' },
-  people: { title: 'People' },
   profile: { title: 'Profile' },
   scheduleEditor: { title: 'Shift Editor' },
   join: { title: 'Join' },
@@ -49,7 +48,22 @@ export const router = createBrowserRouter([
       },
       { path: '/schedule', element: <ScheduleEditorContent />, handle: handles.scheduleEditor },
       { path: '/floor-plan', element: <FloorPlanContent />, handle: handles.floorPlan },
-      { path: '/people', element: <PeopleContent />, handle: handles.people },
+      {
+        path: '/people',
+        element: <PeopleContent />,
+        // Onboarding is a venue-setup action a manager reaches from People —
+        // the same header-action pattern /scheduling uses for the Shift editor.
+        // Without it the wizard was reachable only by typing the URL.
+        handle: {
+          title: 'People',
+          action: (
+            <Link to="/onboarding" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+              <Rocket className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Onboarding</span>
+            </Link>
+          ),
+        },
+      },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
