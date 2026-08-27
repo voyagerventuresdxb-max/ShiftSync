@@ -3,7 +3,7 @@ import { normalizeHeader } from './templates.js';
 import type { ParsedShiftRow, PreviewRow, RowIssue, UploadPreviewSummary } from './types.js';
 
 /** Case/whitespace-insensitive key for matching names against DB records. */
-function nameKey(value: string): string {
+export function nameKey(value: string): string {
   return normalizeHeader(value);
 }
 
