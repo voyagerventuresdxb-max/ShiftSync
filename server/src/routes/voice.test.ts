@@ -171,6 +171,10 @@ test('POST /api/voice/execute: a MANAGER session executing APPROVE_SWAP reassign
     assert.match(voiceAuditRow!.note ?? '', /\[voice\]/);
     assert.ok(voiceAuditRow!.note!.includes(transcript), 'the AuditLog note must contain the transcript text');
     assert.equal(voiceAuditRow!.actorId, manager.id);
+    // Fix #4: the voice audit row must carry the entity's own shiftId and
+    // locationId, not null / the caller's locationId.
+    assert.equal(voiceAuditRow!.shiftId, shift.id, "the voice audit row must carry the entity's own shiftId, not null");
+    assert.equal(voiceAuditRow!.locationId, location!.id, "the voice audit row must carry the entity's own locationId");
   } finally {
     await prisma.auditLog.deleteMany({ where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id } });
     await prisma.shiftSwapRequest.delete({ where: { id: swapRequest.id } }).catch(() => {});
@@ -396,6 +400,9 @@ test('POST /api/voice/execute: DECLINE_SWAP from a MANAGER session declines a re
       where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id, action: 'SWAP_DECLINED', note: { contains: '[voice]' } },
     });
     assert.ok(auditRow, 'a real AuditLog row with action SWAP_DECLINED and a [voice] note must exist');
+    // Fix #4: shiftId/locationId must come from the entity, not be null/the caller's.
+    assert.equal(auditRow!.shiftId, shift.id);
+    assert.equal(auditRow!.locationId, location!.id);
   } finally {
     await prisma.auditLog.deleteMany({ where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id } });
     await prisma.shiftSwapRequest.delete({ where: { id: swapRequest.id } }).catch(() => {});
@@ -431,6 +438,13 @@ test('POST /api/voice/execute: APPROVE_JOIN from a MANAGER session creates a rea
         }),
       });
       assert.equal(res.status, 200);
+      // Fix #6: response shape must be flat — { executed, result: { status, userId } }
+      // — matching every sibling branch (result.mark, result.request, created),
+      // not a nested action-function envelope like {"result":{"result":"ok",...}}.
+      const body = (await res.json()) as { executed: boolean; result: { status: string; userId: string; result?: unknown } };
+      assert.equal(body.result.status, 'APPROVED');
+      assert.ok(body.result.userId, 'response must carry the created userId directly on result');
+      assert.equal(body.result.result, undefined, 'response must not double-nest the action-function envelope');
     });
 
     const decided = await prisma.joinRequest.findUnique({ where: { id: joinRequest.id } });
@@ -490,6 +504,323 @@ test('POST /api/voice/execute: DECLINE_JOIN from a MANAGER session declines with
   } finally {
     await prisma.auditLog.deleteMany({ where: { entityType: 'JoinRequest', entityId: joinRequest.id } });
     await prisma.joinRequest.delete({ where: { id: joinRequest.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: APPROVE_SWAP rejects a swap request that belongs to a different location — 404, nothing changes', async () => {
+  const location = await prisma.location.findFirst();
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const otherLocation = await prisma.location.create({
+    data: { organizationId: location!.organizationId, name: '__task6-test__ other venue (cross-loc swap)', timezone: 'Asia/Dubai' },
+  });
+  const otherRole = await prisma.role.create({ data: { locationId: otherLocation.id, name: '__task6-test__ cross-loc role' } });
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ cross-loc manager (own location)', systemRole: 'MANAGER' },
+  });
+  const requester = await prisma.user.create({
+    data: { locationId: otherLocation.id, fullName: '__task6-test__ cross-loc requester (other location)', systemRole: 'STAFF' },
+  });
+  const target = await prisma.user.create({
+    data: { locationId: otherLocation.id, fullName: '__task6-test__ cross-loc target (other location)', systemRole: 'STAFF' },
+  });
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: otherLocation.id,
+      roleId: otherRole.id,
+      userId: requester.id,
+      date: new Date('2026-09-05T00:00:00.000Z'),
+      startTime: new Date('2026-09-05T09:00:00.000Z'),
+      endTime: new Date('2026-09-05T17:00:00.000Z'),
+      status: 'PUBLISHED',
+    },
+  });
+  const swapRequest = await prisma.shiftSwapRequest.create({
+    data: {
+      shiftId: shift.id,
+      requestedById: requester.id,
+      targetUserId: target.id,
+      type: 'COVER',
+      status: 'PENDING',
+      expiresAt: new Date('2026-12-31T00:00:00.000Z'),
+    },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'approve that swap',
+          intent: { intent: 'APPROVE_SWAP', swapRequestId: swapRequest.id, summary: 'Approve.' },
+        }),
+      });
+      assert.equal(res.status, 404, 'a manager must not be able to decide a swap request from a different location');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /could not be found/i);
+    });
+
+    const unchanged = await prisma.shiftSwapRequest.findUnique({ where: { id: swapRequest.id } });
+    assert.equal(unchanged!.status, 'PENDING', 'cross-location swap request must not have been decided');
+    const unchangedShift = await prisma.shift.findUnique({ where: { id: shift.id } });
+    assert.equal(unchangedShift!.userId, requester.id, 'cross-location shift must not have been reassigned');
+    const auditRows = await prisma.auditLog.findMany({ where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id } });
+    assert.equal(auditRows.length, 0, 'no AuditLog row may exist for a cross-location request that was rejected');
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { entityType: 'ShiftSwapRequest', entityId: swapRequest.id } });
+    await prisma.shiftSwapRequest.delete({ where: { id: swapRequest.id } }).catch(() => {});
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: target.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: requester.id } }).catch(() => {});
+    await prisma.role.delete({ where: { id: otherRole.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: APPROVE_JOIN rejects a join request that belongs to a different location — 404, nothing changes', async () => {
+  const location = await prisma.location.findFirst();
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const otherLocation = await prisma.location.create({
+    data: { organizationId: location!.organizationId, name: '__task6-test__ other venue (cross-loc join)', timezone: 'Asia/Dubai' },
+  });
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ cross-loc join manager (own location)', systemRole: 'MANAGER' },
+  });
+  const joinRequest = await prisma.joinRequest.create({
+    data: { locationId: otherLocation.id, phone: '0509998888', fullName: '__task6-test__ cross-loc new hire', status: 'PENDING' },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'approve that join request',
+          intent: { intent: 'APPROVE_JOIN', joinRequestId: joinRequest.id, summary: 'Approve.' },
+        }),
+      });
+      assert.equal(res.status, 404, 'a manager must not be able to decide a join request from a different location');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /could not be found/i);
+    });
+
+    const unchanged = await prisma.joinRequest.findUnique({ where: { id: joinRequest.id } });
+    assert.equal(unchanged!.status, 'PENDING', 'cross-location join request must not have been decided');
+    assert.equal(unchanged!.createdUserId, null, 'no User must be created from a rejected cross-location join request');
+    const auditRows = await prisma.auditLog.findMany({ where: { entityType: 'JoinRequest', entityId: joinRequest.id } });
+    assert.equal(auditRows.length, 0, 'no AuditLog row may exist for a cross-location join request that was rejected');
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { entityType: 'JoinRequest', entityId: joinRequest.id } });
+    await prisma.joinRequest.delete({ where: { id: joinRequest.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: REQUEST_SWAP rejects a targetUserId from a different location — 404, no request created', async () => {
+  const location = await prisma.location.findFirst();
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const otherLocation = await prisma.location.create({
+    data: { organizationId: location!.organizationId, name: '__task6-test__ other venue (cross-loc target)', timezone: 'Asia/Dubai' },
+  });
+
+  const requester = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ cross-loc-target requester', systemRole: 'STAFF' },
+  });
+  const outOfLocationTarget = await prisma.user.create({
+    data: { locationId: otherLocation.id, fullName: '__task6-test__ cross-loc-target target (other location)', systemRole: 'STAFF' },
+  });
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location!.id,
+      roleId: role!.id,
+      userId: requester.id,
+      date: new Date('2026-09-06T00:00:00.000Z'),
+      startTime: new Date('2026-09-06T09:00:00.000Z'),
+      endTime: new Date('2026-09-06T17:00:00.000Z'),
+      status: 'PUBLISHED',
+    },
+  });
+
+  try {
+    const token = await sessionFor(requester.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'ask someone from another venue to cover',
+          intent: {
+            intent: 'REQUEST_SWAP',
+            shiftId: shift.id,
+            targetUserId: outOfLocationTarget.id,
+            targetUserName: outOfLocationTarget.fullName,
+            reason: null,
+            summary: 'Request a cover swap.',
+          },
+        }),
+      });
+      assert.equal(res.status, 404, 'a targetUserId from a different location must be rejected');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /could not be found/i);
+    });
+
+    const leaked = await prisma.shiftSwapRequest.findMany({ where: { shiftId: shift.id } });
+    assert.equal(leaked.length, 0, 'no ShiftSwapRequest may be created against a cross-location targetUserId');
+  } finally {
+    await prisma.shiftSwapRequest.deleteMany({ where: { shiftId: shift.id } });
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: requester.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: outOfLocationTarget.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: REQUEST_SWAP rejects a nonexistent targetUserId — 404, no request created (and no bare 500)', async () => {
+  const location = await prisma.location.findFirst();
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const requester = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ nonexistent-target requester', systemRole: 'STAFF' },
+  });
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location!.id,
+      roleId: role!.id,
+      userId: requester.id,
+      date: new Date('2026-09-07T00:00:00.000Z'),
+      startTime: new Date('2026-09-07T09:00:00.000Z'),
+      endTime: new Date('2026-09-07T17:00:00.000Z'),
+      status: 'PUBLISHED',
+    },
+  });
+
+  try {
+    const token = await sessionFor(requester.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'ask a made-up person to cover',
+          intent: {
+            intent: 'REQUEST_SWAP',
+            shiftId: shift.id,
+            targetUserId: 'not-a-real-user-id',
+            targetUserName: 'Nobody',
+            reason: null,
+            summary: 'Request a cover swap.',
+          },
+        }),
+      });
+      assert.equal(res.status, 404, 'a nonexistent targetUserId must be a clean 404, not a bare FK-violation 500');
+    });
+
+    const leaked = await prisma.shiftSwapRequest.findMany({ where: { shiftId: shift.id } });
+    assert.equal(leaked.length, 0, 'no ShiftSwapRequest may be created against a nonexistent targetUserId');
+  } finally {
+    await prisma.shiftSwapRequest.deleteMany({ where: { shiftId: shift.id } });
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: requester.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: MARK_AVAILABILITY with a malformed date gets a real 400, no row created', async () => {
+  const location = await prisma.location.findFirst();
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ malformed-date staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'mark me unavailable sometime',
+          intent: { intent: 'MARK_AVAILABILITY', date: 'not-a-real-date', type: 'UNAVAILABLE', summary: 'x' },
+        }),
+      });
+      assert.equal(res.status, 400, 'a malformed date must be rejected before any Prisma call, not raw-500 or silently coerced');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /date/i);
+    });
+
+    const marks = await prisma.availabilityMark.findMany({ where: { userId: staffCaller.id } });
+    assert.equal(marks.length, 0, 'no AvailabilityMark may be created from a malformed date');
+  } finally {
+    await prisma.availabilityMark.deleteMany({ where: { userId: staffCaller.id } });
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: APPROVE_SWAP with a missing swapRequestId gets a real 400', async () => {
+  const location = await prisma.location.findFirst();
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ malformed-shape manager', systemRole: 'MANAGER' },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        // swapRequestId deliberately omitted — a malformed client body, not a real parsed intent.
+        body: JSON.stringify({ transcript: 'approve it', intent: { intent: 'APPROVE_SWAP', summary: 'x' } }),
+      });
+      assert.equal(res.status, 400, 'a missing swapRequestId must 400 before any Prisma call');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /swapRequestId/i);
+    });
+  } finally {
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: an unknown/garbage intent string gets a real 400, not a misleading 403', async () => {
+  const location = await prisma.location.findFirst();
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ garbage-intent manager', systemRole: 'MANAGER' },
+  });
+
+  try {
+    // Even a MANAGER session (which would pass an allowedIntentsFor() check
+    // for any REAL manager intent) must still get 400 for a string that
+    // isn't a real intent at all — proves the ordering fix, not just that
+    // the role check happens to also reject it.
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ transcript: 'x', intent: { intent: 'DELETE_EVERYTHING', summary: 'x' } }),
+      });
+      assert.equal(res.status, 400, 'a garbage intent string must 400, not fall through to the role-permission 403');
+      const body = (await res.json()) as { error: string };
+      assert.doesNotMatch(body.error, /does not permit/i, 'must not be misreported as a permission error');
+    });
+  } finally {
     await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
   }
 });

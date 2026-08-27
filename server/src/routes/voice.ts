@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireSession } from '../middleware/requireSession.js';
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
-import { allowedIntentsFor, type ParsedIntent } from '../voice/intentSchema.js';
+import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest } from '../lib/actions/swapActions.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
@@ -12,6 +12,62 @@ import { markAvailability } from '../lib/actions/availabilityActions.js';
 export const voiceRouter = Router();
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+/**
+ * Every intent value /execute can ever legitimately see: the full manager
+ * set (already a strict superset of the staff set — see intentSchema.ts)
+ * plus the model's own "couldn't confidently resolve this" signal. Used
+ * ONLY to distinguish "not a real intent at all" (400) from "a real intent
+ * your role doesn't permit" (403) — see the ordering note in /execute below.
+ */
+const ALL_INTENTS: readonly string[] = [...MANAGER_INTENTS, 'UNRECOGNIZED'];
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
+ * the narrowing style parseIntent.ts's normalizeParsedIntent already uses
+ * for Gemini's own output, just applied here to whatever a caller's request
+ * body actually contains (which, unlike Gemini's schema-constrained output,
+ * is NOT structurally trustworthy at all). A malformed field here is not a
+ * security bypass — Prisma's own validation would reject it too — but
+ * letting it fall through to a raw Prisma call turns a bad request into an
+ * indistinguishable 500 with a full stack trace in the server log. This
+ * returns a real 400 instead, before any Prisma call is made.
+ */
+function validateIntentShape(intent: ParsedIntent): string | null {
+  switch (intent.intent) {
+    case 'MARK_AVAILABILITY':
+      if (!DATE_RE.test(intent.date)) return 'date must be YYYY-MM-DD.';
+      if (intent.type !== 'UNAVAILABLE' && intent.type !== 'PREFERRED_OFF') {
+        return 'type must be "UNAVAILABLE" or "PREFERRED_OFF".';
+      }
+      return null;
+    case 'REQUEST_SWAP':
+      if (!isNonEmptyString(intent.shiftId)) return 'shiftId is required.';
+      if (!isNonEmptyString(intent.targetUserId)) return 'targetUserId is required.';
+      if (intent.reason !== null && intent.reason !== undefined && typeof intent.reason !== 'string') {
+        return 'reason must be a string or null.';
+      }
+      return null;
+    case 'APPROVE_SWAP':
+    case 'DECLINE_SWAP':
+      if (!isNonEmptyString(intent.swapRequestId)) return 'swapRequestId is required.';
+      return null;
+    case 'APPROVE_JOIN':
+    case 'DECLINE_JOIN':
+      if (!isNonEmptyString(intent.joinRequestId)) return 'joinRequestId is required.';
+      return null;
+    case 'UNRECOGNIZED':
+      return null;
+    default:
+      return null;
+  }
+}
 
 /**
  * POST /api/voice/transcribe — multipart: audio. Session-gated only so this
@@ -73,6 +129,16 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
       return res.status(400).json({ error: 'A parsed intent is required.' });
     }
 
+    // Check membership in the FULL known intent set FIRST, before the
+    // role-permission check runs — this is what makes the switch's own
+    // `default: … 400 'Unknown intent.'` branch below reachable at all.
+    // Without this ordering, a garbage/unknown intent string fell through
+    // to the same misleading 403 as a real-but-not-permitted intent
+    // ("Your role does not permit the \"DELETE_EVERYTHING\" action.").
+    if (!ALL_INTENTS.includes(intent.intent)) {
+      return res.status(400).json({ error: `"${intent.intent}" is not a recognized voice command.` });
+    }
+
     // 'UNRECOGNIZED' is exempt from the role-permission check: it is not a
     // real, role-restricted action (it's the model's own "I couldn't
     // confidently resolve this" signal), and it is deliberately absent from
@@ -84,6 +150,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
     if (intent.intent !== 'UNRECOGNIZED' && !allowed.includes(intent.intent as (typeof allowed)[number])) {
       return res.status(403).json({ error: `Your role does not permit the "${intent.intent}" action.` });
     }
+
+    // Real, permitted intent (or UNRECOGNIZED) — now check its shape is
+    // actually usable before any Prisma call is made.
+    const shapeError = validateIntentShape(intent);
+    if (shapeError) return res.status(400).json({ error: shapeError });
 
     const note = `[voice] "${transcript}"`;
     const actorId = req.user!.id;
@@ -105,7 +176,19 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         if (!shift || shift.userId !== actorId || shift.locationId !== locationId) {
           return res.status(404).json({ error: 'That shift could not be found among your own upcoming shifts.' });
         }
-        const created = await createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason });
+        // The proposed cover must be a real, active staff member at the SAME
+        // location — otherwise this either silently creates a swap request
+        // naming an out-of-location (or nonexistent) "cover", or blows up as
+        // a bare Prisma FK-violation 500. Mirrors the equivalent validation
+        // in the REST route (server/src/routes/swapRequests.ts).
+        const target = await prisma.user.findFirst({
+          where: { id: intent.targetUserId, locationId, isActive: true },
+          select: { id: true },
+        });
+        if (!target) {
+          return res.status(404).json({ error: 'That staff member could not be found at your location.' });
+        }
+        const created = await createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null });
         await prisma.auditLog.create({
           data: { locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: created.id, note },
         });
@@ -113,6 +196,19 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
       }
       case 'APPROVE_SWAP':
       case 'DECLINE_SWAP': {
+        // The referenced ShiftSwapRequest must belong to the caller's own
+        // location — otherwise a manager at Location A could approve/decline
+        // (and, on approval, reassign a shift for) a request that belongs to
+        // Location B entirely. REQUEST_SWAP already gets this right for
+        // shifts (above); this is the same treatment for the decide path.
+        const sr = await prisma.shiftSwapRequest.findUnique({
+          where: { id: intent.swapRequestId },
+          select: { shift: { select: { locationId: true } } },
+        });
+        if (!sr || sr.shift.locationId !== locationId) {
+          return res.status(404).json({ error: 'That swap request could not be found.' });
+        }
+
         const decision = intent.intent === 'APPROVE_SWAP' ? 'approved' : 'declined';
         const result = await decideSwapRequest({ id: intent.swapRequestId, decision, reviewedById: actorId });
         if (result.result === 'not_found') return res.status(404).json({ error: 'That swap request could not be found.' });
@@ -120,22 +216,52 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
         // SWAP_DECLINED) inside its transaction — append the voice transcript by
         // writing a SECOND, linked row rather than mutating the first, keeping
-        // the shared action function's own audit write untouched.
+        // the shared action function's own audit write untouched. This row
+        // carries the entity's own shiftId (from result.request, which we
+        // already have in hand) and its own locationId (from the `sr` lookup
+        // above) rather than null/the caller's locationId, matching how
+        // REQUEST_SWAP's voice row already does it.
         await prisma.auditLog.create({
-          data: { locationId, actorId, action: intent.intent === 'APPROVE_SWAP' ? 'SWAP_APPROVED' : 'SWAP_DECLINED', entityType: 'ShiftSwapRequest', entityId: intent.swapRequestId, note },
+          data: {
+            locationId: sr.shift.locationId,
+            actorId,
+            shiftId: result.request.shiftId,
+            action: intent.intent === 'APPROVE_SWAP' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
+            entityType: 'ShiftSwapRequest',
+            entityId: intent.swapRequestId,
+            note,
+          },
         });
         return res.status(200).json({ executed: true, result: result.request });
       }
       case 'APPROVE_JOIN':
       case 'DECLINE_JOIN': {
+        // Same location-scoping treatment as APPROVE_SWAP/DECLINE_SWAP above,
+        // against JoinRequest.locationId directly.
+        const jr = await prisma.joinRequest.findUnique({ where: { id: intent.joinRequestId }, select: { locationId: true } });
+        if (!jr || jr.locationId !== locationId) {
+          return res.status(404).json({ error: 'That join request could not be found.' });
+        }
+
         const decision = intent.intent === 'APPROVE_JOIN' ? 'approve' : 'decline';
         const result = await decideJoinRequest({ requestId: intent.joinRequestId, decision, reviewedById: actorId });
         if (result.result === 'not_found') return res.status(404).json({ error: 'That join request could not be found.' });
         if (result.result === 'already_reviewed') return res.status(409).json({ error: 'That join request was already reviewed.' });
         await prisma.auditLog.create({
-          data: { locationId, actorId, action: intent.intent === 'APPROVE_JOIN' ? 'JOIN_APPROVED' : 'JOIN_DECLINED', entityType: 'JoinRequest', entityId: intent.joinRequestId, note },
+          data: {
+            locationId: jr.locationId,
+            actorId,
+            action: intent.intent === 'APPROVE_JOIN' ? 'JOIN_APPROVED' : 'JOIN_DECLINED',
+            entityType: 'JoinRequest',
+            entityId: intent.joinRequestId,
+            note,
+          },
         });
-        return res.status(200).json({ executed: true, result });
+        // Return the entity itself, like every sibling branch does
+        // (result.mark, result.request, created) — not the whole
+        // action-function envelope, which nested confusingly as
+        // {"result":{"result":"ok",...}}.
+        return res.status(200).json({ executed: true, result: { status: result.status, userId: result.userId } });
       }
       case 'UNRECOGNIZED':
         return res.status(400).json({ error: 'This command was not recognized — nothing was executed.' });
