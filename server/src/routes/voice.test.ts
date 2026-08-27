@@ -770,6 +770,81 @@ test('POST /api/voice/execute: MARK_AVAILABILITY with a malformed date gets a re
   }
 });
 
+test('POST /api/voice/execute: MARK_AVAILABILITY rejects a calendar-invalid date that silently rolls over (2026-02-30) — 400, no row created for either day', async () => {
+  const location = await prisma.location.findFirst();
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ rollover-date staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: "mark me unavailable Feb 30th",
+          // 2026-02-30 does not exist. JS's `new Date(...)` silently rolls
+          // this over to 2026-03-02 instead of rejecting it — without the
+          // round-trip check, this would 200 and create a mark on the WRONG
+          // day with zero error, a real correctness/compliance defect.
+          intent: { intent: 'MARK_AVAILABILITY', date: '2026-02-30', type: 'UNAVAILABLE', summary: 'x' },
+        }),
+      });
+      assert.equal(res.status, 400, 'a calendar-invalid date that silently rolls over must be rejected, not accepted for the wrong day');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /calendar date/i);
+    });
+
+    const marksOnRolledOverDay = await prisma.availabilityMark.findMany({
+      where: { userId: staffCaller.id, date: new Date('2026-03-02T00:00:00.000Z') },
+    });
+    assert.equal(marksOnRolledOverDay.length, 0, 'no mark may be silently created on the rolled-over day (March 2nd) either');
+    const allMarks = await prisma.availabilityMark.findMany({ where: { userId: staffCaller.id } });
+    assert.equal(allMarks.length, 0, 'no AvailabilityMark of any date may exist for this user');
+  } finally {
+    await prisma.availabilityMark.deleteMany({ where: { userId: staffCaller.id } });
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: MARK_AVAILABILITY rejects shape-valid-but-out-of-range dates (9999-99-99, 0000-00-00) — 400, not a bare 500', async () => {
+  const location = await prisma.location.findFirst();
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task6-test__ garbage-calendar-date staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+
+    for (const badDate of ['9999-99-99', '0000-00-00']) {
+      await withServer(async (baseUrl) => {
+        const res = await fetch(`${baseUrl}/api/voice/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            transcript: 'mark me unavailable',
+            intent: { intent: 'MARK_AVAILABILITY', date: badDate, type: 'UNAVAILABLE', summary: 'x' },
+          }),
+        });
+        assert.equal(res.status, 400, `"${badDate}" matches the YYYY-MM-DD shape regex but is not a real calendar date — must 400, not crash`);
+        const body = (await res.json()) as { error: string };
+        assert.match(body.error, /calendar date/i);
+      });
+    }
+
+    const marks = await prisma.availabilityMark.findMany({ where: { userId: staffCaller.id } });
+    assert.equal(marks.length, 0, 'no AvailabilityMark may be created from either out-of-range date');
+  } finally {
+    await prisma.availabilityMark.deleteMany({ where: { userId: staffCaller.id } });
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
 test('POST /api/voice/execute: APPROVE_SWAP with a missing swapRequestId gets a real 400', async () => {
   const location = await prisma.location.findFirst();
   assert.ok(location, 'seed data (location) must exist to run this test');

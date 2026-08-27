@@ -41,12 +41,23 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 function validateIntentShape(intent: ParsedIntent): string | null {
   switch (intent.intent) {
-    case 'MARK_AVAILABILITY':
+    case 'MARK_AVAILABILITY': {
       if (!DATE_RE.test(intent.date)) return 'date must be YYYY-MM-DD.';
+      // The regex above is a SHAPE check only — it accepts '9999-99-99' and
+      // '0000-00-00' (which crash `new Date(...)` downstream, or worse,
+      // '2026-02-30', which JS silently rolls over to March 2nd instead of
+      // rejecting. A round-trip through Date and back to YYYY-MM-DD catches
+      // both: an invalid date, or a date that got silently renormalized to a
+      // DIFFERENT day than what was asked for.
+      const d = new Date(`${intent.date}T00:00:00.000Z`);
+      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.date) {
+        return 'date must be a real calendar date (YYYY-MM-DD).';
+      }
       if (intent.type !== 'UNAVAILABLE' && intent.type !== 'PREFERRED_OFF') {
         return 'type must be "UNAVAILABLE" or "PREFERRED_OFF".';
       }
       return null;
+    }
     case 'REQUEST_SWAP':
       if (!isNonEmptyString(intent.shiftId)) return 'shiftId is required.';
       if (!isNonEmptyString(intent.targetUserId)) return 'targetUserId is required.';
