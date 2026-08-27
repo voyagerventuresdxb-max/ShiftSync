@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, Home, Map, Mic, Sparkles, Users } from 'lucide-react';
+import { CalendarDays, Home, LoaderCircle, Map, Mic, Sparkles, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -82,9 +82,12 @@ function useDial(target: number) {
 export function RadialDock({
   listening,
   onToggleListening,
+  processing = false,
 }: {
   listening: boolean;
   onToggleListening: () => void;
+  /** True while a captured command is transcribing/parsing — a distinct visual state from "still recording". */
+  processing?: boolean;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation().pathname;
@@ -255,26 +258,37 @@ export function RadialDock({
           );
         })}
 
-        {/* fixed keystone: AI / voice — no voice backend, this only flips local `listening` state */}
+        {/* fixed keystone: AI / voice — drives AppShell's record -> transcribe -> parse -> confirm pipeline */}
         <button
           type="button"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onToggleListening}
+          disabled={processing}
           aria-pressed={listening}
-          aria-label="Toggle AI voice assistant"
+          aria-label={processing ? 'Processing voice command' : listening ? 'Stop recording voice command' : 'Toggle AI voice assistant'}
           className={cn(
             'glass-bar absolute left-1/2 top-[-26px] grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full transition-all duration-300',
-            listening ? 'text-accent-foreground' : 'text-accent hover:brightness-125',
+            listening || processing ? 'text-accent-foreground' : 'text-accent hover:brightness-125',
+            processing && 'cursor-wait',
           )}
           style={{
-            backgroundImage: listening
-              ? 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, var(--accent) 92%, transparent), color-mix(in oklab, var(--accent) 62%, transparent))'
-              : 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, oklch(1 0 0) 16%, transparent), color-mix(in oklab, var(--accent) 12%, transparent))',
-            animation: listening ? 'breathe 2.4s ease-in-out infinite' : undefined,
+            backgroundImage:
+              listening || processing
+                ? 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, var(--accent) 92%, transparent), color-mix(in oklab, var(--accent) 62%, transparent))'
+                : 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, oklch(1 0 0) 16%, transparent), color-mix(in oklab, var(--accent) 12%, transparent))',
+            // processing gets a quicker pulse than plain "still listening" — a
+            // distinct-but-related visual state, not a static icon swap.
+            animation: processing ? 'breathe 0.9s ease-in-out infinite' : listening ? 'breathe 2.4s ease-in-out infinite' : undefined,
             transitionTimingFunction: 'cubic-bezier(0.34,1.56,0.64,1)',
           }}
         >
-          {listening ? <Mic className="h-[18px] w-[18px]" /> : <Sparkles className="h-4 w-4" />}
+          {processing ? (
+            <LoaderCircle className="h-[18px] w-[18px] animate-spin" />
+          ) : listening ? (
+            <Mic className="h-[18px] w-[18px]" />
+          ) : (
+            <Sparkles className="h-4 w-4" />
+          )}
         </button>
       </div>
     </nav>

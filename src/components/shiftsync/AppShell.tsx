@@ -1,9 +1,59 @@
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Bell, CalendarCheck } from 'lucide-react';
 import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
+import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
 import { useAppState } from '@/state/AppStateContext';
+import { useIdentity } from '@/state/IdentityContext';
+import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
+
+/**
+ * MediaRecorder mimetype candidates, most-preferred first.
+ *
+ * Gemini's documented audio-input formats do NOT include `audio/webm`, but
+ * `audio/webm;codecs=opus` is what Chrome/Firefox's MediaRecorder defaults
+ * to. `audio/ogg;codecs=opus` is the best candidate that is BOTH
+ * browser-recordable (Firefox, and Chromium builds that support it) AND in
+ * Gemini's documented list (audio/wav, audio/mp3, audio/aiff, audio/aac,
+ * audio/ogg, audio/flac) — so it is tried first. The webm variants are kept
+ * as a last-resort fallback rather than refused outright: a client-side
+ * mimetype allowlist that blocks recording entirely on browsers that only
+ * support webm would turn "might not decode" (unverified either way — see
+ * server/src/routes/voice.ts's own comment on this) into a guaranteed,
+ * silent "voice commands don't work here" for the common case. If the
+ * upload genuinely fails to transcribe, that already surfaces as a normal,
+ * visible error banner via the existing ApiError/error-block path below —
+ * so the "honest failure" this judgment call has to weigh isn't between
+ * "silent" and "blocked", it's between "sometimes retry with an error
+ * message" and "never try at all for a browser that might have worked".
+ */
+const RECORDER_MIME_CANDIDATES = [
+  'audio/ogg;codecs=opus',
+  'audio/ogg',
+  'audio/wav',
+  'audio/aac',
+  'audio/mp4',
+  'audio/webm;codecs=opus',
+  'audio/webm',
+];
+
+function pickRecorderMimeType(): string {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
+  for (const candidate of RECORDER_MIME_CANDIDATES) {
+    if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+  }
+  return ''; // no candidate matched — let the browser fall back to its own default rather than refuse to record
+}
+
+function isVoiceCapable(): boolean {
+  return (
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === 'function' &&
+    typeof MediaRecorder !== 'undefined'
+  );
+}
 
 /**
  * Per-route header data, attached to each child route as its `handle`.
@@ -41,7 +91,127 @@ export function AppShell() {
   const eyebrow = handle?.eyebrow ?? config.name;
   const action = handle?.action;
 
+  const { session } = useIdentity();
+
+  // `voiceOn` means "actively recording" (mic armed, first tap already
+  // happened); `voiceProcessing` covers the transcribe -> parse-intent
+  // round trip after the second tap stops the recording. RadialDock renders
+  // a distinct visual for each rather than collapsing them into one boolean.
   const [voiceOn, setVoiceOn] = useState(false);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
+  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent } | null>(null);
+  const [voiceExecuting, setVoiceExecuting] = useState(false);
+  const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  // Stop released the tab's mic indicator too, not just our own state —
+  // matters if the user navigates away mid-recording (AppShell itself never
+  // unmounts, since it's the layout route, but this is cheap insurance).
+  useEffect(() => {
+    return () => {
+      mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  const handleRecordingComplete = useCallback(
+    async (blob: Blob) => {
+      if (blob.size === 0) {
+        setVoiceBanner({ kind: 'error', message: 'No audio captured — try again.' });
+        return;
+      }
+      if (!session) {
+        // Session could have expired mid-recording; re-check rather than
+        // send a doomed request that would only surface as a bare 401.
+        setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
+        return;
+      }
+      setVoiceProcessing(true);
+      try {
+        const { transcript } = await transcribeAudio(session.token, blob);
+        const { intent } = await parseVoiceIntent(session.token, transcript);
+        setVoiceResult({ transcript, intent });
+      } catch (err) {
+        setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
+      } finally {
+        setVoiceProcessing(false);
+      }
+    },
+    [session],
+  );
+
+  const startVoiceRecording = useCallback(async () => {
+    if (!session) {
+      setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
+      return;
+    }
+    if (!isVoiceCapable()) {
+      setVoiceBanner({ kind: 'error', message: 'Voice commands are not supported in this browser.' });
+      return;
+    }
+    setVoiceBanner(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = pickRecorderMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const finalType = recorder.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(audioChunksRef.current, { type: finalType });
+        audioChunksRef.current = [];
+        void handleRecordingComplete(blob);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setVoiceOn(true);
+    } catch {
+      setVoiceBanner({ kind: 'error', message: 'Microphone access was denied or unavailable.' });
+    }
+  }, [session, handleRecordingComplete]);
+
+  const stopVoiceRecording = useCallback(() => {
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    setVoiceOn(false);
+  }, []);
+
+  const handleToggleVoice = useCallback(() => {
+    if (voiceProcessing) return; // already disabled on the button itself; guarded here too against a stray keyboard activation
+    if (voiceOn) {
+      stopVoiceRecording();
+    } else {
+      void startVoiceRecording();
+    }
+  }, [voiceOn, voiceProcessing, startVoiceRecording, stopVoiceRecording]);
+
+  const handleVoiceCancel = useCallback(() => {
+    setVoiceResult(null);
+  }, []);
+
+  const handleVoiceConfirm = useCallback(async () => {
+    if (!voiceResult) return;
+    if (!session) {
+      setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
+      setVoiceResult(null);
+      return;
+    }
+    setVoiceExecuting(true);
+    try {
+      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent);
+      setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
+    } catch (err) {
+      setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not execute the voice command.' });
+    } finally {
+      setVoiceExecuting(false);
+      setVoiceResult(null);
+    }
+  }, [voiceResult, session]);
+
   const [unread, setUnread] = useState(true);
 
   // My Shifts is the staff-facing home screen, so it needs a real destination
@@ -111,7 +281,25 @@ export function AppShell() {
         <Outlet />
       </main>
 
-      <RadialDock listening={voiceOn} onToggleListening={() => setVoiceOn((v) => !v)} />
+      {voiceBanner && (
+        <div className="fixed inset-x-0 bottom-24 z-40 mx-auto w-full max-w-sm px-4">
+          <div className={voiceBanner.kind === 'error' ? 'error-block' : 'success-block'} role={voiceBanner.kind === 'error' ? 'alert' : 'status'}>
+            <p>{voiceBanner.message}</p>
+            <button className="btn btn-ghost" onClick={() => setVoiceBanner(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      <VoiceCommandSheet
+        intent={voiceResult?.intent ?? null}
+        onConfirm={handleVoiceConfirm}
+        onCancel={handleVoiceCancel}
+        executing={voiceExecuting}
+      />
+
+      <RadialDock listening={voiceOn} processing={voiceProcessing} onToggleListening={handleToggleVoice} />
     </div>
   );
 }
