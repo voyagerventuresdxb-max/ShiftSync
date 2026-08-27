@@ -556,6 +556,54 @@ body {
   margin-top: 0.25rem;
 }
 
+/* Needs-Review / Matched roster sections — bordered sub-panels inside the
+   already-bordered .upload-card, same treatment as .parse-issues /
+   .anomaly-block (surface-2 fill, hairline border, rounded corners). */
+.preview-section {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.preview-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.preview-section-header .hint {
+  margin: 0;
+}
+
+/* Bottom-anchored bar that replaces the plain .preview-actions row once the
+   preview is split into sections — same right-aligned button pair (nesting
+   .preview-actions unchanged), plus outstanding-count text on the left. */
+.preview-sticky-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  padding: 0.75rem 0 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.preview-sticky-count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
 .staff-directory {
   width: 100%;
   max-width: 56rem;
