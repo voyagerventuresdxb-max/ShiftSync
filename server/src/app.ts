@@ -17,6 +17,7 @@ import { myShiftsRouter } from './routes/myShifts.js';
 import { availabilityRouter } from './routes/availability.js';
 import { policyDocumentsRouter } from './routes/policyDocuments.js';
 import { onboardingRouter } from './routes/onboarding.js';
+import { voiceRouter } from './routes/voice.js';
 
 export function createApp() {
   const app = express();
@@ -46,6 +47,7 @@ export function createApp() {
   app.use('/api/availability', availabilityRouter);
   app.use('/api/policy-documents', policyDocumentsRouter);
   app.use('/api/onboarding', onboardingRouter);
+  app.use('/api/voice', voiceRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
