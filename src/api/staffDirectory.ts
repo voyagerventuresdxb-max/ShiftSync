@@ -2,6 +2,10 @@
  * Client for the Staff Directory API (server/src/routes/staffDirectory.ts)
  * — the venue-configured staff-name -> job-title mapping, set manually
  * once, never inferred from an uploaded roster.
+ *
+ * Extended to also carry phone, preferred language, start date (hiredAt),
+ * employment status (isActive), and a read-only venue name (joined from
+ * Location.name) — see the 2026-08-28 People/Identity plan, Task 5.
  */
 import { ApiError } from './schedules';
 
@@ -12,6 +16,13 @@ export interface StaffDirectoryEntry {
   /** The venue Role's DB id — what every shift-write endpoint requires. Null for staff with no role assigned yet. */
   roleId: string | null;
   roleName: string | null;
+  phone: string | null;
+  preferredLanguage: string | null;
+  /** ISO date, YYYY-MM-DD, or null if never set. */
+  hiredAt: string | null;
+  isActive: boolean;
+  /** Read-only, joined from Location.name. */
+  venueName: string;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -29,25 +40,45 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** GET /api/staff-directory/:locationId */
+/**
+ * GET /api/staff-directory/:locationId — returns ALL staff for a location,
+ * including inactive/terminated ones (the server deliberately does not
+ * filter by isActive so a manager can see and un-terminate someone).
+ * Callers that render staff as assignable (e.g. Floor Plan) must filter
+ * on `isActive` themselves.
+ */
 export async function fetchStaffDirectory(locationId: string): Promise<StaffDirectoryEntry[]> {
   const data = await request<{ staff: StaffDirectoryEntry[] }>(`/api/staff-directory/${locationId}`);
   return data.staff;
 }
 
-/** POST /api/staff-directory */
-export async function addStaffMember(locationId: string, fullName: string, jobTitle: string): Promise<StaffDirectoryEntry> {
+/** POST /api/staff-directory — body: { locationId, fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? } */
+export async function addStaffMember(input: {
+  locationId: string;
+  fullName: string;
+  jobTitle?: string | null;
+  phone?: string | null;
+  preferredLanguage?: string | null;
+  hiredAt?: string | null;
+}): Promise<StaffDirectoryEntry> {
   return request<StaffDirectoryEntry>('/api/staff-directory', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ locationId, fullName, jobTitle: jobTitle || null }),
+    body: JSON.stringify(input),
   });
 }
 
-/** PATCH /api/staff-directory/:userId */
+/** PATCH /api/staff-directory/:userId — accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, isActive. */
 export async function updateStaffMember(
   userId: string,
-  updates: { fullName?: string; jobTitle?: string | null },
+  updates: {
+    fullName?: string;
+    jobTitle?: string | null;
+    phone?: string | null;
+    preferredLanguage?: string | null;
+    hiredAt?: string | null;
+    isActive?: boolean;
+  },
 ): Promise<StaffDirectoryEntry> {
   return request<StaffDirectoryEntry>(`/api/staff-directory/${userId}`, {
     method: 'PATCH',

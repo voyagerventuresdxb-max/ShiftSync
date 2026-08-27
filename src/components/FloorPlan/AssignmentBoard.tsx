@@ -84,7 +84,11 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
       .then(([data, staffList]) => {
         setImage(data.image);
         setSections(data.sections);
-        setStaff(staffList);
+        // Staff Directory now returns terminated staff too (so managers can
+        // see/un-terminate them) — the Floor Plan board must not offer them
+        // as assignable, so filter to active staff before it ever reaches
+        // state used by the roster strip or the section picker.
+        setStaff(staffList.filter((s) => s.isActive !== false));
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load the floor plan.'))
       .finally(() => setLoading(false));
