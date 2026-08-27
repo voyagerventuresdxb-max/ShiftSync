@@ -11,10 +11,20 @@ declare global {
   }
 }
 
+/**
+ * Extracts the raw bearer token from an `Authorization: Bearer <token>`
+ * header, or null if absent/malformed. Exported so a handler that needs the
+ * TOKEN itself (not just the resolved `req.user`) — e.g. session revocation
+ * on sign-out — can read it without re-implementing the parsing.
+ */
+export function bearerToken(req: Request): string | null {
+  const header = req.headers.authorization ?? '';
+  return header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+}
+
 /** Resolves the `Authorization: Bearer <token>` header to a real User, or 401s. */
 export async function requireSession(req: Request, res: Response, next: NextFunction) {
-  const header = req.headers.authorization ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+  const token = bearerToken(req);
   if (!token) return res.status(401).json({ error: 'Missing or malformed Authorization header.' });
 
   const user = await resolveSession(token);

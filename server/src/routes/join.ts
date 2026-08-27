@@ -4,6 +4,12 @@ import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/
 
 export const joinRouter = Router();
 
+/**
+ * Fail-closed, opt-in dev-OTP echo — see the matching comment in
+ * `identity.ts`. Never keyed off `NODE_ENV`, which nothing in this repo sets.
+ */
+const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
+
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
 joinRouter.post('/request-otp', async (req, res) => {
   try {
@@ -11,11 +17,14 @@ joinRouter.post('/request-otp', async (req, res) => {
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
 
     const { plainCode, expiresAt } = await createOtpCode(phone, 'JOIN');
-    console.log(`[join] OTP for ${phone} (JOIN): ${plainCode} — no SMS integration exists; this is a stand-in until one is added.`);
+    // No SMS integration exists; this is a stand-in until one is added.
+    if (DEV_OTP_ECHO) {
+      console.log(`[join] OTP for ${phone} (JOIN): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
+    }
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: process.env.NODE_ENV === 'production' ? undefined : plainCode,
+      devCode: DEV_OTP_ECHO ? plainCode : undefined,
     });
   } catch (err) {
     console.error('[join.requestOtp] failed', err);
@@ -47,9 +56,16 @@ joinRouter.post('/verify-otp', async (req, res) => {
     const result = await verifyOtpCode(phone, 'JOIN', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
+    // ALL normalized-digit matches, not the first: `phoneDigits` is lossy and
+    // `User.phone` isn't unique, so two different real numbers can collide.
+    // Auto-matching one of them would issue a session for the wrong person.
     const digits = phoneDigits(phone);
     const users = await prisma.user.findMany({ where: { locationId, isActive: true } });
-    const match = users.find((u) => u.phone && phoneDigits(u.phone) === digits);
+    const matches = users.filter((u) => u.phone && phoneDigits(u.phone) === digits);
+    if (matches.length > 1) {
+      return res.status(409).json({ error: 'Multiple staff members match this phone number — contact support.' });
+    }
+    const match = matches[0];
 
     if (match) {
       const { plainToken, expiresAt } = await issueSession(match.id);

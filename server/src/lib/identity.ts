@@ -32,19 +32,26 @@ export function hashOtp(code: string): string {
  * Creates and stores a new OTP for (phone, purpose), invalidating any prior
  * unconsumed code for the same (phone, purpose) pair so only the most
  * recently requested code is ever valid.
+ *
+ * `OtpCode.phone` is stored as NORMALIZED digits (via `phoneDigits`), not the
+ * raw submitted string — so a code requested as "+971 50 123 4567" can be
+ * verified as "0501234567", exactly like user-matching already treats phone
+ * numbers. Keying on the raw string only worked by coincidence (the client
+ * happening to send an identical string both times).
  */
 export async function createOtpCode(
   phone: string,
   purpose: OtpPurpose,
 ): Promise<{ id: string; plainCode: string; expiresAt: Date }> {
+  const normalizedPhone = phoneDigits(phone);
   await prisma.otpCode.updateMany({
-    where: { phone, purpose, consumedAt: null },
+    where: { phone: normalizedPhone, purpose, consumedAt: null },
     data: { consumedAt: new Date() }, // invalidate — not a real "use," just supersession
   });
   const plainCode = generateOtp();
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
   const created = await prisma.otpCode.create({
-    data: { phone, purpose, codeHash: hashOtp(plainCode), expiresAt },
+    data: { phone: normalizedPhone, purpose, codeHash: hashOtp(plainCode), expiresAt },
   });
   return { id: created.id, plainCode, expiresAt };
 }
@@ -59,8 +66,9 @@ export async function verifyOtpCode(
   purpose: OtpPurpose,
   submittedCode: string,
 ): Promise<{ ok: boolean; reason?: string }> {
+  // Look up on the same normalized digits `createOtpCode` stored (see there).
   const record = await prisma.otpCode.findFirst({
-    where: { phone, purpose, consumedAt: null },
+    where: { phone: phoneDigits(phone), purpose, consumedAt: null },
     orderBy: { createdAt: 'desc' },
   });
   if (!record) return { ok: false, reason: 'No active code for this phone number — request a new one.' };
@@ -88,6 +96,16 @@ export async function issueSession(userId: string): Promise<{ plainToken: string
     data: { userId, tokenHash: hashOtp(plainToken), expiresAt },
   });
   return { plainToken, expiresAt };
+}
+
+/**
+ * Deletes the Session row backing a bearer token, ending it server-side.
+ * Idempotent: a token that resolves to no row (already revoked, expired and
+ * cleaned up, or never valid) is a silent no-op rather than an error — a
+ * sign-out must never fail just because there was nothing left to sign out of.
+ */
+export async function revokeSession(plainToken: string): Promise<void> {
+  await prisma.session.deleteMany({ where: { tokenHash: hashOtp(plainToken) } });
 }
 
 /** Resolves a bearer token to its real User, or null if missing/expired/unknown. */

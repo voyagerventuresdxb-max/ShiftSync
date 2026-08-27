@@ -24,6 +24,7 @@ function toDto(u: {
   preferredLanguage: string | null;
   hiredAt: Date | null;
   isActive: boolean;
+  terminatedAt: Date | null;
   role: { id: string; name: string } | null;
   location: { name: string };
 }) {
@@ -41,6 +42,10 @@ function toDto(u: {
     preferredLanguage: u.preferredLanguage,
     hiredAt: u.hiredAt ? u.hiredAt.toISOString().slice(0, 10) : null,
     isActive: u.isActive,
+    // Employment status is deliberately the isActive + terminatedAt PAIR (no
+    // parallel status enum, which would be a second source of truth). Both
+    // halves must therefore be exposed, and PATCH keeps them in lockstep.
+    terminatedAt: u.terminatedAt ? u.terminatedAt.toISOString().slice(0, 10) : null,
     venueName: u.location.name,
   };
 }
@@ -115,6 +120,7 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
       preferredLanguage?: string | null;
       hiredAt?: Date | null;
       isActive?: boolean;
+      terminatedAt?: Date | null;
     } = {};
     if (req.body?.fullName !== undefined) {
       const fullName = String(req.body.fullName).trim();
@@ -156,6 +162,14 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
 
     const existing = await prisma.user.findUnique({ where: { id: userId } });
     if (!existing) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+
+    // Employment status is the isActive + terminatedAt pair, so the toggle has
+    // to move both — otherwise terminatedAt stays permanently null and the two
+    // fields disagree about the same fact. Only a real transition writes it, so
+    // re-sending isActive:false doesn't overwrite the original termination date.
+    if (data.isActive !== undefined && data.isActive !== existing.isActive) {
+      data.terminatedAt = data.isActive ? null : new Date();
+    }
 
     const user = await prisma.user.update({
       where: { id: userId },
