@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession } from '../middleware/requireSession.js';
+import { markAvailability } from '../lib/actions/availabilityActions.js';
 
 export const availabilityRouter = Router();
 
@@ -51,13 +52,9 @@ availabilityRouter.post('/', requireSession, async (req, res) => {
       return res.status(400).json({ error: 'type must be "UNAVAILABLE" or "PREFERRED_OFF".' });
     }
 
-    const date = new Date(`${dateStr}T00:00:00.000Z`);
-    const mark = await prisma.availabilityMark.upsert({
-      where: { userId_date: { userId, date } },
-      create: { userId, date, type: type as 'UNAVAILABLE' | 'PREFERRED_OFF', note },
-      update: { type: type as 'UNAVAILABLE' | 'PREFERRED_OFF', note },
-    });
-    return res.status(201).json({ id: mark.id, date: mark.date.toISOString().slice(0, 10), type: mark.type, note: mark.note });
+    const outcome = await markAvailability({ userId, date: dateStr, type, note });
+    const { mark } = outcome;
+    return res.status(201).json({ id: mark.id, date: mark.date, type: mark.type, note: mark.note });
   } catch (err) {
     console.error('[availability.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while saving the availability mark.' });

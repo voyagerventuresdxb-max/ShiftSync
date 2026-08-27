@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
+import { decideJoinRequest } from '../lib/actions/joinActions.js';
 
 export const joinRouter = Router();
 
@@ -127,33 +128,16 @@ joinRouter.patch('/:requestId', async (req, res) => {
       return res.status(400).json({ error: 'decision must be "approve" or "decline".' });
     }
 
-    const existing = await prisma.joinRequest.findUnique({ where: { id: requestId } });
-    if (!existing) return res.status(404).json({ error: `Join request "${requestId}" not found.` });
-    if (existing.status !== 'PENDING') return res.status(409).json({ error: 'This request has already been reviewed.' });
+    const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
 
-    if (decision === 'decline') {
-      await prisma.joinRequest.update({
-        where: { id: requestId },
-        data: { status: 'DECLINED', reviewedById, reviewedAt: new Date() },
-      });
-      await prisma.auditLog.create({
-        data: { locationId: existing.locationId, actorId: reviewedById, action: 'JOIN_DECLINED', entityType: 'JoinRequest', entityId: requestId, note: `Declined join request for ${existing.fullName}` },
-      });
-      return res.status(200).json({ status: 'DECLINED' });
+    const outcome = await decideJoinRequest({ requestId, decision, reviewedById, jobTitle });
+
+    if (outcome.result === 'not_found') return res.status(404).json({ error: `Join request "${requestId}" not found.` });
+    if (outcome.result === 'already_reviewed') {
+      return res.status(409).json({ error: 'This request has already been reviewed.' });
     }
 
-    const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
-    const created = await prisma.user.create({
-      data: { locationId: existing.locationId, fullName: existing.fullName, phone: existing.phone, jobTitle },
-    });
-    await prisma.joinRequest.update({
-      where: { id: requestId },
-      data: { status: 'APPROVED', reviewedById, reviewedAt: new Date(), createdUserId: created.id },
-    });
-    await prisma.auditLog.create({
-      data: { locationId: existing.locationId, actorId: reviewedById, action: 'JOIN_APPROVED', entityType: 'JoinRequest', entityId: requestId, note: `Approved join request for ${existing.fullName} — created User ${created.id}` },
-    });
-    return res.status(200).json({ status: 'APPROVED', userId: created.id });
+    return res.status(200).json({ status: outcome.status, userId: outcome.userId });
   } catch (err) {
     console.error('[join.decide] failed', err);
     return res.status(500).json({ error: 'Unexpected error while deciding the join request.' });

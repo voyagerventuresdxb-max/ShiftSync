@@ -2,22 +2,16 @@ import { Router } from 'express';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../lib/prisma.js';
-import { isRequestLocked, nextRequestWindowClose } from '../lib/swapRequestPolicy.js';
+import { isRequestLocked } from '../lib/swapRequestPolicy.js';
+import {
+  SWAP_REQUEST_INCLUDE,
+  createSwapRequest,
+  decideSwapRequest,
+} from '../lib/actions/swapActions.js';
 
 dayjs.extend(utc);
 
 export const swapRequestsRouter = Router();
-
-/**
- * The Prisma `include` every swap-request read uses. Kept in one place so the
- * list/create/decide paths can never drift apart on which relation fields
- * `toDto` is allowed to read.
- */
-const SWAP_REQUEST_INCLUDE = {
-  requestedBy: { select: { fullName: true } },
-  targetUser: { select: { fullName: true } },
-  shift: { select: { userId: true, date: true, startTime: true, endTime: true } },
-} as const;
 
 /**
  * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00".
@@ -33,16 +27,6 @@ function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date }): st
   const end = dayjs.utc(shift.endTime).format('HH:mm');
   return `${day} · ${start}–${end}`;
 }
-
-/**
- * Thrown inside the decide transaction when the atomic `shift.updateMany`
- * guard finds the shift's owner no longer matches `requestedById` — i.e. a
- * different request already reassigned this shift between our initial read
- * and this write. Thrown (rather than just returning a flag) so the
- * transaction rolls back the status/audit writes too, instead of leaving a
- * false "approved" record with no matching reassignment.
- */
-class ShiftAlreadyReassignedError extends Error {}
 
 function toDto(
   r: {
@@ -125,18 +109,7 @@ swapRequestsRouter.post('/', async (req, res) => {
     const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } });
     if (!target) return res.status(404).json({ error: `Target user "${targetUserId}" not found.` });
 
-    const created = await prisma.shiftSwapRequest.create({
-      data: {
-        shiftId,
-        requestedById,
-        targetUserId,
-        type: 'COVER',
-        status: 'PENDING',
-        reason,
-        expiresAt: nextRequestWindowClose(),
-      },
-      include: SWAP_REQUEST_INCLUDE,
-    });
+    const created = await createSwapRequest({ shiftId, requestedById, targetUserId, reason });
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {
     console.error('[swapRequests.create] failed', err);
@@ -154,77 +127,20 @@ swapRequestsRouter.patch('/:id', async (req, res) => {
     }
     const reviewedById = req.body?.reviewedById ? String(req.body.reviewedById).trim() : null;
 
-    const existing = await prisma.shiftSwapRequest.findUnique({
-      where: { id },
-      include: { requestedBy: { select: { fullName: true } }, targetUser: { select: { fullName: true } }, shift: true },
+    const outcome = await decideSwapRequest({
+      id,
+      decision: decision === 'approved' ? 'approved' : 'declined',
+      reviewedById,
     });
-    if (!existing) return res.status(404).json({ error: `Swap request "${id}" not found.` });
 
-    if (isRequestLocked({ status: existing.status }, { userId: existing.shift.userId }, existing.requestedById)) {
+    if (outcome.result === 'not_found') return res.status(404).json({ error: `Swap request "${id}" not found.` });
+    if (outcome.result === 'conflict') {
       return res.status(409).json({
         error: 'This shift was already reassigned by another approved request — this one can no longer be approved.',
       });
     }
 
-    const status = decision === 'approved' ? 'APPROVED' : 'DECLINED';
-    const managerNote =
-      decision === 'approved'
-        ? `Approved · shift reassigned to ${existing.targetUser?.fullName ?? 'the proposed cover'}`
-        : 'Declined';
-
-    try {
-      const updated = await prisma.$transaction(async (tx) => {
-        // Atomic guard: only reassign the shift if it is still owned by the
-        // same user who requested the swap. This is the real source of
-        // truth against the TOCTOU race — two managers approving two
-        // different pending requests for the same shift can both pass the
-        // earlier informational `isRequestLocked` check (which only reflects
-        // what was true at read time), but only one `updateMany` here can
-        // ever match and actually flip `userId`.
-        if (decision === 'approved' && existing.targetUserId) {
-          const reassigned = await tx.shift.updateMany({
-            where: { id: existing.shiftId, userId: existing.requestedById },
-            data: { userId: existing.targetUserId },
-          });
-          if (reassigned.count === 0) {
-            // Someone else's approval already moved this shift out from
-            // under the original requester. Throwing here rolls back the
-            // whole transaction, so we do NOT let the status/audit writes
-            // below stand as if this approval had actually happened.
-            throw new ShiftAlreadyReassignedError();
-          }
-        }
-
-        const updatedRequest = await tx.shiftSwapRequest.update({
-          where: { id },
-          data: { status, reviewedById, reviewedAt: new Date(), managerNote },
-          include: SWAP_REQUEST_INCLUDE,
-        });
-
-        await tx.auditLog.create({
-          data: {
-            locationId: existing.shift.locationId,
-            actorId: reviewedById,
-            shiftId: existing.shiftId,
-            action: decision === 'approved' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
-            entityType: 'ShiftSwapRequest',
-            entityId: id,
-            note: managerNote,
-          },
-        });
-
-        return updatedRequest;
-      });
-
-      return res.status(200).json({ request: toDto(updated) });
-    } catch (err) {
-      if (err instanceof ShiftAlreadyReassignedError) {
-        return res.status(409).json({
-          error: 'This shift was already reassigned by another approved request — this one can no longer be approved.',
-        });
-      }
-      throw err;
-    }
+    return res.status(200).json({ request: toDto(outcome.request) });
   } catch (err) {
     console.error('[swapRequests.decide] failed', err);
     return res.status(500).json({ error: 'Unexpected error while deciding the swap request.' });
