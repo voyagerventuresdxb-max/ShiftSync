@@ -8,6 +8,7 @@ import FloorPlanContent from './routes/FloorPlanRoute';
 import PeopleContent from './routes/PeopleRoute';
 import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
+import MyShiftsContent from './routes/MyShiftsRoute';
 
 /** Header text per route, read by AppShell via useMatches(). */
 const handles = {
@@ -17,6 +18,7 @@ const handles = {
   profile: { title: 'Profile' },
   scheduleEditor: { title: 'Shift Editor' },
   join: { title: 'Join' },
+  myShifts: { title: 'My Shifts' },
 } satisfies Record<string, RouteHandle>;
 
 /**
@@ -48,6 +50,7 @@ export const router = createBrowserRouter([
       { path: '/people', element: <PeopleContent />, handle: handles.people },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
+      { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
     ],
   },
 ]);

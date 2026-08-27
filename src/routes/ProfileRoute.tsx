@@ -1,3 +1,30 @@
+import { useIdentity } from '../state/IdentityContext';
+
 export default function ProfileContent() {
-  return <p className="panel p-5 text-sm text-muted-foreground">Profile is coming soon.</p>;
+  const { session, logout } = useIdentity();
+
+  if (!session) {
+    return <p className="panel p-5 text-sm text-muted-foreground">Sign in via Join to see your profile.</p>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="panel p-5">
+        <p className="eyebrow">Account</p>
+        <h2 className="text-lg font-semibold">{session.user.fullName}</h2>
+        {session.user.jobTitle && <p className="text-sm text-muted-foreground">{session.user.jobTitle}</p>}
+        <button className="btn btn-ghost mt-4" onClick={logout}>
+          Sign out
+        </button>
+      </section>
+
+      <section className="panel p-5">
+        <p className="eyebrow">Notification preferences</p>
+        <p className="hint mt-2">
+          No real push/SMS notification integration exists in this app yet (consistent with every other "notify"
+          feature here) — this section is a placeholder for when one is added.
+        </p>
+      </section>
+    </div>
+  );
 }
