@@ -5,6 +5,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
 import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasterize.js';
+import { requireSession, requireManager } from '../middleware/requireSession.js';
 
 /**
  * Floor Plan — Sections & Duties.
@@ -54,11 +55,14 @@ function extFor(mimeType: string, originalName: string): string {
  * Saves the venue floor-plan image server-side and records it as the
  * location's current plan. A PDF is rasterized to PNG first (page 1).
  */
-floorPlanRouter.post('/upload', upload.single('file'), async (req, res) => {
+floorPlanRouter.post('/upload', requireSession, requireManager, upload.single('file'), async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
@@ -107,7 +111,7 @@ floorPlanRouter.post('/upload', upload.single('file'), async (req, res) => {
  *
  * `polygon` points are fractions (0-1) of the image's width/height.
  */
-floorPlanRouter.post('/sections', async (req, res) => {
+floorPlanRouter.post('/sections', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     const floorPlanImageId = String(req.body?.floorPlanImageId ?? '').trim();
@@ -128,6 +132,9 @@ floorPlanRouter.post('/sections', async (req, res) => {
     if (!Number.isFinite(paxCapacity) || paxCapacity < 0) {
       return res.status(400).json({ error: 'paxCapacity must be a non-negative number.' });
     }
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
 
     const image = await prisma.floorPlanImage.findUnique({ where: { id: floorPlanImageId } });
     if (!image || image.locationId !== locationId) {
@@ -146,11 +153,13 @@ floorPlanRouter.post('/sections', async (req, res) => {
 });
 
 /** PATCH /api/floor-plan/sections/:sectionId — edit label/polygon/paxCapacity/notes. */
-floorPlanRouter.patch('/sections/:sectionId', async (req, res) => {
+floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, async (req, res) => {
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!existing) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    if (!existing || existing.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    }
 
     const data: { label?: string; polygon?: { x: number; y: number }[]; paxCapacity?: number; notes?: string | null } = {};
     if (req.body?.label !== undefined) {
@@ -189,11 +198,13 @@ floorPlanRouter.patch('/sections/:sectionId', async (req, res) => {
 });
 
 /** DELETE /api/floor-plan/sections/:sectionId — also removes its assignments (cascade). */
-floorPlanRouter.delete('/sections/:sectionId', async (req, res) => {
+floorPlanRouter.delete('/sections/:sectionId', requireSession, requireManager, async (req, res) => {
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!existing) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    if (!existing || existing.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    }
     await prisma.floorSection.delete({ where: { id: sectionId } });
     return res.status(204).send();
   } catch (err) {
@@ -208,9 +219,12 @@ floorPlanRouter.delete('/sections/:sectionId', async (req, res) => {
  * Returns the location's current (most recently uploaded) floor plan image
  * and its sections, or `image: null` if nothing has been uploaded yet.
  */
-floorPlanRouter.get('/:locationId', async (req, res) => {
+floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
     const image = await prisma.floorPlanImage.findFirst({
       where: { locationId },
       orderBy: { createdAt: 'desc' },
@@ -234,9 +248,12 @@ floorPlanRouter.get('/:locationId', async (req, res) => {
  * Returns every section for the location's current floor plan, each with
  * its assignments for that date AND period embedded.
  */
-floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
+floorPlanRouter.get('/:locationId/assignments', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
     const date = String(req.query.date ?? '').trim();
     const period = String(req.query.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -290,9 +307,10 @@ floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
 
 /**
  * POST /api/floor-plan/assignments
- * body: { sectionId, staffId, shiftDate, period, dutyLabel?, createdById? }
+ * body: { sectionId, staffId, shiftDate, period, dutyLabel? }
+ * createdById is derived from the manager's own session, never from the body.
  */
-floorPlanRouter.post('/assignments', async (req, res) => {
+floorPlanRouter.post('/assignments', requireSession, requireManager, async (req, res) => {
   try {
     const sectionId = String(req.body?.sectionId ?? '').trim();
     const staffId = String(req.body?.staffId ?? '').trim();
@@ -306,7 +324,7 @@ floorPlanRouter.post('/assignments', async (req, res) => {
     // member silently wipes their label.
     const hasDutyLabelKey = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'dutyLabel');
     const dutyLabel = hasDutyLabelKey && req.body.dutyLabel ? String(req.body.dutyLabel).trim() : null;
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById = req.user!.id;
 
     if (!sectionId) return res.status(400).json({ error: 'sectionId is required.' });
     if (!staffId) return res.status(400).json({ error: 'staffId is required.' });
@@ -320,6 +338,9 @@ floorPlanRouter.post('/assignments', async (req, res) => {
 
     const section = await prisma.floorSection.findUnique({ where: { id: sectionId } });
     if (!section) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    if (section.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    }
     const staff = await prisma.user.findUnique({ where: { id: staffId } });
     if (!staff || staff.locationId !== section.locationId) {
       return res.status(404).json({ error: `Staff member "${staffId}" not found.` });
@@ -364,8 +385,8 @@ floorPlanRouter.post('/assignments', async (req, res) => {
   }
 });
 
-/** DELETE /api/floor-plan/assignments/:assignmentId — unassign. body (optional): { actorId } */
-floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
+/** DELETE /api/floor-plan/assignments/:assignmentId — unassign. */
+floorPlanRouter.delete('/assignments/:assignmentId', requireSession, requireManager, async (req, res) => {
   try {
     const { assignmentId } = req.params;
     const existing = await prisma.sectionAssignment.findUnique({
@@ -373,8 +394,11 @@ floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
       include: { section: true, staff: { select: { fullName: true } } },
     });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+    if (existing.section.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+    }
 
-    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const actorId = req.user!.id;
     await prisma.auditLog.create({
       data: {
         locationId: existing.section.locationId,
@@ -397,12 +421,11 @@ floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
 
 /**
  * PATCH /api/floor-plan/assignments/:assignmentId/notify
- * body: { actorId? }
  *
  * Stamps `notifiedAt` for one assignment — a manager-initiated, honest
  * tracking event (no real push/SMS/WhatsApp send exists in this codebase).
  */
-floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
+floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requireManager, async (req, res) => {
   try {
     const { assignmentId } = req.params;
     const existing = await prisma.sectionAssignment.findUnique({
@@ -410,8 +433,11 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
       include: { section: true, staff: { select: { fullName: true } } },
     });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+    if (existing.section.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+    }
 
-    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const actorId = req.user!.id;
     const notifiedAt = new Date();
     const updated = await prisma.sectionAssignment.update({
       where: { id: assignmentId },
@@ -439,7 +465,7 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
 
 /**
  * POST /api/floor-plan/:locationId/publish
- * body: { shiftDate, period, actorId? }
+ * body: { shiftDate, period }
  *
  * Flips every DRAFT assignment for the location's sections on that date +
  * period to PUBLISHED, and stamps `notifiedAt` on each one at the same
@@ -447,9 +473,12 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
  * assignment. A manager can still individually re-notify one person later
  * (e.g. after a reassignment) via the per-assignment notify endpoint.
  */
-floorPlanRouter.post('/:locationId/publish', async (req, res) => {
+floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
     const dateStr = String(req.body?.shiftDate ?? '').trim();
     const period = String(req.body?.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
@@ -459,7 +488,7 @@ floorPlanRouter.post('/:locationId/publish', async (req, res) => {
       return res.status(400).json({ error: 'period is required, as AM or PM.' });
     }
     const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
-    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const actorId = req.user!.id;
     const now = new Date();
 
     const result = await prisma.sectionAssignment.updateMany({

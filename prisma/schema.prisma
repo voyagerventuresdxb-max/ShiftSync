@@ -32,6 +32,7 @@ model Location {
   organizationId String   @map("organization_id")
   name           String
   emirate        String? // e.g. Dubai, Abu Dhabi, Sharjah
+  venueType      String?  @map("venue_type") // free-text category chosen from the onboarding wizard's card picker, e.g. "Fine Dining", "Nightclub"
   address        String?
   timezone       String   @default("Asia/Dubai")
   currency       String   @default("AED")
@@ -273,6 +274,8 @@ enum AuditAction {
   JOIN_DECLINED
   AVAILABILITY_MARKED
   SWAP_REQUESTED
+  STAFF_CREATED
+  STAFF_UPDATED
 }
 
 model AuditLog {

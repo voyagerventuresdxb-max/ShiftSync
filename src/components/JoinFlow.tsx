@@ -17,9 +17,9 @@ type Phase = 'phone' | 'otp' | 'pending' | 'error';
  */
 type Mode = 'join' | 'login';
 
-export default function JoinFlow({ locationId }: { locationId: string }) {
+export default function JoinFlow({ locationId, initialMode }: { locationId: string; initialMode?: Mode }) {
   const { login } = useIdentity();
-  const [mode, setMode] = useState<Mode>('join');
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'join');
   const [phase, setPhase] = useState<Phase>('phone');
   const [phone, setPhone] = useState('');
   const [fullName, setFullName] = useState('');

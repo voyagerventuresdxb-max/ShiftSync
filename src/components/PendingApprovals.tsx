@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, ChevronDown, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequestDto } from '../api/join';
+import { useIdentity } from '../state/IdentityContext';
 
 /**
  * Pending Approvals — the review queue for JoinRequest rows raised by the
@@ -12,13 +13,19 @@ import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequest
  * there's nothing to render in a "decided" section.
  */
 export default function PendingApprovals({ locationId }: { locationId: string }) {
+  const { session } = useIdentity();
   const [requests, setRequests] = useState<JoinRequestDto[]>([]);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
   const load = () => {
-    fetchPendingJoinRequests(locationId)
+    // No session (or a staff session) means this can only ever 401/403 — the
+    // route is manager-only now. Skip the request rather than firing one that
+    // can't succeed; the list simply stays empty, same as the "nothing
+    // pending" state below.
+    if (!session) return;
+    fetchPendingJoinRequests(session.token, locationId)
       .then(setRequests)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.'));
   };
@@ -26,12 +33,13 @@ export default function PendingApprovals({ locationId }: { locationId: string })
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId]);
+  }, [locationId, session]);
 
   const handleDecide = async (id: string, decision: 'approve' | 'decline') => {
+    if (!session) return;
     setDecidingId(id);
     try {
-      await decideJoinRequest(id, decision);
+      await decideJoinRequest(session.token, id, decision);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not process that request.');

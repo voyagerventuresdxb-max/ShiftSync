@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../lib/prisma.js';
 import { isRequestLocked } from '../lib/swapRequestPolicy.js';
+import { requireSession, requireManager } from '../middleware/requireSession.js';
 import {
   SWAP_REQUEST_INCLUDE,
   createSwapRequest,
@@ -69,9 +70,12 @@ function toDto(
 }
 
 /** GET /api/swap-requests/:locationId — every request for a shift in this location. */
-swapRequestsRouter.get('/:locationId', async (req, res) => {
+swapRequestsRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
     const rows = await prisma.shiftSwapRequest.findMany({
       where: { shift: { locationId } },
       orderBy: { createdAt: 'desc' },
@@ -84,32 +88,76 @@ swapRequestsRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/swap-requests — body: { shiftId, requestedById, targetUserId, reason? } */
-swapRequestsRouter.post('/', async (req, res) => {
+/**
+ * POST /api/swap-requests — body: { shiftId, targetUserId, reason?, requestedById? }
+ *
+ * `requestedById` is only ever honored for a MANAGER/OWNER session — a STAFF
+ * caller's body is never read for it; the requester is always their own
+ * session id. This mirrors voice.ts's REQUEST_SWAP handling exactly (same
+ * shift-ownership check, same 404 wording, same location-scoped target
+ * lookup) — see that file's `/execute` handler for the canonical version.
+ */
+swapRequestsRouter.post('/', requireSession, async (req, res) => {
   try {
     const shiftId = String(req.body?.shiftId ?? '').trim();
-    const requestedById = String(req.body?.requestedById ?? '').trim();
     const targetUserId = String(req.body?.targetUserId ?? '').trim();
     const reason = req.body?.reason ? String(req.body.reason).trim() : null;
 
     if (!shiftId) return res.status(400).json({ error: 'shiftId is required.' });
-    if (!requestedById) return res.status(400).json({ error: 'requestedById is required.' });
     if (!targetUserId) return res.status(400).json({ error: 'targetUserId is required.' });
 
-    const shift = await prisma.shift.findUnique({ where: { id: shiftId }, select: { id: true, userId: true } });
-    if (!shift) return res.status(404).json({ error: `Shift "${shiftId}" not found.` });
+    const locationId = req.user!.locationId;
 
-    // Validate both user ids before writing. Without this, an id that is not a
-    // real User (e.g. the client's synthetic `upload-emp-<name>` fallback for an
-    // unresolved roster row) reaches the FK constraint and surfaces as an opaque
-    // 500 instead of telling the caller which id was wrong.
-    const requester = await prisma.user.findUnique({ where: { id: requestedById }, select: { id: true } });
-    if (!requester) return res.status(404).json({ error: `Requesting user "${requestedById}" not found.` });
+    // A manager/owner may file a swap request on behalf of whichever employee
+    // is selected in SchedulingRoute's "Viewing" dropdown — an existing,
+    // intentional capability, not a bug — via `requestedById` in the body,
+    // falling back to their own id when omitted. A STAFF session can only
+    // ever file for themselves: `requestedById` is never read in that case.
+    const effectiveRequesterId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.requestedById ? String(req.body.requestedById).trim() : '') || req.user!.id;
 
-    const target = await prisma.user.findUnique({ where: { id: targetUserId }, select: { id: true } });
-    if (!target) return res.status(404).json({ error: `Target user "${targetUserId}" not found.` });
+    const shift = await prisma.shift.findUnique({
+      where: { id: shiftId },
+      select: { id: true, userId: true, locationId: true },
+    });
+    if (!shift || shift.userId !== effectiveRequesterId || shift.locationId !== locationId) {
+      return res.status(404).json({ error: 'That shift could not be found among your own upcoming shifts.' });
+    }
 
-    const created = await createSwapRequest({ shiftId, requestedById, targetUserId, reason });
+    // The proposed cover must be a real, active staff member at the SAME
+    // location — mirrors voice.ts's REQUEST_SWAP validation exactly.
+    const target = await prisma.user.findFirst({
+      where: { id: targetUserId, locationId, isActive: true },
+      select: { id: true },
+    });
+    if (!target) return res.status(404).json({ error: 'That staff member could not be found at your location.' });
+
+    const created = await createSwapRequest({ shiftId, requestedById: effectiveRequesterId, targetUserId, reason });
+
+    // actorId is always the real caller — who clicked the button — even when
+    // requestedById names someone else. Never the effective requester.
+    let onBehalfNote: string | undefined;
+    if (effectiveRequesterId !== req.user!.id) {
+      const requester = await prisma.user.findUnique({
+        where: { id: effectiveRequesterId },
+        select: { fullName: true },
+      });
+      onBehalfNote = `Requested on behalf of ${requester?.fullName ?? effectiveRequesterId}`;
+    }
+    await prisma.auditLog.create({
+      data: {
+        locationId,
+        actorId: req.user!.id,
+        shiftId,
+        action: 'SWAP_REQUESTED',
+        entityType: 'ShiftSwapRequest',
+        entityId: created.id,
+        note: onBehalfNote,
+      },
+    });
+
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {
     console.error('[swapRequests.create] failed', err);
@@ -117,20 +165,35 @@ swapRequestsRouter.post('/', async (req, res) => {
   }
 });
 
-/** PATCH /api/swap-requests/:id — body: { decision: 'approved' | 'denied', reviewedById? } */
-swapRequestsRouter.patch('/:id', async (req, res) => {
+/**
+ * PATCH /api/swap-requests/:id — body: { decision: 'approved' | 'denied' }
+ *
+ * Manager/owner-only (mirrors voice.ts: APPROVE_SWAP/DECLINE_SWAP are in
+ * MANAGER_INTENTS, not STAFF_INTENTS). `reviewedById` in the body is never
+ * read — the reviewer is always the caller's own session id, no on-behalf-of
+ * case here. Location-scoped before `decideSwapRequest` runs at all, since
+ * that function does not location-check itself.
+ */
+swapRequestsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const decision = req.body?.decision;
     if (decision !== 'approved' && decision !== 'denied') {
       return res.status(400).json({ error: 'decision must be "approved" or "denied".' });
     }
-    const reviewedById = req.body?.reviewedById ? String(req.body.reviewedById).trim() : null;
+
+    const sr = await prisma.shiftSwapRequest.findUnique({
+      where: { id },
+      include: { shift: { select: { locationId: true } } },
+    });
+    if (!sr || sr.shift.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: 'That swap request could not be found.' });
+    }
 
     const outcome = await decideSwapRequest({
       id,
       decision: decision === 'approved' ? 'approved' : 'declined',
-      reviewedById,
+      reviewedById: req.user!.id,
     });
 
     if (outcome.result === 'not_found') return res.status(404).json({ error: `Swap request "${id}" not found.` });

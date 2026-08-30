@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
+import { issueSession } from '../lib/identity.js';
 
 const prisma = new PrismaClient();
 
@@ -18,6 +19,12 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+}
+
+/** Issues a real bearer session token for a real User, exactly like a login would. */
+async function sessionFor(userId: string): Promise<string> {
+  const { plainToken } = await issueSession(userId);
+  return plainToken;
 }
 
 /**
@@ -38,6 +45,9 @@ async function createFixture(nameSuffix: string) {
   });
   const staff = await prisma.user.create({
     data: { locationId: location.id, fullName: '__floorplan-test__ Server', systemRole: 'STAFF' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__floorplan-test__ Manager', systemRole: 'MANAGER' },
   });
   const image = await prisma.floorPlanImage.create({
     data: {
@@ -62,19 +72,20 @@ async function createFixture(nameSuffix: string) {
     },
   });
 
-  return { location, staff, image, section };
+  return { location, staff, manager, image, section };
 }
 
 test('POST /api/floor-plan/assignments preserves an existing dutyLabel when the key is absent, and clears it when sent empty', async () => {
-  const { location, staff, section } = await createFixture('duty label');
+  const { location, staff, manager, section } = await createFixture('duty label');
   const shiftDate = '2031-04-04';
 
   try {
+    const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
       const post = (body: Record<string, unknown>) =>
         fetch(`${baseUrl}/api/floor-plan/assignments`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify(body),
         });
 
@@ -111,15 +122,16 @@ test('POST /api/floor-plan/assignments preserves an existing dutyLabel when the 
 });
 
 test('AM and PM assignments for the same section/staff/date are independent rows, each returned only for its own period', async () => {
-  const { location, staff, section } = await createFixture('am pm isolation');
+  const { location, staff, manager, section } = await createFixture('am pm isolation');
   const shiftDate = '2031-04-05';
 
   try {
+    const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
       const post = (period: 'AM' | 'PM', dutyLabel: string) =>
         fetch(`${baseUrl}/api/floor-plan/assignments`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ sectionId: section.id, staffId: staff.id, shiftDate, period, dutyLabel }),
         });
 
@@ -152,7 +164,9 @@ test('AM and PM assignments for the same section/staff/date are independent rows
         ['AM', am.assignment.id],
         ['PM', pm.assignment.id],
       ] as const) {
-        const res = await fetch(`${baseUrl}/api/floor-plan/${location.id}/assignments?date=${shiftDate}&period=${period}`);
+        const res = await fetch(`${baseUrl}/api/floor-plan/${location.id}/assignments?date=${shiftDate}&period=${period}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         assert.equal(res.status, 200);
         const body = (await res.json()) as { sections: { id: string; assignments: { id: string }[] }[] };
         const target = body.sections.find((s) => s.id === section.id);

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { requireSession, requireManager } from '../middleware/requireSession.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -56,9 +57,12 @@ function toDto(u: {
  * a real, user-facing field, so a manager needs to see (and un-set) a
  * terminated staff member too, not have them silently vanish.
  */
-staffDirectoryRouter.get('/:locationId', async (req, res) => {
+staffDirectoryRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
     const users = await prisma.user.findMany({
       where: { locationId },
       orderBy: { fullName: 'asc' },
@@ -73,18 +77,18 @@ staffDirectoryRouter.get('/:locationId', async (req, res) => {
 
 /**
  * POST /api/staff-directory — add a new staff member.
- * body: { locationId, fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? }
+ * body: { fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? }
+ * locationId is derived from the manager's own session, never from the body.
  * `isActive` is left at its schema default (`true`) for new hires.
  */
-staffDirectoryRouter.post('/', async (req, res) => {
+staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const fullName = String(req.body?.fullName ?? '').trim();
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
     const phone = req.body?.phone ? String(req.body.phone).trim() : null;
     const preferredLanguage = req.body?.preferredLanguage ? String(req.body.preferredLanguage).trim() : null;
     const hiredAtStr = req.body?.hiredAt ? String(req.body.hiredAt).trim() : null;
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
     if (hiredAtStr && !/^\d{4}-\d{2}-\d{2}$/.test(hiredAtStr)) {
       return res.status(400).json({ error: 'hiredAt must be formatted as YYYY-MM-DD.' });
@@ -98,6 +102,16 @@ staffDirectoryRouter.post('/', async (req, res) => {
       data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
       include: { role: true, location: { select: { name: true } } },
     });
+    await prisma.auditLog.create({
+      data: {
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_CREATED',
+        entityType: 'User',
+        entityId: user.id,
+        note: `Added ${user.fullName} to the staff directory`,
+      },
+    });
     return res.status(201).json(toDto(user));
   } catch (err) {
     console.error('[staffDirectory.create] failed', err);
@@ -110,7 +124,7 @@ staffDirectoryRouter.post('/', async (req, res) => {
  * Accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, and
  * isActive (the employment-status toggle).
  */
-staffDirectoryRouter.patch('/:userId', async (req, res) => {
+staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (req, res) => {
   try {
     const { userId } = req.params;
     const data: {
@@ -161,7 +175,9 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
     }
 
     const existing = await prisma.user.findUnique({ where: { id: userId } });
-    if (!existing) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+    if (!existing || existing.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+    }
 
     // Employment status is the isActive + terminatedAt pair, so the toggle has
     // to move both — otherwise terminatedAt stays permanently null and the two
@@ -175,6 +191,16 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
       where: { id: userId },
       data,
       include: { role: true, location: { select: { name: true } } },
+    });
+    await prisma.auditLog.create({
+      data: {
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_UPDATED',
+        entityType: 'User',
+        entityId: user.id,
+        note: `Updated ${user.fullName}'s staff record`,
+      },
     });
     return res.status(200).json(toDto(user));
   } catch (err) {

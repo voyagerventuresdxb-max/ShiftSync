@@ -8,6 +8,7 @@
  * Location.name) — see the 2026-08-28 People/Identity plan, Task 5.
  */
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export interface StaffDirectoryEntry {
   id: string;
@@ -50,29 +51,38 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * Callers that render staff as assignable (e.g. Floor Plan) must filter
  * on `isActive` themselves.
  */
-export async function fetchStaffDirectory(locationId: string): Promise<StaffDirectoryEntry[]> {
-  const data = await request<{ staff: StaffDirectoryEntry[] }>(`/api/staff-directory/${locationId}`);
+export async function fetchStaffDirectory(token: string, locationId: string): Promise<StaffDirectoryEntry[]> {
+  const data = await request<{ staff: StaffDirectoryEntry[] }>(`/api/staff-directory/${locationId}`, {
+    headers: withAuth(token),
+  });
   return data.staff;
 }
 
-/** POST /api/staff-directory — body: { locationId, fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? } */
-export async function addStaffMember(input: {
-  locationId: string;
-  fullName: string;
-  jobTitle?: string | null;
-  phone?: string | null;
-  preferredLanguage?: string | null;
-  hiredAt?: string | null;
-}): Promise<StaffDirectoryEntry> {
+/**
+ * POST /api/staff-directory — body: { fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? }.
+ * locationId is no longer accepted here — the server derives it from the
+ * manager's own session, so there is nothing for a caller to supply or spoof.
+ */
+export async function addStaffMember(
+  token: string,
+  input: {
+    fullName: string;
+    jobTitle?: string | null;
+    phone?: string | null;
+    preferredLanguage?: string | null;
+    hiredAt?: string | null;
+  },
+): Promise<StaffDirectoryEntry> {
   return request<StaffDirectoryEntry>('/api/staff-directory', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(input),
   });
 }
 
 /** PATCH /api/staff-directory/:userId — accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, isActive. */
 export async function updateStaffMember(
+  token: string,
   userId: string,
   updates: {
     fullName?: string;
@@ -85,7 +95,7 @@ export async function updateStaffMember(
 ): Promise<StaffDirectoryEntry> {
   return request<StaffDirectoryEntry>(`/api/staff-directory/${userId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(updates),
   });
 }

@@ -12,6 +12,7 @@ import {
   type FloorSectionDto,
   type Point,
 } from '../../api/floorPlan';
+import { useIdentity } from '../../state/IdentityContext';
 
 interface Props {
   locationId: string;
@@ -29,16 +30,20 @@ interface Props {
  * overlays instead, since Konva shapes can't be dnd-kit drop targets.
  */
 export default function SectionEditor({ locationId, image, sections, onChanged, onDone }: Props) {
+  const { session } = useIdentity();
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = useCallback(
     async (file: File) => {
+      // Uploading is manager-only server-side; with no session there is no
+      // token to send and the request could only ever 401.
+      if (!session) return;
       setUploading(true);
       setError(null);
       try {
-        const res = await uploadFloorPlanImage(file, locationId);
+        const res = await uploadFloorPlanImage(session.token, file, locationId);
         onChanged(res.image, res.sections);
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not upload the floor plan.');
@@ -46,7 +51,7 @@ export default function SectionEditor({ locationId, image, sections, onChanged, 
         setUploading(false);
       }
     },
-    [locationId, onChanged],
+    [locationId, onChanged, session],
   );
 
   if (!image) {
@@ -96,6 +101,7 @@ function FloorPlanCanvas({
   onChanged: (image: FloorPlanImageDto, sections: FloorSectionDto[]) => void;
   onDone: () => void;
 }) {
+  const { session } = useIdentity();
   const [img] = useImage(image.fileUrl);
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageWidth, setStageWidth] = useState(800);
@@ -168,11 +174,17 @@ function FloorPlanCanvas({
       setError('Pax capacity must be a non-negative number.');
       return;
     }
+    // Section writes are manager-only server-side; with no session there is
+    // no token to send and the request could only ever 401.
+    if (!session) {
+      setError('Your session has expired. Please sign in again.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       const polygon: Point[] = drawing.map((p) => ({ x: p.x / stageWidth, y: p.y / stageHeight }));
-      const section = await createFloorSection({
+      const section = await createFloorSection(session.token, {
         locationId,
         floorPlanImageId: image.id,
         label,
@@ -193,8 +205,11 @@ function FloorPlanCanvas({
   };
 
   const handleDeleteSection = async (sectionId: string) => {
+    // Section writes are manager-only server-side; with no session there is
+    // no token to send and the request could only ever 401.
+    if (!session) return;
     try {
-      await deleteFloorSection(sectionId);
+      await deleteFloorSection(session.token, sectionId);
       onChanged(image, sections.filter((s) => s.id !== sectionId));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not delete the section.');
@@ -202,8 +217,11 @@ function FloorPlanCanvas({
   };
 
   const handleQuickEdit = async (sectionId: string, updates: { label?: string; paxCapacity?: number; notes?: string | null }) => {
+    // Section writes are manager-only server-side; with no session there is
+    // no token to send and the request could only ever 401.
+    if (!session) return;
     try {
-      const updated = await updateFloorSection(sectionId, updates);
+      const updated = await updateFloorSection(session.token, sectionId, updates);
       onChanged(image, sections.map((s) => (s.id === sectionId ? updated : s)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not update the section.');

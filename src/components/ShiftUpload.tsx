@@ -1,4 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
+import { motion } from 'motion/react';
+import { CheckCircle2 } from 'lucide-react';
 import {
   ApiError,
   confirmRoster,
@@ -28,9 +30,16 @@ interface Props {
    * can otherwise collide and silently drop a shift during the merge.
    */
   onCommitted?: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
+  /**
+   * Overrides the "Parsing {fileName}…" label shown while a file is
+   * mid-upload/parse. Lets a caller with different framing (e.g. the
+   * onboarding wizard) supply its own copy without changing the default
+   * everywhere else this component is embedded (e.g. Scheduling).
+   */
+  uploadingLabel?: string;
 }
 
-export default function ShiftUpload({ locationId, createdById, onCommitted }: Props) {
+export default function ShiftUpload({ locationId, createdById, onCommitted, uploadingLabel }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -166,7 +175,12 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       {phase === 'uploading' && (
         <div className="status-block">
           <span className="spinner" aria-hidden />
-          <p>Parsing <strong>{fileName}</strong>…</p>
+          <motion.p
+            animate={{ opacity: [1, 0.55, 1] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            {uploadingLabel ? uploadingLabel : <>Parsing <strong>{fileName}</strong>…</>}
+          </motion.p>
         </div>
       )}
 
@@ -195,7 +209,14 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       )}
 
       {phase === 'done' && confirmResult && (
-        <div className="success-block" role="status">
+        <motion.div
+          className="success-block text-center"
+          role="status"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 160, damping: 26 }}
+        >
+          <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-success" aria-hidden />
           <p>
             <strong>{confirmResult.createdCount}</strong> shift
             {confirmResult.createdCount === 1 ? '' : 's'} committed.
@@ -209,7 +230,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
           <button className="btn btn-primary" onClick={reset}>
             Upload another roster
           </button>
-        </div>
+        </motion.div>
       )}
     </section>
   );

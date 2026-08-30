@@ -19,7 +19,7 @@ onboardingRouter.get('/:locationId/invite', async (req, res) => {
     const baseUrl = String(req.query.baseUrl ?? `${req.protocol}://${req.get('host')}`);
     const inviteUrl = `${baseUrl}/join?location=${locationId}`;
     const qrDataUrl = await generateQrDataUrl(inviteUrl);
-    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`Join ${location.name} on ShiftSync: ${inviteUrl}`)}`;
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`You've been added to ${location.name}'s team on ShiftSync. Join here: ${inviteUrl}`)}`;
 
     return res.status(200).json({ inviteUrl, qrDataUrl, whatsappUrl });
   } catch (err) {

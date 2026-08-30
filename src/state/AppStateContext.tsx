@@ -7,6 +7,7 @@ import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
+import { useIdentity } from './IdentityContext';
 
 const config: VenueConfig = {
   id: 'venue-1',
@@ -56,6 +57,7 @@ interface PublishInfo {
 const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const { session } = useIdentity();
   const [weekStart, setWeekStart] = useState(currentWeekStart());
 
   const roster: Roster = useMemo(
@@ -180,8 +182,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [staffDirectory]);
 
   useEffect(() => {
+    // Reads are session-gated server-side now. With no session — either a
+    // fresh load before login resolves, OR a sign-out on the shared venue
+    // device this app runs on — there is no token to send, so skip the call
+    // AND clear whatever the previous session's data left behind: this
+    // provider never unmounts across a logout (no route requires a session
+    // to render), so without this a departed manager's staff directory
+    // (names/phone numbers/preferred language) would keep rendering for
+    // whoever uses the device next.
+    if (!session) {
+      setStaffDirectory([]);
+      return;
+    }
     let cancelled = false;
-    fetchStaffDirectory('seed-location')
+    fetchStaffDirectory(session.token, 'seed-location')
       .then((list) => {
         if (!cancelled) setStaffDirectory(list);
       })
@@ -191,7 +205,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     if (currentEmployeeId === undefined && mergedRoster.employees.length > 0) {
@@ -200,8 +214,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [currentEmployeeId, mergedRoster.employees]);
 
   useEffect(() => {
+    // Swap requests are session-gated server-side now. Same shared-device
+    // reasoning as the staff-directory effect above: clear on sign-out, not
+    // just skip the refetch, so a departed user's swap-request history
+    // doesn't keep rendering for whoever uses the device next.
+    if (!session) {
+      setSwapRequests([]);
+      return;
+    }
     let cancelled = false;
-    fetchSwapRequests('seed-location')
+    fetchSwapRequests(session.token, 'seed-location')
       .then((list) => {
         if (!cancelled) setSwapRequests(list);
       })
@@ -211,7 +233,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session]);
 
   const sections = useMemo(() => {
     const jobTitleByName = new Map<string, string | null | undefined>();
@@ -221,11 +243,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const handleRequestCover = useCallback(
     async (shiftId: string, coveringEmployeeId: string) => {
+      // No session, no actor to attribute the request to — the server would
+      // 401 anyway; PersonalRota has no error slot for this today (same as
+      // the catch below), so this simply no-ops.
+      if (!session) return;
       const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
       if (!shift) return;
       try {
-        const request = await createSwapRequest({
+        const request = await createSwapRequest(session.token, {
           shiftId,
+          // Only honored server-side for a MANAGER/OWNER session (filing on
+          // behalf of the employee selected in SchedulingRoute's "Viewing"
+          // dropdown); ignored outright for a STAFF session, which can only
+          // ever file for itself.
           requestedById: shift.employeeId,
           targetUserId: coveringEmployeeId,
         });
@@ -235,36 +265,42 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // phase can surface this; for now the request simply doesn't appear.
       }
     },
-    [mergedRoster.shifts],
+    [mergedRoster.shifts, session],
   );
 
-  const handleDecideRequest = useCallback(async (requestId: string, decision: 'approved' | 'denied') => {
-    // Whatever happens to THIS request, a decide attempt can change the
-    // `locked` status of every sibling request on the same shift (the
-    // server auto-locks the losing requests once one approval reassigns the
-    // shift). Patching only the one row we just decided leaves those
-    // siblings showing stale `locked: false` in local state until a full
-    // reload — so a manager could click Approve on an already-locked
-    // request and get a silent 409 with no visible feedback. Re-fetching
-    // the full list after every attempt (success or failure) keeps the
-    // client's view self-correcting instead.
-    try {
-      await decideSwapRequest(requestId, decision);
-    } catch {
-      // Surfacing a dedicated error message (e.g. for a locked-request 409)
-      // is ApprovalsPanel's job in a follow-up — the refetch below already
-      // makes the failure visible by flipping the row back to its true
-      // (now-locked) state instead of silently doing nothing.
-    } finally {
+  const handleDecideRequest = useCallback(
+    async (requestId: string, decision: 'approved' | 'denied') => {
+      // Deciding is manager/owner-only server-side; with no session there is
+      // no reviewer to attribute the decision to.
+      if (!session) return;
+      // Whatever happens to THIS request, a decide attempt can change the
+      // `locked` status of every sibling request on the same shift (the
+      // server auto-locks the losing requests once one approval reassigns the
+      // shift). Patching only the one row we just decided leaves those
+      // siblings showing stale `locked: false` in local state until a full
+      // reload — so a manager could click Approve on an already-locked
+      // request and get a silent 409 with no visible feedback. Re-fetching
+      // the full list after every attempt (success or failure) keeps the
+      // client's view self-correcting instead.
       try {
-        const fresh = await fetchSwapRequests('seed-location');
-        setSwapRequests(fresh);
+        await decideSwapRequest(session.token, requestId, decision);
       } catch {
-        // Load-error UI for this list is ApprovalsPanel's concern; leave the
-        // previous (possibly stale) list in place rather than clearing it.
+        // Surfacing a dedicated error message (e.g. for a locked-request 409)
+        // is ApprovalsPanel's job in a follow-up — the refetch below already
+        // makes the failure visible by flipping the row back to its true
+        // (now-locked) state instead of silently doing nothing.
+      } finally {
+        try {
+          const fresh = await fetchSwapRequests(session.token, 'seed-location');
+          setSwapRequests(fresh);
+        } catch {
+          // Load-error UI for this list is ApprovalsPanel's concern; leave the
+          // previous (possibly stale) list in place rather than clearing it.
+        }
       }
-    }
-  }, []);
+    },
+    [session],
+  );
 
   const handleCommitted = useCallback(
     (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, fetchFloorPlan, type FloorPlanImageDto, type FloorSectionDto } from '../../api/floorPlan';
+import { useIdentity } from '../../state/IdentityContext';
 import SectionEditor from './SectionEditor';
 import AssignmentBoard from './AssignmentBoard';
 import EightySixBoard from './EightySixBoard';
@@ -17,6 +18,7 @@ type Mode = 'assign' | 'setup' | '86';
  * with nothing uploaded yet is dropped straight into setup.
  */
 export default function FloorPlanTab({ locationId }: Props) {
+  const { session } = useIdentity();
   const [image, setImage] = useState<FloorPlanImageDto | null>(null);
   const [sections, setSections] = useState<FloorSectionDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,8 +27,17 @@ export default function FloorPlanTab({ locationId }: Props) {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
+    // Reads are session-gated server-side now — with no session yet there is
+    // no token to send, so skip the call rather than firing a request that
+    // can only 401.
+    if (!session) {
+      setLoading(false);
+      setInitialized(true);
+      return;
+    }
     let cancelled = false;
-    fetchFloorPlan(locationId)
+    setLoading(true);
+    fetchFloorPlan(session.token, locationId)
       .then((data) => {
         if (cancelled) return;
         setImage(data.image);
@@ -47,7 +58,7 @@ export default function FloorPlanTab({ locationId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [locationId]);
+  }, [locationId, session]);
 
   const handleChanged = useCallback((nextImage: FloorPlanImageDto, nextSections: FloorSectionDto[]) => {
     setImage(nextImage);

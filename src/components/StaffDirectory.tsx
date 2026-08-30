@@ -6,6 +6,7 @@ import {
   type StaffDirectoryEntry,
 } from '../api/staffDirectory';
 import { ApiError } from '../api/schedules';
+import { useIdentity } from '../state/IdentityContext';
 
 interface StaffDirectoryProps {
   locationId: string;
@@ -29,6 +30,7 @@ type EditableFieldUpdates = Partial<
  * venue column (joined server-side from Location.name).
  */
 export default function StaffDirectory({ locationId, onChanged }: StaffDirectoryProps) {
+  const { session } = useIdentity();
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,9 +41,17 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
+    // Reads are session-gated server-side now — with no session yet (e.g. a
+    // fresh load before login resolves) there is no token to send, so skip
+    // the call rather than firing a request that can only 401. Resolve the
+    // loading state immediately instead of leaving the spinner stuck.
+    if (!session) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
-    fetchStaffDirectory(locationId)
+    fetchStaffDirectory(session.token, locationId)
       .then((list) => {
         if (cancelled) return;
         setStaff(list);
@@ -58,7 +68,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     return () => {
       cancelled = true;
     };
-  }, [locationId, onChanged]);
+  }, [locationId, onChanged, session]);
 
   // Previously-seen preferred languages, for the datalist autocomplete —
   // same idea as the 86 List's station autocomplete (EightySixBoard.tsx).
@@ -68,9 +78,12 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   );
 
   const handleFieldSave = async (entry: StaffDirectoryEntry, updates: EditableFieldUpdates, errorMessage: string) => {
+    // Editing is manager-only server-side; with no session there is no
+    // token to send and the request could only ever 401.
+    if (!session) return;
     setSavingId(entry.id);
     try {
-      const updated = await updateStaffMember(entry.id, updates);
+      const updated = await updateStaffMember(session.token, entry.id, updates);
       setStaff((prev) => {
         const next = prev.map((s) => (s.id === entry.id ? updated : s));
         onChanged?.(next);
@@ -87,9 +100,12 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   const handleAdd = async () => {
     const fullName = newName.trim();
     if (!fullName) return;
+    // Adding is manager-only server-side; with no session there is no
+    // token to send and the request could only ever 401.
+    if (!session) return;
     setAdding(true);
     try {
-      const created = await addStaffMember({ locationId, fullName, jobTitle: newTitle.trim() || null });
+      const created = await addStaffMember(session.token, { fullName, jobTitle: newTitle.trim() || null });
       setStaff((prev) => {
         const next = [...prev, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
         onChanged?.(next);

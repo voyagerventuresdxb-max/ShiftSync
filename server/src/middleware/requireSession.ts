@@ -33,3 +33,19 @@ export async function requireSession(req: Request, res: Response, next: NextFunc
   req.user = user;
   next();
 }
+
+/**
+ * Gates a route to MANAGER/OWNER sessions only. MUST run after `requireSession`
+ * (reads `req.user`, does not resolve it itself) — mirrors the STAFF-vs-everyone-else
+ * binary `voice/intentSchema.ts`'s `allowedIntentsFor` already uses ("nothing else in
+ * this codebase differentiates OWNER and MANAGER"), applied here to the legacy REST
+ * routes (swap/join decide, staff directory and floor-plan mutations) that voice.ts's
+ * own role check never covered.
+ */
+export function requireManager(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) return res.status(401).json({ error: 'Missing or malformed Authorization header.' });
+  if (req.user.systemRole === 'STAFF') {
+    return res.status(403).json({ error: 'This action requires a manager or owner account.' });
+  }
+  next();
+}

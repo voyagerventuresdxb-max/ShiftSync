@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
+import { requireSession, requireManager } from '../middleware/requireSession.js';
 
 export const joinRouter = Router();
 
@@ -91,10 +92,13 @@ joinRouter.post('/verify-otp', async (req, res) => {
   }
 });
 
-/** GET /api/join/:locationId/pending — list PENDING join requests for Pending Approvals. */
-joinRouter.get('/:locationId/pending', async (req, res) => {
+/** GET /api/join/:locationId/pending — list PENDING join requests for Pending Approvals. Manager-only, own location. */
+joinRouter.get('/:locationId/pending', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (locationId !== req.user!.locationId) {
+      return res.status(403).json({ error: 'You do not have access to this location.' });
+    }
     const requests = await prisma.joinRequest.findMany({
       where: { locationId, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
@@ -114,23 +118,29 @@ joinRouter.get('/:locationId/pending', async (req, res) => {
 });
 
 /**
- * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', reviewedById?, jobTitle? }
+ * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle? }
  * Approving creates a real, active User from the request's phone/fullName
  * and links it back onto the request — this is the one place a JoinRequest
- * ever produces a real staff member.
+ * ever produces a real staff member. Manager-only, scoped to the caller's
+ * own location; the reviewer is always the authenticated caller — there is
+ * no legitimate on-behalf-of case for reviewing someone else's join request.
  */
-joinRouter.patch('/:requestId', async (req, res) => {
+joinRouter.patch('/:requestId', requireSession, requireManager, async (req, res) => {
   try {
     const { requestId } = req.params;
     const decision = String(req.body?.decision ?? '');
-    const reviewedById = req.body?.reviewedById ? String(req.body.reviewedById).trim() : null;
     if (decision !== 'approve' && decision !== 'decline') {
       return res.status(400).json({ error: 'decision must be "approve" or "decline".' });
     }
 
+    const jr = await prisma.joinRequest.findUnique({ where: { id: requestId } });
+    if (!jr || jr.locationId !== req.user!.locationId) {
+      return res.status(404).json({ error: 'That join request could not be found.' });
+    }
+
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
 
-    const outcome = await decideJoinRequest({ requestId, decision, reviewedById, jobTitle });
+    const outcome = await decideJoinRequest({ requestId, decision, reviewedById: req.user!.id, jobTitle });
 
     if (outcome.result === 'not_found') return res.status(404).json({ error: `Join request "${requestId}" not found.` });
     if (outcome.result === 'already_reviewed') {
