@@ -33,7 +33,7 @@ async function sessionFor(userId: string): Promise<string> {
  * `prisma.location.delete` is the only cleanup each test needs.
  */
 async function createFixture(nameSuffix: string) {
-  const seedLocation = await prisma.location.findFirst();
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
 
   const location = await prisma.location.create({

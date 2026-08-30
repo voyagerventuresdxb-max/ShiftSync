@@ -26,7 +26,7 @@ function baseRow(overrides: Partial<PreviewRow>): PreviewRow {
 }
 
 test('persistShifts returns rows correlated by rowNumber, not array position', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   const user = await prisma.user.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test — run server/scripts/seed-test-data.ts first');

@@ -15,15 +15,24 @@ import OnboardingContent from './routes/OnboardingRoute';
 
 /**
  * Gates the manager-dashboard pages (Scheduling/Approvals, Floor Plan,
- * People/Staff-Directory/Pending-Approvals) behind a real session instead of
- * letting them render and silently show nothing — those pages' own backend
- * routes have required a session since the actor-identity-enforcement phase,
- * so an unauthenticated visit could previously only ever produce a blank/inert
- * screen. Sends straight to `/join`'s existing login mode rather than its
- * default join/self-registration mode. Does not redirect back to the
- * originally-requested page after login — `JoinFlow`'s login success path
- * always lands on `/my-shifts` today; wiring a return-to-origin redirect
- * through that flow was not part of this fix.
+ * People/Staff-Directory/Pending-Approvals, Onboarding) behind a real session
+ * instead of letting them render and silently show nothing or dead-end on an
+ * unactionable error — those pages' own backend routes have required a
+ * session since the actor-identity-enforcement phase, so an unauthenticated
+ * visit could previously only ever fail. Sends straight to `/join`'s existing
+ * login mode rather than its default join/self-registration mode. Does not
+ * redirect back to the originally-requested page after login — `JoinFlow`'s
+ * login success path always lands on `/my-shifts` today; wiring a
+ * return-to-origin redirect through that flow was not part of this fix (see
+ * MEMORY.md's open follow-up).
+ *
+ * `/onboarding` was originally left off this list on the reasoning that it
+ * "doesn't touch the four hardened routes" — wrong: its venue-setup step
+ * calls `/api/locations/:id`, which WAS hardened in the same phase that
+ * reasoning was written for. Caught by that phase's own mandatory
+ * final-review pattern, applied here retroactively. `/schedule` (the Shift
+ * Editor) is still correctly excluded — it only touches `shifts.ts`, which
+ * remains unauthenticated.
  */
 function RequireSession({ children }: { children: ReactNode }) {
   const { session } = useIdentity();
@@ -103,7 +112,15 @@ export const router = createBrowserRouter([
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
-      { path: '/onboarding', element: <OnboardingContent />, handle: handles.onboarding },
+      {
+        path: '/onboarding',
+        element: (
+          <RequireSession>
+            <OnboardingContent />
+          </RequireSession>
+        ),
+        handle: handles.onboarding,
+      },
     ],
   },
 ]);

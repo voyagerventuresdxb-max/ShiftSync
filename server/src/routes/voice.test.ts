@@ -28,7 +28,7 @@ async function sessionFor(userId: string): Promise<string> {
 }
 
 test('POST /api/voice/execute: a STAFF session cannot APPROVE_SWAP even with a hand-crafted intent — 403, and nothing in the DB moves', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -103,7 +103,7 @@ test('POST /api/voice/execute: a STAFF session cannot APPROVE_SWAP even with a h
 });
 
 test('POST /api/voice/execute: a MANAGER session executing APPROVE_SWAP reassigns the shift and writes a real [voice] AuditLog row', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -186,7 +186,7 @@ test('POST /api/voice/execute: a MANAGER session executing APPROVE_SWAP reassign
 });
 
 test('POST /api/voice/execute: MARK_AVAILABILITY from a STAFF session creates a real AvailabilityMark scoped to that session and a real AuditLog row', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const staffCaller = await prisma.user.create({
@@ -237,7 +237,7 @@ test('POST /api/voice/execute: MARK_AVAILABILITY from a STAFF session creates a 
 });
 
 test('POST /api/voice/execute: a STAFF session gets 400 (not 403) for an UNRECOGNIZED intent', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const staffCaller = await prisma.user.create({
@@ -271,7 +271,7 @@ test('POST /api/voice/execute: a STAFF session gets 400 (not 403) for an UNRECOG
 });
 
 test('POST /api/voice/execute: REQUEST_SWAP from a STAFF session creates a real ShiftSwapRequest for their own shift, with a [voice] AuditLog row', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -341,7 +341,7 @@ test('POST /api/voice/execute: REQUEST_SWAP from a STAFF session creates a real 
 });
 
 test('POST /api/voice/execute: DECLINE_SWAP from a MANAGER session declines a real pending request without reassigning the shift', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -414,7 +414,7 @@ test('POST /api/voice/execute: DECLINE_SWAP from a MANAGER session declines a re
 });
 
 test('POST /api/voice/execute: APPROVE_SWAP on an already-DECLINED swap request gets a real 409 and changes nothing', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -488,7 +488,7 @@ test('POST /api/voice/execute: APPROVE_SWAP on an already-DECLINED swap request 
 });
 
 test('POST /api/voice/execute: APPROVE_JOIN from a MANAGER session creates a real User from the join request', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const manager = await prisma.user.create({
@@ -543,7 +543,7 @@ test('POST /api/voice/execute: APPROVE_JOIN from a MANAGER session creates a rea
 });
 
 test('POST /api/voice/execute: DECLINE_JOIN from a MANAGER session declines without creating a User', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const manager = await prisma.user.create({
@@ -583,7 +583,7 @@ test('POST /api/voice/execute: DECLINE_JOIN from a MANAGER session declines with
 });
 
 test('POST /api/voice/execute: APPROVE_SWAP rejects a swap request that belongs to a different location — 404, nothing changes', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -658,7 +658,7 @@ test('POST /api/voice/execute: APPROVE_SWAP rejects a swap request that belongs 
 });
 
 test('POST /api/voice/execute: APPROVE_JOIN rejects a join request that belongs to a different location — 404, nothing changes', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const otherLocation = await prisma.location.create({
@@ -702,7 +702,7 @@ test('POST /api/voice/execute: APPROVE_JOIN rejects a join request that belongs 
 });
 
 test('POST /api/voice/execute: REQUEST_SWAP rejects a targetUserId from a different location — 404, no request created', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -763,7 +763,7 @@ test('POST /api/voice/execute: REQUEST_SWAP rejects a targetUserId from a differ
 });
 
 test('POST /api/voice/execute: REQUEST_SWAP rejects a nonexistent targetUserId — 404, no request created (and no bare 500)', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -813,7 +813,7 @@ test('POST /api/voice/execute: REQUEST_SWAP rejects a nonexistent targetUserId �
 });
 
 test('POST /api/voice/execute: MARK_AVAILABILITY with a malformed date gets a real 400, no row created', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const staffCaller = await prisma.user.create({
@@ -845,7 +845,7 @@ test('POST /api/voice/execute: MARK_AVAILABILITY with a malformed date gets a re
 });
 
 test('POST /api/voice/execute: MARK_AVAILABILITY rejects a calendar-invalid date that silently rolls over (2026-02-30) — 400, no row created for either day', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const staffCaller = await prisma.user.create({
@@ -885,7 +885,7 @@ test('POST /api/voice/execute: MARK_AVAILABILITY rejects a calendar-invalid date
 });
 
 test('POST /api/voice/execute: MARK_AVAILABILITY rejects shape-valid-but-out-of-range dates (9999-99-99, 0000-00-00) — 400, not a bare 500', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const staffCaller = await prisma.user.create({
@@ -920,7 +920,7 @@ test('POST /api/voice/execute: MARK_AVAILABILITY rejects shape-valid-but-out-of-
 });
 
 test('POST /api/voice/execute: APPROVE_SWAP with a missing swapRequestId gets a real 400', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const manager = await prisma.user.create({
@@ -946,7 +946,7 @@ test('POST /api/voice/execute: APPROVE_SWAP with a missing swapRequestId gets a 
 });
 
 test('POST /api/voice/execute: an unknown/garbage intent string gets a real 400, not a misleading 403', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
   const manager = await prisma.user.create({

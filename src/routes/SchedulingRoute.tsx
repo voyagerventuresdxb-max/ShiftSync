@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
@@ -26,8 +27,12 @@ function formatDayMonth(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
+const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export default function SchedulingContent() {
   const {
+    weekStart,
+    setWeekStart,
     mergedRoster,
     config,
     currentEmployeeId,
@@ -40,6 +45,55 @@ export default function SchedulingContent() {
     staffDirectoryByName,
     swapRequests,
   } = useAppState();
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // `weekStart` lives in AppStateContext, which sits ABOVE the router
+  // (mounted in App.tsx wrapping <RouterProvider>), so it can't read the URL
+  // itself — this component, which IS inside the router, is what reconciles
+  // the two. Read once on mount: a `?week=` param (a hard refresh, or a
+  // shared/bookmarked link) overrides the context's `currentWeekStart()`
+  // default.
+  useEffect(() => {
+    const param = searchParams.get('week');
+    if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
+      setWeekStart(param);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keeps the URL's `?week=` in sync with whatever week is actually on
+  // screen — Prev/Next-week clicks, template application, etc. — so a hard
+  // refresh always reloads the week that was really being viewed instead of
+  // snapping back to `currentWeekStart()`. `replace` so paging through weeks
+  // doesn't spam browser history with a back-button entry per week.
+  //
+  // Deliberately skips its very first invocation (`isFirstRunRef`). Both this
+  // effect and the mount-only one above run in the SAME initial effects
+  // flush, in definition order — but a state update from the first effect
+  // (`setWeekStart`) doesn't land in this effect's closure until a later
+  // render, so on that first pass `weekStart` here is still the stale
+  // pre-mount-sync default. Without the skip, this effect would immediately
+  // overwrite a valid incoming `?week=param` with that stale default,
+  // fighting the mount effect above (self-corrects on the next render once
+  // `weekStart` actually changes, but leaves a real window where the URL is
+  // briefly wrong, and an async `setSearchParams` navigation resolving
+  // out of order could leave it stuck wrong instead of just flickering).
+  // Reconciling the initial URL/state mismatch is the mount effect's job
+  // alone; this effect's job starts only once that's already settled.
+  const isFirstRunRef = useRef(true);
+  useEffect(() => {
+    if (isFirstRunRef.current) {
+      isFirstRunRef.current = false;
+      return;
+    }
+    if (searchParams.get('week') !== weekStart) {
+      const next = new URLSearchParams(searchParams);
+      next.set('week', weekStart);
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekStart]);
 
   const [mode, setMode] = useState<Mode>('personal');
   const activeEmployee =

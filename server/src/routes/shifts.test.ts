@@ -21,7 +21,7 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
 }
 
 test('PATCH /api/shifts/:id rejects a roleId that belongs to a different location (404, not a raw FK 500)', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -65,7 +65,7 @@ test('PATCH /api/shifts/:id rejects a roleId that belongs to a different locatio
 });
 
 test('PATCH /api/shifts/:id rejects a userId that belongs to a different location (404)', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
@@ -106,7 +106,7 @@ test('PATCH /api/shifts/:id rejects a userId that belongs to a different locatio
 });
 
 test('POST /api/shifts/bulk rejects the whole batch when one row references a roleId from a different location', async () => {
-  const location = await prisma.location.findFirst();
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
 
