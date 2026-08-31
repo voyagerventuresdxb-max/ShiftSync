@@ -4,12 +4,46 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 
 export const policyDocumentsRouter = Router();
 
+/**
+ * Serves the actual uploaded PDF bytes — mounted directly at
+ * `/uploads/policy-documents` in `app.ts`, BEFORE the generic `/uploads`
+ * static fallback, so it intercepts this one subpath while every other
+ * uploaded-file type (floor-plan images) still falls through to the
+ * unauthenticated static mount. That's a known, separately-tracked gap of
+ * the exact same shape (see MEMORY.md) — not closed here, since it wasn't
+ * named in scope, but real and worth closing the same way.
+ *
+ * The stored `fileUrl` values (`/uploads/policy-documents/<uuid>.pdf`)
+ * never change, so no data migration is needed — only which handler answers
+ * that URL.
+ */
+export const policyDocumentFilesRouter = Router();
+
 const UPLOAD_DIR = join(import.meta.dirname, '..', '..', 'uploads', 'policy-documents');
+
+/** Matches exactly the `${randomUUID()}.pdf` shape every upload is stored under — rejects anything else before it ever reaches the filesystem. */
+const SAFE_FILENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.pdf$/i;
+
+policyDocumentFilesRouter.get('/:filename', requireSession, async (req, res) => {
+  try {
+    const { filename } = req.params;
+    if (!SAFE_FILENAME_RE.test(filename)) return res.status(404).json({ error: 'Document not found.' });
+
+    const fileUrl = `/uploads/policy-documents/${filename}`;
+    const doc = await prisma.policyDocument.findFirst({ where: { fileUrl } });
+    if (!ownedOrNotFound(req, res, doc, 'Document not found.')) return;
+
+    return res.sendFile(join(UPLOAD_DIR, filename));
+  } catch (err) {
+    console.error('[policyDocuments.serveFile] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while serving the document.' });
+  }
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -20,10 +54,16 @@ const upload = multer({
   },
 });
 
-/** GET /api/policy-documents/:locationId — grouped by category client-side; server returns a flat list. */
-policyDocumentsRouter.get('/:locationId', async (req, res) => {
+/**
+ * GET /api/policy-documents/:locationId — grouped by category client-side; server returns a flat list.
+ * Session-gated (2026-08-31 — see MEMORY.md): compliance documents are real
+ * sensitive data, not just structural metadata; this was closed alongside
+ * the matching `/uploads/policy-documents` file-serving gap in the same file.
+ */
+policyDocumentsRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const docs = await prisma.policyDocument.findMany({
       where: { locationId },
       orderBy: [{ category: 'asc' }, { createdAt: 'desc' }],

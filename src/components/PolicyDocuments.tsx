@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Trash2, Upload } from 'lucide-react';
-import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, ApiError, type PolicyDocumentDto } from '../api/policyDocuments';
+import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, fetchPolicyDocumentFile, ApiError, type PolicyDocumentDto } from '../api/policyDocuments';
 import { useIdentity } from '../state/IdentityContext';
 
 /**
@@ -65,6 +65,25 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
     }
   };
 
+  // The document link used to be a plain <a href> — no longer possible now
+  // that the file itself is session-gated (this app authenticates via a
+  // Bearer header, not a cookie, so a browser's own navigation can't carry
+  // it). Fetch the bytes with the real session token, then hand the browser
+  // a same-origin blob: URL to open instead.
+  const handleOpen = async (d: PolicyDocumentDto) => {
+    setError(null);
+    try {
+      const blob = await fetchPolicyDocumentFile(session!.token, d.fileUrl);
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      // The new tab has already loaded the blob by the time it opens; revoking
+      // shortly after frees the memory without racing the open() call itself.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not open that document.');
+    }
+  };
+
   return (
     <section className="panel p-5">
       <h2 className="text-base font-semibold">Training &amp; Policy Documents</h2>
@@ -114,9 +133,13 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
               <ul className="mt-1.5 space-y-1.5">
                 {catDocs.map((d) => (
                   <li key={d.id} className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-                    <a href={d.fileUrl} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 hover:text-accent">
+                    <button
+                      type="button"
+                      onClick={() => void handleOpen(d)}
+                      className="flex min-w-0 items-center gap-2 text-left hover:text-accent"
+                    >
                       <FileText className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{d.title}</span>
-                    </a>
+                    </button>
                     <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="shrink-0 text-muted-foreground hover:text-destructive">
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>

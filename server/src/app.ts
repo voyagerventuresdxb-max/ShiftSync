@@ -16,7 +16,7 @@ import { joinRouter } from './routes/join.js';
 import { signupRouter } from './routes/signup.js';
 import { myShiftsRouter } from './routes/myShifts.js';
 import { availabilityRouter } from './routes/availability.js';
-import { policyDocumentsRouter } from './routes/policyDocuments.js';
+import { policyDocumentsRouter, policyDocumentFilesRouter } from './routes/policyDocuments.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { locationsRouter } from './routes/locations.js';
 import { voiceRouter } from './routes/voice.js';
@@ -28,6 +28,14 @@ export function createApp() {
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  // Policy documents are real compliance PDFs, not floor-plan images —
+  // session-gated and location-scoped (see policyDocuments.ts), mounted
+  // BEFORE the generic static fallback below so it intercepts this one
+  // subpath first. Everything else under /uploads (floor-plan images) still
+  // falls through to the unauthenticated static mount — a known, separately
+  // -tracked gap of the same shape, not closed here (see MEMORY.md).
+  app.use('/uploads/policy-documents', policyDocumentFilesRouter);
 
   // Uploaded floor-plan images — served so every staff member's browser can
   // load the same plan, not just the device that uploaded it.

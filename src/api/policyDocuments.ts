@@ -53,3 +53,25 @@ export async function uploadPolicyDocument(token: string, input: { file: File; c
 export async function deletePolicyDocument(token: string, id: string): Promise<void> {
   await request(`/api/policy-documents/${id}`, { method: 'DELETE', headers: withAuth(token) });
 }
+
+/**
+ * Fetches the actual PDF bytes behind `fileUrl` (now session-gated — see
+ * MEMORY.md). This app authenticates via a `Bearer` header, not a cookie, so
+ * a plain `<a href={fileUrl}>` can no longer reach it: a browser's own
+ * anchor-click navigation never attaches an `Authorization` header. Callers
+ * fetch the blob here and open/download it themselves instead.
+ */
+export async function fetchPolicyDocumentFile(token: string, fileUrl: string): Promise<Blob> {
+  const res = await fetch(fileUrl, { headers: withAuth(token) });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // non-JSON error body; keep the generic message
+    }
+    throw new ApiError(message, res.status);
+  }
+  return res.blob();
+}
