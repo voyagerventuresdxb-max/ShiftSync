@@ -2,6 +2,8 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
+import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const rotaTemplatesRouter = Router();
 
@@ -33,20 +35,35 @@ rotaTemplatesRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/rota-templates — body: { locationId, name, entries, createdById? } */
-rotaTemplatesRouter.post('/', async (req, res) => {
+/**
+ * POST /api/rota-templates — body: { name, entries, createdById? }
+ * Session-gated; `locationId` comes from the session, not the body.
+ * `createdById` is only honored for a MANAGER/OWNER session — same
+ * on-behalf-of rule as shifts.ts's POST /.
+ */
+rotaTemplatesRouter.post('/', requireSession, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const name = String(req.body?.name ?? '').trim();
     const entries = Array.isArray(req.body?.entries) ? (req.body.entries as TemplateEntry[]) : [];
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
 
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!name) return res.status(400).json({ error: 'name is required.' });
     if (entries.length === 0) return res.status(400).json({ error: 'entries must be a non-empty array.' });
 
     const created = await prisma.rotaTemplate.create({
       data: { locationId, name, entries: entries as unknown as Prisma.InputJsonValue, createdById },
+    });
+    await writeAuditLog(prisma, {
+      locationId,
+      actorId: req.user!.id,
+      action: 'ROTA_TEMPLATE_CREATED',
+      entityType: 'RotaTemplate',
+      entityId: created.id,
+      note: `Created template "${name}" (${entries.length} entries)`,
     });
     return res.status(201).json({
       template: { id: created.id, name: created.name, entryCount: entries.length, createdAt: created.createdAt.toISOString() },
@@ -57,13 +74,21 @@ rotaTemplatesRouter.post('/', async (req, res) => {
   }
 });
 
-/** DELETE /api/rota-templates/:id */
-rotaTemplatesRouter.delete('/:id', async (req, res) => {
+/** DELETE /api/rota-templates/:id — session-gated, own venue only. */
+rotaTemplatesRouter.delete('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.rotaTemplate.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Template "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Template "${id}" not found.`)) return;
     await prisma.rotaTemplate.delete({ where: { id } });
+    await writeAuditLog(prisma, {
+      locationId: existing.locationId,
+      actorId: req.user!.id,
+      action: 'ROTA_TEMPLATE_DELETED',
+      entityType: 'RotaTemplate',
+      entityId: id,
+      note: `Deleted template "${existing.name}"`,
+    });
     return res.status(204).send();
   } catch (err) {
     console.error('[rotaTemplates.delete] failed', err);
@@ -72,15 +97,18 @@ rotaTemplatesRouter.delete('/:id', async (req, res) => {
 });
 
 /** POST /api/rota-templates/:id/apply — body: { weekStart, createdById? } — creates real Shift rows for the target week. */
-rotaTemplatesRouter.post('/:id/apply', async (req, res) => {
+rotaTemplatesRouter.post('/:id/apply', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const weekStart = String(req.body?.weekStart ?? '').trim();
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
 
     const template = await prisma.rotaTemplate.findUnique({ where: { id } });
-    if (!template) return res.status(404).json({ error: `Template "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, template, `Template "${id}" not found.`)) return;
 
     const entries = template.entries as unknown as TemplateEntry[];
 
@@ -134,6 +162,14 @@ rotaTemplatesRouter.post('/:id/apply', async (req, res) => {
         });
       }),
     );
+    await writeAuditLog(prisma, {
+      locationId: template.locationId,
+      actorId: req.user!.id,
+      action: 'SHIFT_CREATED',
+      entityType: 'Shift',
+      entityId: created[0]?.id ?? id,
+      note: `Applied template "${template.name}" to week ${weekStart} — created ${created.length} shift(s)`,
+    });
     return res.status(201).json({ createdCount: created.length });
   } catch (err) {
     console.error('[rotaTemplates.apply] failed', err);

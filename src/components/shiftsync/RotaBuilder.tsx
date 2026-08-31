@@ -24,6 +24,7 @@ import { weekDates, weekdayOf } from '@/engine/rosterView';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
+import { useIdentity } from '@/state/IdentityContext';
 import { ApiError } from '@/api/schedules';
 import {
   fetchRotaTemplates,
@@ -88,6 +89,7 @@ export function RotaBuilder() {
     refetchWeekShifts,
     currentEmployeeId,
   } = useAppState();
+  const { session } = useIdentity();
 
   const [cardOpen, setCardOpen] = useState(true);
   const [templates, setTemplates] = useState<RotaTemplateDto[]>([]);
@@ -361,7 +363,7 @@ export function RotaBuilder() {
   const templatableShifts = weekShifts.filter((s) => Boolean(roleIdByShiftId[s.id]));
 
   const saveWeekAsTemplate = async (name: string) => {
-    if (!locationId) {
+    if (!session) {
       say('You must be signed in to do this.');
       return;
     }
@@ -378,7 +380,7 @@ export function RotaBuilder() {
       return;
     }
     try {
-      const template = await saveRotaTemplate(locationId, name, entries, currentEmployeeId);
+      const template = await saveRotaTemplate(session.token, name, entries, currentEmployeeId);
       setTemplates((prev) => [...prev, template]);
       say(`Saved "${template.name}" — ${entries.length} shifts captured.`);
       setSheet(null);
@@ -516,8 +518,12 @@ export function RotaBuilder() {
           templates={templates}
           onClose={() => setSheet(null)}
           onApply={async (t) => {
+            if (!session) {
+              say('You must be signed in to do this.');
+              return;
+            }
             try {
-              const result = await applyRotaTemplate(t.id, weekStart, currentEmployeeId);
+              const result = await applyRotaTemplate(session.token, t.id, weekStart, currentEmployeeId);
               await refetchWeekShifts();
               bump();
               refreshPublishInfo();
@@ -528,8 +534,12 @@ export function RotaBuilder() {
             }
           }}
           onDelete={async (id) => {
+            if (!session) {
+              say('You must be signed in to do this.');
+              return;
+            }
             try {
-              await deleteRotaTemplate(id);
+              await deleteRotaTemplate(session.token, id);
               setTemplates((prev) => prev.filter((t) => t.id !== id));
             } catch (err) {
               fail(err, 'Could not delete that template.');

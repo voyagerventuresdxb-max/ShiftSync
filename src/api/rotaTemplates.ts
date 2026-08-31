@@ -1,4 +1,5 @@
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export interface RotaTemplateDto {
   id: string;
@@ -37,23 +38,23 @@ export async function fetchRotaTemplates(locationId: string): Promise<RotaTempla
   return data.templates;
 }
 
-export async function saveRotaTemplate(locationId: string, name: string, entries: TemplateEntryInput[], createdById?: string): Promise<RotaTemplateDto> {
+export async function saveRotaTemplate(token: string, name: string, entries: TemplateEntryInput[], createdById?: string): Promise<RotaTemplateDto> {
   const data = await request<{ template: RotaTemplateDto }>('/api/rota-templates', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ locationId, name, entries, createdById: createdById ?? null }),
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
+    body: JSON.stringify({ name, entries, createdById: createdById ?? null }),
   });
   return data.template;
 }
 
-export async function deleteRotaTemplate(id: string): Promise<void> {
-  await request(`/api/rota-templates/${id}`, { method: 'DELETE' });
+export async function deleteRotaTemplate(token: string, id: string): Promise<void> {
+  await request(`/api/rota-templates/${id}`, { method: 'DELETE', headers: withAuth(token) });
 }
 
-export async function applyRotaTemplate(id: string, weekStart: string, createdById?: string): Promise<{ createdCount: number }> {
+export async function applyRotaTemplate(token: string, id: string, weekStart: string, createdById?: string): Promise<{ createdCount: number }> {
   return request(`/api/rota-templates/${id}/apply`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ weekStart, createdById: createdById ?? null }),
   });
 }
