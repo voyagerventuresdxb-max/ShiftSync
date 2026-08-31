@@ -15,8 +15,6 @@ const ACCEPTED = '.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp';
 type Phase = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done' | 'error';
 
 interface Props {
-  /** Location (venue) id the roster belongs to. */
-  locationId: string;
   /** Optional id of the manager committing the roster (audit trail). */
   createdById?: string;
   /**

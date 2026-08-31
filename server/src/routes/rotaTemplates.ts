@@ -51,6 +51,11 @@ rotaTemplatesRouter.post('/', requireSession, async (req, res) => {
         ? req.user!.id
         : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
 
+    if (createdById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
+    }
+
     if (!name) return res.status(400).json({ error: 'name is required.' });
     if (entries.length === 0) return res.status(400).json({ error: 'entries must be a non-empty array.' });
 
@@ -106,6 +111,11 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, async (req, res) => {
         ? req.user!.id
         : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
+
+    if (createdById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
+    }
 
     const template = await prisma.rotaTemplate.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, template, `Template "${id}" not found.`)) return;

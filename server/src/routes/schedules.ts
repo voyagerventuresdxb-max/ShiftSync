@@ -353,6 +353,12 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
         : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+
+    if (createdById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
+    }
+
     const result = await persistShifts(prisma, batch.locationId, createdById, batch.rows);
     uploadCache.delete(batchId);
 

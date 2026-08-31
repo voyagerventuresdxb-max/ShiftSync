@@ -201,6 +201,9 @@ export default function SchedulingContent() {
     refreshHours();
   }, [refreshHours]);
 
+  const canClockActiveEmployee =
+    !session || session.user.systemRole !== 'STAFF' || activeEmployee?.id === session.user.id;
+
   const handleClockIn = () => {
     if (!activeEmployee) return;
     setClockError(null);
@@ -280,8 +283,8 @@ export default function SchedulingContent() {
             weekLabel={weekLabel}
             currentEmployeeName={activeEmployee?.name}
             clockedIn={clockedIn}
-            onClockIn={handleClockIn}
-            onClockOut={handleClockOut}
+            onClockIn={canClockActiveEmployee ? handleClockIn : undefined}
+            onClockOut={canClockActiveEmployee ? handleClockOut : undefined}
           />
         </aside>
       </div>
@@ -291,14 +294,7 @@ export default function SchedulingContent() {
       </div>
 
       <div className="mt-5">
-        {/*
-          `ShiftUpload.locationId` is a required `string`, not `string | null`
-          — this route is behind RequireSession so locationId is non-null in
-          practice, but rather than force a non-null assertion through the
-          prop, simply don't render the upload card in the (unreachable)
-          null case.
-        */}
-        {locationId && <ShiftUpload locationId={locationId} onCommitted={handleCommitted} />}
+        <ShiftUpload onCommitted={handleCommitted} />
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>

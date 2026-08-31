@@ -25,7 +25,7 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
 
     if (shiftId) {
       const shift = await prisma.shift.findUnique({ where: { id: shiftId } });
-      if (!shift) return res.status(404).json({ error: `Shift "${shiftId}" not found.` });
+      if (!ownedOrNotFound(req, res, shift, `Shift "${shiftId}" not found.`)) return;
     }
 
     const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });

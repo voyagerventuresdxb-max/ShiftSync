@@ -59,6 +59,12 @@ policyDocumentsRouter.post('/upload', requireSession, upload.single('file'), asy
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
         : (req.body?.uploadedById ? String(req.body.uploadedById).trim() : '') || req.user!.id;
+
+    if (uploadedById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: uploadedById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${uploadedById}" not found.`)) return;
+    }
+
     if (!category) return res.status(400).json({ error: 'category is required.' });
     if (!title) return res.status(400).json({ error: 'title is required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
