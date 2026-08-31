@@ -1,27 +1,45 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const attendanceRouter = Router();
 
-/** POST /api/attendance/clock-in — body: { userId, shiftId? } */
-attendanceRouter.post('/clock-in', async (req, res) => {
+/**
+ * POST /api/attendance/clock-in — body: { userId?, shiftId? }
+ * Session-gated. `userId` in the body is only honored for a MANAGER/OWNER
+ * session naming a different staff member (same on-behalf-of rule as
+ * shifts.ts's POST /) — a STAFF session can only ever clock itself in. The
+ * effective target user must belong to the caller's own venue.
+ */
+attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
   try {
-    const userId = String(req.body?.userId ?? '').trim();
+    const effectiveUserId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.userId ? String(req.body.userId).trim() : '') || req.user!.id;
     const shiftId = req.body?.shiftId ? String(req.body.shiftId).trim() : null;
-    if (!userId) return res.status(400).json({ error: 'userId is required.' });
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+    const user = await prisma.user.findUnique({ where: { id: effectiveUserId } });
+    if (!ownedOrNotFound(req, res, user, `Staff member "${effectiveUserId}" not found.`)) return;
 
     if (shiftId) {
       const shift = await prisma.shift.findUnique({ where: { id: shiftId } });
       if (!shift) return res.status(404).json({ error: `Shift "${shiftId}" not found.` });
     }
 
-    const open = await prisma.attendanceLog.findFirst({ where: { userId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
+    const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
     if (open) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
 
-    const log = await prisma.attendanceLog.create({ data: { userId, shiftId, clockInAt: new Date(), source: 'manual' } });
+    const log = await prisma.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
+    await writeAuditLog(prisma, {
+      locationId: req.user!.locationId,
+      actorId: req.user!.id,
+      action: 'CLOCKED_IN',
+      entityType: 'AttendanceLog',
+      entityId: log.id,
+      note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+    });
     return res.status(201).json({ id: log.id, clockInAt: log.clockInAt!.toISOString(), clockOutAt: null });
   } catch (err) {
     console.error('[attendance.clockIn] failed', err);
@@ -29,16 +47,32 @@ attendanceRouter.post('/clock-in', async (req, res) => {
   }
 });
 
-/** POST /api/attendance/clock-out — body: { userId } — closes the caller's own open log. */
-attendanceRouter.post('/clock-out', async (req, res) => {
+/**
+ * POST /api/attendance/clock-out — body: { userId? } — closes the effective
+ * target's own open log. Session-gated; same on-behalf-of rule as clock-in.
+ */
+attendanceRouter.post('/clock-out', requireSession, async (req, res) => {
   try {
-    const userId = String(req.body?.userId ?? '').trim();
-    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+    const effectiveUserId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.userId ? String(req.body.userId).trim() : '') || req.user!.id;
 
-    const open = await prisma.attendanceLog.findFirst({ where: { userId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
+    const user = await prisma.user.findUnique({ where: { id: effectiveUserId } });
+    if (!ownedOrNotFound(req, res, user, `Staff member "${effectiveUserId}" not found.`)) return;
+
+    const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
     if (!open) return res.status(409).json({ error: 'Not currently clocked in.' });
 
     const closed = await prisma.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } });
+    await writeAuditLog(prisma, {
+      locationId: req.user!.locationId,
+      actorId: req.user!.id,
+      action: 'CLOCKED_OUT',
+      entityType: 'AttendanceLog',
+      entityId: closed.id,
+      note: effectiveUserId === req.user!.id ? undefined : `Clocked out ${user.fullName} on their behalf`,
+    });
     return res.status(200).json({ id: closed.id, clockInAt: closed.clockInAt!.toISOString(), clockOutAt: closed.clockOutAt!.toISOString() });
   } catch (err) {
     console.error('[attendance.clockOut] failed', err);

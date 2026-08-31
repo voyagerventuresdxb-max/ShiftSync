@@ -11,6 +11,7 @@ import { RotaBuilder } from '../components/shiftsync/RotaBuilder';
 import ShiftUpload from '../components/ShiftUpload';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
+import { useIdentity } from '../state/IdentityContext';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { ApiError } from '../api/schedules';
 
@@ -30,6 +31,7 @@ function formatDayMonth(iso: string): string {
 const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
+  const { session } = useIdentity();
   const {
     locationId,
     weekStart,
@@ -202,14 +204,14 @@ export default function SchedulingContent() {
   const handleClockIn = () => {
     if (!activeEmployee) return;
     setClockError(null);
-    clockIn(activeEmployee.id)
+    clockIn(session!.token, activeEmployee.id)
       .then(() => refreshHours())
       .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock in.'));
   };
   const handleClockOut = () => {
     if (!activeEmployee) return;
     setClockError(null);
-    clockOut(activeEmployee.id)
+    clockOut(session!.token, activeEmployee.id)
       .then(() => refreshHours())
       .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock out.'));
   };

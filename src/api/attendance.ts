@@ -1,4 +1,5 @@
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export interface HourStaffEntry {
   id: string;
@@ -22,18 +23,18 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function clockIn(userId: string, shiftId?: string): Promise<{ id: string; clockInAt: string; clockOutAt: string | null }> {
+export async function clockIn(token: string, userId: string, shiftId?: string): Promise<{ id: string; clockInAt: string; clockOutAt: string | null }> {
   return request('/api/attendance/clock-in', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ userId, shiftId: shiftId ?? null }),
   });
 }
 
-export async function clockOut(userId: string): Promise<{ id: string; clockInAt: string; clockOutAt: string }> {
+export async function clockOut(token: string, userId: string): Promise<{ id: string; clockInAt: string; clockOutAt: string }> {
   return request('/api/attendance/clock-out', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ userId }),
   });
 }
