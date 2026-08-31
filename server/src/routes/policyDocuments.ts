@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
+import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const policyDocumentsRouter = Router();
 
@@ -42,20 +44,24 @@ policyDocumentsRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/policy-documents/upload — multipart: file, locationId, category, title, uploadedById? */
-policyDocumentsRouter.post('/upload', upload.single('file'), async (req, res) => {
+/**
+ * POST /api/policy-documents/upload — multipart: file, category, title, uploadedById?
+ * Session-gated; `locationId` comes from the session, not the body.
+ * `uploadedById` is only honored for a MANAGER/OWNER session — same
+ * on-behalf-of rule used across every other hardened route.
+ */
+policyDocumentsRouter.post('/upload', requireSession, upload.single('file'), async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const category = String(req.body?.category ?? '').trim();
     const title = String(req.body?.title ?? '').trim();
-    const uploadedById = req.body?.uploadedById ? String(req.body.uploadedById).trim() : null;
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
+    const uploadedById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.uploadedById ? String(req.body.uploadedById).trim() : '') || req.user!.id;
     if (!category) return res.status(400).json({ error: 'category is required.' });
     if (!title) return res.status(400).json({ error: 'title is required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
     await mkdir(UPLOAD_DIR, { recursive: true });
     const filename = `${randomUUID()}.pdf`;
@@ -64,6 +70,14 @@ policyDocumentsRouter.post('/upload', upload.single('file'), async (req, res) =>
 
     const doc = await prisma.policyDocument.create({
       data: { locationId, category, title, fileUrl, originalName: req.file.originalname, mimeType: req.file.mimetype, uploadedById },
+    });
+    await writeAuditLog(prisma, {
+      locationId,
+      actorId: req.user!.id,
+      action: 'POLICY_DOCUMENT_UPLOADED',
+      entityType: 'PolicyDocument',
+      entityId: doc.id,
+      note: `Uploaded "${title}" (${category})`,
     });
     return res.status(201).json({
       document: { id: doc.id, category: doc.category, title: doc.title, fileUrl: doc.fileUrl, originalName: doc.originalName, createdAt: doc.createdAt.toISOString() },
@@ -74,13 +88,21 @@ policyDocumentsRouter.post('/upload', upload.single('file'), async (req, res) =>
   }
 });
 
-/** DELETE /api/policy-documents/:id */
-policyDocumentsRouter.delete('/:id', async (req, res) => {
+/** DELETE /api/policy-documents/:id — session-gated, own venue only. */
+policyDocumentsRouter.delete('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.policyDocument.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Document "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Document "${id}" not found.`)) return;
     await prisma.policyDocument.delete({ where: { id } });
+    await writeAuditLog(prisma, {
+      locationId: existing.locationId,
+      actorId: req.user!.id,
+      action: 'POLICY_DOCUMENT_DELETED',
+      entityType: 'PolicyDocument',
+      entityId: id,
+      note: `Deleted "${existing.title}" (${existing.category})`,
+    });
     return res.status(204).send();
   } catch (err) {
     console.error('[policyDocuments.delete] failed', err);

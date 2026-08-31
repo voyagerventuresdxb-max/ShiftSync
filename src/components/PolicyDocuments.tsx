@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Trash2, Upload } from 'lucide-react';
 import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, ApiError, type PolicyDocumentDto } from '../api/policyDocuments';
+import { useIdentity } from '../state/IdentityContext';
 
 /**
  * Training & Policy document hub — venue-level PDF documents (handbooks,
@@ -9,6 +10,7 @@ import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, ApiEr
  * pattern established by EightySixBoard.tsx in the Floor Plan phase.
  */
 export default function PolicyDocuments({ locationId }: { locationId: string }) {
+  const { session } = useIdentity();
   const [docs, setDocs] = useState<PolicyDocumentDto[]>([]);
   const [category, setCategory] = useState('');
   const [title, setTitle] = useState('');
@@ -17,10 +19,10 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
   const [uploading, setUploading] = useState(false);
 
   const load = useCallback(() => {
-    fetchPolicyDocuments(locationId)
+    fetchPolicyDocuments(session!.token, locationId)
       .then(setDocs)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load documents.'));
-  }, [locationId]);
+  }, [session, locationId]);
 
   useEffect(() => {
     load();
@@ -42,7 +44,7 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
     setUploading(true);
     setError(null);
     try {
-      await uploadPolicyDocument({ file, locationId, category: category.trim(), title: title.trim() });
+      await uploadPolicyDocument(session!.token, { file, category: category.trim(), title: title.trim() });
       setFile(null);
       setCategory('');
       setTitle('');
@@ -56,7 +58,7 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
 
   const handleDelete = async (id: string) => {
     try {
-      await deletePolicyDocument(id);
+      await deletePolicyDocument(session!.token, id);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not delete that document.');
