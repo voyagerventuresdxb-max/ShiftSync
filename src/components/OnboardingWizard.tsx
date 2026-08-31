@@ -278,7 +278,6 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
             </p>
           </div>
           <ShiftUpload
-            locationId={locationId}
             uploadingLabel="Reading your roster…"
             onCommitted={() => {
               setRosterImported(true);
