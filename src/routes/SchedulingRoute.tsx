@@ -168,7 +168,22 @@ export default function SchedulingContent() {
 
   const [hourStaff, setHourStaff] = useState<{ id: string; name: string; hours: number; contract: number }[]>([]);
   const [clockedIn, setClockedIn] = useState(false);
+  const [selfClockedIn, setSelfClockedIn] = useState(false);
   const [clockError, setClockError] = useState<string | null>(null);
+
+  // A STAFF session can only ever clock ITSELF in/out server-side (see
+  // attendance.ts's on-behalf-of rule) — but the "Viewing" dropdown
+  // (`activeEmployee`) defaults to the roster's first employee, not to the
+  // signed-in user, and exists for a different purpose (a manager checking a
+  // colleague's Personal Rota). Tying the clock buttons to `activeEmployee`
+  // for STAFF meant they silently clocked in whichever employee the dropdown
+  // happened to default to, not the STAFF user themselves — a real bug this
+  // decouples: the clock target for STAFF is always their own identity,
+  // independent of whatever's selected in "Viewing"; MANAGER/OWNER keeps the
+  // existing on-behalf-of capability against the Viewing selection.
+  const isStaffSession = session?.user.systemRole === 'STAFF';
+  const clockTargetId = isStaffSession ? session!.user.id : activeEmployee?.id;
+  const clockTargetName = isStaffSession ? session!.user.fullName : activeEmployee?.name;
 
   const refreshHours = useCallback(() => {
     // This route is behind RequireSession, so locationId is non-null in
@@ -193,28 +208,31 @@ export default function SchedulingContent() {
         // or switching the "Viewing" employee always reflects whether that
         // person actually has an open attendance log right now.
         setClockedIn(activeEmployee ? (byId.get(activeEmployee.id)?.clockedIn ?? false) : false);
+        // `weekly-hours` returns every active user at the venue (queried by
+        // locationId, not by roster/shift membership), so this resolves
+        // correctly even for a STAFF session with no shift in the currently
+        // -viewed week — unlike `mergedRoster.employees`, which wouldn't
+        // contain them at all in that case.
+        setSelfClockedIn(session ? (byId.get(session.user.id)?.clockedIn ?? false) : false);
       })
       .catch(() => setHourStaff([]));
-  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee, locationId]);
+  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee, locationId, session]);
 
   useEffect(() => {
     refreshHours();
   }, [refreshHours]);
 
-  const canClockActiveEmployee =
-    !session || session.user.systemRole !== 'STAFF' || activeEmployee?.id === session.user.id;
-
   const handleClockIn = () => {
-    if (!activeEmployee) return;
+    if (!clockTargetId) return;
     setClockError(null);
-    clockIn(session!.token, activeEmployee.id)
+    clockIn(session!.token, clockTargetId)
       .then(() => refreshHours())
       .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock in.'));
   };
   const handleClockOut = () => {
-    if (!activeEmployee) return;
+    if (!clockTargetId) return;
     setClockError(null);
-    clockOut(session!.token, activeEmployee.id)
+    clockOut(session!.token, clockTargetId)
       .then(() => refreshHours())
       .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock out.'));
   };
@@ -281,10 +299,10 @@ export default function SchedulingContent() {
           <HourTracker
             staff={hourStaff}
             weekLabel={weekLabel}
-            currentEmployeeName={activeEmployee?.name}
-            clockedIn={clockedIn}
-            onClockIn={canClockActiveEmployee ? handleClockIn : undefined}
-            onClockOut={canClockActiveEmployee ? handleClockOut : undefined}
+            currentEmployeeName={clockTargetName}
+            clockedIn={isStaffSession ? selfClockedIn : clockedIn}
+            onClockIn={clockTargetId ? handleClockIn : undefined}
+            onClockOut={clockTargetId ? handleClockOut : undefined}
           />
         </aside>
       </div>
