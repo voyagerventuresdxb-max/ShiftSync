@@ -100,7 +100,13 @@ model User {
   // and is what the roster grid's Management tier is populated from.
   jobTitle          String?    @map("job_title")
   email             String?    @unique
-  phone             String?
+  // Globally unique, not per-Organization — under Decision A1 (one User =
+  // one Location = one login) phone IS the login credential, and the OTP
+  // identity system's existing-account lookup has no location context to
+  // scope by (see findPhoneMatches in server/src/lib/identity.ts). Postgres
+  // allows unlimited NULLs alongside a unique index, so users with no phone
+  // set are unaffected.
+  phone             String?    @unique
   preferredLanguage String?    @map("preferred_language")
   emiratesIdNumber  String?    @map("emirates_id_number")
   laborCardNumber   String?    @map("labor_card_number")
