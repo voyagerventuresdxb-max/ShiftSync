@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
-import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 
 export const rotaTemplatesRouter = Router();
@@ -16,10 +16,18 @@ interface TemplateEntry {
   note?: string;
 }
 
-/** GET /api/rota-templates/:locationId */
-rotaTemplatesRouter.get('/:locationId', async (req, res) => {
+/**
+ * GET /api/rota-templates/:locationId
+ * Session-gated (2026-08-31 — see MEMORY.md): no comment on record ever
+ * justified this staying anonymous, and its only real consumer
+ * (`RotaBuilder.tsx`) has lived inside the session-gated `/schedule` route
+ * since the kiosk-access-fork phase — this reads as an overlooked gap, not
+ * a deliberate one, found by the anonymous-read sweep.
+ */
+rotaTemplatesRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const templates = await prisma.rotaTemplate.findMany({ where: { locationId }, orderBy: { createdAt: 'desc' } });
     return res.status(200).json({
       templates: templates.map((t) => ({

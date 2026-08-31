@@ -130,12 +130,14 @@ export function RotaBuilder() {
   useEffect(() => {
     // No session, no real venue to load templates for — leave the list
     // empty rather than fetching against a hardcoded/wrong location.
-    if (!locationId) {
+    // fetchRotaTemplates became session-gated in the anonymous-read sweep
+    // (2026-08-31 — see MEMORY.md).
+    if (!locationId || !session) {
       setTemplates([]);
       return;
     }
-    fetchRotaTemplates(locationId).then(setTemplates).catch(() => setTemplates([]));
-  }, [locationId]);
+    fetchRotaTemplates(session.token, locationId).then(setTemplates).catch(() => setTemplates([]));
+  }, [locationId, session]);
 
   useEffect(() => {
     // Same reasoning as the templates effect above — this is a supplemental
@@ -167,7 +169,11 @@ export function RotaBuilder() {
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
-    if (userIds.length === 0) {
+    // `/schedule` is RequireSession-gated, so `session` is non-null here in
+    // practice — guarded purely for TypeScript, matching this file's other
+    // session checks. fetchAvailability became session-gated in the
+    // anonymous-read sweep (2026-08-31 — see MEMORY.md).
+    if (userIds.length === 0 || !session) {
       setAvailabilityByKey({});
       return;
     }
@@ -180,7 +186,7 @@ export function RotaBuilder() {
     // change frontend-only rather than adding a new backend endpoint.
     Promise.all(
       userIds.map((userId) =>
-        fetchAvailability(userId, weekStart)
+        fetchAvailability(session.token, userId, weekStart)
           .then((marks) => ({ userId, marks }))
           .catch(() => ({ userId, marks: [] as AvailabilityMarkDto[] })),
       ),
@@ -195,7 +201,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, assignedUserIdsKey]);
+  }, [weekStart, assignedUserIdsKey, session]);
 
   // Every role a staff member actually holds, plus any extra role seen on
   // this week's shifts. Directory-first means a location with staff on

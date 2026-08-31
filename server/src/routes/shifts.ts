@@ -52,7 +52,15 @@ async function venueTimezone(locationId: string): Promise<string> {
   return location?.timezone || DEFAULT_VENUE_TIMEZONE;
 }
 
-/** GET /api/shifts/:locationId?weekStart=YYYY-MM-DD — the 7 days starting weekStart. */
+/**
+ * GET /api/shifts/:locationId?weekStart=YYYY-MM-DD — the 7 days starting weekStart.
+ * Deliberately NOT behind `requireSession` — the kiosk-access-fork decision
+ * (Option 3, 2026-08-31 — see MEMORY.md): Home's anonymous glance board
+ * needs this (via `AppStateContext.tsx`'s shared `refetchWeekShifts`, which
+ * every consumer — signed-in or not — reads from). `/schedule` (the write
+ * surface) requires a session; this read does not. Confirmed still correct
+ * by the follow-up anonymous-read sweep.
+ */
 shiftsRouter.get('/:locationId', async (req, res) => {
   try {
     const { locationId } = req.params;
@@ -331,7 +339,14 @@ shiftsRouter.post('/:locationId/publish', requireSession, async (req, res) => {
   }
 });
 
-/** GET /api/shifts/:locationId/publish-status?weekStart=YYYY-MM-DD */
+/**
+ * GET /api/shifts/:locationId/publish-status?weekStart=YYYY-MM-DD
+ * Deliberately NOT behind `requireSession` — same kiosk-access-fork
+ * reasoning as the GET above (`AppStateContext.tsx`'s `refreshPublishInfo`
+ * also runs for every consumer regardless of session). No sensitive content
+ * either way: just a publish timestamp and a count. Confirmed still correct
+ * by the follow-up anonymous-read sweep.
+ */
 shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
   try {
     const { locationId } = req.params;

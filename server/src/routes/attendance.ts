@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 
 export const attendanceRouter = Router();
@@ -85,10 +85,16 @@ attendanceRouter.post('/clock-out', requireSession, async (req, res) => {
  * Real worked hours per staff member for the week, computed from actual
  * clockIn/clockOut pairs — NOT from the scheduled rota. An open (not yet
  * clocked out) log counts up to "now" so the running total is live.
+ * Session-gated (2026-08-31 — see MEMORY.md): real per-person worked-hours
+ * totals and live clocked-in status are payroll-adjacent data, not
+ * structural metadata — the anonymous-read sweep found this had neither a
+ * session check nor a comment justifying one, unlike this codebase's other
+ * deliberately-anonymous GETs.
  */
-attendanceRouter.get('/:locationId/weekly-hours', async (req, res) => {
+attendanceRouter.get('/:locationId/weekly-hours', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const weekStart = String(req.query.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
 

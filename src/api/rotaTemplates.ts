@@ -33,8 +33,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function fetchRotaTemplates(locationId: string): Promise<RotaTemplateDto[]> {
-  const data = await request<{ templates: RotaTemplateDto[] }>(`/api/rota-templates/${locationId}`);
+export async function fetchRotaTemplates(token: string, locationId: string): Promise<RotaTemplateDto[]> {
+  const data = await request<{ templates: RotaTemplateDto[] }>(`/api/rota-templates/${locationId}`, { headers: withAuth(token) });
   return data.templates;
 }
 

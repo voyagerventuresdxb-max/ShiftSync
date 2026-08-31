@@ -3,6 +3,7 @@ import { motion, type Variants } from 'motion/react';
 import { CheckCircle2, Coffee, Disc3, Hotel, Sparkles, Umbrella, UtensilsCrossed, Wine } from 'lucide-react';
 import ShiftUpload from './ShiftUpload';
 import { fetchLocation, updateLocation, VENUE_TYPES } from '../api/locations';
+import { withAuth } from '../api/identity';
 import { useIdentity } from '../state/IdentityContext';
 
 /**
@@ -131,7 +132,12 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
     setError(null);
     setLoadingInvite(true);
     try {
-      const res = await fetch(`/api/onboarding/${locationId}/invite`);
+      // /onboarding is RequireSession managerOnly-gated, so `session` is
+      // non-null here in practice. The invite-minting endpoint became
+      // session-gated in the anonymous-read sweep (2026-08-31 — see
+      // MEMORY.md) — this call just never sent the token it already had.
+      if (!session) throw new Error('Your session has expired. Please sign in again.');
+      const res = await fetch(`/api/onboarding/${locationId}/invite`, { headers: withAuth(session.token) });
       if (!res.ok) throw new Error('Could not generate the invite link.');
       const data = (await res.json()) as Invite;
       setInvite(data);

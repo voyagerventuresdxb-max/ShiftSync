@@ -3,7 +3,12 @@ import { prisma } from '../lib/prisma.js';
 
 export const shoutoutsRouter = Router();
 
-/** GET /api/shoutouts/:locationId — newest first. */
+/**
+ * GET /api/shoutouts/:locationId — newest first.
+ * Deliberately NOT behind `requireSession` — same kiosk-access-fork decision
+ * as `announcements.ts`'s GET (Option 3, 2026-08-31 — see MEMORY.md).
+ * Confirmed still correct by the follow-up anonymous-read sweep.
+ */
 shoutoutsRouter.get('/:locationId', async (req, res) => {
   try {
     const { locationId } = req.params;

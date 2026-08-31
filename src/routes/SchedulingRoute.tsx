@@ -186,14 +186,16 @@ export default function SchedulingContent() {
   const clockTargetName = isStaffSession ? session!.user.fullName : activeEmployee?.name;
 
   const refreshHours = useCallback(() => {
-    // This route is behind RequireSession, so locationId is non-null in
-    // practice — guarded the same way as the other read-fetches in this
-    // sweep (AppStateContext.tsx's refetchWeekShifts) purely for TypeScript.
-    if (!locationId) {
+    // This route is behind RequireSession, so locationId/session are
+    // non-null in practice — guarded the same way as the other read-fetches
+    // in this sweep (AppStateContext.tsx's refetchWeekShifts) purely for
+    // TypeScript. weekly-hours became session-gated in the anonymous-read
+    // sweep (2026-08-31 — see MEMORY.md).
+    if (!locationId || !session) {
       setHourStaff([]);
       return;
     }
-    fetchWeeklyHours(locationId, mergedRoster.weekStart)
+    fetchWeeklyHours(session.token, locationId, mergedRoster.weekStart)
       .then((entries) => {
         const byId = new Map(entries.map((e) => [e.id, e]));
         setHourStaff(

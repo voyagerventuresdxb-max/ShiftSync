@@ -13,6 +13,7 @@ import {
   type Point,
 } from '../../api/floorPlan';
 import { useIdentity } from '../../state/IdentityContext';
+import { useAuthenticatedBlobUrl } from '../../hooks/useAuthenticatedBlobUrl';
 
 interface Props {
   locationId: string;
@@ -102,7 +103,11 @@ function FloorPlanCanvas({
   onDone: () => void;
 }) {
   const { session } = useIdentity();
-  const [img] = useImage(image.fileUrl);
+  // Floor-plan images are now session-gated (see MEMORY.md) — `useImage`
+  // just needs a URL string to load from, so a fetched `blob:` URL works
+  // exactly like the old plain `image.fileUrl` did, once it's ready.
+  const imageBlobUrl = useAuthenticatedBlobUrl(image.fileUrl, session?.token);
+  const [img] = useImage(imageBlobUrl ?? '');
   const containerRef = useRef<HTMLDivElement>(null);
   const [stageWidth, setStageWidth] = useState(800);
   const [error, setError] = useState<string | null>(null);

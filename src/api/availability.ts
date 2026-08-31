@@ -30,12 +30,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * GET /api/availability/:userId?weekStart=YYYY-MM-DD — unauthenticated by
- * design: RotaBuilder (a manager screen with no staff session) reads other
- * people's marks to render its informational scheduling badges.
+ * GET /api/availability/:userId?weekStart=YYYY-MM-DD — session-gated
+ * (2026-08-31 anonymous-read sweep — see MEMORY.md; this doc comment used to
+ * say "unauthenticated by design" for a reason that stopped being true once
+ * RotaBuilder moved inside the session-gated `/schedule` route). Any signed-
+ * in session can still read another user's marks, matching the server's own
+ * unchanged read model — only anonymous access was closed.
  */
-export async function fetchAvailability(userId: string, weekStart: string): Promise<AvailabilityMarkDto[]> {
-  const data = await request<{ marks: AvailabilityMarkDto[] }>(`/api/availability/${userId}?weekStart=${weekStart}`);
+export async function fetchAvailability(token: string, userId: string, weekStart: string): Promise<AvailabilityMarkDto[]> {
+  const data = await request<{ marks: AvailabilityMarkDto[] }>(`/api/availability/${userId}?weekStart=${weekStart}`, { headers: withAuth(token) });
   return data.marks;
 }
 

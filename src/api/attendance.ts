@@ -39,7 +39,7 @@ export async function clockOut(token: string, userId: string): Promise<{ id: str
   });
 }
 
-export async function fetchWeeklyHours(locationId: string, weekStart: string): Promise<HourStaffEntry[]> {
-  const data = await request<{ staff: HourStaffEntry[] }>(`/api/attendance/${locationId}/weekly-hours?weekStart=${weekStart}`);
+export async function fetchWeeklyHours(token: string, locationId: string, weekStart: string): Promise<HourStaffEntry[]> {
+  const data = await request<{ staff: HourStaffEntry[] }>(`/api/attendance/${locationId}/weekly-hours?weekStart=${weekStart}`, { headers: withAuth(token) });
   return data.staff;
 }

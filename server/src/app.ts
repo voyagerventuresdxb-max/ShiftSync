@@ -3,7 +3,7 @@ import cors from 'cors';
 import { join } from 'node:path';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
-import { floorPlanRouter } from './routes/floorPlan.js';
+import { floorPlanRouter, floorPlanFilesRouter } from './routes/floorPlan.js';
 import { announcementsRouter } from './routes/announcements.js';
 import { shoutoutsRouter } from './routes/shoutouts.js';
 import { swapRequestsRouter } from './routes/swapRequests.js';
@@ -29,16 +29,21 @@ export function createApp() {
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-  // Policy documents are real compliance PDFs, not floor-plan images —
-  // session-gated and location-scoped (see policyDocuments.ts), mounted
-  // BEFORE the generic static fallback below so it intercepts this one
-  // subpath first. Everything else under /uploads (floor-plan images) still
-  // falls through to the unauthenticated static mount — a known, separately
-  // -tracked gap of the same shape, not closed here (see MEMORY.md).
+  // Both uploaded-file subpaths are session-gated and location-scoped (see
+  // policyDocuments.ts / floorPlan.ts), each mounted BEFORE the generic
+  // static fallback below so it intercepts its own subpath first. Anything
+  // under /uploads NOT matching one of these two known subdirectories still
+  // falls through to the unauthenticated static mount below — there are
+  // none today (only floor-plans/ and policy-documents/ exist), but a
+  // future third upload type would need the exact same treatment, not a
+  // silent ride on the generic fallback.
   app.use('/uploads/policy-documents', policyDocumentFilesRouter);
+  app.use('/uploads/floor-plans', floorPlanFilesRouter);
 
-  // Uploaded floor-plan images — served so every staff member's browser can
-  // load the same plan, not just the device that uploaded it.
+  // Kept only as a defensive fallback for the two known subpaths above (both
+  // now intercepted before reaching here) and as an explicit trip-wire for
+  // any future /uploads/<new-subdir> that hasn't been given its own
+  // authenticated route yet — see the comment above.
   app.use('/uploads', express.static(join(import.meta.dirname, '..', 'uploads')));
 
   app.use('/api/schedules', schedulesRouter);

@@ -135,7 +135,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchAvailability(userId, weekStart)
+    fetchAvailability(token, userId, weekStart)
       .then((list) => {
         if (cancelled) return;
         setMarks(Object.fromEntries(list.map((m) => [m.date, m])));
@@ -150,7 +150,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
     return () => {
       cancelled = true;
     };
-  }, [userId, weekStart]);
+  }, [userId, weekStart, token]);
 
   const cycle = async (date: string) => {
     const current = marks[date];

@@ -13,6 +13,7 @@ import {
 } from '../../api/floorPlan';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../../api/staffDirectory';
 import { useIdentity } from '../../state/IdentityContext';
+import { useAuthenticatedBlobUrl } from '../../hooks/useAuthenticatedBlobUrl';
 import StaffChip from './StaffChip';
 import SectionOverlay from './SectionOverlay';
 import SectionDetail from './SectionDetail';
@@ -63,6 +64,9 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   const [date, setDate] = useState(todayIso());
   const [period, setPeriod] = useState<'AM' | 'PM'>('AM');
   const [image, setImage] = useState<FloorPlanImageDto | null>(null);
+  // Floor-plan images are now session-gated (see MEMORY.md) — a plain <img
+  // src> can't attach the Bearer header the file route now requires.
+  const imageBlobUrl = useAuthenticatedBlobUrl(image?.fileUrl, session?.token);
   const [sections, setSections] = useState<AssignmentSectionDto[]>([]);
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -334,7 +338,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         </div>
 
         <div className="fp-canvas-wrap">
-          <img src={image.fileUrl} alt="Venue floor plan" className="fp-image" draggable={false} />
+          {imageBlobUrl && <img src={imageBlobUrl} alt="Venue floor plan" className="fp-image" draggable={false} />}
           {sections.map((section) => (
             <SectionOverlay
               key={section.id}

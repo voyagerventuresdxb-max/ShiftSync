@@ -25,6 +25,37 @@ export const floorPlanRouter = Router();
 
 const UPLOAD_DIR = join(import.meta.dirname, '..', '..', 'uploads', 'floor-plans');
 
+/**
+ * Serves the actual uploaded floor-plan image bytes — mounted directly at
+ * `/uploads/floor-plans` in `app.ts`, BEFORE the generic `/uploads` static
+ * fallback, so it intercepts this one subpath. Same pattern, same reasoning,
+ * as `policyDocumentFilesRouter` in `policyDocuments.ts` (see MEMORY.md):
+ * this app authenticates via a Bearer header, not a cookie, so the file
+ * itself has to be fetched with a real token and rendered from a `blob:`
+ * URL client-side — a plain `<img src>`/`useImage` can't attach one.
+ * `FloorPlanImage.fileUrl` values never change, so no data migration needed.
+ */
+export const floorPlanFilesRouter = Router();
+
+/** Matches the `${randomUUID()}${extFor(...)}` shape every upload is stored under (see `extFor`, below) — rejects anything else before it ever reaches the filesystem. */
+const SAFE_IMAGE_FILENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpe?g|webp|gif)$/i;
+
+floorPlanFilesRouter.get('/:filename', requireSession, async (req, res) => {
+  try {
+    const { filename } = req.params;
+    if (!SAFE_IMAGE_FILENAME_RE.test(filename)) return res.status(404).json({ error: 'Image not found.' });
+
+    const fileUrl = `/uploads/floor-plans/${filename}`;
+    const image = await prisma.floorPlanImage.findFirst({ where: { fileUrl } });
+    if (!ownedOrNotFound(req, res, image, 'Image not found.')) return;
+
+    return res.sendFile(join(UPLOAD_DIR, filename));
+  } catch (err) {
+    console.error('[floorPlan.serveFile] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while serving the image.' });
+  }
+});
+
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
 const upload = multer({
