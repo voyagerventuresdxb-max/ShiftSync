@@ -1,31 +1,15 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, requireManager } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation } from '../middleware/requireSession.js';
+import { VENUE_TYPES } from '../../../shared/venueTypes.js';
 
 export const locationsRouter = Router();
-
-/**
- * Options offered by the onboarding wizard's venue-type card picker.
- * `venueType` itself is a free-text column (not a Prisma enum, same
- * shallow-additive pattern as FloorSection.notes) — this list is enforced
- * here at the API boundary instead.
- */
-export const VENUE_TYPES = [
-  'Fine Dining',
-  'Bar / Lounge',
-  'Nightclub',
-  'Rooftop / Beach Club',
-  'Hotel F&B Outlet',
-  'Café / Bakery',
-] as const;
 
 /** GET /api/locations/:id — any authenticated session, own venue only. */
 locationsRouter.get('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
-    if (id !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, id)) return;
     const location = await prisma.location.findUnique({
       where: { id },
       select: { id: true, name: true, venueType: true },
@@ -47,9 +31,7 @@ locationsRouter.get('/:id', requireSession, async (req, res) => {
 locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
-    if (id !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, id)) return;
     const existing = await prisma.location.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: `Location "${id}" not found.` });
 

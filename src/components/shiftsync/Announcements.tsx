@@ -8,6 +8,7 @@ import {
   type AnnouncementDto,
 } from '@/api/announcements';
 import { useAppState } from '@/state/AppStateContext';
+import { useIdentity } from '@/state/IdentityContext';
 
 /** "3h ago" / "2d ago" — coarse, matches the reference design's tone. */
 function timeAgo(iso: string): string {
@@ -24,6 +25,7 @@ function formatStamp(iso: string): string {
 
 export function Announcements() {
   const { locationId, currentEmployeeId, mergedRoster } = useAppState();
+  const { session } = useIdentity();
   const [items, setItems] = useState<AnnouncementDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +59,12 @@ export function Announcements() {
 
   async function save() {
     if (!draft || !draft.body.trim()) return;
-    if (!draft.id && !locationId) {
+    // Guards on `session`, not `locationId`: since the kiosk-access fork
+    // resolution (2026-08-31, see MEMORY.md), `locationId` alone no longer
+    // implies a real signed-in user — an anonymous kiosk visit to Home can
+    // have a non-null `locationId` via the venue-binding mechanism, and this
+    // error copy's own promise ("must be signed in") has to actually hold.
+    if (!draft.id && !session) {
       setError('You must be signed in to post an announcement.');
       return;
     }

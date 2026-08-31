@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
-import { requireSession, requireManager } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 
 export const joinRouter = Router();
 
@@ -102,9 +102,7 @@ joinRouter.post('/verify-otp', async (req, res) => {
 joinRouter.get('/:locationId/pending', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const requests = await prisma.joinRequest.findMany({
       where: { locationId, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
@@ -140,9 +138,7 @@ joinRouter.patch('/:requestId', requireSession, requireManager, async (req, res)
     }
 
     const jr = await prisma.joinRequest.findUnique({ where: { id: requestId } });
-    if (!jr || jr.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: 'That join request could not be found.' });
-    }
+    if (!ownedOrNotFound(req, res, jr, 'That join request could not be found.')) return;
 
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
 

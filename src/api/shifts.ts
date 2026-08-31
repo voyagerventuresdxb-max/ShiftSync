@@ -1,4 +1,5 @@
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export interface ShiftDto {
   id: string;
@@ -37,27 +38,31 @@ export async function fetchWeekShifts(locationId: string, weekStart: string): Pr
   return data.shifts;
 }
 
-export async function createShift(input: {
-  locationId: string;
-  roleId: string;
-  userId?: string | null;
-  date: string;
-  start: string;
-  end: string;
-  breakMinutes?: number;
-  briefingNote?: string;
-  sidework?: string[];
-  createdById?: string;
-}): Promise<ShiftDto> {
+export async function createShift(
+  token: string,
+  input: {
+    locationId: string;
+    roleId: string;
+    userId?: string | null;
+    date: string;
+    start: string;
+    end: string;
+    breakMinutes?: number;
+    briefingNote?: string;
+    sidework?: string[];
+    createdById?: string;
+  },
+): Promise<ShiftDto> {
   const data = await request<{ shift: ShiftDto }>('/api/shifts', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(input),
   });
   return data.shift;
 }
 
 export async function updateShift(
+  token: string,
   id: string,
   patch: Partial<{
     roleId: string;
@@ -73,36 +78,44 @@ export async function updateShift(
 ): Promise<ShiftDto> {
   const data = await request<{ shift: ShiftDto }>(`/api/shifts/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(patch),
   });
   return data.shift;
 }
 
-export async function deleteShift(id: string, actorId?: string): Promise<void> {
+export async function deleteShift(token: string, id: string, actorId?: string): Promise<void> {
   await request(`/api/shifts/${id}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ actorId: actorId ?? null }),
   });
 }
 
-export async function bulkCreateShifts(input: {
-  locationId: string;
-  createdById?: string;
-  shifts: { roleId: string; userId?: string | null; date: string; start: string; end: string; breakMinutes?: number }[];
-}): Promise<{ shifts: ShiftDto[]; createdCount: number }> {
+export async function bulkCreateShifts(
+  token: string,
+  input: {
+    locationId: string;
+    createdById?: string;
+    shifts: { roleId: string; userId?: string | null; date: string; start: string; end: string; breakMinutes?: number }[];
+  },
+): Promise<{ shifts: ShiftDto[]; createdCount: number }> {
   return request('/api/shifts/bulk', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(input),
   });
 }
 
-export async function publishWeek(locationId: string, weekStart: string, publishedById?: string): Promise<{ publishedAt: string; notifiedCount: number }> {
+export async function publishWeek(
+  token: string,
+  locationId: string,
+  weekStart: string,
+  publishedById?: string,
+): Promise<{ publishedAt: string; notifiedCount: number }> {
   return request(`/api/shifts/${locationId}/publish`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ weekStart, publishedById: publishedById ?? null }),
   });
 }

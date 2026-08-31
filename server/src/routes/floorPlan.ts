@@ -5,7 +5,8 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
 import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasterize.js';
-import { requireSession, requireManager } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 /**
  * Floor Plan — Sections & Duties.
@@ -60,9 +61,7 @@ floorPlanRouter.post('/upload', requireSession, requireManager, upload.single('f
     const locationId = String(req.body?.locationId ?? '').trim();
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
@@ -132,9 +131,7 @@ floorPlanRouter.post('/sections', requireSession, requireManager, async (req, re
     if (!Number.isFinite(paxCapacity) || paxCapacity < 0) {
       return res.status(400).json({ error: 'paxCapacity must be a non-negative number.' });
     }
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
 
     const image = await prisma.floorPlanImage.findUnique({ where: { id: floorPlanImageId } });
     if (!image || image.locationId !== locationId) {
@@ -157,9 +154,7 @@ floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, as
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!existing || existing.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: `Section "${sectionId}" not found.` });
-    }
+    if (!ownedOrNotFound(req, res, existing, `Section "${sectionId}" not found.`)) return;
 
     const data: { label?: string; polygon?: { x: number; y: number }[]; paxCapacity?: number; notes?: string | null } = {};
     if (req.body?.label !== undefined) {
@@ -202,9 +197,7 @@ floorPlanRouter.delete('/sections/:sectionId', requireSession, requireManager, a
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!existing || existing.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: `Section "${sectionId}" not found.` });
-    }
+    if (!ownedOrNotFound(req, res, existing, `Section "${sectionId}" not found.`)) return;
     await prisma.floorSection.delete({ where: { id: sectionId } });
     return res.status(204).send();
   } catch (err) {
@@ -222,9 +215,7 @@ floorPlanRouter.delete('/sections/:sectionId', requireSession, requireManager, a
 floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const image = await prisma.floorPlanImage.findFirst({
       where: { locationId },
       orderBy: { createdAt: 'desc' },
@@ -251,9 +242,7 @@ floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
 floorPlanRouter.get('/:locationId/assignments', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const date = String(req.query.date ?? '').trim();
     const period = String(req.query.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -337,10 +326,7 @@ floorPlanRouter.post('/assignments', requireSession, requireManager, async (req,
     const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
 
     const section = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!section) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
-    if (section.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: `Section "${sectionId}" not found.` });
-    }
+    if (!ownedOrNotFound(req, res, section, `Section "${sectionId}" not found.`)) return;
     const staff = await prisma.user.findUnique({ where: { id: staffId } });
     if (!staff || staff.locationId !== section.locationId) {
       return res.status(404).json({ error: `Staff member "${staffId}" not found.` });
@@ -356,16 +342,14 @@ floorPlanRouter.post('/assignments', requireSession, requireManager, async (req,
       include: { staff: { select: { id: true, fullName: true } } },
     });
 
-    await prisma.auditLog.create({
-      data: {
-        locationId: section.locationId,
-        actorId: createdById,
-        shiftId: null,
-        action: 'SHIFT_ASSIGNED',
-        entityType: 'SectionAssignment',
-        entityId: assignment.id,
-        note: `${staff.fullName} assigned to ${section.label} (${period})${dutyLabel ? ` — ${dutyLabel}` : ''}`,
-      },
+    await writeAuditLog(prisma, {
+      locationId: section.locationId,
+      actorId: createdById,
+      shiftId: null,
+      action: 'SHIFT_ASSIGNED',
+      entityType: 'SectionAssignment',
+      entityId: assignment.id,
+      note: `${staff.fullName} assigned to ${section.label} (${period})${dutyLabel ? ` — ${dutyLabel}` : ''}`,
     });
 
     return res.status(201).json({
@@ -394,21 +378,17 @@ floorPlanRouter.delete('/assignments/:assignmentId', requireSession, requireMana
       include: { section: true, staff: { select: { fullName: true } } },
     });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
-    if (existing.section.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
-    }
+    if (!ownedOrNotFound(req, res, existing.section, `Assignment "${assignmentId}" not found.`)) return;
 
     const actorId = req.user!.id;
-    await prisma.auditLog.create({
-      data: {
-        locationId: existing.section.locationId,
-        actorId,
-        shiftId: null,
-        action: 'SHIFT_ASSIGNED',
-        entityType: 'SectionAssignment',
-        entityId: assignmentId,
-        note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
-      },
+    await writeAuditLog(prisma, {
+      locationId: existing.section.locationId,
+      actorId,
+      shiftId: null,
+      action: 'SHIFT_ASSIGNED',
+      entityType: 'SectionAssignment',
+      entityId: assignmentId,
+      note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
     });
 
     await prisma.sectionAssignment.delete({ where: { id: assignmentId } });
@@ -433,9 +413,7 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requi
       include: { section: true, staff: { select: { fullName: true } } },
     });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
-    if (existing.section.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
-    }
+    if (!ownedOrNotFound(req, res, existing.section, `Assignment "${assignmentId}" not found.`)) return;
 
     const actorId = req.user!.id;
     const notifiedAt = new Date();
@@ -444,16 +422,14 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requi
       data: { notifiedAt },
     });
 
-    await prisma.auditLog.create({
-      data: {
-        locationId: existing.section.locationId,
-        actorId,
-        shiftId: null,
-        action: 'ASSIGNMENT_NOTIFIED',
-        entityType: 'SectionAssignment',
-        entityId: assignmentId,
-        note: `${existing.staff.fullName} marked notified for ${existing.section.label} (${existing.period})`,
-      },
+    await writeAuditLog(prisma, {
+      locationId: existing.section.locationId,
+      actorId,
+      shiftId: null,
+      action: 'ASSIGNMENT_NOTIFIED',
+      entityType: 'SectionAssignment',
+      entityId: assignmentId,
+      note: `${existing.staff.fullName} marked notified for ${existing.section.label} (${existing.period})`,
     });
 
     return res.status(200).json({ notifiedAt: updated.notifiedAt!.toISOString() });
@@ -476,9 +452,7 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requi
 floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const dateStr = String(req.body?.shiftDate ?? '').trim();
     const period = String(req.body?.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
@@ -497,16 +471,14 @@ floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, asy
     });
 
     if (result.count > 0) {
-      await prisma.auditLog.create({
-        data: {
-          locationId,
-          actorId,
-          shiftId: null,
-          action: 'ASSIGNMENT_NOTIFIED',
-          entityType: 'SectionAssignment',
-          entityId: locationId,
-          note: `Published & notified ${result.count} assignment${result.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
-        },
+      await writeAuditLog(prisma, {
+        locationId,
+        actorId,
+        shiftId: null,
+        action: 'ASSIGNMENT_NOTIFIED',
+        entityType: 'SectionAssignment',
+        entityId: locationId,
+        note: `Published & notified ${result.count} assignment${result.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
       });
     }
 

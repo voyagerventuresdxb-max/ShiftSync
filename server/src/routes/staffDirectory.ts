@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, requireManager } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -60,9 +61,7 @@ function toDto(u: {
 staffDirectoryRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const users = await prisma.user.findMany({
       where: { locationId },
       orderBy: { fullName: 'asc' },
@@ -102,15 +101,13 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
       data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
       include: { role: true, location: { select: { name: true } } },
     });
-    await prisma.auditLog.create({
-      data: {
-        locationId: req.user!.locationId,
-        actorId: req.user!.id,
-        action: 'STAFF_CREATED',
-        entityType: 'User',
-        entityId: user.id,
-        note: `Added ${user.fullName} to the staff directory`,
-      },
+    await writeAuditLog(prisma, {
+      locationId: req.user!.locationId,
+      actorId: req.user!.id,
+      action: 'STAFF_CREATED',
+      entityType: 'User',
+      entityId: user.id,
+      note: `Added ${user.fullName} to the staff directory`,
     });
     return res.status(201).json(toDto(user));
   } catch (err) {
@@ -175,9 +172,7 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
     }
 
     const existing = await prisma.user.findUnique({ where: { id: userId } });
-    if (!existing || existing.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: `Staff member "${userId}" not found.` });
-    }
+    if (!ownedOrNotFound(req, res, existing, `Staff member "${userId}" not found.`)) return;
 
     // Employment status is the isActive + terminatedAt pair, so the toggle has
     // to move both — otherwise terminatedAt stays permanently null and the two
@@ -192,15 +187,13 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data,
       include: { role: true, location: { select: { name: true } } },
     });
-    await prisma.auditLog.create({
-      data: {
-        locationId: req.user!.locationId,
-        actorId: req.user!.id,
-        action: 'STAFF_UPDATED',
-        entityType: 'User',
-        entityId: user.id,
-        note: `Updated ${user.fullName}'s staff record`,
-      },
+    await writeAuditLog(prisma, {
+      locationId: req.user!.locationId,
+      actorId: req.user!.id,
+      action: 'STAFF_UPDATED',
+      entityType: 'User',
+      entityId: user.id,
+      note: `Updated ${user.fullName}'s staff record`,
     });
     return res.status(200).json(toDto(user));
   } catch (err) {

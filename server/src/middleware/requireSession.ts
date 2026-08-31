@@ -49,3 +49,44 @@ export function requireManager(req: Request, res: Response, next: NextFunction) 
   }
   next();
 }
+
+/**
+ * 403s a route whose resource id comes directly from the request (a URL
+ * param or body field), not a looked-up entity, when it doesn't match the
+ * caller's own venue. MUST run after `requireSession`. Consolidates what
+ * was ~11 hand-repeated copies of this exact check across `locations.ts`,
+ * `staffDirectory.ts`, `swapRequests.ts`, `floorPlan.ts`, `shifts.ts`, and
+ * `join.ts` (2026-08-31 tech-debt consolidation — see MEMORY.md) into one
+ * place, so a future mutation route can't drop the check by omission.
+ * Returns whether the caller may proceed; a `false` return has already sent
+ * the 403.
+ */
+export function assertOwnsLocation(req: Request, res: Response, locationId: string): boolean {
+  if (locationId !== req.user!.locationId) {
+    res.status(403).json({ error: 'You do not have access to this location.' });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 404s a route whose resource was looked up by id, when either the lookup
+ * found nothing OR the entity belongs to a different venue — the same 404
+ * either way, on purpose: a 403 here would leak "this id exists, just isn't
+ * yours" to a caller probing another tenant's ids. A type predicate, so a
+ * passing call narrows `entity` to non-null for the rest of the handler.
+ * MUST run after `requireSession`. Same consolidation as
+ * `assertOwnsLocation`, above, for its sibling pattern.
+ */
+export function ownedOrNotFound<T extends { locationId: string }>(
+  req: Request,
+  res: Response,
+  entity: T | null,
+  notFoundMessage: string,
+): entity is T {
+  if (!entity || entity.locationId !== req.user!.locationId) {
+    res.status(404).json({ error: notFoundMessage });
+    return false;
+  }
+  return true;
+}

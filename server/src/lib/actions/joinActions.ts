@@ -1,4 +1,5 @@
 import { prisma } from '../prisma.js';
+import { writeAuditLog } from '../auditLog.js';
 
 /**
  * Approves or declines a PENDING join request.
@@ -28,15 +29,13 @@ export async function decideJoinRequest(input: {
       where: { id: input.requestId },
       data: { status: 'DECLINED', reviewedById: input.reviewedById, reviewedAt: new Date() },
     });
-    await prisma.auditLog.create({
-      data: {
-        locationId: existing.locationId,
-        actorId: input.reviewedById,
-        action: 'JOIN_DECLINED',
-        entityType: 'JoinRequest',
-        entityId: input.requestId,
-        note: `Declined join request for ${existing.fullName}`,
-      },
+    await writeAuditLog(prisma, {
+      locationId: existing.locationId,
+      actorId: input.reviewedById,
+      action: 'JOIN_DECLINED',
+      entityType: 'JoinRequest',
+      entityId: input.requestId,
+      note: `Declined join request for ${existing.fullName}`,
     });
     return { result: 'ok', status: 'DECLINED' };
   }
@@ -49,15 +48,13 @@ export async function decideJoinRequest(input: {
     where: { id: input.requestId },
     data: { status: 'APPROVED', reviewedById: input.reviewedById, reviewedAt: new Date(), createdUserId: created.id },
   });
-  await prisma.auditLog.create({
-    data: {
-      locationId: existing.locationId,
-      actorId: input.reviewedById,
-      action: 'JOIN_APPROVED',
-      entityType: 'JoinRequest',
-      entityId: input.requestId,
-      note: `Approved join request for ${existing.fullName} — created User ${created.id}`,
-    },
+  await writeAuditLog(prisma, {
+    locationId: existing.locationId,
+    actorId: input.reviewedById,
+    action: 'JOIN_APPROVED',
+    entityType: 'JoinRequest',
+    entityId: input.requestId,
+    note: `Approved join request for ${existing.fullName} — created User ${created.id}`,
   });
   return { result: 'ok', status: 'APPROVED', userId: created.id };
 }

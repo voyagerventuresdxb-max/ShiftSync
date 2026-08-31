@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Award, Plus, X } from 'lucide-react';
 import { fetchShoutouts, postShoutout, type ShoutoutDto } from '@/api/shoutouts';
 import { useAppState } from '@/state/AppStateContext';
+import { useIdentity } from '@/state/IdentityContext';
 import { weekdayOf } from '@/engine/rosterView';
 
 function initials(name: string): string {
@@ -17,6 +18,7 @@ function timeAgo(iso: string): string {
 
 export function Shoutouts() {
   const { locationId, mergedRoster, currentEmployeeId } = useAppState();
+  const { session } = useIdentity();
   const [items, setItems] = useState<ShoutoutDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +60,10 @@ export function Shoutouts() {
 
   async function submit() {
     if (!employeeId || !shiftId || !note.trim()) return;
-    if (!locationId) {
+    // Guards on `session`, not `locationId` — see the matching comment in
+    // Announcements.tsx's `save()` for why this changed with the
+    // kiosk-access fork resolution (2026-08-31, MEMORY.md).
+    if (!session || !locationId) {
       setError('You must be signed in to give a shoutout.');
       return;
     }

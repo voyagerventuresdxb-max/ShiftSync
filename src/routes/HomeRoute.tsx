@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PredictiveBanner } from '../components/shiftsync/PredictiveBanner';
 import { Announcements } from '../components/shiftsync/Announcements';
 import { Shoutouts } from '../components/shiftsync/Shoutouts';
@@ -5,6 +7,7 @@ import { ApprovalsPanel, type ApprovalRequestView } from '../components/shiftsyn
 import { SafetyValve } from '../components/shiftsync/SafetyValve';
 import { weekdayOf } from '../engine/rosterView';
 import { useAppState } from '../state/AppStateContext';
+import { useIdentity } from '../state/IdentityContext';
 
 function formatDayMonth(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
@@ -12,7 +15,20 @@ function formatDayMonth(iso: string): string {
 }
 
 export default function HomeContent() {
-  const { mergedRoster, swapRequests, handleDecideRequest } = useAppState();
+  const { mergedRoster, swapRequests, handleDecideRequest, bindAnonymousVenue } = useAppState();
+  const { session } = useIdentity();
+  const [searchParams] = useSearchParams();
+
+  // Adopts a bookmarked `/?venue=<locationId>` kiosk link into the
+  // persisted anonymous-venue binding — see `api/venueBinding.ts`. Only
+  // while signed out: a manager's own session always determines their
+  // venue, and must never be overridden by a stray `?venue=` param (e.g. a
+  // kiosk link opened in the same browser a manager is also logged in on).
+  useEffect(() => {
+    if (session) return;
+    const venueParam = searchParams.get('venue');
+    if (venueParam) bindAnonymousVenue(venueParam);
+  }, [session, searchParams, bindAnonymousVenue]);
 
   const employeeName = (id: string) => mergedRoster.employees.find((e) => e.id === id)?.name ?? 'Unknown';
 

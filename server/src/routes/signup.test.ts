@@ -132,9 +132,6 @@ test('POST /api/signup/verify-otp: a phone that already matches an existing acti
 
   const { plainCode } = await createOtpCode(submittedPhone, 'SIGNUP');
 
-  const orgCountBefore = await prisma.organization.count();
-  const locationCountBefore = await prisma.location.count();
-
   try {
     await withServer(async (baseUrl) => {
       const res = await fetch(`${baseUrl}/api/signup/verify-otp`, {
@@ -153,9 +150,22 @@ test('POST /api/signup/verify-otp: a phone that already matches an existing acti
       assert.match(body.error, /log in/i);
     });
 
-    // Nothing new was created anywhere — verify via a fresh DB re-query.
-    assert.equal(await prisma.organization.count(), orgCountBefore, 'no new Organization may be created');
-    assert.equal(await prisma.location.count(), locationCountBefore, 'no new Location may be created');
+    // Nothing new was created anywhere — verify via a fresh DB re-query,
+    // scoped to this test's own distinctively-named venue rather than a
+    // raw global count. `node --test` runs test files concurrently against
+    // the same live DB, and other files (shifts.test.ts, floorPlan.test.ts)
+    // create/delete their own throwaway Location rows mid-run — a global
+    // `count()` snapshot taken before/after is a real race against that
+    // unrelated churn, not a check on this test's own effect. Same class of
+    // hazard as the unordered-`findFirst()` race already fixed elsewhere
+    // (see MEMORY.md); name-scoping here is the fix, not a workaround,
+    // since venueName ends up as both Organization.name and Location.name
+    // (confirmed by the "real new signup" test above) and this test's own
+    // venueName is unique to it.
+    const leakedOrg = await prisma.organization.findFirst({ where: { name: '__task-signup-test__ duplicate venue' } });
+    assert.equal(leakedOrg, null, 'no new Organization may be created');
+    const leakedLocation = await prisma.location.findFirst({ where: { name: '__task-signup-test__ duplicate venue' } });
+    assert.equal(leakedLocation, null, 'no new Location may be created');
     const leaked = await prisma.user.findMany({
       where: { fullName: '__task-signup-test__ duplicate signer' },
     });

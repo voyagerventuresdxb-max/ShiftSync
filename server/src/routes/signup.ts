@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { findPhoneMatches } from './identity.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const signupRouter = Router();
 
@@ -46,10 +47,10 @@ signupRouter.post('/request-otp', async (req, res) => {
  * On success, creates a brand-new Organization + Location + User(OWNER) in
  * one transaction — a partial failure here (e.g. the User create failing
  * after Org/Location already committed) would otherwise leave an orphaned,
- * ownerless venue behind. This is deliberately the first of a 4-screen
- * wizard (Welcome → Venue → Roster → Invite); the Venue screen collects the
- * venue's real emirate/address/venueType right after this, so only the bare
- * minimum is collected here.
+ * ownerless venue behind. This is deliberately the first of a 5-screen
+ * wizard (Welcome → Venue → Roster → Review → Invite); the Venue screen
+ * collects the venue's real emirate/address/venueType right after this, so
+ * only the bare minimum is collected here.
  */
 signupRouter.post('/verify-otp', async (req, res) => {
   try {
@@ -86,7 +87,7 @@ signupRouter.post('/verify-otp', async (req, res) => {
     // from the column default. venueType/emirate/address are left unset —
     // venueType specifically must stay null, not venueName: it's a
     // categorical value from the wizard's own Venue-step card-select
-    // (VENUE_TYPES in locations.ts — "Fine Dining", "Bar / Lounge", etc.),
+    // (VENUE_TYPES in shared/venueTypes.ts — "Fine Dining", "Bar / Lounge", etc.),
     // not the venue's own name, and that step collects it next.
     const { user } = await prisma.$transaction(async (tx) => {
       const organization = await tx.organization.create({ data: { name: venueName } });
@@ -101,15 +102,13 @@ signupRouter.post('/verify-otp', async (req, res) => {
       // per the task brief's explicit go-ahead rather than adding a new enum
       // value mid-task. entityType is 'Location' since the row's real subject
       // is the new venue's creation, not just the User row.
-      await tx.auditLog.create({
-        data: {
-          locationId: location.id,
-          actorId: user.id,
-          action: 'STAFF_CREATED',
-          entityType: 'Location',
-          entityId: location.id,
-          note: `[signup] New venue "${venueName}" created via self-service signup; owner: ${fullName}.`,
-        },
+      await writeAuditLog(tx, {
+        locationId: location.id,
+        actorId: user.id,
+        action: 'STAFF_CREATED',
+        entityType: 'Location',
+        entityId: location.id,
+        note: `[signup] New venue "${venueName}" created via self-service signup; owner: ${fullName}.`,
       });
       return { location, user };
     });

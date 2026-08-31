@@ -3,20 +3,13 @@
  */
 import { withAuth } from './identity';
 
+export { VENUE_TYPES } from '../../shared/venueTypes';
+
 export interface LocationSummary {
   id: string;
   name: string;
   venueType: string | null;
 }
-
-export const VENUE_TYPES = [
-  'Fine Dining',
-  'Bar / Lounge',
-  'Nightclub',
-  'Rooftop / Beach Club',
-  'Hotel F&B Outlet',
-  'Café / Bakery',
-] as const;
 
 export class ApiError extends Error {
   constructor(

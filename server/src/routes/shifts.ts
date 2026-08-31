@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
+import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const shiftsRouter = Router();
 
@@ -75,10 +77,19 @@ shiftsRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/shifts — body: { locationId, roleId, userId?, date, start, end, breakMinutes?, briefingNote?, sidework?, createdById? } */
-shiftsRouter.post('/', async (req, res) => {
+/**
+ * POST /api/shifts — body: { roleId, userId?, date, start, end, breakMinutes?, briefingNote?, sidework?, createdById? }
+ * Session-gated (2026-08-31, kiosk-access fork resolution — see MEMORY.md):
+ * the Shift Editor is a write surface and `locationId`/the acting user must
+ * come from the caller's own session, not a client-supplied value, the same
+ * way `swapRequests.ts`'s POST already resolves `requestedById`.
+ * `createdById` in the body is only ever honored for a MANAGER/OWNER session
+ * filing on behalf of the staff member selected in the Shift Editor's
+ * "Viewing" dropdown — a STAFF session can only ever be attributed as itself.
+ */
+shiftsRouter.post('/', requireSession, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const roleId = String(req.body?.roleId ?? '').trim();
     const userId = req.body?.userId ? String(req.body.userId).trim() : null;
     const date = String(req.body?.date ?? '').trim();
@@ -87,9 +98,11 @@ shiftsRouter.post('/', async (req, res) => {
     const breakMinutes = Number(req.body?.breakMinutes ?? 0);
     const briefingNote = req.body?.briefingNote ? String(req.body.briefingNote).trim() : null;
     const sidework = Array.isArray(req.body?.sidework) ? req.body.sidework.map(String) : [];
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
 
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!roleId) return res.status(400).json({ error: 'roleId is required.' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date is required, as YYYY-MM-DD.' });
     if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
@@ -112,9 +125,7 @@ shiftsRouter.post('/', async (req, res) => {
       data: { locationId, roleId, userId, createdById, date: new Date(`${date}T00:00:00.000Z`), startTime, endTime, breakMinutes, managerNotes: briefingNote, sidework, status: 'DRAFT' },
       include: SHIFT_INCLUDE,
     });
-    await prisma.auditLog.create({
-      data: { locationId, actorId: createdById, shiftId: created.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: created.id },
-    });
+    await writeAuditLog(prisma, { locationId, actorId: createdById, shiftId: created.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: created.id });
     return res.status(201).json({ shift: shiftToDto(created, timezone) });
   } catch (err) {
     console.error('[shifts.create] failed', err);
@@ -122,12 +133,16 @@ shiftsRouter.post('/', async (req, res) => {
   }
 });
 
-/** PATCH /api/shifts/:id — any subset of { roleId, userId, date, start, end, breakMinutes, briefingNote, sidework, actorId } */
-shiftsRouter.patch('/:id', async (req, res) => {
+/**
+ * PATCH /api/shifts/:id — any subset of { roleId, userId, date, start, end, breakMinutes, briefingNote, sidework, actorId }
+ * Session-gated; `actorId` in the body is only honored for a MANAGER/OWNER
+ * session (same "Viewing" on-behalf-of pattern as POST /, above).
+ */
+shiftsRouter.patch('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Shift "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
 
     const timezone = await venueTimezone(existing.locationId);
     const data: Record<string, unknown> = {};
@@ -164,11 +179,12 @@ shiftsRouter.patch('/:id', async (req, res) => {
       data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
     }
 
-    const actorId = req.body?.actorId ? String(req.body.actorId) : null;
+    const actorId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
     const updated = await prisma.shift.update({ where: { id }, data, include: SHIFT_INCLUDE });
-    await prisma.auditLog.create({
-      data: { locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id },
-    });
+    await writeAuditLog(prisma, { locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id });
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });
   } catch (err) {
     console.error('[shifts.update] failed', err);
@@ -176,16 +192,17 @@ shiftsRouter.patch('/:id', async (req, res) => {
   }
 });
 
-/** DELETE /api/shifts/:id — body (optional): { actorId } */
-shiftsRouter.delete('/:id', async (req, res) => {
+/** DELETE /api/shifts/:id — body (optional): { actorId }. Session-gated; same on-behalf-of rule as PATCH, above. */
+shiftsRouter.delete('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Shift "${id}" not found.` });
-    const actorId = req.body?.actorId ? String(req.body.actorId) : null;
-    await prisma.auditLog.create({
-      data: { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id },
-    });
+    if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
+    const actorId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    await writeAuditLog(prisma, { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id });
     await prisma.shift.delete({ where: { id } });
     return res.status(204).send();
   } catch (err) {
@@ -194,14 +211,20 @@ shiftsRouter.delete('/:id', async (req, res) => {
   }
 });
 
-/** POST /api/shifts/bulk — body: { locationId, createdById?, shifts: [{ roleId, userId?, date, start, end, breakMinutes? }] } */
-shiftsRouter.post('/bulk', async (req, res) => {
+/**
+ * POST /api/shifts/bulk — body: { createdById?, shifts: [{ roleId, userId?, date, start, end, breakMinutes? }] }
+ * Session-gated; `locationId` comes from the session, and `createdById` in
+ * the body is only honored for a MANAGER/OWNER session — same rules as POST /, above.
+ */
+shiftsRouter.post('/bulk', requireSession, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const locationId = req.user!.locationId;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
     type BulkShiftRow = { roleId?: unknown; userId?: unknown; date: string; start: string; end: string; breakMinutes?: number };
     const rows = (Array.isArray(req.body?.shifts) ? req.body.shifts : []) as BulkShiftRow[];
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (rows.length === 0) return res.status(400).json({ error: 'shifts must be a non-empty array.' });
 
     // Validate every row's roleId/userId up front — same existence + same-
@@ -257,13 +280,21 @@ shiftsRouter.post('/bulk', async (req, res) => {
   }
 });
 
-/** POST /api/shifts/:locationId/publish — body: { weekStart, publishedById? } */
-shiftsRouter.post('/:locationId/publish', async (req, res) => {
+/**
+ * POST /api/shifts/:locationId/publish — body: { weekStart, publishedById? }
+ * Session-gated, scoped to the caller's own location; `publishedById` in the
+ * body is only honored for a MANAGER/OWNER session — same rules as POST /, above.
+ */
+shiftsRouter.post('/:locationId/publish', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const weekStart = String(req.body?.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
-    const publishedById = req.body?.publishedById ? String(req.body.publishedById).trim() : null;
+    const publishedById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.publishedById ? String(req.body.publishedById).trim() : '') || req.user!.id;
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });

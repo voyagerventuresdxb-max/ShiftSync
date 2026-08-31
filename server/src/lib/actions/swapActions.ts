@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js';
+import { writeAuditLog } from '../auditLog.js';
 
 /**
  * The Prisma `include` every swap-request read uses. Kept in one place so the
@@ -109,16 +110,14 @@ export async function decideSwapRequest(input: {
         include: SWAP_REQUEST_INCLUDE,
       });
 
-      await tx.auditLog.create({
-        data: {
-          locationId: existing.shift.locationId,
-          actorId: input.reviewedById,
-          shiftId: existing.shiftId,
-          action: input.decision === 'approved' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
-          entityType: 'ShiftSwapRequest',
-          entityId: input.id,
-          note: managerNote,
-        },
+      await writeAuditLog(tx, {
+        locationId: existing.shift.locationId,
+        actorId: input.reviewedById,
+        shiftId: existing.shiftId,
+        action: input.decision === 'approved' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
+        entityType: 'ShiftSwapRequest',
+        entityId: input.id,
+        note: managerNote,
       });
 
       return updatedRequest;

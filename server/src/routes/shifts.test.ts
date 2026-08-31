@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
+import { issueSession } from '../lib/identity.js';
 
 const prisma = new PrismaClient();
 
@@ -20,6 +21,12 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
   }
 }
 
+/** Issues a real bearer session token for a real User, exactly like a login would. */
+async function sessionFor(userId: string): Promise<string> {
+  const { plainToken } = await issueSession(userId);
+  return plainToken;
+}
+
 test('PATCH /api/shifts/:id rejects a roleId that belongs to a different location (404, not a raw FK 500)', async () => {
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
@@ -30,6 +37,9 @@ test('PATCH /api/shifts/:id rejects a roleId that belongs to a different locatio
     data: { organizationId: location!.organizationId, name: '__task2-test__ other venue', timezone: 'Asia/Dubai' },
   });
   const otherRole = await prisma.role.create({ data: { locationId: otherLocation.id, name: '__task2-test__ cross-location role' } });
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task2-test__ manager', systemRole: 'MANAGER' },
+  });
 
   const shift = await prisma.shift.create({
     data: {
@@ -43,10 +53,11 @@ test('PATCH /api/shifts/:id rejects a roleId that belongs to a different locatio
   });
 
   try {
+    const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
       const res = await fetch(`${baseUrl}/api/shifts/${shift.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ roleId: otherRole.id }),
       });
       assert.equal(res.status, 404, 'a role from a different location must be rejected with 404, not applied or 500ed');
@@ -60,6 +71,7 @@ test('PATCH /api/shifts/:id rejects a roleId that belongs to a different locatio
   } finally {
     await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
     await prisma.role.delete({ where: { id: otherRole.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
     await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
   }
 });
@@ -75,6 +87,9 @@ test('PATCH /api/shifts/:id rejects a userId that belongs to a different locatio
   const otherUser = await prisma.user.create({
     data: { locationId: otherLocation.id, fullName: '__task2-test__ Cross-Location Staff', systemRole: 'STAFF' },
   });
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task2-test__ manager 2', systemRole: 'MANAGER' },
+  });
 
   const shift = await prisma.shift.create({
     data: {
@@ -88,10 +103,11 @@ test('PATCH /api/shifts/:id rejects a userId that belongs to a different locatio
   });
 
   try {
+    const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
       const res = await fetch(`${baseUrl}/api/shifts/${shift.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ userId: otherUser.id }),
       });
       assert.equal(res.status, 404, 'a user from a different location must be rejected with 404');
@@ -101,6 +117,7 @@ test('PATCH /api/shifts/:id rejects a userId that belongs to a different locatio
   } finally {
     await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
     await prisma.user.delete({ where: { id: otherUser.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
     await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
   }
 });
@@ -114,18 +131,21 @@ test('POST /api/shifts/bulk rejects the whole batch when one row references a ro
     data: { organizationId: location!.organizationId, name: '__task2-test__ other venue 3', timezone: 'Asia/Dubai' },
   });
   const otherRole = await prisma.role.create({ data: { locationId: otherLocation.id, name: '__task2-test__ cross-location role 2' } });
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task2-test__ manager 3', systemRole: 'MANAGER' },
+  });
 
   // A marker date unlikely to collide with real seed data, so we can assert
   // nothing at all landed in the DB even for the batch's otherwise-valid row.
   const markerDate = '2031-03-03';
 
   try {
+    const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
       const res = await fetch(`${baseUrl}/api/shifts/bulk`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          locationId: location!.id,
           shifts: [
             { roleId: role!.id, date: markerDate, start: '09:00', end: '17:00' }, // valid
             { roleId: otherRole.id, date: markerDate, start: '10:00', end: '18:00' }, // invalid: wrong location
@@ -142,6 +162,7 @@ test('POST /api/shifts/bulk rejects the whole batch when one row references a ro
   } finally {
     await prisma.shift.deleteMany({ where: { locationId: location!.id, date: new Date(`${markerDate}T00:00:00.000Z`) } });
     await prisma.role.delete({ where: { id: otherRole.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
     await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
   }
 });

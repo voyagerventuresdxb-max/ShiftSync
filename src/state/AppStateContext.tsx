@@ -7,6 +7,7 @@ import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
+import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
 import { useIdentity } from './IdentityContext';
 
 const config: VenueConfig = {
@@ -21,8 +22,24 @@ const config: VenueConfig = {
 
 interface AppStateValue {
   config: VenueConfig;
-  /** The real logged-in session's venue — null with no session. The single source every consumer should read instead of a hardcoded id. */
+  /**
+   * The venue every read-effect should scope itself to — a real session's
+   * venue when signed in, otherwise the anonymous kiosk venue bound via
+   * `bindAnonymousVenue` (see below), otherwise null. Both sources resolve
+   * to a real `Location.id`; the two are never mixed (a signed-in session
+   * always wins over any bound kiosk venue). Every write path below reads
+   * `session` directly instead, so an anonymous kiosk binding can only ever
+   * unlock reads, never writes — see MEMORY.md's kiosk-access fork entry.
+   */
   locationId: string | null;
+  /**
+   * Binds `/` (Home) to a venue for an anonymous, no-session visit — the
+   * "shared kiosk device" case. Persisted to localStorage so the binding
+   * survives future visits with no `?venue=` param present. No-ops while a
+   * real session exists, so a bookmarked kiosk link can never override a
+   * signed-in user's own venue.
+   */
+  bindAnonymousVenue: (locationId: string) => void;
   mergedRoster: Roster;
   swapRequests: SwapRequest[];
   staffDirectory: StaffDirectoryEntry[];
@@ -39,10 +56,10 @@ interface AppStateValue {
   weekStart: string;
   setWeekStart: React.Dispatch<React.SetStateAction<string>>;
   refetchWeekShifts: () => Promise<void>;
-  createRotaShift: (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => Promise<void>;
-  updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[1]) => Promise<void>;
+  createRotaShift: (input: Omit<Parameters<typeof createShift>[1], 'locationId'>) => Promise<void>;
+  updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[2]) => Promise<void>;
   deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
-  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => Promise<void>;
+  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => Promise<void>;
   publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
   publishInfo: PublishInfo | null;
   /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
@@ -60,7 +77,12 @@ const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const { session } = useIdentity();
-  const locationId = session?.user.locationId ?? null;
+  const [anonymousVenueId, setAnonymousVenueId] = useState<string | null>(() => loadBoundVenue());
+  const locationId = session?.user.locationId ?? anonymousVenueId;
+  const bindAnonymousVenue = useCallback((id: string) => {
+    saveBoundVenue(id);
+    setAnonymousVenueId(id);
+  }, []);
   const [weekStart, setWeekStart] = useState(currentWeekStart());
 
   const roster: Roster = useMemo(
@@ -326,31 +348,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const createRotaShift = useCallback(
-    async (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => {
-      // RotaBuilder/ScheduleEditor only ever render inside a RequireSession-
-      // gated route, so this should never actually fire without a session —
-      // but if it somehow did, sending `locationId: null` to the API would
-      // either 400 or (worse) silently resolve to the wrong venue. Throwing
-      // here surfaces a clear error through the caller's existing try/catch
-      // rather than either of those.
-      if (!locationId) throw new Error('You must be signed in to do this.');
-      await createShift({ ...input, locationId });
+    async (input: Omit<Parameters<typeof createShift>[1], 'locationId'>) => {
+      // ScheduleEditor only ever renders inside a RequireSession-gated route
+      // (`/schedule`, since the 2026-08-31 kiosk-access fork resolution —
+      // see MEMORY.md), so this should never actually fire without a
+      // session — but if it somehow did, throwing here surfaces a clear
+      // error through the caller's existing try/catch instead of crashing
+      // on `session!.token` below or (worse) silently resolving to whatever
+      // anonymous kiosk venue happens to be bound.
+      if (!session) throw new Error('You must be signed in to do this.');
+      await createShift(session.token, { ...input, locationId: session.user.locationId });
       await refetchWeekShifts();
     },
-    [refetchWeekShifts, locationId],
+    [refetchWeekShifts, session],
   );
 
   const updateRotaShift = useCallback(
-    async (id: string, patch: Parameters<typeof updateShift>[1]) => {
-      await updateShift(id, patch);
+    async (id: string, patch: Parameters<typeof updateShift>[2]) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await updateShift(session.token, id, patch);
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, session],
   );
 
   const deleteRotaShift = useCallback(
     async (id: string, actorId?: string) => {
-      await deleteShift(id, actorId);
+      if (!session) throw new Error('You must be signed in to do this.');
+      await deleteShift(session.token, id, actorId);
       // `buildCommitted` stamps the real persisted `Shift.id` onto a confirmed
       // upload row, so the row just deleted from the DB may also be sitting in
       // the never-refreshed `committed` snapshot. Refetching `weekShifts`
@@ -363,29 +388,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       );
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, session],
   );
 
   const bulkCreateRotaShifts = useCallback(
     // `createdById` is threaded through so bulk-created shifts get a real
     // actor in the AuditLog — the underlying client has always accepted it,
     // this wrapper just never passed it on.
-    async (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => {
-      if (!locationId) throw new Error('You must be signed in to do this.');
-      await bulkCreateShifts({ locationId, createdById, shifts });
+    async (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await bulkCreateShifts(session.token, { locationId: session.user.locationId, createdById, shifts });
       await refetchWeekShifts();
     },
-    [refetchWeekShifts, locationId],
+    [refetchWeekShifts, session],
   );
 
   const publishCurrentWeek = useCallback(
     async (publishedById?: string) => {
-      if (!locationId) throw new Error('You must be signed in to do this.');
-      const result = await publishWeek(locationId, weekStart, publishedById);
+      if (!session) throw new Error('You must be signed in to do this.');
+      const result = await publishWeek(session.token, session.user.locationId, weekStart, publishedById);
       await refetchWeekShifts();
       return result;
     },
-    [weekStart, refetchWeekShifts, locationId],
+    [weekStart, refetchWeekShifts, session],
   );
 
   // Publish/lock state is shared, not RotaBuilder-local: the Shift Editor
@@ -415,6 +440,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     () => ({
       config,
       locationId,
+      bindAnonymousVenue,
       mergedRoster,
       swapRequests,
       staffDirectory,
@@ -442,6 +468,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }),
     [
       locationId,
+      bindAnonymousVenue,
       mergedRoster,
       swapRequests,
       staffDirectory,

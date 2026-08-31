@@ -16,34 +16,46 @@ import OnboardingContent from './routes/OnboardingRoute';
 
 /**
  * Gates the manager-dashboard pages (Scheduling/Approvals, Floor Plan,
- * People/Staff-Directory/Pending-Approvals, Onboarding) behind a real session
- * instead of letting them render and silently show nothing or dead-end on an
- * unactionable error — those pages' own backend routes have required a
- * session since the actor-identity-enforcement phase, so an unauthenticated
- * visit could previously only ever fail. Sends straight to `/join`'s existing
- * login mode rather than its default join/self-registration mode. Does not
- * redirect back to the originally-requested page after login — `JoinFlow`'s
- * login success path always lands on `/my-shifts` today; wiring a
- * return-to-origin redirect through that flow was not part of this fix (see
- * MEMORY.md's open follow-up).
+ * People/Staff-Directory/Pending-Approvals, Onboarding, Shift Editor) behind
+ * a real session instead of letting them render and silently show nothing or
+ * dead-end on an unactionable error — those pages' own backend routes have
+ * required a session since the actor-identity-enforcement phase, so an
+ * unauthenticated visit could previously only ever fail. Sends straight to
+ * `/join`'s existing login mode rather than its default join/self-
+ * registration mode. Does not redirect back to the originally-requested page
+ * after login — `JoinFlow`'s login success path always lands on `/my-shifts`
+ * today; wiring a return-to-origin redirect through that flow was not part
+ * of this fix (see MEMORY.md's open follow-up).
  *
  * `/onboarding` was originally left off this list on the reasoning that it
  * "doesn't touch the four hardened routes" — wrong: its venue-setup step
  * calls `/api/locations/:id`, which WAS hardened in the same phase that
  * reasoning was written for. Caught by that phase's own mandatory
- * final-review pattern, applied here retroactively. `/schedule` (the Shift
- * Editor) is still correctly excluded — it only touches `shifts.ts`, which
- * remains unauthenticated.
+ * final-review pattern, applied here retroactively.
+ *
+ * `/schedule` (the Shift Editor) was originally left off this list on
+ * purpose, to serve a "walk up to the shared venue device, no personal
+ * login" kiosk use case — see MEMORY.md's multi-tenant-signup-phase entry
+ * for the full "kiosk-access fork" this created and the decision that
+ * resolved it (2026-08-31): `/` (Home) stays anonymous-friendly via an
+ * explicit venue-binding mechanism (`api/venueBinding.ts`) because it is a
+ * low-stakes glance board, but `/schedule` is a write surface, and
+ * unattributed shift mutation would undermine the audit trail this product
+ * is meant to guarantee — so it now requires the same session every other
+ * write-capable page already does. `shifts.ts`'s own routes were hardened
+ * to match in the same phase (previously the only one of this app's
+ * mutation route files with no session check at all).
  *
  * `managerOnly` additionally redirects a real, valid STAFF session away
  * instead of letting the page render and immediately 403 on every API call
  * it makes — `/people` (Staff Directory + Pending Approvals, both
  * MANAGER/OWNER-only server-side since the actor-identity phase) and
  * `/onboarding` (entirely a manager action) have no legitimate STAFF use at
- * all, unlike `/scheduling`/`/floor-plan`, which mix staff-readable content
- * with manager-only sub-actions that already fail informatively per-action
- * rather than page-wide. Redirects to `/my-shifts`, the same landing spot
- * `JoinFlow`'s login success path already uses for a STAFF session.
+ * all, unlike `/scheduling`/`/floor-plan`/`/schedule`, which mix
+ * staff-readable/staff-usable content with manager-only sub-actions that
+ * already fail informatively per-action rather than page-wide. Redirects to
+ * `/my-shifts`, the same landing spot `JoinFlow`'s login success path
+ * already uses for a STAFF session.
  */
 function RequireSession({ children, managerOnly }: { children: ReactNode; managerOnly?: boolean }) {
   const { session } = useIdentity();
@@ -92,7 +104,15 @@ export const router = createBrowserRouter([
           ),
         },
       },
-      { path: '/schedule', element: <ScheduleEditorContent />, handle: handles.scheduleEditor },
+      {
+        path: '/schedule',
+        element: (
+          <RequireSession>
+            <ScheduleEditorContent />
+          </RequireSession>
+        ),
+        handle: handles.scheduleEditor,
+      },
       {
         path: '/floor-plan',
         element: (

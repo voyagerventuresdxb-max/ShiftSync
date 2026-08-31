@@ -3,7 +3,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../lib/prisma.js';
 import { isRequestLocked } from '../lib/swapRequestPolicy.js';
-import { requireSession, requireManager } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 import {
   SWAP_REQUEST_INCLUDE,
   createSwapRequest,
@@ -73,9 +74,7 @@ function toDto(
 swapRequestsRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
-    if (locationId !== req.user!.locationId) {
-      return res.status(403).json({ error: 'You do not have access to this location.' });
-    }
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const rows = await prisma.shiftSwapRequest.findMany({
       where: { shift: { locationId } },
       orderBy: { createdAt: 'desc' },
@@ -150,16 +149,14 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
       });
       onBehalfNote = `Requested on behalf of ${requester?.fullName ?? effectiveRequesterId}`;
     }
-    await prisma.auditLog.create({
-      data: {
-        locationId,
-        actorId: req.user!.id,
-        shiftId,
-        action: 'SWAP_REQUESTED',
-        entityType: 'ShiftSwapRequest',
-        entityId: created.id,
-        note: onBehalfNote,
-      },
+    await writeAuditLog(prisma, {
+      locationId,
+      actorId: req.user!.id,
+      shiftId,
+      action: 'SWAP_REQUESTED',
+      entityType: 'ShiftSwapRequest',
+      entityId: created.id,
+      note: onBehalfNote,
     });
 
     return res.status(201).json({ request: toDto(created) });
@@ -190,9 +187,7 @@ swapRequestsRouter.patch('/:id', requireSession, requireManager, async (req, res
       where: { id },
       include: { shift: { select: { locationId: true } } },
     });
-    if (!sr || sr.shift.locationId !== req.user!.locationId) {
-      return res.status(404).json({ error: 'That swap request could not be found.' });
-    }
+    if (!ownedOrNotFound(req, res, sr?.shift ?? null, 'That swap request could not be found.')) return;
 
     const outcome = await decideSwapRequest({
       id,

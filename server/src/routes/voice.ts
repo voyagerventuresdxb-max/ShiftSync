@@ -8,6 +8,7 @@ import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/
 import { createSwapRequest, decideSwapRequest } from '../lib/actions/swapActions.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const voiceRouter = Router();
 
@@ -194,9 +195,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // and only ever returns { result: 'ok' } — there is no 'not_found' case
         // to handle here, unlike the swap/join actions below.
         const result = await markAvailability({ userId: actorId, date: intent.date, type: intent.type, note });
-        await prisma.auditLog.create({
-          data: { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: result.mark.id, note },
-        });
+        await writeAuditLog(prisma, { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: result.mark.id, note });
         return res.status(200).json({ executed: true, result: result.mark });
       }
       case 'REQUEST_SWAP': {
@@ -217,9 +216,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           return res.status(404).json({ error: 'That staff member could not be found at your location.' });
         }
         const created = await createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null });
-        await prisma.auditLog.create({
-          data: { locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: created.id, note },
-        });
+        await writeAuditLog(prisma, { locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: created.id, note });
         return res.status(201).json({ executed: true, result: created });
       }
       case 'APPROVE_SWAP':
@@ -262,16 +259,14 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // already have in hand) and its own locationId (from the `sr` lookup
         // above) rather than null/the caller's locationId, matching how
         // REQUEST_SWAP's voice row already does it.
-        await prisma.auditLog.create({
-          data: {
-            locationId: sr.shift.locationId,
-            actorId,
-            shiftId: result.request.shiftId,
-            action: intent.intent === 'APPROVE_SWAP' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
-            entityType: 'ShiftSwapRequest',
-            entityId: intent.swapRequestId,
-            note,
-          },
+        await writeAuditLog(prisma, {
+          locationId: sr.shift.locationId,
+          actorId,
+          shiftId: result.request.shiftId,
+          action: intent.intent === 'APPROVE_SWAP' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
+          entityType: 'ShiftSwapRequest',
+          entityId: intent.swapRequestId,
+          note,
         });
         return res.status(200).json({ executed: true, result: result.request });
       }
@@ -288,15 +283,13 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         const result = await decideJoinRequest({ requestId: intent.joinRequestId, decision, reviewedById: actorId });
         if (result.result === 'not_found') return res.status(404).json({ error: 'That join request could not be found.' });
         if (result.result === 'already_reviewed') return res.status(409).json({ error: 'That join request was already reviewed.' });
-        await prisma.auditLog.create({
-          data: {
-            locationId: jr.locationId,
-            actorId,
-            action: intent.intent === 'APPROVE_JOIN' ? 'JOIN_APPROVED' : 'JOIN_DECLINED',
-            entityType: 'JoinRequest',
-            entityId: intent.joinRequestId,
-            note,
-          },
+        await writeAuditLog(prisma, {
+          locationId: jr.locationId,
+          actorId,
+          action: intent.intent === 'APPROVE_JOIN' ? 'JOIN_APPROVED' : 'JOIN_DECLINED',
+          entityType: 'JoinRequest',
+          entityId: intent.joinRequestId,
+          note,
         });
         // Return the entity itself, like every sibling branch does
         // (result.mark, result.request, created) — not the whole
