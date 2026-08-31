@@ -38,6 +38,7 @@ export default function SchedulingContent() {
     setWeekStart,
     mergedRoster,
     config,
+    venueName,
     currentEmployeeId,
     setCurrentEmployeeId,
     handleRequestCover,
@@ -122,7 +123,7 @@ export default function SchedulingContent() {
         id: dayShifts[0].id,
         day: weekdayOf(date),
         date: formatDayMonth(date),
-        venue: config.name,
+        venue: venueName ?? '',
         role: dayShifts[0].requiredRole ?? activeEmployee.role,
         start: dayShifts.map((s) => s.start).join(' / '),
         end: dayShifts.map((s) => s.end).join(' / '),
@@ -135,7 +136,7 @@ export default function SchedulingContent() {
         sidework: dayShifts[0].sidework,
       };
     });
-  }, [mergedRoster, activeEmployee, dates, config.name, swapRequests]);
+  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests]);
 
   const coverCandidates: CoverCandidate[] = activeEmployee
     ? mergedRoster.employees.filter((e) => e.id !== activeEmployee.id).map((e) => ({ id: e.id, name: e.name }))
@@ -287,7 +288,7 @@ export default function SchedulingContent() {
             ) : mode === 'personal' ? (
               <PersonalRota shifts={rotaCards} coverCandidates={coverCandidates} onRequestCover={handleRequestCover} />
             ) : (
-              <TeamMatrix venueName={config.name} days={matrixDays} members={matrixMembers} matrix={matrixCells} />
+              <TeamMatrix venueName={venueName ?? ''} days={matrixDays} members={matrixMembers} matrix={matrixCells} />
             )}
           </div>
         </div>

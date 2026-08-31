@@ -8,8 +8,23 @@ import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirec
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
 import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
+import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
 
+/**
+ * Shared UI vocabulary (role/shift-type labels) plus a compliance ruleset —
+ * genuinely global for this pilot (every venue is UAE-mainland Dubai/GCC
+ * hospitality per this product's own scope; see AGENTS.md), not a
+ * per-venue value that should come from session. `id`/`name`/`knownStaff`
+ * are NOT real venue identity, despite the shape — inert legacy
+ * placeholders that only satisfy `VenueConfig`'s type for `src/engine/
+ * parser.ts`'s `parseRosterText`, which is dead code today (only its own
+ * test file calls it; no live route or component does — confirmed via
+ * `grep` during the 2026-08-31 hardcoded-reference sweep, see MEMORY.md).
+ * No live UI reads `config.name`/`config.id` for anything real-venue
+ * -identifying — every display surface reads `venueName` (below) instead,
+ * fetched from the actual signed-in session's own `Location` row.
+ */
 const config: VenueConfig = {
   id: 'venue-1',
   name: 'Demo Venue',
@@ -22,6 +37,15 @@ const config: VenueConfig = {
 
 interface AppStateValue {
   config: VenueConfig;
+  /**
+   * The real signed-in venue's actual display name, fetched from the
+   * database — `null` until it loads, or for an anonymous kiosk visit
+   * (`GET /api/locations/:id` requires a session; an anonymous binding has
+   * no way to fetch this). Every UI surface that shows a venue name reads
+   * this, never `config.name` (a hardcoded placeholder — see the comment on
+   * `config`, below).
+   */
+  venueName: string | null;
   /**
    * The venue every read-effect should scope itself to — a real session's
    * venue when signed in, otherwise the anonymous kiosk venue bound via
@@ -83,6 +107,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     saveBoundVenue(id);
     setAnonymousVenueId(id);
   }, []);
+
+  // The real venue's display name — never `config.name` (see the comment on
+  // `config`, above). `GET /api/locations/:id` requires a session, so an
+  // anonymous kiosk visit (no session, only a bound venue id) has no way to
+  // fetch this and stays `null` — every consumer already has to handle a
+  // loading/unknown state, so this is the same shape, not a new one.
+  const [venueName, setVenueName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!session) {
+      setVenueName(null);
+      return;
+    }
+    let cancelled = false;
+    fetchLocation(session.token, session.user.locationId)
+      .then((location) => {
+        if (!cancelled) setVenueName(location.name);
+      })
+      .catch(() => {
+        if (!cancelled) setVenueName(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
   const [weekStart, setWeekStart] = useState(currentWeekStart());
 
   const roster: Roster = useMemo(
@@ -440,6 +489,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     () => ({
       config,
       locationId,
+      venueName,
       bindAnonymousVenue,
       mergedRoster,
       swapRequests,
@@ -468,6 +518,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }),
     [
       locationId,
+      venueName,
       bindAnonymousVenue,
       mergedRoster,
       swapRequests,

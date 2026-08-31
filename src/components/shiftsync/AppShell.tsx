@@ -106,9 +106,12 @@ export function AppShell() {
     .filter(isRouteHandle)
     .at(-1);
 
-  const { config } = useAppState();
-  const title = handle?.title ?? config.name;
-  const eyebrow = handle?.eyebrow ?? config.name;
+  // `venueName` is the real signed-in venue's actual name (null while
+  // loading, or for an anonymous kiosk visit) — never `config.name`, a
+  // hardcoded placeholder unrelated to any real venue (see AppStateContext).
+  const { venueName } = useAppState();
+  const title = handle?.title ?? venueName ?? 'ShiftSync';
+  const eyebrow = handle?.eyebrow ?? venueName ?? 'ShiftSync';
   const action = handle?.action;
 
   const { session } = useIdentity();
@@ -295,7 +298,7 @@ export function AppShell() {
               aria-label="Open your profile"
               className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-sm font-bold text-accent transition-transform duration-200 hover:scale-105 active:scale-95"
             >
-              {avatarInitial(config.name)}
+              {avatarInitial(venueName ?? 'ShiftSync')}
             </Link>
 
             <div className="min-w-0">
