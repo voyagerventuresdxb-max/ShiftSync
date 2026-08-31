@@ -14,6 +14,8 @@ import { resolveRowsAgainstDatabase } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
 import { uploadCache } from '../store/uploadCache.js';
+import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -71,26 +73,19 @@ export const schedulesRouter = Router();
 
 /**
  * POST /api/schedules/upload
- * multipart/form-data: file=<xlsx|xls|csv>, locationId=<string>
+ * multipart/form-data: file=<xlsx|xls|csv>
  *
  * Parses + validates the sheet against the 3 master templates, resolves
  * rows against existing Role/User records for the location, and returns a
  * sanity-check preview. Nothing is written to the database at this stage.
  * The response includes a `batchId` to pass to the confirm step below.
+ * Session-gated: locationId is derived from the caller's session.
  */
-schedulesRouter.post('/upload', upload.single('file'), async (req, res) => {
+schedulesRouter.post('/upload', requireSession, upload.single('file'), async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
-    if (!locationId) {
-      return res.status(400).json({ error: 'locationId is required.' });
-    }
+    const locationId = req.user!.locationId;
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded. Attach it under the "file" field.' });
-    }
-
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) {
-      return res.status(404).json({ error: `Location "${locationId}" not found.` });
     }
 
     // Optional reference week for text/PDF rosters that use day names
@@ -346,18 +341,30 @@ schedulesRouter.post('/upload', upload.single('file'), async (req, res) => {
  * Commits a previously-previewed batch to the Shift table. Rows with an
  * unresolved role are skipped (cannot satisfy the required FK) and reported
  * back in `skippedCount` for the manager to fix and re-upload separately.
+ * Session-gated; the batch must belong to the caller's venue.
  */
-schedulesRouter.post('/upload/:batchId/confirm', async (req, res) => {
+schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res) => {
   try {
     const { batchId } = req.params;
     const batch = uploadCache.get(batchId);
-    if (!batch) {
-      return res.status(404).json({ error: 'This preview has expired or was already confirmed. Please re-upload the file.' });
-    }
+    if (!ownedOrNotFound(req, res, batch, 'This preview has expired or was already confirmed. Please re-upload the file.')) return;
 
-    const createdById = req.body?.createdById ? String(req.body.createdById) : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
     const result = await persistShifts(prisma, batch.locationId, createdById, batch.rows);
     uploadCache.delete(batchId);
+
+    await writeAuditLog(prisma, {
+      locationId: batch.locationId,
+      actorId: req.user!.id,
+      action: 'SHIFT_CREATED',
+      entityType: 'Shift',
+      entityId: result.rows[0]?.shiftId ?? batchId,
+      shiftId: result.rows[0]?.shiftId ?? null,
+      note: `Imported ${result.createdCount} shift(s) from roster upload (${result.skippedCount} skipped)`,
+    });
 
     return res.status(201).json({
       message: `Imported ${result.createdCount} shift(s).`,

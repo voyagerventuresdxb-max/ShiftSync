@@ -5,6 +5,8 @@
  * exactly what the parser resolved before anything is committed.
  */
 
+import { withAuth } from './identity';
+
 export type RowMatchStatus =
   | 'matched'
   | 'new_employee'
@@ -100,27 +102,25 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /** POST /api/schedules/upload — parse + preview an Excel/CSV roster. */
-export async function uploadRoster(
-  file: File,
-  locationId: string,
-): Promise<UploadResponse> {
+export async function uploadRoster(token: string, file: File): Promise<UploadResponse> {
   const form = new FormData();
   form.append('file', file);
-  form.append('locationId', locationId);
   return request<UploadResponse>('/api/schedules/upload', {
     method: 'POST',
+    headers: withAuth(token),
     body: form,
   });
 }
 
 /** POST /api/schedules/upload/:batchId/confirm — commit a reviewed batch. */
 export async function confirmRoster(
+  token: string,
   batchId: string,
   createdById?: string,
 ): Promise<ConfirmResponse> {
   return request<ConfirmResponse>(`/api/schedules/upload/${batchId}/confirm`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ createdById: createdById ?? null }),
   });
 }

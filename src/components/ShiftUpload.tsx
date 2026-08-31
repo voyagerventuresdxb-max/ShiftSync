@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2 } from 'lucide-react';
+import { useIdentity } from '../state/IdentityContext';
 import {
   ApiError,
   confirmRoster,
@@ -39,7 +40,8 @@ interface Props {
   uploadingLabel?: string;
 }
 
-export default function ShiftUpload({ locationId, createdById, onCommitted, uploadingLabel }: Props) {
+export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }: Props) {
+  const { session } = useIdentity();
   const [phase, setPhase] = useState<Phase>('idle');
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -60,7 +62,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted, uplo
       setFileName(file.name);
       setPhase('uploading');
       try {
-        const res = await uploadRoster(file, locationId);
+        const res = await uploadRoster(session!.token, file);
         setData(res);
         setPhase('preview');
       } catch (err) {
@@ -68,7 +70,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted, uplo
         setPhase('error');
       }
     },
-    [locationId],
+    [session],
   );
 
   const onDrop = useCallback(
@@ -85,7 +87,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted, uplo
     if (!data) return;
     setPhase('confirming');
     try {
-      const res = await confirmRoster(data.batchId, createdById);
+      const res = await confirmRoster(session!.token, data.batchId, createdById);
       setConfirmResult({ createdCount: res.createdCount, skippedCount: res.skippedCount });
       setPhase('done');
       // Flush the reviewed rows into the parent's roster state so the grid
@@ -113,7 +115,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted, uplo
       }
       setPhase('error');
     }
-  }, [data, createdById, onCommitted]);
+  }, [data, createdById, onCommitted, session]);
 
   const reset = useCallback(() => {
     setPhase('idle');
