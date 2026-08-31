@@ -16,7 +16,7 @@ function timeAgo(iso: string): string {
 }
 
 export function Shoutouts() {
-  const { mergedRoster, currentEmployeeId } = useAppState();
+  const { locationId, mergedRoster, currentEmployeeId } = useAppState();
   const [items, setItems] = useState<ShoutoutDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,8 +27,16 @@ export function Shoutouts() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    // Same reasoning as Announcements.tsx (this component's two hosts, Home
+    // and My Shifts, are both session-optional) — no locationId means no
+    // real venue to load shoutouts for.
+    if (!locationId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
-    fetchShoutouts('seed-location')
+    fetchShoutouts(locationId)
       .then((list) => {
         if (!cancelled) setItems(list);
       })
@@ -41,7 +49,7 @@ export function Shoutouts() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [locationId]);
 
   const shiftsForEmployee = useMemo(
     () => mergedRoster.shifts.filter((s) => s.employeeId === employeeId).sort((a, b) => b.date.localeCompare(a.date)),
@@ -50,13 +58,17 @@ export function Shoutouts() {
 
   async function submit() {
     if (!employeeId || !shiftId || !note.trim()) return;
+    if (!locationId) {
+      setError('You must be signed in to give a shoutout.');
+      return;
+    }
     const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
     const snapshot = shift ? `${weekdayOf(shift.date)} · ${shift.start}–${shift.end} · ${shift.requiredRole ?? ''}`.trim() : undefined;
     setSaving(true);
     setError(null);
     try {
       const created = await postShoutout({
-        locationId: 'seed-location',
+        locationId,
         employeeId,
         authorId: currentEmployeeId,
         shiftSnapshot: snapshot,

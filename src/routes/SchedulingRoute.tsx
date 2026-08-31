@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
@@ -31,6 +31,7 @@ const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
   const {
+    locationId,
     weekStart,
     setWeekStart,
     mergedRoster,
@@ -51,49 +52,35 @@ export default function SchedulingContent() {
   // `weekStart` lives in AppStateContext, which sits ABOVE the router
   // (mounted in App.tsx wrapping <RouterProvider>), so it can't read the URL
   // itself — this component, which IS inside the router, is what reconciles
-  // the two. Read once on mount: a `?week=` param (a hard refresh, or a
-  // shared/bookmarked link) overrides the context's `currentWeekStart()`
-  // default.
+  // the two, in both directions, in one effect:
+  //  - an incoming `?week=` differing from the current state (a hard
+  //    refresh, a shared/bookmarked link, OR — the case a two-effect
+  //    version of this got wrong — remounting via in-app client-side
+  //    navigation away from and back to /scheduling with no `?week=` in the
+  //    URL) adopts INTO state, and returns without also writing the URL in
+  //    this same pass;
+  //  - otherwise, whatever `weekStart` actually is gets written back to the
+  //    URL if it doesn't already match (Prev/Next-week clicks, template
+  //    application, or simply the URL having gone stale/bare on remount).
+  // The `return` after `setWeekStart` is what avoids the race a two-effect
+  // version of this had: `setWeekStart` doesn't land in this closure until a
+  // later render, so writing the URL in the SAME pass would write the STALE
+  // pre-adopt week; returning defers that write to the next run, by which
+  // point `weekStart` and the URL already agree (a no-op) or the effect
+  // naturally re-syncs. `replace` so paging through weeks doesn't spam
+  // browser history with a back-button entry per week.
   useEffect(() => {
     const param = searchParams.get('week');
     if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
       setWeekStart(param);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Keeps the URL's `?week=` in sync with whatever week is actually on
-  // screen — Prev/Next-week clicks, template application, etc. — so a hard
-  // refresh always reloads the week that was really being viewed instead of
-  // snapping back to `currentWeekStart()`. `replace` so paging through weeks
-  // doesn't spam browser history with a back-button entry per week.
-  //
-  // Deliberately skips its very first invocation (`isFirstRunRef`). Both this
-  // effect and the mount-only one above run in the SAME initial effects
-  // flush, in definition order — but a state update from the first effect
-  // (`setWeekStart`) doesn't land in this effect's closure until a later
-  // render, so on that first pass `weekStart` here is still the stale
-  // pre-mount-sync default. Without the skip, this effect would immediately
-  // overwrite a valid incoming `?week=param` with that stale default,
-  // fighting the mount effect above (self-corrects on the next render once
-  // `weekStart` actually changes, but leaves a real window where the URL is
-  // briefly wrong, and an async `setSearchParams` navigation resolving
-  // out of order could leave it stuck wrong instead of just flickering).
-  // Reconciling the initial URL/state mismatch is the mount effect's job
-  // alone; this effect's job starts only once that's already settled.
-  const isFirstRunRef = useRef(true);
-  useEffect(() => {
-    if (isFirstRunRef.current) {
-      isFirstRunRef.current = false;
       return;
     }
-    if (searchParams.get('week') !== weekStart) {
+    if (param !== weekStart) {
       const next = new URLSearchParams(searchParams);
       next.set('week', weekStart);
       setSearchParams(next, { replace: true });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekStart]);
+  }, [weekStart, searchParams, setWeekStart, setSearchParams]);
 
   const [mode, setMode] = useState<Mode>('personal');
   const activeEmployee =
@@ -182,7 +169,14 @@ export default function SchedulingContent() {
   const [clockError, setClockError] = useState<string | null>(null);
 
   const refreshHours = useCallback(() => {
-    fetchWeeklyHours('seed-location', mergedRoster.weekStart)
+    // This route is behind RequireSession, so locationId is non-null in
+    // practice — guarded the same way as the other read-fetches in this
+    // sweep (AppStateContext.tsx's refetchWeekShifts) purely for TypeScript.
+    if (!locationId) {
+      setHourStaff([]);
+      return;
+    }
+    fetchWeeklyHours(locationId, mergedRoster.weekStart)
       .then((entries) => {
         const byId = new Map(entries.map((e) => [e.id, e]));
         setHourStaff(
@@ -199,7 +193,7 @@ export default function SchedulingContent() {
         setClockedIn(activeEmployee ? (byId.get(activeEmployee.id)?.clockedIn ?? false) : false);
       })
       .catch(() => setHourStaff([]));
-  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee]);
+  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee, locationId]);
 
   useEffect(() => {
     refreshHours();
@@ -295,7 +289,14 @@ export default function SchedulingContent() {
       </div>
 
       <div className="mt-5">
-        <ShiftUpload locationId="seed-location" onCommitted={handleCommitted} />
+        {/*
+          `ShiftUpload.locationId` is a required `string`, not `string | null`
+          — this route is behind RequireSession so locationId is non-null in
+          practice, but rather than force a non-null assertion through the
+          prop, simply don't render the upload card in the (unreachable)
+          null case.
+        */}
+        {locationId && <ShiftUpload locationId={locationId} onCommitted={handleCommitted} />}
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>

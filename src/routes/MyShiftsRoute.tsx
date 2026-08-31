@@ -58,6 +58,12 @@ export default function MyShiftsContent() {
         <Link to="/join" className="btn btn-primary inline-flex">
           Join or log in
         </Link>
+        <p className="text-xs text-muted-foreground">
+          Setting up a brand-new venue?{' '}
+          <Link to="/signup" className="underline-offset-2 hover:text-foreground hover:underline">
+            Sign up your restaurant
+          </Link>
+        </p>
       </div>
     );
   }

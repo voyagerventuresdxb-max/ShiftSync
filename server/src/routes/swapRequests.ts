@@ -118,20 +118,24 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
         ? req.user!.id
         : (req.body?.requestedById ? String(req.body.requestedById).trim() : '') || req.user!.id;
 
-    const shift = await prisma.shift.findUnique({
-      where: { id: shiftId },
-      select: { id: true, userId: true, locationId: true },
-    });
+    // Neither lookup depends on the other's result (the target check doesn't
+    // need anything from the shift row) — run them concurrently rather than
+    // paying two sequential round-trips.
+    const [shift, target] = await Promise.all([
+      prisma.shift.findUnique({
+        where: { id: shiftId },
+        select: { id: true, userId: true, locationId: true },
+      }),
+      // The proposed cover must be a real, active staff member at the SAME
+      // location — mirrors voice.ts's REQUEST_SWAP validation exactly.
+      prisma.user.findFirst({
+        where: { id: targetUserId, locationId, isActive: true },
+        select: { id: true },
+      }),
+    ]);
     if (!shift || shift.userId !== effectiveRequesterId || shift.locationId !== locationId) {
       return res.status(404).json({ error: 'That shift could not be found among your own upcoming shifts.' });
     }
-
-    // The proposed cover must be a real, active staff member at the SAME
-    // location — mirrors voice.ts's REQUEST_SWAP validation exactly.
-    const target = await prisma.user.findFirst({
-      where: { id: targetUserId, locationId, isActive: true },
-      select: { id: true },
-    });
     if (!target) return res.status(404).json({ error: 'That staff member could not be found at your location.' });
 
     const created = await createSwapRequest({ shiftId, requestedById: effectiveRequesterId, targetUserId, reason });

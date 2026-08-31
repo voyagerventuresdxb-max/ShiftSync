@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ApiError, requestJoinOtp, verifyJoinOtp } from '../api/join';
 import { requestLoginOtp, verifyLoginOtp } from '../api/identity';
 import { useIdentity } from '../state/IdentityContext';
@@ -17,7 +18,7 @@ type Phase = 'phone' | 'otp' | 'pending' | 'error';
  */
 type Mode = 'join' | 'login';
 
-export default function JoinFlow({ locationId, initialMode }: { locationId: string; initialMode?: Mode }) {
+export default function JoinFlow({ locationId, initialMode }: { locationId?: string; initialMode?: Mode }) {
   const { login } = useIdentity();
   const [mode, setMode] = useState<Mode>(initialMode ?? 'join');
   const [phase, setPhase] = useState<Phase>('phone');
@@ -43,7 +44,14 @@ export default function JoinFlow({ locationId, initialMode }: { locationId: stri
     setSubmitting(true);
     setError(null);
     try {
-      const res = isLogin ? await requestLoginOtp(locationId, phone) : await requestJoinOtp(phone);
+      // Login is global by phone — no locationId needed (see identity.ts) —
+      // which is exactly what lets this screen work when reached from
+      // RequireSession's redirect, which has no venue context to give it.
+      // Join still needs one; JoinRoute.tsx already refuses to render this
+      // component in join mode without a real location, so this is a
+      // type-narrowing guard, not a real code path in practice.
+      if (!isLogin && !locationId) throw new ApiError('This link is missing venue information.', 400);
+      const res = isLogin ? await requestLoginOtp(phone) : await requestJoinOtp(phone);
       setDevCode(res.devCode ?? null);
       setPhase('otp');
     } catch (err) {
@@ -58,11 +66,12 @@ export default function JoinFlow({ locationId, initialMode }: { locationId: stri
     setError(null);
     try {
       if (isLogin) {
-        const result = await verifyLoginOtp(locationId, phone, code);
+        const result = await verifyLoginOtp(phone, code);
         login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
         window.location.href = '/my-shifts';
         return;
       }
+      if (!locationId) throw new ApiError('This link is missing venue information.', 400);
       const result = await verifyJoinOtp({ locationId, phone, code, fullName: fullName.trim() || undefined });
       if (result.pending) {
         setPhase('pending');
@@ -137,7 +146,17 @@ export default function JoinFlow({ locationId, initialMode }: { locationId: stri
         </div>
       )}
 
-      {phase !== 'pending' && (
+      {/*
+       * Switching TO join mode needs a real `locationId` to join into — this
+       * screen only has one when a real invite link provided it. Reached
+       * with none (e.g. RequireSession's redirect for a signed-out visit,
+       * which has no venue context to give), offering "Join" here would
+       * lead straight into the dead end `handleRequestOtp`/`handleVerify`
+       * already guard against — so the toggle only offers switching TO join
+       * mode when there's actually a venue to join, and the /signup link
+       * below stands in as the real next step otherwise.
+       */}
+      {phase !== 'pending' && (isLogin ? Boolean(locationId) : true) && (
         <button
           type="button"
           className="mt-5 w-full text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
@@ -145,6 +164,24 @@ export default function JoinFlow({ locationId, initialMode }: { locationId: stri
         >
           {isLogin ? "Don't have an account yet? Join" : 'Already have an account? Log in'}
         </button>
+      )}
+
+      {/*
+       * This screen is for joining a venue's EXISTING roster — someone
+       * looking to stand up a brand-new venue for the first time (the exact
+       * confusion behind the home-base user report this was added for)
+       * belongs on /signup instead, not merged into this flow. Shown
+       * whenever join mode isn't actually reachable here (no locationId) —
+       * not just whenever the CURRENT mode happens to be join — since a
+       * locationId-less login screen has no working path to join at all.
+       */}
+      {phase !== 'pending' && (!isLogin || !locationId) && (
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          Setting up a brand-new venue?{' '}
+          <Link to="/signup" className="underline-offset-2 hover:text-foreground hover:underline">
+            Sign up your restaurant
+          </Link>
+        </p>
       )}
     </section>
   );

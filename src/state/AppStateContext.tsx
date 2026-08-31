@@ -21,6 +21,8 @@ const config: VenueConfig = {
 
 interface AppStateValue {
   config: VenueConfig;
+  /** The real logged-in session's venue — null with no session. The single source every consumer should read instead of a hardcoded id. */
+  locationId: string | null;
   mergedRoster: Roster;
   swapRequests: SwapRequest[];
   staffDirectory: StaffDirectoryEntry[];
@@ -58,6 +60,7 @@ const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const { session } = useIdentity();
+  const locationId = session?.user.locationId ?? null;
   const [weekStart, setWeekStart] = useState(currentWeekStart());
 
   const roster: Roster = useMemo(
@@ -92,9 +95,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const reqSeqRef = useRef(0);
 
   const refetchWeekShifts = useCallback(async () => {
+    // No session, no real venue to scope this fetch to — clear rather than
+    // fetch against a hardcoded/wrong location. Same shared-device reasoning
+    // as the staff-directory/swap-requests effects below.
+    if (!locationId) {
+      setWeekShifts([]);
+      return;
+    }
     const seq = ++reqSeqRef.current;
     try {
-      const dtos = await fetchWeekShifts('seed-location', weekStart);
+      const dtos = await fetchWeekShifts(locationId, weekStart);
       if (seq !== reqSeqRef.current) return;
       setWeekShifts(
         dtos.map((s) => ({
@@ -121,7 +131,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       if (seq !== reqSeqRef.current) return;
       setWeekShifts([]);
     }
-  }, [weekStart]);
+  }, [weekStart, locationId]);
 
   useEffect(() => {
     void refetchWeekShifts();
@@ -195,7 +205,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    fetchStaffDirectory(session.token, 'seed-location')
+    fetchStaffDirectory(session.token, session.user.locationId)
       .then((list) => {
         if (!cancelled) setStaffDirectory(list);
       })
@@ -223,7 +233,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    fetchSwapRequests(session.token, 'seed-location')
+    fetchSwapRequests(session.token, session.user.locationId)
       .then((list) => {
         if (!cancelled) setSwapRequests(list);
       })
@@ -291,7 +301,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // (now-locked) state instead of silently doing nothing.
       } finally {
         try {
-          const fresh = await fetchSwapRequests(session.token, 'seed-location');
+          const fresh = await fetchSwapRequests(session.token, session.user.locationId);
           setSwapRequests(fresh);
         } catch {
           // Load-error UI for this list is ApprovalsPanel's concern; leave the
@@ -317,10 +327,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const createRotaShift = useCallback(
     async (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => {
-      await createShift({ ...input, locationId: 'seed-location' });
+      // RotaBuilder/ScheduleEditor only ever render inside a RequireSession-
+      // gated route, so this should never actually fire without a session —
+      // but if it somehow did, sending `locationId: null` to the API would
+      // either 400 or (worse) silently resolve to the wrong venue. Throwing
+      // here surfaces a clear error through the caller's existing try/catch
+      // rather than either of those.
+      if (!locationId) throw new Error('You must be signed in to do this.');
+      await createShift({ ...input, locationId });
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, locationId],
   );
 
   const updateRotaShift = useCallback(
@@ -354,19 +371,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // actor in the AuditLog — the underlying client has always accepted it,
     // this wrapper just never passed it on.
     async (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => {
-      await bulkCreateShifts({ locationId: 'seed-location', createdById, shifts });
+      if (!locationId) throw new Error('You must be signed in to do this.');
+      await bulkCreateShifts({ locationId, createdById, shifts });
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, locationId],
   );
 
   const publishCurrentWeek = useCallback(
     async (publishedById?: string) => {
-      const result = await publishWeek('seed-location', weekStart, publishedById);
+      if (!locationId) throw new Error('You must be signed in to do this.');
+      const result = await publishWeek(locationId, weekStart, publishedById);
       await refetchWeekShifts();
       return result;
     },
-    [weekStart, refetchWeekShifts],
+    [weekStart, refetchWeekShifts, locationId],
   );
 
   // Publish/lock state is shared, not RotaBuilder-local: the Shift Editor
@@ -375,10 +394,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // pattern as `refetchWeekShifts` above, and re-fetched by every editor
   // after a mutation (a create/update/delete flips `hasUnpublishedChanges`).
   const refreshPublishInfo = useCallback(() => {
-    fetchPublishStatus('seed-location', weekStart)
+    if (!locationId) {
+      setPublishInfo(null);
+      return;
+    }
+    fetchPublishStatus(locationId, weekStart)
       .then(setPublishInfo)
       .catch(() => setPublishInfo(null));
-  }, [weekStart]);
+  }, [weekStart, locationId]);
 
   useEffect(() => {
     refreshPublishInfo();
@@ -391,6 +414,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const value: AppStateValue = useMemo(
     () => ({
       config,
+      locationId,
       mergedRoster,
       swapRequests,
       staffDirectory,
@@ -417,6 +441,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       refreshPublishInfo,
     }),
     [
+      locationId,
       mergedRoster,
       swapRequests,
       staffDirectory,

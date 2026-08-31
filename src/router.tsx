@@ -10,6 +10,7 @@ import FloorPlanContent from './routes/FloorPlanRoute';
 import PeopleContent from './routes/PeopleRoute';
 import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
+import SignupContent from './routes/SignupRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
 import OnboardingContent from './routes/OnboardingRoute';
 
@@ -33,10 +34,21 @@ import OnboardingContent from './routes/OnboardingRoute';
  * final-review pattern, applied here retroactively. `/schedule` (the Shift
  * Editor) is still correctly excluded — it only touches `shifts.ts`, which
  * remains unauthenticated.
+ *
+ * `managerOnly` additionally redirects a real, valid STAFF session away
+ * instead of letting the page render and immediately 403 on every API call
+ * it makes — `/people` (Staff Directory + Pending Approvals, both
+ * MANAGER/OWNER-only server-side since the actor-identity phase) and
+ * `/onboarding` (entirely a manager action) have no legitimate STAFF use at
+ * all, unlike `/scheduling`/`/floor-plan`, which mix staff-readable content
+ * with manager-only sub-actions that already fail informatively per-action
+ * rather than page-wide. Redirects to `/my-shifts`, the same landing spot
+ * `JoinFlow`'s login success path already uses for a STAFF session.
  */
-function RequireSession({ children }: { children: ReactNode }) {
+function RequireSession({ children, managerOnly }: { children: ReactNode; managerOnly?: boolean }) {
   const { session } = useIdentity();
   if (!session) return <Navigate to="/join?mode=login" replace />;
+  if (managerOnly && session.user.systemRole === 'STAFF') return <Navigate to="/my-shifts" replace />;
   return <>{children}</>;
 }
 
@@ -47,6 +59,7 @@ const handles = {
   profile: { title: 'Profile' },
   scheduleEditor: { title: 'Shift Editor' },
   join: { title: 'Join' },
+  signup: { title: 'Sign up' },
   myShifts: { title: 'My Shifts' },
   onboarding: { title: 'Onboarding' },
 } satisfies Record<string, RouteHandle>;
@@ -92,7 +105,7 @@ export const router = createBrowserRouter([
       {
         path: '/people',
         element: (
-          <RequireSession>
+          <RequireSession managerOnly>
             <PeopleContent />
           </RequireSession>
         ),
@@ -111,11 +124,14 @@ export const router = createBrowserRouter([
       },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
+      // Not behind RequireSession — this is how someone gets their FIRST
+      // session (a brand-new venue). Gating it would make it unreachable.
+      { path: '/signup', element: <SignupContent />, handle: handles.signup },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
       {
         path: '/onboarding',
         element: (
-          <RequireSession>
+          <RequireSession managerOnly>
             <OnboardingContent />
           </RequireSession>
         ),

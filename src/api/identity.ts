@@ -10,6 +10,8 @@ export interface SessionUser {
   id: string;
   fullName: string;
   jobTitle: string | null;
+  locationId: string;
+  systemRole: 'OWNER' | 'MANAGER' | 'STAFF';
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -28,29 +30,30 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * POST /api/identity/request-otp — login path. `locationId` is required: the
- * server scopes the phone lookup to one venue rather than scanning every user
- * in the database. `devCode` is only present when the server has the opt-in
- * ALLOW_DEV_OTP_ECHO flag set.
+ * POST /api/identity/request-otp — login path. No `locationId` — the server
+ * matches the phone globally across every venue (it's the real cross-venue
+ * identity key under this app's one-user-one-location model), which is what
+ * lets login work from contexts that don't know a venue yet, like
+ * `RequireSession`'s redirect to `/join?mode=login`. `devCode` is only
+ * present when the server has the opt-in ALLOW_DEV_OTP_ECHO flag set.
  */
-export async function requestLoginOtp(locationId: string, phone: string): Promise<{ expiresAt: string; devCode?: string }> {
+export async function requestLoginOtp(phone: string): Promise<{ expiresAt: string; devCode?: string }> {
   return request('/api/identity/request-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ locationId, phone }),
+    body: JSON.stringify({ phone }),
   });
 }
 
 /** POST /api/identity/verify-otp */
 export async function verifyLoginOtp(
-  locationId: string,
   phone: string,
   code: string,
 ): Promise<{ token: string; expiresAt: string; user: SessionUser }> {
   return request('/api/identity/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ locationId, phone, code }),
+    body: JSON.stringify({ phone, code }),
   });
 }
 
@@ -87,6 +90,16 @@ export function loadSession(): StoredSession | null {
   try {
     const parsed = JSON.parse(raw) as StoredSession;
     if (new Date(parsed.expiresAt) < new Date()) {
+      clearSession();
+      return null;
+    }
+    // Sessions saved before `locationId`/`systemRole` were added to the
+    // payload won't have them. The type says they're always present, and the
+    // upcoming de-hardcoding sweep trusts `session.user.locationId` as the
+    // real venue id — silently handing it `undefined` there is worse than
+    // forcing one extra login. Fail closed instead of letting a stale shape
+    // masquerade as the current one.
+    if (!parsed.user?.locationId) {
       clearSession();
       return null;
     }

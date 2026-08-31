@@ -72,6 +72,7 @@ const OPEN_ROW = 'open';
 
 export function RotaBuilder() {
   const {
+    locationId,
     weekStart,
     setWeekStart,
     mergedRoster,
@@ -125,12 +126,23 @@ export function RotaBuilder() {
   const bump = () => setDataVersion((v) => v + 1);
 
   useEffect(() => {
-    fetchRotaTemplates('seed-location').then(setTemplates).catch(() => setTemplates([]));
-  }, []);
+    // No session, no real venue to load templates for — leave the list
+    // empty rather than fetching against a hardcoded/wrong location.
+    if (!locationId) {
+      setTemplates([]);
+      return;
+    }
+    fetchRotaTemplates(locationId).then(setTemplates).catch(() => setTemplates([]));
+  }, [locationId]);
 
   useEffect(() => {
+    // Same reasoning as the templates effect above — this is a supplemental
+    // sidecar fetch, so with no locationId it simply skips rather than
+    // fetching against the wrong venue; there's nothing to clear since a
+    // page with no locationId has nothing else to render anyway.
+    if (!locationId) return;
     let cancelled = false;
-    fetchWeekShifts('seed-location', weekStart)
+    fetchWeekShifts(locationId, weekStart)
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
@@ -149,7 +161,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, dataVersion]);
+  }, [weekStart, dataVersion, locationId]);
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
@@ -349,6 +361,10 @@ export function RotaBuilder() {
   const templatableShifts = weekShifts.filter((s) => Boolean(roleIdByShiftId[s.id]));
 
   const saveWeekAsTemplate = async (name: string) => {
+    if (!locationId) {
+      say('You must be signed in to do this.');
+      return;
+    }
     const entries: TemplateEntryInput[] = templatableShifts.map((s) => ({
       dayOffset: days.indexOf(s.date),
       roleId: roleIdByShiftId[s.id]!,
@@ -362,7 +378,7 @@ export function RotaBuilder() {
       return;
     }
     try {
-      const template = await saveRotaTemplate('seed-location', name, entries, currentEmployeeId);
+      const template = await saveRotaTemplate(locationId, name, entries, currentEmployeeId);
       setTemplates((prev) => [...prev, template]);
       say(`Saved "${template.name}" — ${entries.length} shifts captured.`);
       setSheet(null);

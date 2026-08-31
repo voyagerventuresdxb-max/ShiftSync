@@ -118,6 +118,16 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
   };
 
   const loadInvite = async () => {
+    // Cancels any still-pending roster→review handoff timer (see onCommitted
+    // below): reaching the invite screen means that transition is moot no
+    // matter how it got skipped/short-circuited — without this, a fast
+    // upload-commit-then-skip-then-generate-invite sequence could leave the
+    // stale 900ms timer firing after this screen is already showing, yanking
+    // the user backward off the invite screen it forcibly calls setStep on.
+    if (handoffTimeoutRef.current) {
+      clearTimeout(handoffTimeoutRef.current);
+      handoffTimeoutRef.current = null;
+    }
     setError(null);
     setLoadingInvite(true);
     try {
@@ -278,7 +288,20 @@ export default function OnboardingWizard({ locationId }: { locationId: string })
               handoffTimeoutRef.current = setTimeout(() => setStep('review'), 900);
             }}
           />
-          <button className="btn btn-ghost mt-4" onClick={() => setStep('review')}>
+          <button
+            className="btn btn-ghost mt-4"
+            onClick={() => {
+              // Explicitly choosing to skip supersedes any handoff already
+              // queued by a just-finished upload (onCommitted above) — clear
+              // it so it can't fire later and forcibly bounce the manager
+              // back to 'review' after they've already moved further on.
+              if (handoffTimeoutRef.current) {
+                clearTimeout(handoffTimeoutRef.current);
+                handoffTimeoutRef.current = null;
+              }
+              setStep('review');
+            }}
+          >
             Set it up as I go instead
           </button>
         </section>

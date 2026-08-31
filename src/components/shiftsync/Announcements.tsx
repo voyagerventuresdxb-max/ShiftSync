@@ -23,7 +23,7 @@ function formatStamp(iso: string): string {
 }
 
 export function Announcements() {
-  const { currentEmployeeId, mergedRoster } = useAppState();
+  const { locationId, currentEmployeeId, mergedRoster } = useAppState();
   const [items, setItems] = useState<AnnouncementDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,8 +31,16 @@ export function Announcements() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    // Neither Home nor My Shifts (this component's two hosts) requires a
+    // session — with none, there's no real venue to load announcements for,
+    // so show the empty state rather than fetching against a hardcoded id.
+    if (!locationId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
-    fetchAnnouncements('seed-location')
+    fetchAnnouncements(locationId)
       .then((list) => {
         if (!cancelled) setItems(list);
       })
@@ -45,10 +53,14 @@ export function Announcements() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [locationId]);
 
   async function save() {
     if (!draft || !draft.body.trim()) return;
+    if (!draft.id && !locationId) {
+      setError('You must be signed in to post an announcement.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -56,7 +68,7 @@ export function Announcements() {
         const updated = await updateAnnouncement(draft.id, draft.body.trim());
         setItems((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       } else {
-        const created = await postAnnouncement('seed-location', draft.body.trim(), currentEmployeeId);
+        const created = await postAnnouncement(locationId!, draft.body.trim(), currentEmployeeId);
         setItems((prev) => [created, ...prev]);
       }
       setDraft(null);

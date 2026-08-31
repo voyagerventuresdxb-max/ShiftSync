@@ -75,7 +75,13 @@ joinRouter.post('/verify-otp', async (req, res) => {
         pending: false,
         token: plainToken,
         expiresAt: expiresAt.toISOString(),
-        user: { id: match.id, fullName: match.fullName, jobTitle: match.jobTitle },
+        user: {
+          id: match.id,
+          fullName: match.fullName,
+          jobTitle: match.jobTitle,
+          locationId: match.locationId,
+          systemRole: match.systemRole,
+        },
       });
     }
 
