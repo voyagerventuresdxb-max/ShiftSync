@@ -27,20 +27,21 @@ async function sessionFor(userId: string): Promise<string> {
   return plainToken;
 }
 
-test('POST /api/attendance/clock-in rejects a second clock-in while one is already open — no double open AttendanceLog', async () => {
+/** Builds a throwaway Location + one STAFF User for a test. Everything cascades off the location row, so `prisma.location.delete` is the only cleanup a caller needs. */
+async function createTestStaff(label: string) {
   const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
-
   const location = await prisma.location.create({
-    data: {
-      organizationId: seedLocation!.organizationId,
-      name: '__attendance-test__ double clock-in',
-      timezone: 'Asia/Dubai',
-    },
+    data: { organizationId: seedLocation!.organizationId, name: `__attendance-test__ ${label}`, timezone: 'Asia/Dubai' },
   });
   const staff = await prisma.user.create({
-    data: { locationId: location.id, fullName: '__attendance-test__ Server', systemRole: 'STAFF' },
+    data: { locationId: location.id, fullName: `__attendance-test__ ${label} Staff`, systemRole: 'STAFF' },
   });
+  return { location, staff };
+}
+
+test('POST /api/attendance/clock-in rejects a second clock-in while one is already open — no double open AttendanceLog', async () => {
+  const { location, staff } = await createTestStaff('double clock-in');
 
   try {
     const token = await sessionFor(staff.id);
@@ -80,19 +81,7 @@ test('POST /api/attendance/clock-in rejects a second clock-in while one is alrea
 // sequential test above cannot exercise (it only replays a stale
 // expectation, never a genuine simultaneous request).
 test('POST /api/attendance/clock-in — genuinely concurrent double clock-in leaves exactly one open AttendanceLog', async () => {
-  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
-  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
-
-  const location = await prisma.location.create({
-    data: {
-      organizationId: seedLocation!.organizationId,
-      name: '__attendance-test__ concurrent double clock-in',
-      timezone: 'Asia/Dubai',
-    },
-  });
-  const staff = await prisma.user.create({
-    data: { locationId: location.id, fullName: '__attendance-test__ Concurrent', systemRole: 'STAFF' },
-  });
+  const { location, staff } = await createTestStaff('concurrent double clock-in');
 
   try {
     const token = await sessionFor(staff.id);
@@ -116,15 +105,20 @@ test('POST /api/attendance/clock-in — genuinely concurrent double clock-in lea
       // a legitimate, valid outcome and confirms the ordinary path still
       // behaves correctly end-to-end. The actual proof that the DB-level
       // constraint itself works is the next test below (direct-mechanism,
-      // not HTTP-level). Assert loosely on outcome shape (never two 201s,
-      // never a raw 500) rather than requiring a specific split.
+      // not HTTP-level).
+      //
+      // Exactly [201, 409] is the ONLY correct outcome, not one option among
+      // several — with the migration actually working, the DB can commit at
+      // most one open-log insert per user, so two genuine concurrent
+      // clock-ins can never both return 201 (an earlier draft of this
+      // assertion allowed `[201, 201]` as a hypothetical alternative, which
+      // a review pass correctly called out as dead/self-defeating: if that
+      // branch ever fired, the `openLogs.length === 1` assertion below would
+      // independently fail anyway, so allowing it here just weakened what
+      // this test actually proves).
       const [a, b] = await Promise.all([clockIn(), clockIn()]);
       const statuses = [a.status, b.status].sort();
-      assert.ok(
-        (statuses[0] === 201 && statuses[1] === 409) || (statuses[0] === 201 && statuses[1] === 201),
-        `expected [201,409] (raced or serialized-through-fast-path) or, if the unique index itself had to arbitrate, never two failures — got ${JSON.stringify(statuses)}`,
-      );
-      assert.notEqual(statuses[1], 500, 'a genuine race must never surface as a raw 500');
+      assert.deepEqual(statuses, [201, 409], `expected exactly one success and one clean conflict — got ${JSON.stringify(statuses)}`);
 
       const openLogs = await prisma.attendanceLog.findMany({ where: { userId: staff.id, clockOutAt: null } });
       assert.equal(openLogs.length, 1, 'exactly one open AttendanceLog must exist after the race, never two, never zero');
@@ -141,19 +135,7 @@ test('POST /api/attendance/clock-in — genuinely concurrent double clock-in lea
 // the app-level `findFirst` guard) — the DB's partial unique index must
 // reject the second with Prisma's P2002 unique-violation code.
 test('DB-level partial unique index rejects a second open AttendanceLog for the same user with P2002', async () => {
-  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
-  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
-
-  const location = await prisma.location.create({
-    data: {
-      organizationId: seedLocation!.organizationId,
-      name: '__attendance-test__ P2002 mechanism proof',
-      timezone: 'Asia/Dubai',
-    },
-  });
-  const staff = await prisma.user.create({
-    data: { locationId: location.id, fullName: '__attendance-test__ Mechanism', systemRole: 'STAFF' },
-  });
+  const { location, staff } = await createTestStaff('P2002 mechanism proof');
 
   try {
     // First open log — the "no open log" precondition was true when both
@@ -172,6 +154,12 @@ test('DB-level partial unique index rejects a second open AttendanceLog for the 
       (err: unknown) => {
         assert.ok(err instanceof Prisma.PrismaClientKnownRequestError, 'expected a Prisma known-request error');
         assert.equal((err as Prisma.PrismaClientKnownRequestError).code, 'P2002', 'expected the unique-violation code');
+        // The route's own catch pins down `meta.target` to exactly ["user_id"]
+        // before treating a P2002 as "already clocked in" (so an unrelated
+        // future unique-constraint violation doesn't get silently
+        // misreported as this one) — verified here against the real error
+        // Postgres/Prisma actually produces for this specific raw index.
+        assert.deepEqual((err as Prisma.PrismaClientKnownRequestError).meta?.target, ['user_id'], 'expected meta.target to name exactly the userId column, matching what the route\'s own catch checks for');
         return true;
       },
     );

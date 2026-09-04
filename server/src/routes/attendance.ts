@@ -74,8 +74,28 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
       .catch((err) => {
         if (err instanceof AlreadyClockedInError) return null;
         // Real backstop: the DB-level partial unique index rejected a
-        // genuine concurrent double-create. Same clean 409 as the fast-path.
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return null;
+        // genuine concurrent double-create. Checking `meta.target` (not just
+        // the P2002 code) matters — this transaction also writes an audit
+        // log row, and a future unique constraint added to either model
+        // would also throw P2002; without pinning down which one fired,
+        // that unrelated violation would get silently swallowed and
+        // misreported as "already clocked in" instead of surfacing as the
+        // real bug it'd be. Verified empirically against this exact raw
+        // index (Prisma doesn't expose the index's own name here, only the
+        // column(s) the DB reported): `meta.target` for this specific
+        // violation is `["user_id"]` — nothing else, since this partial
+        // index is keyed on that one column. An exact-match check (not a
+        // loose `.includes`) matters too: a future `@@unique([userId, x])`
+        // would also report a `target` containing `"user_id"`, and a loose
+        // check would wrongly treat that different constraint as this one.
+        const target = err instanceof Prisma.PrismaClientKnownRequestError ? (err.meta?.target as unknown) : undefined;
+        const isOpenClockInViolation =
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002' &&
+          Array.isArray(target) &&
+          target.length === 1 &&
+          target[0] === 'user_id';
+        if (isOpenClockInViolation) return null;
         throw err;
       });
     if (!log) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
