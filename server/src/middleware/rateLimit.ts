@@ -1,4 +1,4 @@
-import { rateLimit } from 'express-rate-limit';
+import { rateLimit, ipKeyGenerator } from 'express-rate-limit';
 import type { Request, Response } from 'express';
 
 /**
@@ -12,10 +12,12 @@ import type { Request, Response } from 'express';
  */
 function sessionKey(req: Request): string {
   // Defensive fallback only — in the intended mount order (after requireSession)
-  // req.user is always populated by the time this runs. Falling back to req.ip
-  // instead of throwing means a future mis-ordered mount degrades to a shared
-  // per-IP bucket rather than a raw 500 leaking an internal error string.
-  return req.user?.id ?? req.ip ?? 'unknown';
+  // req.user is always populated by the time this runs. Falling back to a
+  // per-IP bucket (via express-rate-limit's own IPv6-safe helper, not raw
+  // req.ip — a raw string lets an IPv6 client bypass the limit by rotating
+  // the low bits of its address) means a future mis-ordered mount degrades
+  // gracefully instead of throwing a raw 500 that leaks an internal error.
+  return req.user?.id ?? ipKeyGenerator(req.ip ?? '');
 }
 
 /**
@@ -27,45 +29,39 @@ function sendTooManyRequests(_req: Request, res: Response): void {
   res.status(429).json({ error: 'Too many voice requests — please wait a few minutes and try again.' });
 }
 
+/** Shared shape for every voice-route limiter — only `limit` varies per route. */
+function makeVoiceLimiter(limit: number) {
+  return rateLimit({
+    windowMs: 5 * 60 * 1000,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    // A failed call (bad input, provider outage) shouldn't burn the same
+    // budget as a successful one — otherwise a user retrying through a real
+    // Gemini outage gets 429-locked out precisely when retries matter.
+    skipFailedRequests: true,
+    keyGenerator: sessionKey,
+    handler: sendTooManyRequests,
+  });
+}
+
 /**
- * Rate limit for POST /api/voice/transcribe (audio upload + Gemini/Whisper-
- * style transcription call — the more expensive of the two AI-backed voice
+ * POST /api/voice/transcribe (audio upload + Gemini/Whisper-style
+ * transcription call — the more expensive of the two AI-backed voice
  * routes, both in payload size and provider processing cost). 20 requests
  * per 5 minutes comfortably covers real usage (a staff member firing off an
  * occasional voice command, including a few retries if a recording came out
  * garbled) while keeping the blast radius of a compromised/buggy client or
  * an abusive session small relative to a real per-provider-call cost.
  */
-export const transcribeRateLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  // A failed call (bad input, provider outage) shouldn't burn the same budget
-  // as a successful one — otherwise a user retrying through a real Gemini
-  // outage gets 429-locked out of the feature precisely when retries matter.
-  skipFailedRequests: true,
-  keyGenerator: sessionKey,
-  handler: sendTooManyRequests,
-});
+export const transcribeRateLimiter = makeVoiceLimiter(20);
 
 /**
- * Rate limit for POST /api/voice/parse-intent (short text transcript ->
- * Gemini intent parsing — no audio payload, a smaller prompt, and a
- * schema-constrained response, so it is cheaper and faster per call than
- * /transcribe). A somewhat higher allowance is defensible on that basis, but
- * this deliberately stays in the same "occasional voice command" ballpark
+ * POST /api/voice/parse-intent (short text transcript -> Gemini intent
+ * parsing — no audio payload, a smaller prompt, and a schema-constrained
+ * response, so it is cheaper and faster per call than /transcribe). A
+ * somewhat higher allowance is defensible on that basis, but this
+ * deliberately stays in the same "occasional voice command" ballpark
  * rather than opening the door to materially more volume than /transcribe.
  */
-export const parseIntentRateLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  // A failed call (bad input, provider outage) shouldn't burn the same budget
-  // as a successful one — otherwise a user retrying through a real Gemini
-  // outage gets 429-locked out of the feature precisely when retries matter.
-  skipFailedRequests: true,
-  keyGenerator: sessionKey,
-  handler: sendTooManyRequests,
-});
+export const parseIntentRateLimiter = makeVoiceLimiter(30);

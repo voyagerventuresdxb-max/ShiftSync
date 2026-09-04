@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog } from '../lib/auditLog.js';
@@ -17,11 +17,20 @@ import { writeAuditLog } from '../lib/auditLog.js';
  */
 export const staffDirectoryRouter = Router();
 
+/** The one place "does this caller get personal fields?" is decided — every route derives `redactPersonal` from this, never a literal. */
+function redactPersonalFor(req: Request): boolean {
+  return req.user!.systemRole === 'STAFF';
+}
+
 /**
  * Shape shared by GET/POST/PATCH responses below.
  * `redactPersonal` nulls phone/preferredLanguage/hiredAt/terminatedAt for STAFF
  * callers (no STAFF-reachable consumer reads them) — required, not defaulted,
- * so a new call site can't silently ship them unredacted.
+ * so a new call site can't silently ship them unredacted. Always derive it
+ * via `redactPersonalFor(req)` below rather than a literal, even at the two
+ * `requireManager`-gated write routes where it's always `false` today — a
+ * hardcoded literal at those sites would silently start leaking these fields
+ * again if either route ever became STAFF-reachable.
  */
 function toDto(
   u: {
@@ -75,7 +84,7 @@ staffDirectoryRouter.get('/:locationId', requireSession, async (req, res) => {
       orderBy: { fullName: 'asc' },
       include: { role: true, location: { select: { name: true } } },
     });
-    const redactPersonal = req.user!.systemRole === 'STAFF';
+    const redactPersonal = redactPersonalFor(req);
     return res.status(200).json({ staff: users.map((u) => toDto(u, redactPersonal)) });
   } catch (err) {
     console.error('[staffDirectory.list] failed', err);
@@ -121,7 +130,7 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
       });
       return created;
     });
-    return res.status(201).json(toDto(user, false));
+    return res.status(201).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
     console.error('[staffDirectory.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while adding the staff member.' });
@@ -210,7 +219,7 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       });
       return updated;
     });
-    return res.status(200).json(toDto(user, false));
+    return res.status(200).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
     console.error('[staffDirectory.update] failed', err);
     return res.status(500).json({ error: 'Unexpected error while updating the staff member.' });

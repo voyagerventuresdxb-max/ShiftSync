@@ -19,12 +19,12 @@ export interface PersistShiftsResult {
  * these creates to commit atomically with the audit-log row it writes right
  * after this returns, so it wraps both in one interactive transaction and
  * passes `tx` through here. Because a `tx` cannot itself open a nested
- * `$transaction`, the batch of creates below runs as `Promise.all` rather
- * than the array form of `$transaction` — when `prisma` here IS a `tx`,
- * they're already part of one atomic transaction from the caller; when it's
- * the top-level client (e.g. this function's own unit test), the concurrent
- * creates are no longer wrapped in a DB transaction, which is unchanged in
- * practice since nothing currently calls this outside of a wrapping `tx`.
+ * `$transaction`, the creates below run sequentially in a plain loop rather
+ * than the array form of `$transaction` — an interactive-transaction client
+ * is bound to a single reserved DB connection, so firing them concurrently
+ * (e.g. via `Promise.all`) wouldn't parallelize anyway and risks tripping
+ * the transaction's own timeout under some drivers/poolers. Sequential is
+ * both correct and no slower in practice for a single-connection client.
  */
 export async function persistShifts(
   prisma: Prisma.TransactionClient | PrismaClient,
@@ -41,12 +41,13 @@ export async function persistShifts(
   const location = await prisma.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
   const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
 
-  const created = await Promise.all(
-    importable.map((row) => {
-      const startTime = combineDateAndTime(row.date, row.startTime, timezone);
-      const endTime = combineDateAndTime(row.date, row.endTime, timezone, row.overnight);
+  const created: { id: string; userId: string | null }[] = [];
+  for (const row of importable) {
+    const startTime = combineDateAndTime(row.date, row.startTime, timezone);
+    const endTime = combineDateAndTime(row.date, row.endTime, timezone, row.overnight);
 
-      return prisma.shift.create({
+    created.push(
+      await prisma.shift.create({
         data: {
           locationId,
           roleId: row.resolvedRoleId!,
@@ -60,9 +61,9 @@ export async function persistShifts(
           status: 'PUBLISHED',
         },
         select: { id: true, userId: true },
-      });
-    }),
-  );
+      }),
+    );
+  }
 
   return {
     createdCount: created.length,

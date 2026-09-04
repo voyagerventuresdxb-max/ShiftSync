@@ -372,6 +372,11 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res
       });
       return persisted;
     });
+    // Deleted only after the transaction commits — deleting it before commit
+    // and then having the transaction roll back (e.g. the audit write fails)
+    // would permanently strand the batch as unretryable with nothing
+    // actually persisted. This does leave a narrow window where a duplicate
+    // concurrent confirm on the same batchId isn't caught (see MEMORY.md).
     uploadCache.delete(batchId);
 
     return res.status(201).json({

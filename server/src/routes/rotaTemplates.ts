@@ -165,13 +165,17 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, async (req, res) => {
     const start = new Date(`${weekStart}T00:00:00.000Z`);
 
     const created = await prisma.$transaction(async (tx) => {
-      const rows = await Promise.all(
-        entries.map((e) => {
-          const date = new Date(start);
-          date.setUTCDate(date.getUTCDate() + e.dayOffset);
-          const dateStr = date.toISOString().slice(0, 10);
-          const overnight = e.end <= e.start;
-          return tx.shift.create({
+      // Sequential, not Promise.all: `tx` is bound to a single reserved DB
+      // connection, so concurrent creates against it wouldn't parallelize
+      // anyway and risk tripping the transaction's own timeout.
+      const rows: { id: string }[] = [];
+      for (const e of entries) {
+        const date = new Date(start);
+        date.setUTCDate(date.getUTCDate() + e.dayOffset);
+        const dateStr = date.toISOString().slice(0, 10);
+        const overnight = e.end <= e.start;
+        rows.push(
+          await tx.shift.create({
             data: {
               locationId: template.locationId,
               roleId: e.roleId,
@@ -183,9 +187,9 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, async (req, res) => {
               managerNotes: e.note ?? null,
               status: 'DRAFT',
             },
-          });
-        }),
-      );
+          }),
+        );
+      }
       await writeAuditLog(tx, {
         locationId: template.locationId,
         actorId: req.user!.id,
