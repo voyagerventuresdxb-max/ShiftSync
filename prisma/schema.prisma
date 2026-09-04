@@ -318,6 +318,13 @@ enum AttendanceStatus {
   EXCUSED
 }
 
+// A partial unique index enforcing "at most one open clock-in per user"
+// (user_id, WHERE clock_out_at IS NULL) exists on this table via raw
+// migration SQL (prisma/migrations/20260904152729_attendance_one_open_clock_in_per_user) —
+// intentionally NOT representable as an @@unique here, since Prisma's schema
+// DSL can't express a conditional/partial unique index. Don't wonder why one
+// isn't declared below; it's enforced at the DB level instead. See
+// attendance.ts's POST /clock-in for how the resulting P2002 is handled.
 model AttendanceLog {
   id         String           @id @default(cuid())
   userId     String           @map("user_id")

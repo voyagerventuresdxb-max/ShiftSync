@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog } from '../lib/auditLog.js';
@@ -7,8 +8,10 @@ export const attendanceRouter = Router();
 
 /**
  * Thrown inside the clock-in transaction when the re-checked "no open log"
- * guard finds one anyway — see the comment at its call site below for why
- * this only narrows, rather than closes, the underlying race.
+ * fast-path guard finds one anyway — the common, non-racing case. See the
+ * comment at its call site below: the real enforcement is now a DB-level
+ * partial unique index, and a genuine race lands in the P2002 catch instead
+ * of here.
  */
 class AlreadyClockedInError extends Error {}
 
@@ -35,20 +38,22 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
       if (!ownedOrNotFound(req, res, shift, `Shift "${shiftId}" not found.`)) return;
     }
 
-    // The "already clocked in" guard is re-checked with `tx` immediately
-    // before the create, inside the same transaction, instead of via a plain
-    // `prisma` read beforehand — this narrows the TOCTOU window from the
-    // whole request down to two round trips inside one transaction. It does
-    // NOT fully close it: this is a CREATE (a brand-new row), not an update
-    // of an existing row, so there is no prior row to put a conditional
-    // `WHERE` on the way `joinActions.ts`/`swapActions.ts`/`staffDirectory.ts`
-    // do. Under Postgres's default READ COMMITTED isolation, two concurrent
-    // transactions can still both run this `findFirst` and both see "no open
-    // log" before either commits its `create` — so two opens for the same
-    // user remain possible in a genuine simultaneous-request race. Closing
-    // that fully would need a DB-level partial unique index (`CREATE UNIQUE
-    // INDEX ... ON attendance_logs (user_id) WHERE clock_out_at IS NULL`),
-    // which was deliberately not added here — see MEMORY.md for why.
+    // RACE CLOSED. The real enforcement is a DB-level partial unique index
+    // (`attendance_logs_one_open_per_user`, prisma/migrations/
+    // 20260904152729_attendance_one_open_clock_in_per_user):
+    // `CREATE UNIQUE INDEX ... ON attendance_logs (user_id) WHERE
+    // clock_out_at IS NULL` — Postgres itself now refuses a second open log
+    // for the same user, full stop, regardless of transaction interleaving
+    // under READ COMMITTED. The `tx`-scoped `findFirst` below is kept as a
+    // fast, friendly PRE-CHECK for the common sequential case only: it gives
+    // a clean 409 without wasting a round trip attempting an insert that
+    // would fail anyway. It is NOT what makes this safe. The actual
+    // backstop for a genuine concurrent race is the `catch` below: if two
+    // requests both pass the pre-check (both see "no open log") and both
+    // attempt the `create`, Postgres's unique index lets exactly one commit
+    // and rejects the other with a unique-violation, which Prisma surfaces
+    // as `P2002` — caught and translated to the same 409 as the fast-path,
+    // so callers never see a raw 500 for this.
     const log = await prisma
       .$transaction(async (tx) => {
         const open = await tx.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
@@ -68,6 +73,9 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
       })
       .catch((err) => {
         if (err instanceof AlreadyClockedInError) return null;
+        // Real backstop: the DB-level partial unique index rejected a
+        // genuine concurrent double-create. Same clean 409 as the fast-path.
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return null;
         throw err;
       });
     if (!log) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
