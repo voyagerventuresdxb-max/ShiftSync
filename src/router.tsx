@@ -1,4 +1,4 @@
-import { createBrowserRouter, Link, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Link, Navigate, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { Pencil, Rocket } from 'lucide-react';
 import { AppShell, type RouteHandle } from './components/shiftsync/AppShell';
@@ -22,10 +22,15 @@ import OnboardingContent from './routes/OnboardingRoute';
  * required a session since the actor-identity-enforcement phase, so an
  * unauthenticated visit could previously only ever fail. Sends straight to
  * `/join`'s existing login mode rather than its default join/self-
- * registration mode. Does not redirect back to the originally-requested page
- * after login — `JoinFlow`'s login success path always lands on `/my-shifts`
- * today; wiring a return-to-origin redirect through that flow was not part
- * of this fix (see MEMORY.md's open follow-up).
+ * registration mode.
+ *
+ * When redirecting a signed-out visit, the current path (pathname + search)
+ * travels along as a `returnTo` query param so `JoinFlow`'s login success
+ * path can send the visitor back to where they were headed instead of
+ * always landing on `/my-shifts` (see MEMORY.md's open follow-up, now
+ * closed). `managerOnly`'s redirect below is unrelated and deliberately
+ * left untouched — it sends a real, valid STAFF session away from a page
+ * it never had access to, not an unauthenticated visitor.
  *
  * `/onboarding` was originally left off this list on the reasoning that it
  * "doesn't touch the four hardened routes" — wrong: its venue-setup step
@@ -59,7 +64,11 @@ import OnboardingContent from './routes/OnboardingRoute';
  */
 function RequireSession({ children, managerOnly }: { children: ReactNode; managerOnly?: boolean }) {
   const { session } = useIdentity();
-  if (!session) return <Navigate to="/join?mode=login" replace />;
+  const location = useLocation();
+  if (!session) {
+    const returnTo = encodeURIComponent(`${location.pathname}${location.search}`);
+    return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
+  }
   if (managerOnly && session.user.systemRole === 'STAFF') return <Navigate to="/my-shifts" replace />;
   return <>{children}</>;
 }

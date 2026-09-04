@@ -25,11 +25,18 @@ import JoinFlow from '../components/JoinFlow';
  * venue context to give it. Only JOIN mode (self-registering against one
  * specific venue's roster) still requires a real `location` param, so the
  * missing-param dead-end below only applies there.
+ *
+ * `?returnTo=` carries the path `RequireSession` (in `router.tsx`) redirected
+ * from, so a successful login can send the visitor back there instead of
+ * always landing on `/my-shifts`. Passed straight through to `JoinFlow`,
+ * which is where it gets validated before ever being used as a navigation
+ * target — this route does no validation of its own.
  */
 export default function JoinContent() {
   const [searchParams] = useSearchParams();
   const locationId = searchParams.get('location')?.trim();
   const initialMode = searchParams.get('mode') === 'login' ? 'login' : undefined;
+  const returnTo = searchParams.get('returnTo') ?? undefined;
 
   if (!locationId && initialMode !== 'login') {
     return (
@@ -48,5 +55,5 @@ export default function JoinContent() {
     );
   }
 
-  return <JoinFlow locationId={locationId} initialMode={initialMode} />;
+  return <JoinFlow locationId={locationId} initialMode={initialMode} returnTo={returnTo} />;
 }
