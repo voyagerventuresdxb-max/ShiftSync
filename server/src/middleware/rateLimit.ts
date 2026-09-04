@@ -26,20 +26,35 @@ function sessionKey(req: Request): string {
  * route files) instead of express-rate-limit's default HTML/text 429 body.
  */
 function sendTooManyRequests(_req: Request, res: Response): void {
-  res.status(429).json({ error: 'Too many voice requests — please wait a few minutes and try again.' });
+  res.status(429).json({ error: 'Too many requests — please wait a few minutes and try again.' });
 }
 
-/** Shared shape for every voice-route limiter — only `limit` varies per route. */
-function makeVoiceLimiter(limit: number) {
+/**
+ * Shared shape for every session-keyed, AI-provider-backed route limiter
+ * (voice transcription/intent parsing, roster-upload vision extraction, and
+ * any future Gemini/Whisper-style route) — only `limit` and `skipFailedRequests`
+ * vary per route. Not voice-specific: this is the general per-user "guard an
+ * expensive external AI call" factory for this codebase.
+ *
+ * `skipFailedRequests` is NOT safe to hardcode `true` for every caller: it
+ * only makes sense where a >=400 response means "the provider call never
+ * really happened, or the provider itself is down" (voice.ts's two routes
+ * only ever fail with a 503 VOICE_UNAVAILABLE from a genuine provider
+ * outage). schedules.ts's upload route is different — a malformed/
+ * low-quality file routinely returns 422 AFTER a real, paid Gemini or local
+ * Ollama vision call already ran and simply couldn't extract a usable
+ * roster. Defaulting `skipFailedRequests` to true there would let repeated
+ * bad uploads dodge the counter entirely while still spending the real
+ * per-call cost this limiter exists to cap — so each call site must pass an
+ * explicit value, not inherit a blanket default.
+ */
+function makeAiRouteLimiter(limit: number, skipFailedRequests: boolean) {
   return rateLimit({
     windowMs: 5 * 60 * 1000,
     limit,
     standardHeaders: true,
     legacyHeaders: false,
-    // A failed call (bad input, provider outage) shouldn't burn the same
-    // budget as a successful one — otherwise a user retrying through a real
-    // Gemini outage gets 429-locked out precisely when retries matter.
-    skipFailedRequests: true,
+    skipFailedRequests,
     keyGenerator: sessionKey,
     handler: sendTooManyRequests,
   });
@@ -53,8 +68,11 @@ function makeVoiceLimiter(limit: number) {
  * occasional voice command, including a few retries if a recording came out
  * garbled) while keeping the blast radius of a compromised/buggy client or
  * an abusive session small relative to a real per-provider-call cost.
+ * `skipFailedRequests: true` — this route's only failure mode is a 503 from
+ * a genuine Gemini/Whisper outage, so a retrying user shouldn't burn budget
+ * on a call that never really completed.
  */
-export const transcribeRateLimiter = makeVoiceLimiter(20);
+export const transcribeRateLimiter = makeAiRouteLimiter(20, true);
 
 /**
  * POST /api/voice/parse-intent (short text transcript -> Gemini intent
@@ -63,5 +81,33 @@ export const transcribeRateLimiter = makeVoiceLimiter(20);
  * somewhat higher allowance is defensible on that basis, but this
  * deliberately stays in the same "occasional voice command" ballpark
  * rather than opening the door to materially more volume than /transcribe.
+ * `skipFailedRequests: true` for the same reason as /transcribe above.
  */
-export const parseIntentRateLimiter = makeVoiceLimiter(30);
+export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
+
+/**
+ * POST /api/schedules/upload (roster file upload — schedules.ts routes an
+ * uploaded file across several parsing paths depending on shape: a
+ * deterministic grid/text parser first where possible, a local Ollama vision
+ * model for images and scanned/no-text-layer PDFs, and — for an Excel/CSV
+ * grid the deterministic parser can't recognize — a last-resort call to
+ * parseVision.ts's parseRosterGrid, which hits the Gemini API directly for
+ * full-page grid reconstruction, anomaly detection, and leave-record
+ * extraction in one shot). Whichever path a given upload takes, the request
+ * itself is a full file (image/PDF/spreadsheet), a materially larger payload
+ * than /transcribe's audio, and every non-deterministic path is a more
+ * expensive extraction call than a single transcription. It is also a far
+ * rarer legitimate action than a voice command: a manager uploads a roster
+ * once per scheduling cycle, plus maybe a couple of retries if a scan came
+ * out cropped wrong or the wrong file got picked. 10 requests per 5 minutes
+ * is deliberately tighter than /transcribe's 20 — reflecting the higher
+ * per-call cost on the paths that do hit an external/local AI model — while
+ * still leaving comfortable headroom over any realistic legitimate retry
+ * burst. `skipFailedRequests: false` — unlike voice.ts's routes, a 422 here
+ * (`VisionIngestionError`/`PdfRasterizeError`) routinely follows a real,
+ * already-spent Gemini or Ollama call that just couldn't extract a usable
+ * roster from a bad file; excluding those from the counter would let
+ * repeated bad uploads dodge the limit while still paying the real
+ * per-call cost this limiter exists to cap.
+ */
+export const rosterUploadRateLimiter = makeAiRouteLimiter(10, false);

@@ -15,6 +15,7 @@ import { persistShifts } from '../parsing/persistShifts.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
 import { uploadCache } from '../store/uploadCache.js';
 import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -81,7 +82,7 @@ export const schedulesRouter = Router();
  * The response includes a `batchId` to pass to the confirm step below.
  * Session-gated: locationId is derived from the caller's session.
  */
-schedulesRouter.post('/upload', requireSession, upload.single('file'), async (req, res) => {
+schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.single('file'), async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     if (!req.file) {
