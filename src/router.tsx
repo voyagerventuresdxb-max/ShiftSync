@@ -66,7 +66,11 @@ function RequireSession({ children, managerOnly }: { children: ReactNode; manage
   const { session } = useIdentity();
   const location = useLocation();
   if (!session) {
-    const returnTo = encodeURIComponent(`${location.pathname}${location.search}`);
+    // Includes the hash too, even though no gated route reads one today —
+    // cheap to keep, and it means a future hash-based deep link (e.g.
+    // `/floor-plan#table-12`) doesn't silently lose its fragment across a
+    // sign-in round trip the day one gets added.
+    const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
     return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
   }
   if (managerOnly && session.user.systemRole === 'STAFF') return <Navigate to="/my-shifts" replace />;

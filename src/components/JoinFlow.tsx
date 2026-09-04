@@ -46,7 +46,14 @@ type Mode = 'join' | 'login';
  */
 export function isSafeReturnTo(path: string | undefined | null): path is string {
   if (!path) return false;
-  if (path.startsWith('/join')) return false; // avoid redirecting back into the join flow itself
+  // Case-INSENSITIVE on purpose: react-router-dom's route matching defaults
+  // to caseSensitive: false (confirmed for this app's own `/join` route in
+  // router.tsx, which sets no override), so `/JOIN` really does route back
+  // into this same flow. A case-sensitive check here would let `/JOIN`
+  // through as "safe," and the loop this guard exists to prevent would
+  // still happen — landing on the "missing venue info" dead-end instead of
+  // anywhere useful, just via a differently-cased link.
+  if (path.toLowerCase().startsWith('/join')) return false;
   const base = 'https://internal.invalid';
   try {
     return new URL(path, base).origin === base;
@@ -102,8 +109,17 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
     setSubmitting(true);
     setError(null);
     try {
-      const destination = isSafeReturnTo(returnTo) ? returnTo : '/my-shifts';
       if (isLogin) {
+        // returnTo only ever makes sense here: it exists specifically to
+        // send a visitor back to the page RequireSession bounced them from
+        // for lacking a session, and that redirect only ever produces
+        // ?mode=login. A fresh self-registration (the branch below) was
+        // never "returning" from anywhere, so it always goes to /my-shifts
+        // regardless of returnTo — otherwise anyone editing a shared,
+        // unsigned invite link (?location=<id>, no signature over the query
+        // string) could append &returnTo=/floor-plan and redirect a brand
+        // new hire somewhere surprising the moment they're auto-approved.
+        const destination = isSafeReturnTo(returnTo) ? returnTo : '/my-shifts';
         const result = await verifyLoginOtp(phone, code);
         login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
         window.location.href = destination;
@@ -115,7 +131,7 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
         setPhase('pending');
       } else {
         login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
-        window.location.href = destination;
+        window.location.href = '/my-shifts';
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not verify that code.');

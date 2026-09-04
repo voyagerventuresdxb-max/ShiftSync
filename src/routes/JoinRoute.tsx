@@ -27,10 +27,14 @@ import JoinFlow from '../components/JoinFlow';
  * missing-param dead-end below only applies there.
  *
  * `?returnTo=` carries the path `RequireSession` (in `router.tsx`) redirected
- * from, so a successful login can send the visitor back there instead of
+ * from, so a successful LOGIN can send the visitor back there instead of
  * always landing on `/my-shifts`. Passed straight through to `JoinFlow`,
  * which is where it gets validated before ever being used as a navigation
- * target — this route does no validation of its own.
+ * target — this route does no validation of its own. `JoinFlow` only ever
+ * honors it on the login path; a fresh self-registration always lands on
+ * `/my-shifts` regardless of `returnTo`, since it was never "returning"
+ * from anywhere, and honoring it there would let anyone editing a shared,
+ * unsigned invite link redirect a brand-new hire somewhere unexpected.
  */
 export default function JoinContent() {
   const [searchParams] = useSearchParams();
