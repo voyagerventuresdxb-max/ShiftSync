@@ -17,19 +17,27 @@ import { writeAuditLog } from '../lib/auditLog.js';
  */
 export const staffDirectoryRouter = Router();
 
-/** Shape shared by GET/POST/PATCH responses below. */
-function toDto(u: {
-  id: string;
-  fullName: string;
-  jobTitle: string | null;
-  phone: string | null;
-  preferredLanguage: string | null;
-  hiredAt: Date | null;
-  isActive: boolean;
-  terminatedAt: Date | null;
-  role: { id: string; name: string } | null;
-  location: { name: string };
-}) {
+/**
+ * Shape shared by GET/POST/PATCH responses below.
+ * `redactPersonal` nulls phone/preferredLanguage/hiredAt/terminatedAt for STAFF
+ * callers (no STAFF-reachable consumer reads them) — required, not defaulted,
+ * so a new call site can't silently ship them unredacted.
+ */
+function toDto(
+  u: {
+    id: string;
+    fullName: string;
+    jobTitle: string | null;
+    phone: string | null;
+    preferredLanguage: string | null;
+    hiredAt: Date | null;
+    isActive: boolean;
+    terminatedAt: Date | null;
+    role: { id: string; name: string } | null;
+    location: { name: string };
+  },
+  redactPersonal: boolean,
+) {
   return {
     id: u.id,
     fullName: u.fullName,
@@ -40,14 +48,14 @@ function toDto(u: {
     // shifts yet — without it, a new week can't be built at all.
     roleId: u.role?.id ?? null,
     roleName: u.role?.name ?? null,
-    phone: u.phone,
-    preferredLanguage: u.preferredLanguage,
-    hiredAt: u.hiredAt ? u.hiredAt.toISOString().slice(0, 10) : null,
+    phone: redactPersonal ? null : u.phone,
+    preferredLanguage: redactPersonal ? null : u.preferredLanguage,
+    hiredAt: redactPersonal || !u.hiredAt ? null : u.hiredAt.toISOString().slice(0, 10),
     isActive: u.isActive,
     // Employment status is deliberately the isActive + terminatedAt PAIR (no
     // parallel status enum, which would be a second source of truth). Both
     // halves must therefore be exposed, and PATCH keeps them in lockstep.
-    terminatedAt: u.terminatedAt ? u.terminatedAt.toISOString().slice(0, 10) : null,
+    terminatedAt: redactPersonal || !u.terminatedAt ? null : u.terminatedAt.toISOString().slice(0, 10),
     venueName: u.location.name,
   };
 }
@@ -67,7 +75,8 @@ staffDirectoryRouter.get('/:locationId', requireSession, async (req, res) => {
       orderBy: { fullName: 'asc' },
       include: { role: true, location: { select: { name: true } } },
     });
-    return res.status(200).json({ staff: users.map(toDto) });
+    const redactPersonal = req.user!.systemRole === 'STAFF';
+    return res.status(200).json({ staff: users.map((u) => toDto(u, redactPersonal)) });
   } catch (err) {
     console.error('[staffDirectory.list] failed', err);
     return res.status(500).json({ error: 'Unexpected error while loading the staff directory.' });
@@ -109,7 +118,7 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
       entityId: user.id,
       note: `Added ${user.fullName} to the staff directory`,
     });
-    return res.status(201).json(toDto(user));
+    return res.status(201).json(toDto(user, false));
   } catch (err) {
     console.error('[staffDirectory.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while adding the staff member.' });
@@ -195,7 +204,7 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       entityId: user.id,
       note: `Updated ${user.fullName}'s staff record`,
     });
-    return res.status(200).json(toDto(user));
+    return res.status(200).json(toDto(user, false));
   } catch (err) {
     console.error('[staffDirectory.update] failed', err);
     return res.status(500).json({ error: 'Unexpected error while updating the staff member.' });
