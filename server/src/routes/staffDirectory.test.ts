@@ -87,3 +87,116 @@ test('GET /api/staff-directory/:locationId redacts personal fields for a STAFF c
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+test('PATCH /api/staff-directory/:userId: the atomic isActive guard rejects a write keyed off a stale snapshot, after a real toggle has already moved the row', async () => {
+  // Unlike joinActions/attendance, this route always re-reads `existing`
+  // fresh immediately before its own write, so replaying a second FULL HTTP
+  // PATCH with a "stale" body can't actually observe staleness — it just
+  // re-reads the current state and (harmlessly) succeeds again. Confirmed
+  // empirically too: firing two real concurrent PATCHes at this app's
+  // shared `prisma` client serializes at the DB connection/transaction
+  // level in this environment rather than genuinely overlapping, so a
+  // Promise.all-style race is not a reliable way to exercise this guard
+  // here. Instead: do one real PATCH through the live server (proving the
+  // normal path still works end to end), then directly issue the exact
+  // same guarded `updateMany` shape the route uses — scoped to the
+  // now-superseded `isActive: true` snapshot a concurrent racer would have
+  // read before that PATCH committed — and confirm it matches zero rows.
+  // That is the literal mechanism that makes a losing concurrent PATCH
+  // roll back instead of leaving isActive/terminatedAt out of lockstep.
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: {
+      organizationId: seedLocation!.organizationId,
+      name: '__staffdirectory-test__ stale guard',
+      timezone: 'Asia/Dubai',
+    },
+  });
+  const staff = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Toggled', systemRole: 'STAFF', isActive: true },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager2', systemRole: 'MANAGER' },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      // 1. The real toggle, through the real route — this moves the state
+      //    the guard defends (isActive true -> false, terminatedAt set).
+      const real = await fetch(`${baseUrl}/api/staff-directory/${staff.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ isActive: false }),
+      });
+      assert.equal(real.status, 200);
+      const realBody = (await real.json()) as { isActive: boolean; terminatedAt: string | null };
+      assert.equal(realBody.isActive, false);
+      assert.ok(realBody.terminatedAt, 'the real toggle must have set terminatedAt');
+    });
+
+    // 2. A would-be concurrent racer that read `isActive: true` (the ORIGINAL,
+    //    now-stale snapshot) before the real PATCH above committed, replayed
+    //    as the exact guarded statement the route issues inside its
+    //    transaction. It must match nothing — proving this is what would
+    //    have rolled that racer's whole transaction back instead of letting
+    //    it clobber the real toggle's terminatedAt.
+    const staleRacer = await prisma.user.updateMany({
+      where: { id: staff.id, isActive: true },
+      data: { isActive: true, terminatedAt: null },
+    });
+    assert.equal(staleRacer.count, 0, 'a write keyed off the stale isActive:true snapshot must not match the now-false row');
+
+    const persisted = await prisma.user.findUnique({ where: { id: staff.id } });
+    assert.equal(persisted!.isActive, false, 'the stale racer must not have flipped isActive back');
+    assert.ok(persisted!.terminatedAt, 'the stale racer must not have wiped terminatedAt back to null');
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('PATCH /api/staff-directory/:userId: a PATCH that never touches isActive is not guarded by isActive at all', async () => {
+  // Regression test for a real overreach the isActive guard above could
+  // introduce if scoped wrong: the guarded `updateMany`'s WHERE must only
+  // include `isActive: existing.isActive` when THIS request's own body sets
+  // isActive. A plain fullName/phone/etc-only PATCH has to succeed no matter
+  // what isActive currently is, since it never depended on that value —
+  // guarding it anyway would make an unrelated edit spuriously fail with a
+  // 409 any time someone else happened to toggle isActive around the same
+  // time, even though the two edits touch entirely disjoint fields.
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: {
+      organizationId: seedLocation!.organizationId,
+      name: '__staffdirectory-test__ non-isActive patch',
+      timezone: 'Asia/Dubai',
+    },
+  });
+  const staff = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Original Name', systemRole: 'STAFF', isActive: true },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager3', systemRole: 'MANAGER' },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/staff-directory/${staff.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ fullName: '__staffdirectory-test__ Renamed' }),
+      });
+      assert.equal(res.status, 200, 'a fullName-only PATCH must succeed regardless of isActive');
+      const body = (await res.json()) as { fullName: string; isActive: boolean };
+      assert.equal(body.fullName, '__staffdirectory-test__ Renamed');
+      assert.equal(body.isActive, true, 'isActive must be untouched by a PATCH that never mentioned it');
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});

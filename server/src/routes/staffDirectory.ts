@@ -17,6 +17,17 @@ import { writeAuditLog } from '../lib/auditLog.js';
  */
 export const staffDirectoryRouter = Router();
 
+/**
+ * Thrown inside the PATCH transaction when the atomic `user.updateMany`
+ * guard finds `isActive` no longer matches the value `terminatedAt` was
+ * computed from — i.e. a concurrent PATCH on the same user already changed
+ * `isActive` between our initial read and this write. Thrown (rather than
+ * just returning a flag) so the transaction rolls back too, instead of
+ * writing a `terminatedAt` that no longer agrees with the row's real
+ * `isActive`. Mirrors `swapActions.ts`'s `ShiftAlreadyReassignedError`.
+ */
+class StaffRecordChangedConcurrentlyError extends Error {}
+
 /** The one place "does this caller get personal fields?" is decided — every route derives `redactPersonal` from this, never a literal. */
 function redactPersonalFor(req: Request): boolean {
   return req.user!.systemRole === 'STAFF';
@@ -203,22 +214,48 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
-    const user = await prisma.$transaction(async (tx) => {
-      const updated = await tx.user.update({
-        where: { id: userId },
-        data,
-        include: { role: true, location: { select: { name: true } } },
+    const user = await prisma
+      .$transaction(async (tx) => {
+        // Atomic guard: only when THIS request is itself toggling isActive
+        // (and therefore computed `data.terminatedAt` from `existing.isActive`
+        // above) do we re-assert that isActive hasn't moved since our read —
+        // two concurrent opposite-direction toggles can both pass the plain
+        // `existing.isActive` read above, but only one `updateMany` here can
+        // ever match and actually write. Scoping the guard to `data.isActive
+        // !== undefined` matters: a PATCH that only changes something else
+        // (fullName, phone, ...) must NOT spuriously conflict just because
+        // someone else toggled isActive in between — it never depended on
+        // that value, so it should be free to apply regardless.
+        const result = await tx.user.updateMany({
+          where: data.isActive !== undefined ? { id: userId, isActive: existing.isActive } : { id: userId },
+          data,
+        });
+        if (result.count === 0) {
+          throw new StaffRecordChangedConcurrentlyError();
+        }
+        // `updateMany` doesn't return the row, so re-fetch it (inside the
+        // same transaction) for the response's `toDto`.
+        const updated = await tx.user.findUnique({
+          where: { id: userId },
+          include: { role: true, location: { select: { name: true } } },
+        });
+        await writeAuditLog(tx, {
+          locationId: req.user!.locationId,
+          actorId: req.user!.id,
+          action: 'STAFF_UPDATED',
+          entityType: 'User',
+          entityId: userId,
+          note: `Updated ${updated!.fullName}'s staff record`,
+        });
+        return updated!;
+      })
+      .catch((err) => {
+        if (err instanceof StaffRecordChangedConcurrentlyError) return null;
+        throw err;
       });
-      await writeAuditLog(tx, {
-        locationId: req.user!.locationId,
-        actorId: req.user!.id,
-        action: 'STAFF_UPDATED',
-        entityType: 'User',
-        entityId: updated.id,
-        note: `Updated ${updated.fullName}'s staff record`,
-      });
-      return updated;
-    });
+    if (!user) {
+      return res.status(409).json({ error: 'This staff record was changed by someone else — please refresh and try again.' });
+    }
     return res.status(200).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
     console.error('[staffDirectory.update] failed', err);

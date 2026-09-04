@@ -6,6 +6,13 @@ import { writeAuditLog } from '../lib/auditLog.js';
 export const attendanceRouter = Router();
 
 /**
+ * Thrown inside the clock-in transaction when the re-checked "no open log"
+ * guard finds one anyway — see the comment at its call site below for why
+ * this only narrows, rather than closes, the underlying race.
+ */
+class AlreadyClockedInError extends Error {}
+
+/**
  * POST /api/attendance/clock-in — body: { userId?, shiftId? }
  * Session-gated. `userId` in the body is only honored for a MANAGER/OWNER
  * session naming a different staff member (same on-behalf-of rule as
@@ -28,21 +35,42 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
       if (!ownedOrNotFound(req, res, shift, `Shift "${shiftId}" not found.`)) return;
     }
 
-    const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
-    if (open) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
-
-    const log = await prisma.$transaction(async (tx) => {
-      const created = await tx.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
-      await writeAuditLog(tx, {
-        locationId: req.user!.locationId,
-        actorId: req.user!.id,
-        action: 'CLOCKED_IN',
-        entityType: 'AttendanceLog',
-        entityId: created.id,
-        note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+    // The "already clocked in" guard is re-checked with `tx` immediately
+    // before the create, inside the same transaction, instead of via a plain
+    // `prisma` read beforehand — this narrows the TOCTOU window from the
+    // whole request down to two round trips inside one transaction. It does
+    // NOT fully close it: this is a CREATE (a brand-new row), not an update
+    // of an existing row, so there is no prior row to put a conditional
+    // `WHERE` on the way `joinActions.ts`/`swapActions.ts`/`staffDirectory.ts`
+    // do. Under Postgres's default READ COMMITTED isolation, two concurrent
+    // transactions can still both run this `findFirst` and both see "no open
+    // log" before either commits its `create` — so two opens for the same
+    // user remain possible in a genuine simultaneous-request race. Closing
+    // that fully would need a DB-level partial unique index (`CREATE UNIQUE
+    // INDEX ... ON attendance_logs (user_id) WHERE clock_out_at IS NULL`),
+    // which was deliberately not added here — see MEMORY.md for why.
+    const log = await prisma
+      .$transaction(async (tx) => {
+        const open = await tx.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
+        if (open) {
+          throw new AlreadyClockedInError();
+        }
+        const created = await tx.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
+        await writeAuditLog(tx, {
+          locationId: req.user!.locationId,
+          actorId: req.user!.id,
+          action: 'CLOCKED_IN',
+          entityType: 'AttendanceLog',
+          entityId: created.id,
+          note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+        });
+        return created;
+      })
+      .catch((err) => {
+        if (err instanceof AlreadyClockedInError) return null;
+        throw err;
       });
-      return created;
-    });
+    if (!log) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
     return res.status(201).json({ id: log.id, clockInAt: log.clockInAt!.toISOString(), clockOutAt: null });
   } catch (err) {
     console.error('[attendance.clockIn] failed', err);
