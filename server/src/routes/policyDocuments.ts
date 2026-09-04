@@ -12,11 +12,10 @@ export const policyDocumentsRouter = Router();
 /**
  * Serves the actual uploaded PDF bytes — mounted directly at
  * `/uploads/policy-documents` in `app.ts`, BEFORE the generic `/uploads`
- * static fallback, so it intercepts this one subpath while every other
- * uploaded-file type (floor-plan images) still falls through to the
- * unauthenticated static mount. That's a known, separately-tracked gap of
- * the exact same shape (see MEMORY.md) — not closed here, since it wasn't
- * named in scope, but real and worth closing the same way.
+ * static fallback, so it intercepts this one subpath. Floor-plan images got
+ * the identical treatment via `floorPlanFilesRouter` in floorPlan.ts — both
+ * upload types are now session-gated, nothing still falls through to the
+ * generic unauthenticated static mount.
  *
  * The stored `fileUrl` values (`/uploads/policy-documents/<uuid>.pdf`)
  * never change, so no data migration is needed — only which handler answers
@@ -114,16 +113,19 @@ policyDocumentsRouter.post('/upload', requireSession, upload.single('file'), asy
     await writeFile(join(UPLOAD_DIR, filename), req.file.buffer);
     const fileUrl = `/uploads/policy-documents/${filename}`;
 
-    const doc = await prisma.policyDocument.create({
-      data: { locationId, category, title, fileUrl, originalName: req.file.originalname, mimeType: req.file.mimetype, uploadedById },
-    });
-    await writeAuditLog(prisma, {
-      locationId,
-      actorId: req.user!.id,
-      action: 'POLICY_DOCUMENT_UPLOADED',
-      entityType: 'PolicyDocument',
-      entityId: doc.id,
-      note: `Uploaded "${title}" (${category})`,
+    const doc = await prisma.$transaction(async (tx) => {
+      const created = await tx.policyDocument.create({
+        data: { locationId, category, title, fileUrl, originalName: req.file!.originalname, mimeType: req.file!.mimetype, uploadedById },
+      });
+      await writeAuditLog(tx, {
+        locationId,
+        actorId: req.user!.id,
+        action: 'POLICY_DOCUMENT_UPLOADED',
+        entityType: 'PolicyDocument',
+        entityId: created.id,
+        note: `Uploaded "${title}" (${category})`,
+      });
+      return created;
     });
     return res.status(201).json({
       document: { id: doc.id, category: doc.category, title: doc.title, fileUrl: doc.fileUrl, originalName: doc.originalName, createdAt: doc.createdAt.toISOString() },
@@ -140,14 +142,16 @@ policyDocumentsRouter.delete('/:id', requireSession, async (req, res) => {
     const { id } = req.params;
     const existing = await prisma.policyDocument.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, existing, `Document "${id}" not found.`)) return;
-    await prisma.policyDocument.delete({ where: { id } });
-    await writeAuditLog(prisma, {
-      locationId: existing.locationId,
-      actorId: req.user!.id,
-      action: 'POLICY_DOCUMENT_DELETED',
-      entityType: 'PolicyDocument',
-      entityId: id,
-      note: `Deleted "${existing.title}" (${existing.category})`,
+    await prisma.$transaction(async (tx) => {
+      await tx.policyDocument.delete({ where: { id } });
+      await writeAuditLog(tx, {
+        locationId: existing.locationId,
+        actorId: req.user!.id,
+        action: 'POLICY_DOCUMENT_DELETED',
+        entityType: 'PolicyDocument',
+        entityId: id,
+        note: `Deleted "${existing.title}" (${existing.category})`,
+      });
     });
     return res.status(204).send();
   } catch (err) {

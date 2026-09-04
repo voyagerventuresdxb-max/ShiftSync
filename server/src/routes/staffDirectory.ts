@@ -106,17 +106,20 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
-    const user = await prisma.user.create({
-      data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
-      include: { role: true, location: { select: { name: true } } },
-    });
-    await writeAuditLog(prisma, {
-      locationId: req.user!.locationId,
-      actorId: req.user!.id,
-      action: 'STAFF_CREATED',
-      entityType: 'User',
-      entityId: user.id,
-      note: `Added ${user.fullName} to the staff directory`,
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
+        include: { role: true, location: { select: { name: true } } },
+      });
+      await writeAuditLog(tx, {
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_CREATED',
+        entityType: 'User',
+        entityId: created.id,
+        note: `Added ${created.fullName} to the staff directory`,
+      });
+      return created;
     });
     return res.status(201).json(toDto(user, false));
   } catch (err) {
@@ -191,18 +194,21 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data,
-      include: { role: true, location: { select: { name: true } } },
-    });
-    await writeAuditLog(prisma, {
-      locationId: req.user!.locationId,
-      actorId: req.user!.id,
-      action: 'STAFF_UPDATED',
-      entityType: 'User',
-      entityId: user.id,
-      note: `Updated ${user.fullName}'s staff record`,
+    const user = await prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: userId },
+        data,
+        include: { role: true, location: { select: { name: true } } },
+      });
+      await writeAuditLog(tx, {
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_UPDATED',
+        entityType: 'User',
+        entityId: updated.id,
+        note: `Updated ${updated.fullName}'s staff record`,
+      });
+      return updated;
     });
     return res.status(200).json(toDto(user, false));
   } catch (err) {

@@ -29,14 +29,22 @@ export type SwapRequestWithRelations = Prisma.ShiftSwapRequestGetPayload<{
  */
 export class ShiftAlreadyReassignedError extends Error {}
 
-/** Creates a PENDING cover-swap request. Mirrors the POST /api/swap-requests body shape. */
-export async function createSwapRequest(input: {
-  shiftId: string;
-  requestedById: string;
-  targetUserId: string;
-  reason: string | null;
-}): Promise<SwapRequestWithRelations> {
-  return prisma.shiftSwapRequest.create({
+/**
+ * Creates a PENDING cover-swap request. Mirrors the POST /api/swap-requests
+ * body shape. Accepts either the top-level `prisma` client or a `tx` — a
+ * caller that writes an accompanying audit-log row (routes/swapRequests.ts,
+ * routes/voice.ts's REQUEST_SWAP) passes `tx` so both commit atomically.
+ */
+export async function createSwapRequest(
+  input: {
+    shiftId: string;
+    requestedById: string;
+    targetUserId: string;
+    reason: string | null;
+  },
+  client: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<SwapRequestWithRelations> {
+  return client.shiftSwapRequest.create({
     data: {
       shiftId: input.shiftId,
       requestedById: input.requestedById,

@@ -137,10 +137,10 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
     }
     if (!target) return res.status(404).json({ error: 'That staff member could not be found at your location.' });
 
-    const created = await createSwapRequest({ shiftId, requestedById: effectiveRequesterId, targetUserId, reason });
-
     // actorId is always the real caller — who clicked the button — even when
-    // requestedById names someone else. Never the effective requester.
+    // requestedById names someone else. Never the effective requester. This
+    // read doesn't depend on the swap creation below, so it runs ahead of
+    // the transaction rather than inside it.
     let onBehalfNote: string | undefined;
     if (effectiveRequesterId !== req.user!.id) {
       const requester = await prisma.user.findUnique({
@@ -149,14 +149,19 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
       });
       onBehalfNote = `Requested on behalf of ${requester?.fullName ?? effectiveRequesterId}`;
     }
-    await writeAuditLog(prisma, {
-      locationId,
-      actorId: req.user!.id,
-      shiftId,
-      action: 'SWAP_REQUESTED',
-      entityType: 'ShiftSwapRequest',
-      entityId: created.id,
-      note: onBehalfNote,
+
+    const created = await prisma.$transaction(async (tx) => {
+      const request = await createSwapRequest({ shiftId, requestedById: effectiveRequesterId, targetUserId, reason }, tx);
+      await writeAuditLog(tx, {
+        locationId,
+        actorId: req.user!.id,
+        shiftId,
+        action: 'SWAP_REQUESTED',
+        entityType: 'ShiftSwapRequest',
+        entityId: request.id,
+        note: onBehalfNote,
+      });
+      return request;
     });
 
     return res.status(201).json({ request: toDto(created) });

@@ -67,16 +67,19 @@ rotaTemplatesRouter.post('/', requireSession, async (req, res) => {
     if (!name) return res.status(400).json({ error: 'name is required.' });
     if (entries.length === 0) return res.status(400).json({ error: 'entries must be a non-empty array.' });
 
-    const created = await prisma.rotaTemplate.create({
-      data: { locationId, name, entries: entries as unknown as Prisma.InputJsonValue, createdById },
-    });
-    await writeAuditLog(prisma, {
-      locationId,
-      actorId: req.user!.id,
-      action: 'ROTA_TEMPLATE_CREATED',
-      entityType: 'RotaTemplate',
-      entityId: created.id,
-      note: `Created template "${name}" (${entries.length} entries)`,
+    const created = await prisma.$transaction(async (tx) => {
+      const template = await tx.rotaTemplate.create({
+        data: { locationId, name, entries: entries as unknown as Prisma.InputJsonValue, createdById },
+      });
+      await writeAuditLog(tx, {
+        locationId,
+        actorId: req.user!.id,
+        action: 'ROTA_TEMPLATE_CREATED',
+        entityType: 'RotaTemplate',
+        entityId: template.id,
+        note: `Created template "${name}" (${entries.length} entries)`,
+      });
+      return template;
     });
     return res.status(201).json({
       template: { id: created.id, name: created.name, entryCount: entries.length, createdAt: created.createdAt.toISOString() },
@@ -93,14 +96,16 @@ rotaTemplatesRouter.delete('/:id', requireSession, async (req, res) => {
     const { id } = req.params;
     const existing = await prisma.rotaTemplate.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, existing, `Template "${id}" not found.`)) return;
-    await prisma.rotaTemplate.delete({ where: { id } });
-    await writeAuditLog(prisma, {
-      locationId: existing.locationId,
-      actorId: req.user!.id,
-      action: 'ROTA_TEMPLATE_DELETED',
-      entityType: 'RotaTemplate',
-      entityId: id,
-      note: `Deleted template "${existing.name}"`,
+    await prisma.$transaction(async (tx) => {
+      await tx.rotaTemplate.delete({ where: { id } });
+      await writeAuditLog(tx, {
+        locationId: existing.locationId,
+        actorId: req.user!.id,
+        action: 'ROTA_TEMPLATE_DELETED',
+        entityType: 'RotaTemplate',
+        entityId: id,
+        note: `Deleted template "${existing.name}"`,
+      });
     });
     return res.status(204).send();
   } catch (err) {
@@ -159,34 +164,37 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, async (req, res) => {
     const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
     const start = new Date(`${weekStart}T00:00:00.000Z`);
 
-    const created = await prisma.$transaction(
-      entries.map((e) => {
-        const date = new Date(start);
-        date.setUTCDate(date.getUTCDate() + e.dayOffset);
-        const dateStr = date.toISOString().slice(0, 10);
-        const overnight = e.end <= e.start;
-        return prisma.shift.create({
-          data: {
-            locationId: template.locationId,
-            roleId: e.roleId,
-            userId: e.userId,
-            createdById,
-            date,
-            startTime: combineDateAndTime(dateStr, e.start, timezone),
-            endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
-            managerNotes: e.note ?? null,
-            status: 'DRAFT',
-          },
-        });
-      }),
-    );
-    await writeAuditLog(prisma, {
-      locationId: template.locationId,
-      actorId: req.user!.id,
-      action: 'SHIFT_CREATED',
-      entityType: 'Shift',
-      entityId: created[0]?.id ?? id,
-      note: `Applied template "${template.name}" to week ${weekStart} — created ${created.length} shift(s)`,
+    const created = await prisma.$transaction(async (tx) => {
+      const rows = await Promise.all(
+        entries.map((e) => {
+          const date = new Date(start);
+          date.setUTCDate(date.getUTCDate() + e.dayOffset);
+          const dateStr = date.toISOString().slice(0, 10);
+          const overnight = e.end <= e.start;
+          return tx.shift.create({
+            data: {
+              locationId: template.locationId,
+              roleId: e.roleId,
+              userId: e.userId,
+              createdById,
+              date,
+              startTime: combineDateAndTime(dateStr, e.start, timezone),
+              endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
+              managerNotes: e.note ?? null,
+              status: 'DRAFT',
+            },
+          });
+        }),
+      );
+      await writeAuditLog(tx, {
+        locationId: template.locationId,
+        actorId: req.user!.id,
+        action: 'SHIFT_CREATED',
+        entityType: 'Shift',
+        entityId: rows[0]?.id ?? id,
+        note: `Applied template "${template.name}" to week ${weekStart} — created ${rows.length} shift(s)`,
+      });
+      return rows;
     });
     return res.status(201).json({ createdCount: created.length });
   } catch (err) {

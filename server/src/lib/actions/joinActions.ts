@@ -25,36 +25,41 @@ export async function decideJoinRequest(input: {
   if (existing.status !== 'PENDING') return { result: 'already_reviewed' };
 
   if (input.decision === 'decline') {
-    await prisma.joinRequest.update({
-      where: { id: input.requestId },
-      data: { status: 'DECLINED', reviewedById: input.reviewedById, reviewedAt: new Date() },
-    });
-    await writeAuditLog(prisma, {
-      locationId: existing.locationId,
-      actorId: input.reviewedById,
-      action: 'JOIN_DECLINED',
-      entityType: 'JoinRequest',
-      entityId: input.requestId,
-      note: `Declined join request for ${existing.fullName}`,
+    await prisma.$transaction(async (tx) => {
+      await tx.joinRequest.update({
+        where: { id: input.requestId },
+        data: { status: 'DECLINED', reviewedById: input.reviewedById, reviewedAt: new Date() },
+      });
+      await writeAuditLog(tx, {
+        locationId: existing.locationId,
+        actorId: input.reviewedById,
+        action: 'JOIN_DECLINED',
+        entityType: 'JoinRequest',
+        entityId: input.requestId,
+        note: `Declined join request for ${existing.fullName}`,
+      });
     });
     return { result: 'ok', status: 'DECLINED' };
   }
 
   const jobTitle = input.jobTitle ?? null;
-  const created = await prisma.user.create({
-    data: { locationId: existing.locationId, fullName: existing.fullName, phone: existing.phone, jobTitle },
-  });
-  await prisma.joinRequest.update({
-    where: { id: input.requestId },
-    data: { status: 'APPROVED', reviewedById: input.reviewedById, reviewedAt: new Date(), createdUserId: created.id },
-  });
-  await writeAuditLog(prisma, {
-    locationId: existing.locationId,
-    actorId: input.reviewedById,
-    action: 'JOIN_APPROVED',
-    entityType: 'JoinRequest',
-    entityId: input.requestId,
-    note: `Approved join request for ${existing.fullName} — created User ${created.id}`,
+  const created = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: { locationId: existing.locationId, fullName: existing.fullName, phone: existing.phone, jobTitle },
+    });
+    await tx.joinRequest.update({
+      where: { id: input.requestId },
+      data: { status: 'APPROVED', reviewedById: input.reviewedById, reviewedAt: new Date(), createdUserId: user.id },
+    });
+    await writeAuditLog(tx, {
+      locationId: existing.locationId,
+      actorId: input.reviewedById,
+      action: 'JOIN_APPROVED',
+      entityType: 'JoinRequest',
+      entityId: input.requestId,
+      note: `Approved join request for ${existing.fullName} — created User ${user.id}`,
+    });
+    return user;
   });
   return { result: 'ok', status: 'APPROVED', userId: created.id };
 }

@@ -194,8 +194,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // markAvailability() upserts unconditionally (one row per (userId, date))
         // and only ever returns { result: 'ok' } — there is no 'not_found' case
         // to handle here, unlike the swap/join actions below.
-        const result = await markAvailability({ userId: actorId, date: intent.date, type: intent.type, note });
-        await writeAuditLog(prisma, { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: result.mark.id, note });
+        const result = await prisma.$transaction(async (tx) => {
+          const marked = await markAvailability({ userId: actorId, date: intent.date, type: intent.type, note }, tx);
+          await writeAuditLog(tx, { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: marked.mark.id, note });
+          return marked;
+        });
         return res.status(200).json({ executed: true, result: result.mark });
       }
       case 'REQUEST_SWAP': {
@@ -215,8 +218,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         if (!target) {
           return res.status(404).json({ error: 'That staff member could not be found at your location.' });
         }
-        const created = await createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null });
-        await writeAuditLog(prisma, { locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: created.id, note });
+        const created = await prisma.$transaction(async (tx) => {
+          const request = await createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx);
+          await writeAuditLog(tx, { locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note });
+          return request;
+        });
         return res.status(201).json({ executed: true, result: created });
       }
       case 'APPROVE_SWAP':

@@ -129,11 +129,14 @@ shiftsRouter.post('/', requireSession, async (req, res) => {
     const startTime = combineDateAndTime(date, start, timezone);
     const endTime = combineDateAndTime(date, end, timezone, overnight);
 
-    const created = await prisma.shift.create({
-      data: { locationId, roleId, userId, createdById, date: new Date(`${date}T00:00:00.000Z`), startTime, endTime, breakMinutes, managerNotes: briefingNote, sidework, status: 'DRAFT' },
-      include: SHIFT_INCLUDE,
+    const created = await prisma.$transaction(async (tx) => {
+      const shift = await tx.shift.create({
+        data: { locationId, roleId, userId, createdById, date: new Date(`${date}T00:00:00.000Z`), startTime, endTime, breakMinutes, managerNotes: briefingNote, sidework, status: 'DRAFT' },
+        include: SHIFT_INCLUDE,
+      });
+      await writeAuditLog(tx, { locationId, actorId: createdById, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id });
+      return shift;
     });
-    await writeAuditLog(prisma, { locationId, actorId: createdById, shiftId: created.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: created.id });
     return res.status(201).json({ shift: shiftToDto(created, timezone) });
   } catch (err) {
     console.error('[shifts.create] failed', err);
@@ -191,8 +194,11 @@ shiftsRouter.patch('/:id', requireSession, async (req, res) => {
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
         : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
-    const updated = await prisma.shift.update({ where: { id }, data, include: SHIFT_INCLUDE });
-    await writeAuditLog(prisma, { locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id });
+    const updated = await prisma.$transaction(async (tx) => {
+      const shift = await tx.shift.update({ where: { id }, data, include: SHIFT_INCLUDE });
+      await writeAuditLog(tx, { locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id });
+      return shift;
+    });
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });
   } catch (err) {
     console.error('[shifts.update] failed', err);
@@ -210,8 +216,10 @@ shiftsRouter.delete('/:id', requireSession, async (req, res) => {
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
         : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
-    await writeAuditLog(prisma, { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id });
-    await prisma.shift.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await writeAuditLog(tx, { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id });
+      await tx.shift.delete({ where: { id } });
+    });
     return res.status(204).send();
   } catch (err) {
     console.error('[shifts.delete] failed', err);

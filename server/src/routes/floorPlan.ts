@@ -363,24 +363,27 @@ floorPlanRouter.post('/assignments', requireSession, requireManager, async (req,
       return res.status(404).json({ error: `Staff member "${staffId}" not found.` });
     }
 
-    const assignment = await prisma.sectionAssignment.upsert({
-      where: { sectionId_staffId_shiftDate_period: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM' } },
-      create: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById },
-      // Only touch dutyLabel on an existing row when the request actually
-      // sent the key — a plain re-assign (drag-drop, or tap-to-pick with no
-      // label typed) must not clobber a label set earlier via inline edit.
-      update: hasDutyLabelKey ? { dutyLabel } : {},
-      include: { staff: { select: { id: true, fullName: true } } },
-    });
+    const assignment = await prisma.$transaction(async (tx) => {
+      const upserted = await tx.sectionAssignment.upsert({
+        where: { sectionId_staffId_shiftDate_period: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM' } },
+        create: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById },
+        // Only touch dutyLabel on an existing row when the request actually
+        // sent the key — a plain re-assign (drag-drop, or tap-to-pick with no
+        // label typed) must not clobber a label set earlier via inline edit.
+        update: hasDutyLabelKey ? { dutyLabel } : {},
+        include: { staff: { select: { id: true, fullName: true } } },
+      });
 
-    await writeAuditLog(prisma, {
-      locationId: section.locationId,
-      actorId: createdById,
-      shiftId: null,
-      action: 'SHIFT_ASSIGNED',
-      entityType: 'SectionAssignment',
-      entityId: assignment.id,
-      note: `${staff.fullName} assigned to ${section.label} (${period})${dutyLabel ? ` — ${dutyLabel}` : ''}`,
+      await writeAuditLog(tx, {
+        locationId: section.locationId,
+        actorId: createdById,
+        shiftId: null,
+        action: 'SHIFT_ASSIGNED',
+        entityType: 'SectionAssignment',
+        entityId: upserted.id,
+        note: `${staff.fullName} assigned to ${section.label} (${period})${dutyLabel ? ` — ${dutyLabel}` : ''}`,
+      });
+      return upserted;
     });
 
     return res.status(201).json({
@@ -412,17 +415,19 @@ floorPlanRouter.delete('/assignments/:assignmentId', requireSession, requireMana
     if (!ownedOrNotFound(req, res, existing.section, `Assignment "${assignmentId}" not found.`)) return;
 
     const actorId = req.user!.id;
-    await writeAuditLog(prisma, {
-      locationId: existing.section.locationId,
-      actorId,
-      shiftId: null,
-      action: 'SHIFT_ASSIGNED',
-      entityType: 'SectionAssignment',
-      entityId: assignmentId,
-      note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
-    });
+    await prisma.$transaction(async (tx) => {
+      await writeAuditLog(tx, {
+        locationId: existing.section.locationId,
+        actorId,
+        shiftId: null,
+        action: 'SHIFT_ASSIGNED',
+        entityType: 'SectionAssignment',
+        entityId: assignmentId,
+        note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
+      });
 
-    await prisma.sectionAssignment.delete({ where: { id: assignmentId } });
+      await tx.sectionAssignment.delete({ where: { id: assignmentId } });
+    });
     return res.status(204).send();
   } catch (err) {
     console.error('[floorPlan.assignments.delete] failed', err);
@@ -448,19 +453,22 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requi
 
     const actorId = req.user!.id;
     const notifiedAt = new Date();
-    const updated = await prisma.sectionAssignment.update({
-      where: { id: assignmentId },
-      data: { notifiedAt },
-    });
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.sectionAssignment.update({
+        where: { id: assignmentId },
+        data: { notifiedAt },
+      });
 
-    await writeAuditLog(prisma, {
-      locationId: existing.section.locationId,
-      actorId,
-      shiftId: null,
-      action: 'ASSIGNMENT_NOTIFIED',
-      entityType: 'SectionAssignment',
-      entityId: assignmentId,
-      note: `${existing.staff.fullName} marked notified for ${existing.section.label} (${existing.period})`,
+      await writeAuditLog(tx, {
+        locationId: existing.section.locationId,
+        actorId,
+        shiftId: null,
+        action: 'ASSIGNMENT_NOTIFIED',
+        entityType: 'SectionAssignment',
+        entityId: assignmentId,
+        note: `${existing.staff.fullName} marked notified for ${existing.section.label} (${existing.period})`,
+      });
+      return row;
     });
 
     return res.status(200).json({ notifiedAt: updated.notifiedAt!.toISOString() });
@@ -496,22 +504,25 @@ floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, asy
     const actorId = req.user!.id;
     const now = new Date();
 
-    const result = await prisma.sectionAssignment.updateMany({
-      where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
-      data: { status: 'PUBLISHED', publishedAt: now, notifiedAt: now },
-    });
-
-    if (result.count > 0) {
-      await writeAuditLog(prisma, {
-        locationId,
-        actorId,
-        shiftId: null,
-        action: 'ASSIGNMENT_NOTIFIED',
-        entityType: 'SectionAssignment',
-        entityId: locationId,
-        note: `Published & notified ${result.count} assignment${result.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
+    const result = await prisma.$transaction(async (tx) => {
+      const updateResult = await tx.sectionAssignment.updateMany({
+        where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
+        data: { status: 'PUBLISHED', publishedAt: now, notifiedAt: now },
       });
-    }
+
+      if (updateResult.count > 0) {
+        await writeAuditLog(tx, {
+          locationId,
+          actorId,
+          shiftId: null,
+          action: 'ASSIGNMENT_NOTIFIED',
+          entityType: 'SectionAssignment',
+          entityId: locationId,
+          note: `Published & notified ${updateResult.count} assignment${updateResult.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
+        });
+      }
+      return updateResult;
+    });
 
     return res.status(200).json({ publishedCount: result.count });
   } catch (err) {

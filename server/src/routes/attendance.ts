@@ -31,14 +31,17 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
     const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
     if (open) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
 
-    const log = await prisma.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
-    await writeAuditLog(prisma, {
-      locationId: req.user!.locationId,
-      actorId: req.user!.id,
-      action: 'CLOCKED_IN',
-      entityType: 'AttendanceLog',
-      entityId: log.id,
-      note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+    const log = await prisma.$transaction(async (tx) => {
+      const created = await tx.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
+      await writeAuditLog(tx, {
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'CLOCKED_IN',
+        entityType: 'AttendanceLog',
+        entityId: created.id,
+        note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+      });
+      return created;
     });
     return res.status(201).json({ id: log.id, clockInAt: log.clockInAt!.toISOString(), clockOutAt: null });
   } catch (err) {
@@ -64,14 +67,17 @@ attendanceRouter.post('/clock-out', requireSession, async (req, res) => {
     const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
     if (!open) return res.status(409).json({ error: 'Not currently clocked in.' });
 
-    const closed = await prisma.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } });
-    await writeAuditLog(prisma, {
-      locationId: req.user!.locationId,
-      actorId: req.user!.id,
-      action: 'CLOCKED_OUT',
-      entityType: 'AttendanceLog',
-      entityId: closed.id,
-      note: effectiveUserId === req.user!.id ? undefined : `Clocked out ${user.fullName} on their behalf`,
+    const closed = await prisma.$transaction(async (tx) => {
+      const updated = await tx.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } });
+      await writeAuditLog(tx, {
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'CLOCKED_OUT',
+        entityType: 'AttendanceLog',
+        entityId: updated.id,
+        note: effectiveUserId === req.user!.id ? undefined : `Clocked out ${user.fullName} on their behalf`,
+      });
+      return updated;
     });
     return res.status(200).json({ id: closed.id, clockInAt: closed.clockInAt!.toISOString(), clockOutAt: closed.clockOutAt!.toISOString() });
   } catch (err) {

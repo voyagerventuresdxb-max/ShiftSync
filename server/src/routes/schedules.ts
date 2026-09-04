@@ -359,18 +359,20 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res
       if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
     }
 
-    const result = await persistShifts(prisma, batch.locationId, createdById, batch.rows);
-    uploadCache.delete(batchId);
-
-    await writeAuditLog(prisma, {
-      locationId: batch.locationId,
-      actorId: req.user!.id,
-      action: 'SHIFT_CREATED',
-      entityType: 'Shift',
-      entityId: result.rows[0]?.shiftId ?? batchId,
-      shiftId: result.rows[0]?.shiftId ?? null,
-      note: `Imported ${result.createdCount} shift(s) from roster upload (${result.skippedCount} skipped)`,
+    const result = await prisma.$transaction(async (tx) => {
+      const persisted = await persistShifts(tx, batch.locationId, createdById, batch.rows);
+      await writeAuditLog(tx, {
+        locationId: batch.locationId,
+        actorId: req.user!.id,
+        action: 'SHIFT_CREATED',
+        entityType: 'Shift',
+        entityId: persisted.rows[0]?.shiftId ?? batchId,
+        shiftId: persisted.rows[0]?.shiftId ?? null,
+        note: `Imported ${persisted.createdCount} shift(s) from roster upload (${persisted.skippedCount} skipped)`,
+      });
+      return persisted;
     });
+    uploadCache.delete(batchId);
 
     return res.status(201).json({
       message: `Imported ${result.createdCount} shift(s).`,
