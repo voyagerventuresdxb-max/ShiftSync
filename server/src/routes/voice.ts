@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
 import { requireSession } from '../middleware/requireSession.js';
+import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
@@ -99,7 +100,7 @@ function validateIntentShape(intent: ParsedIntent): string | null {
  * NOT include audio/webm (the browser MediaRecorder default), and resolving
  * that gap belongs to the recording client, not this endpoint.
  */
-voiceRouter.post('/transcribe', requireSession, upload.single('audio'), async (req, res) => {
+voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file uploaded.' });
     const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype);
@@ -115,7 +116,7 @@ voiceRouter.post('/transcribe', requireSession, upload.single('audio'), async (r
 });
 
 /** POST /api/voice/parse-intent — body: { transcript }. Never mutates anything — the "propose" half of confirm-before-execute. */
-voiceRouter.post('/parse-intent', requireSession, async (req, res) => {
+voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async (req, res) => {
   try {
     const transcript = String(req.body?.transcript ?? '').trim();
     if (!transcript) return res.status(400).json({ error: 'transcript is required.' });
