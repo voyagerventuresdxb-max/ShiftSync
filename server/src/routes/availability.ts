@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const availabilityRouter = Router();
 
@@ -59,7 +60,12 @@ availabilityRouter.post('/', requireSession, async (req, res) => {
       return res.status(400).json({ error: 'type must be "UNAVAILABLE" or "PREFERRED_OFF".' });
     }
 
-    const outcome = await markAvailability({ userId, date: dateStr, type, note });
+    const locationId = req.user!.locationId;
+    const outcome = await prisma.$transaction(async (tx) => {
+      const marked = await markAvailability({ userId, date: dateStr, type, note }, tx);
+      await writeAuditLog(tx, { locationId, actorId: userId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: marked.mark.id, note });
+      return marked;
+    });
     const { mark } = outcome;
     return res.status(201).json({ id: mark.id, date: mark.date, type: mark.type, note: mark.note });
   } catch (err) {
