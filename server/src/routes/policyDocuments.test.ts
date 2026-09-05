@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
@@ -53,12 +54,19 @@ test('policyDocuments.ts mutation routes reject a real STAFF session with 403 �
   const staff = await prisma.user.create({
     data: { locationId: location.id, fullName: '__authgap-test__ staff', systemRole: 'STAFF' },
   });
+  // fileUrl includes a fresh randomUUID (not a fixed literal) — after this
+  // session's performance audit added a real @unique constraint on this
+  // column (matching production's own always-randomUUID fileUrl shape), a
+  // fixed literal here would collide with a stale leftover row from any
+  // prior run of this test that crashed before its own cleanup ran, turning
+  // an already-rare leftover into a hard P2002 at test setup instead of a
+  // harmless (if untidy) duplicate — found by the mandatory review.
   const doc = await prisma.policyDocument.create({
     data: {
       locationId: location.id,
       category: 'other',
       title: '__authgap-test__ existing doc',
-      fileUrl: '/uploads/policy-documents/__authgap-test__-existing.pdf',
+      fileUrl: `/uploads/policy-documents/__authgap-test__-${randomUUID()}.pdf`,
       originalName: 'existing.pdf',
       mimeType: 'application/pdf',
       uploadedById: manager.id,

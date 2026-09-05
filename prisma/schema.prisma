@@ -341,6 +341,11 @@ model AttendanceLog {
 
   @@index([userId])
   @@index([shiftId])
+  // Supports the weekly-hours screen's date-range query (attendance.ts),
+  // which otherwise has no index to prune by clockInAt and must scan every
+  // historical row for the requested users before filtering by date in
+  // Postgres (found by the 2026-09-05 performance audit).
+  @@index([userId, clockInAt])
   @@map("attendance_logs")
 }
 
@@ -652,6 +657,12 @@ model JoinRequest {
   createdUser User?    @relation("JoinRequestCreatedUser", fields: [createdUserId], references: [id], onDelete: SetNull)
 
   @@index([locationId, status])
+  // Supports myShifts.ts's "do I have a pending join request?" lookup,
+  // filtered by phone + status with no locationId in the query at all —
+  // the existing [locationId, status] index gives zero help there. This
+  // route is hit on every staff home-screen load (found by the 2026-09-05
+  // performance audit).
+  @@index([phone, status])
   @@map("join_requests")
 }
 
@@ -688,7 +699,13 @@ model PolicyDocument {
   locationId   String   @map("location_id")
   category     String
   title        String
-  fileUrl      String   @map("file_url")
+  // Unique by construction — always `/uploads/policy-documents/${randomUUID()}.pdf`
+  // (policyDocuments.ts). The file-serve route looks a document up by this
+  // field alone with no locationId in the query, so it had zero index
+  // support at all before this — every file view did a full-table scan
+  // across every venue's policy documents (found by the 2026-09-05
+  // performance audit).
+  fileUrl      String   @unique @map("file_url")
   originalName String?  @map("original_name")
   mimeType     String   @map("mime_type")
   uploadedById String?  @map("uploaded_by_id")

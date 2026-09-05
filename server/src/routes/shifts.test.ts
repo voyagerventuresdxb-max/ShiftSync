@@ -311,3 +311,67 @@ test('shifts.ts mutation routes still work normally for a real MANAGER session â
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+// 2026-09-05 â€” found by the performance audit: publish used to fetch every
+// column of every shift in the week just to check non-emptiness and count
+// distinct assigned users, replaced with prisma.shift.count() + a
+// distinct-select query. This proves the rewrite preserves the exact same
+// notifiedCount semantics: two shifts assigned to the SAME user count once,
+// an unassigned (userId: null) shift doesn't count at all.
+test('shifts.ts POST /:locationId/publish computes notifiedCount as distinct assigned users, not total shifts', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__perfaudit-test__ publish notifiedCount', timezone: 'Asia/Dubai' },
+  });
+  const role = await prisma.role.create({ data: { locationId: location.id, name: '__perfaudit-test__ role' } });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__perfaudit-test__ manager', systemRole: 'MANAGER' },
+  });
+  const staffA = await prisma.user.create({ data: { locationId: location.id, fullName: '__perfaudit-test__ staff A', systemRole: 'STAFF' } });
+  const staffB = await prisma.user.create({ data: { locationId: location.id, fullName: '__perfaudit-test__ staff B', systemRole: 'STAFF' } });
+  const weekStart = '2031-07-07'; // a Monday, isolated from other tests' fixture dates
+
+  const makeShift = (userId: string | null, dayOffset: number) => {
+    const date = new Date(`${weekStart}T00:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() + dayOffset);
+    return prisma.shift.create({
+      data: {
+        locationId: location.id,
+        roleId: role.id,
+        userId,
+        date,
+        startTime: new Date(`${date.toISOString().slice(0, 10)}T09:00:00.000Z`),
+        endTime: new Date(`${date.toISOString().slice(0, 10)}T17:00:00.000Z`),
+        status: 'DRAFT',
+      },
+    });
+  };
+
+  try {
+    // staffA gets 2 shifts (same user, different days), staffB gets 1, one shift is unassigned.
+    await Promise.all([makeShift(staffA.id, 0), makeShift(staffA.id, 1), makeShift(staffB.id, 2), makeShift(null, 3)]);
+
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const publish = await fetch(`${baseUrl}/api/shifts/${location.id}/publish`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ weekStart }),
+      });
+      assert.equal(publish.status, 200);
+      const body = (await publish.json()) as { notifiedCount: number };
+      assert.equal(body.notifiedCount, 2, 'staffA (2 shifts) + staffB (1 shift) = 2 distinct users; the unassigned shift must not count');
+    });
+  } finally {
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.rotaPublish.deleteMany({ where: { locationId: location.id } });
+    await prisma.role.delete({ where: { id: role.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staffA.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staffB.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});

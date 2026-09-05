@@ -75,7 +75,21 @@ export async function decideSwapRequest(input: {
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
     where: { id: input.id },
-    include: { requestedBy: { select: { fullName: true } }, targetUser: { select: { fullName: true } }, shift: true },
+    // Reuses SWAP_REQUEST_INCLUDE's own requestedBy/targetUser selects
+    // (rather than retyping them) so there's only one place that says "which
+    // fields does a swap-request read need" for those two relations — only
+    // `shift` differs here: just userId (the TOCTOU guard) and locationId
+    // (the audit entry) are read below, so a narrower select replaces
+    // SWAP_REQUEST_INCLUDE's own shift shape (date/startTime/endTime, needed
+    // for the DTO this function does NOT return) instead of a full
+    // `shift: true` (found by the 2026-09-05 performance audit; the
+    // duplication risk of hand-rolling all three relations separately was
+    // caught by its mandatory review).
+    include: {
+      requestedBy: SWAP_REQUEST_INCLUDE.requestedBy,
+      targetUser: SWAP_REQUEST_INCLUDE.targetUser,
+      shift: { select: { userId: true, locationId: true } },
+    },
   });
   if (!existing) return { result: 'not_found' };
 

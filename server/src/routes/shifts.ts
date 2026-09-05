@@ -337,10 +337,22 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 7);
 
-    const weekShifts = await prisma.shift.findMany({ where: { locationId, date: { gte: start, lt: end } } });
-    if (weekShifts.length === 0) return res.status(400).json({ error: 'No shifts exist for this week yet.' });
+    // Was `findMany` over every column of every shift this week, just to
+    // check non-emptiness and count distinct assigned users — one groupBy
+    // returns both numbers in a single round-trip without pulling a full row
+    // (managerNotes, sidework, timestamps, ...) per shift over the wire
+    // (found by the 2026-09-05 performance audit; a first attempt used two
+    // separate count/findMany calls — a follow-up review pass caught that a
+    // single groupBy does the same job in one query instead of two).
+    const shiftGroups = await prisma.shift.groupBy({
+      by: ['userId'],
+      where: { locationId, date: { gte: start, lt: end } },
+      _count: true,
+    });
+    const weekShiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
+    if (weekShiftCount === 0) return res.status(400).json({ error: 'No shifts exist for this week yet.' });
 
-    const notifiedCount = new Set(weekShifts.map((s) => s.userId).filter(Boolean)).size;
+    const notifiedCount = shiftGroups.filter((g) => g.userId !== null).length;
     // Capture one shared instant for both writes. Without this, RotaPublish's
     // auto-generated `publishedAt` (set here) and Shift's auto-generated
     // `@updatedAt` (set by Prisma at the updateMany's own execution time, a
