@@ -166,3 +166,148 @@ test('POST /api/shifts/bulk rejects the whole batch when one row references a ro
     await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
   }
 });
+
+// 2026-09-05 — a whole-branch review found every mutation route below was
+// requireSession-only, with no requireManager check at all: any signed-in
+// STAFF session could create, edit, delete, bulk-create, or publish shifts
+// at their own venue via a direct API call, including a coworker's — the
+// Shift Editor's own client renders these controls with no role check of
+// its own either, so this was reachable through the real UI, not just a
+// crafted request. These prove the fix: every one of the 5 routes now
+// rejects a real STAFF session with a clean 403, not a raw 500 and not a
+// silent success.
+test('shifts.ts mutation routes reject a real STAFF session with 403 — POST /, PATCH /:id, DELETE /:id, POST /bulk, POST /:locationId/publish', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__task2-test__ requireManager gate', timezone: 'Asia/Dubai' },
+  });
+  const role = await prisma.role.create({ data: { locationId: location.id, name: '__task2-test__ requireManager role' } });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__task2-test__ requireManager owner', systemRole: 'MANAGER' },
+  });
+  const staff = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__task2-test__ requireManager staff', systemRole: 'STAFF' },
+  });
+  // A real shift a MANAGER owns, to attempt PATCH/DELETE against as STAFF.
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location.id,
+      roleId: role.id,
+      date: new Date('2026-08-24T00:00:00.000Z'),
+      startTime: new Date('2026-08-24T05:00:00.000Z'),
+      endTime: new Date('2026-08-24T13:00:00.000Z'),
+      status: 'DRAFT',
+    },
+  });
+
+  try {
+    const staffToken = await sessionFor(staff.id);
+    await withServer(async (baseUrl) => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` };
+
+      const post = await fetch(`${baseUrl}/api/shifts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ roleId: role.id, date: '2031-04-04', start: '09:00', end: '17:00' }),
+      });
+      assert.equal(post.status, 403, 'POST / must reject a STAFF session');
+
+      const patch = await fetch(`${baseUrl}/api/shifts/${shift.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ breakMinutes: 45 }),
+      });
+      assert.equal(patch.status, 403, 'PATCH /:id must reject a STAFF session');
+
+      const del = await fetch(`${baseUrl}/api/shifts/${shift.id}`, { method: 'DELETE', headers });
+      assert.equal(del.status, 403, 'DELETE /:id must reject a STAFF session');
+
+      const bulk = await fetch(`${baseUrl}/api/shifts/bulk`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ shifts: [{ roleId: role.id, date: '2031-04-04', start: '09:00', end: '17:00' }] }),
+      });
+      assert.equal(bulk.status, 403, 'POST /bulk must reject a STAFF session');
+
+      const publish = await fetch(`${baseUrl}/api/shifts/${location.id}/publish`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ weekStart: '2031-04-01' }),
+      });
+      assert.equal(publish.status, 403, 'POST /:locationId/publish must reject a STAFF session');
+    });
+
+    // Nothing any of the rejected calls attempted should have actually landed.
+    const persisted = await prisma.shift.findMany({ where: { locationId: location.id } });
+    assert.equal(persisted.length, 1, 'only the original manager-created shift should exist — no STAFF mutation attempt should have succeeded');
+    assert.equal(persisted[0]!.id, shift.id);
+    assert.equal(persisted[0]!.breakMinutes, 0, 'the rejected PATCH must not have applied its breakMinutes change');
+  } finally {
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.role.delete({ where: { id: role.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staff.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+// Companion to the STAFF-403 test above: proves adding `requireManager`
+// didn't also break the LEGITIMATE case. PATCH /:id and POST /bulk already
+// get manager-session coverage from the two pre-existing tests earlier in
+// this file; this covers the three routes that didn't otherwise have any
+// manager-session assertion — POST /, DELETE /:id, POST /:locationId/publish
+// — so a middleware-ordering mistake (e.g. requireManager placed before
+// requireSession, leaving req.user undefined for everyone) would fail here
+// instead of only showing up as a real manager's report that shift
+// creation/deletion/publishing silently stopped working.
+test('shifts.ts mutation routes still work normally for a real MANAGER session — POST /, DELETE /:id, POST /:locationId/publish', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__task2-test__ requireManager still works', timezone: 'Asia/Dubai' },
+  });
+  const role = await prisma.role.create({ data: { locationId: location.id, name: '__task2-test__ requireManager works role' } });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__task2-test__ requireManager works manager', systemRole: 'MANAGER' },
+  });
+  const weekStart = '2031-06-02'; // a Monday, isolated from other tests' fixture dates
+
+  try {
+    const token = await sessionFor(manager.id);
+    let shiftId = '';
+    await withServer(async (baseUrl) => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+
+      const post = await fetch(`${baseUrl}/api/shifts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ roleId: role.id, date: weekStart, start: '09:00', end: '17:00' }),
+      });
+      assert.equal(post.status, 201, 'a real manager session must still be able to create a shift');
+      const postBody = (await post.json()) as { shift: { id: string } };
+      shiftId = postBody.shift.id;
+
+      const publish = await fetch(`${baseUrl}/api/shifts/${location.id}/publish`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ weekStart }),
+      });
+      assert.equal(publish.status, 200, 'a real manager session must still be able to publish the week');
+
+      const del = await fetch(`${baseUrl}/api/shifts/${shiftId}`, { method: 'DELETE', headers });
+      assert.equal(del.status, 204, 'a real manager session must still be able to delete a shift');
+    });
+
+    const remaining = await prisma.shift.findMany({ where: { locationId: location.id } });
+    assert.equal(remaining.length, 0, 'the created-then-deleted shift should leave nothing behind');
+  } finally {
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.rotaPublish.deleteMany({ where: { locationId: location.id } });
+    await prisma.role.delete({ where: { id: role.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
-import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 
 export const shiftsRouter = Router();
@@ -87,15 +87,22 @@ shiftsRouter.get('/:locationId', async (req, res) => {
 
 /**
  * POST /api/shifts — body: { roleId, userId?, date, start, end, breakMinutes?, briefingNote?, sidework?, createdById? }
- * Session-gated (2026-08-31, kiosk-access fork resolution — see MEMORY.md):
- * the Shift Editor is a write surface and `locationId`/the acting user must
- * come from the caller's own session, not a client-supplied value, the same
- * way `swapRequests.ts`'s POST already resolves `requestedById`.
- * `createdById` in the body is only ever honored for a MANAGER/OWNER session
- * filing on behalf of the staff member selected in the Shift Editor's
- * "Viewing" dropdown — a STAFF session can only ever be attributed as itself.
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; this was the real,
+ * live gap a whole-branch review found: every mutation route here was
+ * `requireSession`-only, so any authenticated STAFF session could create,
+ * edit, delete, bulk-create, or publish shifts at their own venue via a
+ * direct API call, including a coworker's — no UI needed, and the Shift
+ * Editor's own client renders these controls with no role check of its own
+ * either). `locationId`/the acting user still come from the caller's own
+ * session, not a client-supplied value, the same way `swapRequests.ts`'s
+ * POST already resolves `requestedById`. `createdById` in the body is
+ * honored for whichever MANAGER/OWNER is filing on behalf of the staff
+ * member selected in the Shift Editor's "Viewing" dropdown; the `STAFF ?
+ * self : ...` branch below is now unreachable (no STAFF session can pass
+ * `requireManager`) and kept only as defense in depth, matching this
+ * codebase's existing style at every other on-behalf-of site.
  */
-shiftsRouter.post('/', requireSession, async (req, res) => {
+shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const roleId = String(req.body?.roleId ?? '').trim();
@@ -146,10 +153,11 @@ shiftsRouter.post('/', requireSession, async (req, res) => {
 
 /**
  * PATCH /api/shifts/:id — any subset of { roleId, userId, date, start, end, breakMinutes, briefingNote, sidework, actorId }
- * Session-gated; `actorId` in the body is only honored for a MANAGER/OWNER
- * session (same "Viewing" on-behalf-of pattern as POST /, above).
+ * `requireManager`-gated (2026-09-05, same fix as POST /, above — see its
+ * comment and MEMORY.md). `actorId` in the body is honored for whichever
+ * MANAGER/OWNER is acting (same "Viewing" on-behalf-of pattern as POST /).
  */
-shiftsRouter.patch('/:id', requireSession, async (req, res) => {
+shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
@@ -206,8 +214,8 @@ shiftsRouter.patch('/:id', requireSession, async (req, res) => {
   }
 });
 
-/** DELETE /api/shifts/:id — body (optional): { actorId }. Session-gated; same on-behalf-of rule as PATCH, above. */
-shiftsRouter.delete('/:id', requireSession, async (req, res) => {
+/** DELETE /api/shifts/:id — body (optional): { actorId }. `requireManager`-gated (2026-09-05, same fix as POST /, above); same on-behalf-of rule as PATCH. */
+shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
@@ -229,10 +237,11 @@ shiftsRouter.delete('/:id', requireSession, async (req, res) => {
 
 /**
  * POST /api/shifts/bulk — body: { createdById?, shifts: [{ roleId, userId?, date, start, end, breakMinutes? }] }
- * Session-gated; `locationId` comes from the session, and `createdById` in
- * the body is only honored for a MANAGER/OWNER session — same rules as POST /, above.
+ * `requireManager`-gated (2026-09-05, same fix as POST /, above). `locationId`
+ * comes from the session, and `createdById` in the body is honored for
+ * whichever MANAGER/OWNER is acting — same rules as POST /.
  */
-shiftsRouter.post('/bulk', requireSession, async (req, res) => {
+shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const createdById =
@@ -298,10 +307,11 @@ shiftsRouter.post('/bulk', requireSession, async (req, res) => {
 
 /**
  * POST /api/shifts/:locationId/publish — body: { weekStart, publishedById? }
- * Session-gated, scoped to the caller's own location; `publishedById` in the
- * body is only honored for a MANAGER/OWNER session — same rules as POST /, above.
+ * `requireManager`-gated (2026-09-05, same fix as POST /, above), scoped to
+ * the caller's own location; `publishedById` in the body is honored for
+ * whichever MANAGER/OWNER is acting — same rules as POST /.
  */
-shiftsRouter.post('/:locationId/publish', requireSession, async (req, res) => {
+shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
     if (!assertOwnsLocation(req, res, locationId)) return;

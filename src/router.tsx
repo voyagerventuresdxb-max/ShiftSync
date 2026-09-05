@@ -58,9 +58,25 @@ import OnboardingContent from './routes/OnboardingRoute';
  * `/onboarding` (entirely a manager action) have no legitimate STAFF use at
  * all, unlike `/scheduling`/`/floor-plan`/`/schedule`, which mix
  * staff-readable/staff-usable content with manager-only sub-actions that
- * already fail informatively per-action rather than page-wide. Redirects to
+ * fail informatively per-action rather than page-wide. Redirects to
  * `/my-shifts`, the same landing spot `JoinFlow`'s login success path
  * already uses for a STAFF session.
+ *
+ * **This claim about `/schedule` was FALSE until 2026-09-05, and the false
+ * claim itself was a real risk — see MEMORY.md.** `shifts.ts`'s mutation
+ * routes (`POST /`, `PATCH /:id`, `DELETE /:id`, `POST /bulk`,
+ * `POST /:locationId/publish`) were `requireSession`-only, with no
+ * `requireManager` check at all and no client-side gate in the Shift Editor
+ * either — so a STAFF session's manager-only sub-actions on `/schedule`
+ * silently SUCCEEDED instead of failing per-action, letting any employee
+ * edit or delete any coworker's shift. This comment's own confident claim
+ * that they "already fail informatively per-action" is exactly what let
+ * that gap go unnoticed as long as it did: a false statement of protection
+ * reads as a closed question, discouraging the very check that would have
+ * caught it. `shifts.ts` is now `requireManager`-gated to match, so the
+ * claim is accurate as of this fix — kept here, corrected rather than
+ * quietly deleted, precisely so this specific mistake (trusting a comment's
+ * claim of protection over reading the actual route file) isn't repeated.
  */
 function RequireSession({ children, managerOnly }: { children: ReactNode; managerOnly?: boolean }) {
   const { session } = useIdentity();
