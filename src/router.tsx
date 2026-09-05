@@ -97,7 +97,17 @@ function RequireSession({ children, managerOnly }: { children: ReactNode; manage
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
     return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
   }
-  if (managerOnly && session.user.systemRole === 'STAFF') return <Navigate to="/my-shifts" replace />;
+  // Positive check (redirect unless confirmed MANAGER/OWNER), not a negative
+  // one (redirect only if STAFF) — matching `ShiftEditorLink`'s fix below
+  // for the same reason: `loadSession()` (`api/identity.ts`) parses
+  // `localStorage` at runtime with no validation that `systemRole` is
+  // actually one of the three expected values, so a corrupted/tampered
+  // session blob could carry an unexpected role string. A negative check
+  // would let that fall through unredirected onto a managerOnly page; this
+  // fails closed instead.
+  if (managerOnly && session.user.systemRole !== 'MANAGER' && session.user.systemRole !== 'OWNER') {
+    return <Navigate to="/my-shifts" replace />;
+  }
   return <>{children}</>;
 }
 

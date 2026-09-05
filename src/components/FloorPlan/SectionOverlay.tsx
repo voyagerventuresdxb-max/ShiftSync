@@ -67,9 +67,24 @@ function primaryLabel(section: AssignmentSectionDto): string {
  * this pin's hover tooltip and aria-label are a compact, glanceable surface,
  * not a place for an unbounded multi-sentence note to dump verbatim. The
  * full, untruncated text is still one tap away in the detail panel.
+ *
+ * Segments by grapheme cluster (`Intl.Segmenter`), not by `.slice`'s raw
+ * UTF-16 code units — a plain `.slice(0, 80)` can cut an astral-plane emoji
+ * in half (leaving a lone unpaired surrogate) or split a combining-mark/ZWJ
+ * sequence (a flag, a family emoji, Arabic diacritics — all plausible in
+ * this app's Dubai/GCC hospitality context), rendering as a mangled glyph
+ * in exactly the compact spot meant to look tidy. `Intl.Segmenter` is
+ * standard in every evergreen browser this app targets; falls back to the
+ * simpler code-unit slice only if it's ever unavailable.
  */
 function truncateNote(note: string, maxLength = 80): string {
-  return note.length > maxLength ? `${note.slice(0, maxLength - 1).trimEnd()}…` : note;
+  if (note.length <= maxLength) return note;
+  if (typeof Intl === 'undefined' || typeof Intl.Segmenter === 'undefined') {
+    return `${note.slice(0, maxLength - 1).trimEnd()}…`;
+  }
+  const graphemes = Array.from(new Intl.Segmenter().segment(note), (s) => s.segment);
+  if (graphemes.length <= maxLength) return note;
+  return `${graphemes.slice(0, maxLength - 1).join('').trimEnd()}…`;
 }
 
 /**
