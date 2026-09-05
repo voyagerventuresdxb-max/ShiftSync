@@ -14,7 +14,7 @@ import { resolveRowsAgainstDatabase } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
 import { uploadCache } from '../store/uploadCache.js';
-import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 
@@ -342,9 +342,14 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
  * Commits a previously-previewed batch to the Shift table. Rows with an
  * unresolved role are skipped (cannot satisfy the required FK) and reported
  * back in `skippedCount` for the manager to fix and re-upload separately.
- * Session-gated; the batch must belong to the caller's venue.
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
+ * gap the `withAuditedTransaction` review found: this was `requireSession`-
+ * only, so any authenticated STAFF session could confirm a batch — including
+ * one uploaded by someone else at the same venue, since `ownedOrNotFound`
+ * only checks venue, not uploader — bulk-creating real Shift rows for the
+ * whole venue). The batch must still belong to the caller's venue.
  */
-schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res) => {
+schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager, async (req, res) => {
   try {
     const { batchId } = req.params;
     const batch = uploadCache.get(batchId);
@@ -363,15 +368,24 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res
     const result = await withAuditedTransaction(
       prisma,
       (tx) => persistShifts(tx, batch.locationId, createdById, batch.rows),
-      (persisted) => ({
-        locationId: batch.locationId,
-        actorId: req.user!.id,
-        action: 'SHIFT_CREATED',
-        entityType: 'Shift',
-        entityId: persisted.rows[0]?.shiftId ?? batchId,
-        shiftId: persisted.rows[0]?.shiftId ?? null,
-        note: `Imported ${persisted.createdCount} shift(s) from roster upload (${persisted.skippedCount} skipped)`,
-      }),
+      // Only write a real audit row when at least one shift was actually
+      // created — a batch where every row was skipped for an unresolved
+      // role (persisted.createdCount === 0) would otherwise still produce a
+      // SHIFT_CREATED entry pointing at the batchId (not a real Shift id),
+      // a false compliance-audit record claiming a shift was created when
+      // none was. Same guard shape as floorPlan.ts's publish route.
+      (persisted) =>
+        persisted.createdCount > 0
+          ? {
+              locationId: batch.locationId,
+              actorId: req.user!.id,
+              action: 'SHIFT_CREATED',
+              entityType: 'Shift',
+              entityId: persisted.rows[0]!.shiftId,
+              shiftId: persisted.rows[0]!.shiftId,
+              note: `Imported ${persisted.createdCount} shift(s) from roster upload (${persisted.skippedCount} skipped)`,
+            }
+          : null,
     );
     // Deleted only after the transaction commits — deleting it before commit
     // and then having the transaction roll back (e.g. the audit write fails)

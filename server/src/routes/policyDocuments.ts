@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const policyDocumentsRouter = Router();
@@ -85,11 +85,17 @@ policyDocumentsRouter.get('/:locationId', requireSession, async (req, res) => {
 
 /**
  * POST /api/policy-documents/upload — multipart: file, category, title, uploadedById?
- * Session-gated; `locationId` comes from the session, not the body.
- * `uploadedById` is only honored for a MANAGER/OWNER session — same
- * on-behalf-of rule used across every other hardened route.
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
+ * gap the `withAuditedTransaction` review found: this route and `DELETE
+ * /:id` below were both `requireSession`-only, so any authenticated STAFF
+ * session could upload or permanently delete a compliance document — this
+ * file's own GET route comment already calls these "real sensitive data").
+ * `locationId` comes from the session, not the body. `uploadedById` is only
+ * honored for a MANAGER/OWNER session — the `STAFF ? self : ...` branch
+ * below is now unreachable and kept only as defense in depth, matching
+ * `shifts.ts`.
  */
-policyDocumentsRouter.post('/upload', requireSession, upload.single('file'), async (req, res) => {
+policyDocumentsRouter.post('/upload', requireSession, requireManager, upload.single('file'), async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const category = String(req.body?.category ?? '').trim();
@@ -137,8 +143,8 @@ policyDocumentsRouter.post('/upload', requireSession, upload.single('file'), asy
   }
 });
 
-/** DELETE /api/policy-documents/:id — session-gated, own venue only. */
-policyDocumentsRouter.delete('/:id', requireSession, async (req, res) => {
+/** DELETE /api/policy-documents/:id — `requireManager`-gated (2026-09-05, same fix as POST /upload, above), own venue only. */
+policyDocumentsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.policyDocument.findUnique({ where: { id } });

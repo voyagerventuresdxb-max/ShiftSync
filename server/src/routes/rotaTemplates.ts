@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
-import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const rotaTemplatesRouter = Router();
@@ -45,11 +45,17 @@ rotaTemplatesRouter.get('/:locationId', requireSession, async (req, res) => {
 
 /**
  * POST /api/rota-templates — body: { name, entries, createdById? }
- * Session-gated; `locationId` comes from the session, not the body.
- * `createdById` is only honored for a MANAGER/OWNER session — same
- * on-behalf-of rule as shifts.ts's POST /.
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
+ * gap the `withAuditedTransaction` review found: this route, `DELETE /:id`,
+ * and `POST /:id/apply` below were all `requireSession`-only, so any
+ * authenticated STAFF session could create/delete templates or apply one to
+ * bulk-create a full week of real shifts — the same class of gap
+ * `shifts.ts`'s own `requireManager` fix closed earlier). `locationId` comes
+ * from the session, not the body. `createdById` is only honored for a
+ * MANAGER/OWNER session — the `STAFF ? self : ...` branch below is now
+ * unreachable and kept only as defense in depth, matching `shifts.ts`.
  */
-rotaTemplatesRouter.post('/', requireSession, async (req, res) => {
+rotaTemplatesRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const name = String(req.body?.name ?? '').trim();
@@ -91,8 +97,8 @@ rotaTemplatesRouter.post('/', requireSession, async (req, res) => {
   }
 });
 
-/** DELETE /api/rota-templates/:id — session-gated, own venue only. */
-rotaTemplatesRouter.delete('/:id', requireSession, async (req, res) => {
+/** DELETE /api/rota-templates/:id — `requireManager`-gated (2026-09-05, same fix as POST /, above), own venue only. */
+rotaTemplatesRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.rotaTemplate.findUnique({ where: { id } });
@@ -116,8 +122,14 @@ rotaTemplatesRouter.delete('/:id', requireSession, async (req, res) => {
   }
 });
 
-/** POST /api/rota-templates/:id/apply — body: { weekStart, createdById? } — creates real Shift rows for the target week. */
-rotaTemplatesRouter.post('/:id/apply', requireSession, async (req, res) => {
+/**
+ * POST /api/rota-templates/:id/apply — body: { weekStart, createdById? } —
+ * bulk-creates real Shift rows for the target week. `requireManager`-gated
+ * (2026-09-05, same fix as POST /, above) — this was the most severe of the
+ * three gaps found: a STAFF session could otherwise bulk-create a full
+ * week of shifts for the whole venue with one call, no UI needed.
+ */
+rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const weekStart = String(req.body?.weekStart ?? '').trim();
