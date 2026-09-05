@@ -54,29 +54,37 @@ import OnboardingContent from './routes/OnboardingRoute';
  * `managerOnly` additionally redirects a real, valid STAFF session away
  * instead of letting the page render and immediately 403 on every API call
  * it makes — `/people` (Staff Directory + Pending Approvals, both
- * MANAGER/OWNER-only server-side since the actor-identity phase) and
- * `/onboarding` (entirely a manager action) have no legitimate STAFF use at
- * all, unlike `/scheduling`/`/floor-plan`/`/schedule`, which mix
- * staff-readable/staff-usable content with manager-only sub-actions that
- * fail informatively per-action rather than page-wide. Redirects to
+ * MANAGER/OWNER-only server-side since the actor-identity phase),
+ * `/onboarding` (entirely a manager action), and, as of 2026-09-05,
+ * `/schedule` (see below) have no legitimate STAFF use at all, unlike
+ * `/scheduling`/`/floor-plan`, which genuinely do mix staff-readable/
+ * staff-usable content with manager-only sub-actions that fail
+ * informatively per-action rather than page-wide. Redirects to
  * `/my-shifts`, the same landing spot `JoinFlow`'s login success path
  * already uses for a STAFF session.
  *
- * **This claim about `/schedule` was FALSE until 2026-09-05, and the false
- * claim itself was a real risk — see MEMORY.md.** `shifts.ts`'s mutation
- * routes (`POST /`, `PATCH /:id`, `DELETE /:id`, `POST /bulk`,
+ * **`/schedule` moved from the "mixed" group above into the `managerOnly`
+ * one on 2026-09-05 — this comment previously claimed the opposite, and
+ * the false claim itself was a real risk (see MEMORY.md).** `shifts.ts`'s
+ * mutation routes (`POST /`, `PATCH /:id`, `DELETE /:id`, `POST /bulk`,
  * `POST /:locationId/publish`) were `requireSession`-only, with no
  * `requireManager` check at all and no client-side gate in the Shift Editor
  * either — so a STAFF session's manager-only sub-actions on `/schedule`
  * silently SUCCEEDED instead of failing per-action, letting any employee
- * edit or delete any coworker's shift. This comment's own confident claim
- * that they "already fail informatively per-action" is exactly what let
- * that gap go unnoticed as long as it did: a false statement of protection
- * reads as a closed question, discouraging the very check that would have
- * caught it. `shifts.ts` is now `requireManager`-gated to match, so the
- * claim is accurate as of this fix — kept here, corrected rather than
- * quietly deleted, precisely so this specific mistake (trusting a comment's
- * claim of protection over reading the actual route file) isn't repeated.
+ * edit or delete any coworker's shift. That gap is now closed
+ * (`shifts.ts` is `requireManager`-gated), which also means `/schedule` has
+ * no remaining staff-usable content at all — unlike `/scheduling`, it was
+ * never a place STAFF could read anything either, only a write surface —
+ * so once the routes were actually protected, leaving the PAGE reachable
+ * only bought a STAFF session a page-wide 403 wall instead of a clean
+ * redirect. `managerOnly` added here to close that too, matching `/people`/
+ * `/onboarding`'s existing pattern exactly. `/scheduling`'s own "Shift
+ * editor" link is unconditionally rendered (not hidden for STAFF) — a STAFF
+ * session that clicks it now lands straight back on `/my-shifts` via this
+ * same redirect, the identical experience `/people`'s "Onboarding" link
+ * would produce for a STAFF session if `/people` weren't already
+ * unreachable to them for the same reason. Whether to also hide the link
+ * itself was raised and left as a separate, not-yet-decided UX call.
  */
 function RequireSession({ children, managerOnly }: { children: ReactNode; managerOnly?: boolean }) {
   const { session } = useIdentity();
@@ -136,7 +144,7 @@ export const router = createBrowserRouter([
       {
         path: '/schedule',
         element: (
-          <RequireSession>
+          <RequireSession managerOnly>
             <ScheduleEditorContent />
           </RequireSession>
         ),
