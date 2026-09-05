@@ -24,16 +24,34 @@ const ROLE_ALIASES: Record<string, string> = {
   'floor team': 'Floor Staff',
   'floor service': 'Floor Staff',
   'floor staff member': 'Floor Staff',
+  // "Commis de rang"/"commis de salle" = the most junior member of a
+  // French-service rang team (clearing, assisting) — general floor duty
+  // rather than a specific waiter/runner specialization.
+  'commis de rang': 'Floor Staff',
+  'commis de salle': 'Floor Staff',
   waiter: 'Waiter',
   waiters: 'Waiter',
   'wait staff': 'Waiter',
   'waiting staff': 'Waiter',
   server: 'Waiter',
   servers: 'Waiter',
+  // Classic French-service brigade: a "demi chef de rang" is the junior
+  // half of a section-waiter pair, working under a chef de rang — same
+  // seniority tier as a regular waiter, NOT the kitchen 'Chef' bucket.
+  'demi chef de rang': 'Waiter',
+  'demi chefs de rang': 'Waiter',
   'head waiter': 'Head Waiter',
   'head waiters': 'Head Waiter',
   'head server': 'Head Waiter',
   'senior waiter': 'Head Waiter',
+  // "Chef de rang" = senior section waiter who owns a group of tables in
+  // French service. Despite the word "Chef", this is a FOH floor role,
+  // not kitchen staff — do not route into the 'Chef' bucket below.
+  'chef de rang': 'Head Waiter',
+  'chefs de rang': 'Head Waiter',
+  // "Captain" is a common senior-waiter title on Dubai fine-dining floors.
+  captain: 'Head Waiter',
+  captains: 'Head Waiter',
   supervisor: 'Supervisor',
   supervisors: 'Supervisor',
   'floor supervisor': 'Supervisor',
@@ -47,13 +65,30 @@ const ROLE_ALIASES: Record<string, string> = {
   bartender: 'Bartender',
   bartenders: 'Bartender',
   barista: 'Bartender',
+  barback: 'Bartender',
+  barbacks: 'Bartender',
+  mixologist: 'Bartender',
+  mixologists: 'Bartender',
   host: 'Host',
   hostess: 'Host',
   'host hostess': 'Host',
+  // Guest Relations Officer/Associate — the guest-greeting/seating desk
+  // role common at Dubai/GCC fine-dining and hotel outlets; functionally
+  // closest to Host among existing buckets (see report re: judgment call).
+  'guest relations officer': 'Host',
+  'guest relations': 'Host',
+  gro: 'Host',
+  'guest relations associate': 'Host',
+  gra: 'Host',
   chef: 'Chef',
   cooks: 'Chef',
   cook: 'Chef',
   'kitchen staff': 'Chef',
+  // "Commis chef" = junior/trainee kitchen chef — a real, distinct title
+  // (unlike bare "commis", which is ambiguous between kitchen and floor
+  // and is deliberately NOT added here — see report).
+  'commis chef': 'Chef',
+  'commis chefs': 'Chef',
   management: 'Management',
   'management floor': 'Management',
   'management / floor': 'Management',
@@ -70,6 +105,27 @@ const ROLE_ALIASES: Record<string, string> = {
   'assistant gm': 'Management',
   'head of floor': 'Management',
   'floor management': 'Management',
+  // Maître d'Hôtel / Chef de Salle — the senior FOH authority in French
+  // service, above chef de rang and reporting to the F&B/restaurant
+  // manager. Grouped with 'Management' to match this table's existing
+  // "head of floor" / "floor management" entries rather than Supervisor.
+  // NOTE: nameKey/normalizeHeader replaces each accented char (é, î, ô…)
+  // with a space rather than folding it to its plain-ASCII letter, so a
+  // literal "Maître d'Hôtel" normalizes to "ma tre d h tel" and will NOT
+  // match this key — only the plain-ASCII spellings real Dubai rosters
+  // actually use ("Maitre D", "Maitre D'Hotel") match here.
+  'maitre d': 'Management',
+  'maitre d hotel': 'Management',
+  'chef de salle': 'Management',
+  'outlet manager': 'Management',
+  'outlet managers': 'Management',
+  // F&B / Food & Beverage Manager — both the spelled-out and "&"-punctuated
+  // forms are covered since normalization only collapses punctuation to a
+  // space, not the word "and" itself.
+  'f b manager': 'Management',
+  'fnb manager': 'Management',
+  'food and beverage manager': 'Management',
+  'food beverage manager': 'Management',
   staff: 'Staff',
   'general staff': 'Staff',
 };
