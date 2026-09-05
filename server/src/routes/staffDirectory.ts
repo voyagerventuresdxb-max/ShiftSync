@@ -1,7 +1,7 @@
 import { Router, type Request } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -126,21 +126,23 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
-    const user = await prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
-        include: { role: true, location: { select: { name: true } } },
-      });
-      await writeAuditLog(tx, {
+    const user = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        return tx.user.create({
+          data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
+          include: { role: true, location: { select: { name: true } } },
+        });
+      },
+      (created) => ({
         locationId: req.user!.locationId,
         actorId: req.user!.id,
         action: 'STAFF_CREATED',
         entityType: 'User',
         entityId: created.id,
         note: `Added ${created.fullName} to the staff directory`,
-      });
-      return created;
-    });
+      }),
+    );
     return res.status(201).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
     console.error('[staffDirectory.create] failed', err);
@@ -214,8 +216,9 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
-    const user = await prisma
-      .$transaction(async (tx) => {
+    const user = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
         // Atomic guard: only when THIS request is itself toggling isActive
         // (and therefore computed `data.terminatedAt` from `existing.isActive`
         // above) do we re-assert that isActive hasn't moved since our read —
@@ -239,20 +242,20 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
           where: { id: userId },
           include: { role: true, location: { select: { name: true } } },
         });
-        await writeAuditLog(tx, {
-          locationId: req.user!.locationId,
-          actorId: req.user!.id,
-          action: 'STAFF_UPDATED',
-          entityType: 'User',
-          entityId: userId,
-          note: `Updated ${updated!.fullName}'s staff record`,
-        });
         return updated!;
-      })
-      .catch((err) => {
-        if (err instanceof StaffRecordChangedConcurrentlyError) return null;
-        throw err;
-      });
+      },
+      (updated) => ({
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_UPDATED',
+        entityType: 'User',
+        entityId: userId,
+        note: `Updated ${updated.fullName}'s staff record`,
+      }),
+    ).catch((err) => {
+      if (err instanceof StaffRecordChangedConcurrentlyError) return null;
+      throw err;
+    });
     if (!user) {
       return res.status(409).json({ error: 'This staff record was changed by someone else — please refresh and try again.' });
     }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 
 export const eightySixRouter = Router();
@@ -90,12 +90,13 @@ eightySixRouter.post('/', requireSession, async (req, res) => {
     if (!itemName) return res.status(400).json({ error: 'itemName is required.' });
     if (!station) return res.status(400).json({ error: 'station is required.' });
 
-    const item = await prisma.$transaction(async (tx) => {
-      const created = await tx.eightySixItem.create({
-        data: { locationId, itemName, station, note, createdById },
-      });
-
-      await writeAuditLog(tx, {
+    const item = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.eightySixItem.create({
+          data: { locationId, itemName, station, note, createdById },
+        }),
+      (created) => ({
         locationId,
         actorId: createdById,
         shiftId: null,
@@ -103,9 +104,8 @@ eightySixRouter.post('/', requireSession, async (req, res) => {
         entityType: 'EightySixItem',
         entityId: created.id,
         note: `86'd "${itemName}" (${station})`,
-      });
-      return created;
-    });
+      }),
+    );
 
     return res.status(201).json({ item: itemToDto(item) });
   } catch (err) {
@@ -132,13 +132,14 @@ eightySixRouter.patch('/:itemId/back-on', requireSession, async (req, res) => {
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
         : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
-    const item = await prisma.$transaction(async (tx) => {
-      const updated = await tx.eightySixItem.update({
-        where: { id: itemId },
-        data: { status: 'BACK_ON', backOnAt: new Date(), backOnById },
-      });
-
-      await writeAuditLog(tx, {
+    const item = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.eightySixItem.update({
+          where: { id: itemId },
+          data: { status: 'BACK_ON', backOnAt: new Date(), backOnById },
+        }),
+      (updated) => ({
         locationId: existing.locationId,
         actorId: backOnById,
         shiftId: null,
@@ -146,9 +147,8 @@ eightySixRouter.patch('/:itemId/back-on', requireSession, async (req, res) => {
         entityType: 'EightySixItem',
         entityId: updated.id,
         note: `"${existing.itemName}" back on (${existing.station})`,
-      });
-      return updated;
-    });
+      }),
+    );
 
     return res.status(200).json({ item: itemToDto(item) });
   } catch (err) {

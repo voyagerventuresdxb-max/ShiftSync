@@ -4,7 +4,7 @@ import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../lib/prisma.js';
 import { isRequestLocked } from '../lib/swapRequestPolicy.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 import {
   SWAP_REQUEST_INCLUDE,
   createSwapRequest,
@@ -150,9 +150,10 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
       onBehalfNote = `Requested on behalf of ${requester?.fullName ?? effectiveRequesterId}`;
     }
 
-    const created = await prisma.$transaction(async (tx) => {
-      const request = await createSwapRequest({ shiftId, requestedById: effectiveRequesterId, targetUserId, reason }, tx);
-      await writeAuditLog(tx, {
+    const created = await withAuditedTransaction(
+      prisma,
+      (tx) => createSwapRequest({ shiftId, requestedById: effectiveRequesterId, targetUserId, reason }, tx),
+      (request) => ({
         locationId,
         actorId: req.user!.id,
         shiftId,
@@ -160,9 +161,8 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
         entityType: 'ShiftSwapRequest',
         entityId: request.id,
         note: onBehalfNote,
-      });
-      return request;
-    });
+      }),
+    );
 
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {

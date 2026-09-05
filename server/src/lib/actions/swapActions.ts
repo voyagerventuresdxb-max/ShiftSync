@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js';
-import { writeAuditLog } from '../auditLog.js';
+import { withAuditedTransaction } from '../auditLog.js';
 
 /**
  * The Prisma `include` every swap-request read uses. Kept in one place so the
@@ -89,8 +89,9 @@ export async function decideSwapRequest(input: {
       ? `Approved · shift reassigned to ${existing.targetUser?.fullName ?? 'the proposed cover'}`
       : 'Declined';
 
-  const updated = await prisma
-    .$transaction(async (tx) => {
+  const updated = await withAuditedTransaction(
+    prisma,
+    async (tx) => {
       // Atomic guard: only reassign the shift if it is still owned by the
       // same user who requested the swap. This is the real source of truth
       // against the TOCTOU race — two managers approving two different
@@ -118,22 +119,21 @@ export async function decideSwapRequest(input: {
         include: SWAP_REQUEST_INCLUDE,
       });
 
-      await writeAuditLog(tx, {
-        locationId: existing.shift.locationId,
-        actorId: input.reviewedById,
-        shiftId: existing.shiftId,
-        action: input.decision === 'approved' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
-        entityType: 'ShiftSwapRequest',
-        entityId: input.id,
-        note: managerNote,
-      });
-
       return updatedRequest;
-    })
-    .catch((err) => {
-      if (err instanceof ShiftAlreadyReassignedError) return null;
-      throw err;
-    });
+    },
+    () => ({
+      locationId: existing.shift.locationId,
+      actorId: input.reviewedById,
+      shiftId: existing.shiftId,
+      action: input.decision === 'approved' ? 'SWAP_APPROVED' : 'SWAP_DECLINED',
+      entityType: 'ShiftSwapRequest',
+      entityId: input.id,
+      note: managerNote,
+    }),
+  ).catch((err) => {
+    if (err instanceof ShiftAlreadyReassignedError) return null;
+    throw err;
+  });
 
   if (!updated) return { result: 'conflict' };
   return { result: 'ok', request: updated };

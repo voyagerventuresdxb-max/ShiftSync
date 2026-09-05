@@ -5,7 +5,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const policyDocumentsRouter = Router();
 
@@ -113,20 +113,21 @@ policyDocumentsRouter.post('/upload', requireSession, upload.single('file'), asy
     await writeFile(join(UPLOAD_DIR, filename), req.file.buffer);
     const fileUrl = `/uploads/policy-documents/${filename}`;
 
-    const doc = await prisma.$transaction(async (tx) => {
-      const created = await tx.policyDocument.create({
-        data: { locationId, category, title, fileUrl, originalName: req.file!.originalname, mimeType: req.file!.mimetype, uploadedById },
-      });
-      await writeAuditLog(tx, {
+    const doc = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.policyDocument.create({
+          data: { locationId, category, title, fileUrl, originalName: req.file!.originalname, mimeType: req.file!.mimetype, uploadedById },
+        }),
+      (created) => ({
         locationId,
         actorId: req.user!.id,
         action: 'POLICY_DOCUMENT_UPLOADED',
         entityType: 'PolicyDocument',
         entityId: created.id,
         note: `Uploaded "${title}" (${category})`,
-      });
-      return created;
-    });
+      }),
+    );
     return res.status(201).json({
       document: { id: doc.id, category: doc.category, title: doc.title, fileUrl: doc.fileUrl, originalName: doc.originalName, createdAt: doc.createdAt.toISOString() },
     });
@@ -142,17 +143,18 @@ policyDocumentsRouter.delete('/:id', requireSession, async (req, res) => {
     const { id } = req.params;
     const existing = await prisma.policyDocument.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, existing, `Document "${id}" not found.`)) return;
-    await prisma.$transaction(async (tx) => {
-      await tx.policyDocument.delete({ where: { id } });
-      await writeAuditLog(tx, {
+    await withAuditedTransaction(
+      prisma,
+      (tx) => tx.policyDocument.delete({ where: { id } }),
+      () => ({
         locationId: existing.locationId,
         actorId: req.user!.id,
         action: 'POLICY_DOCUMENT_DELETED',
         entityType: 'PolicyDocument',
         entityId: id,
         note: `Deleted "${existing.title}" (${existing.category})`,
-      });
-    });
+      }),
+    );
     return res.status(204).send();
   } catch (err) {
     console.error('[policyDocuments.delete] failed', err);

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const attendanceRouter = Router();
 
@@ -54,23 +54,25 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
     // and rejects the other with a unique-violation, which Prisma surfaces
     // as `P2002` — caught and translated to the same 409 as the fast-path,
     // so callers never see a raw 500 for this.
-    const log = await prisma
-      .$transaction(async (tx) => {
+    const log = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
         const open = await tx.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
         if (open) {
           throw new AlreadyClockedInError();
         }
         const created = await tx.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
-        await writeAuditLog(tx, {
-          locationId: req.user!.locationId,
-          actorId: req.user!.id,
-          action: 'CLOCKED_IN',
-          entityType: 'AttendanceLog',
-          entityId: created.id,
-          note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
-        });
         return created;
-      })
+      },
+      (created) => ({
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'CLOCKED_IN',
+        entityType: 'AttendanceLog',
+        entityId: created.id,
+        note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+      }),
+    )
       .catch((err) => {
         if (err instanceof AlreadyClockedInError) return null;
         // Real backstop: the DB-level partial unique index rejected a
@@ -123,18 +125,18 @@ attendanceRouter.post('/clock-out', requireSession, async (req, res) => {
     const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
     if (!open) return res.status(409).json({ error: 'Not currently clocked in.' });
 
-    const closed = await prisma.$transaction(async (tx) => {
-      const updated = await tx.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } });
-      await writeAuditLog(tx, {
+    const closed = await withAuditedTransaction(
+      prisma,
+      (tx) => tx.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } }),
+      (updated) => ({
         locationId: req.user!.locationId,
         actorId: req.user!.id,
         action: 'CLOCKED_OUT',
         entityType: 'AttendanceLog',
         entityId: updated.id,
         note: effectiveUserId === req.user!.id ? undefined : `Clocked out ${user.fullName} on their behalf`,
-      });
-      return updated;
-    });
+      }),
+    );
     return res.status(200).json({ id: closed.id, clockInAt: closed.clockInAt!.toISOString(), clockOutAt: closed.clockOutAt!.toISOString() });
   } catch (err) {
     console.error('[attendance.clockOut] failed', err);

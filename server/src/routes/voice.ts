@@ -9,7 +9,7 @@ import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/
 import { createSwapRequest, decideSwapRequest } from '../lib/actions/swapActions.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 
 export const voiceRouter = Router();
 
@@ -195,11 +195,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // markAvailability() upserts unconditionally (one row per (userId, date))
         // and only ever returns { result: 'ok' } — there is no 'not_found' case
         // to handle here, unlike the swap/join actions below.
-        const result = await prisma.$transaction(async (tx) => {
-          const marked = await markAvailability({ userId: actorId, date: intent.date, type: intent.type, note }, tx);
-          await writeAuditLog(tx, { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: marked.mark.id, note });
-          return marked;
-        });
+        const result = await withAuditedTransaction(
+          prisma,
+          (tx) => markAvailability({ userId: actorId, date: intent.date, type: intent.type, note }, tx),
+          (marked) => ({ locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: marked.mark.id, note }),
+        );
         return res.status(200).json({ executed: true, result: result.mark });
       }
       case 'REQUEST_SWAP': {
@@ -219,11 +219,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         if (!target) {
           return res.status(404).json({ error: 'That staff member could not be found at your location.' });
         }
-        const created = await prisma.$transaction(async (tx) => {
-          const request = await createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx);
-          await writeAuditLog(tx, { locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note });
-          return request;
-        });
+        const created = await withAuditedTransaction(
+          prisma,
+          (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
+          (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
+        );
         return res.status(201).json({ executed: true, result: created });
       }
       case 'APPROVE_SWAP':

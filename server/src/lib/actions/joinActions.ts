@@ -1,5 +1,5 @@
 import { prisma } from '../prisma.js';
-import { writeAuditLog } from '../auditLog.js';
+import { withAuditedTransaction } from '../auditLog.js';
 
 /**
  * Thrown inside the decide transactions (both decline and approve) when the
@@ -38,8 +38,9 @@ export async function decideJoinRequest(input: {
   if (existing.status !== 'PENDING') return { result: 'already_reviewed' };
 
   if (input.decision === 'decline') {
-    const declined = await prisma
-      .$transaction(async (tx) => {
+    const declined = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
         // Atomic guard: only decline if the request is still PENDING. Two
         // concurrent decisions on the same request (double-decline, or an
         // approve/decline race) can both pass the plain `existing.status`
@@ -52,27 +53,28 @@ export async function decideJoinRequest(input: {
         if (result.count === 0) {
           throw new JoinRequestAlreadyReviewedError();
         }
-        await writeAuditLog(tx, {
-          locationId: existing.locationId,
-          actorId: input.reviewedById,
-          action: 'JOIN_DECLINED',
-          entityType: 'JoinRequest',
-          entityId: input.requestId,
-          note: `Declined join request for ${existing.fullName}`,
-        });
         return true;
-      })
-      .catch((err) => {
-        if (err instanceof JoinRequestAlreadyReviewedError) return null;
-        throw err;
-      });
+      },
+      () => ({
+        locationId: existing.locationId,
+        actorId: input.reviewedById,
+        action: 'JOIN_DECLINED',
+        entityType: 'JoinRequest',
+        entityId: input.requestId,
+        note: `Declined join request for ${existing.fullName}`,
+      }),
+    ).catch((err) => {
+      if (err instanceof JoinRequestAlreadyReviewedError) return null;
+      throw err;
+    });
     if (!declined) return { result: 'already_reviewed' };
     return { result: 'ok', status: 'DECLINED' };
   }
 
   const jobTitle = input.jobTitle ?? null;
-  const created = await prisma
-    .$transaction(async (tx) => {
+  const created = await withAuditedTransaction(
+    prisma,
+    async (tx) => {
       const user = await tx.user.create({
         data: { locationId: existing.locationId, fullName: existing.fullName, phone: existing.phone, jobTitle },
       });
@@ -87,20 +89,20 @@ export async function decideJoinRequest(input: {
       if (result.count === 0) {
         throw new JoinRequestAlreadyReviewedError();
       }
-      await writeAuditLog(tx, {
-        locationId: existing.locationId,
-        actorId: input.reviewedById,
-        action: 'JOIN_APPROVED',
-        entityType: 'JoinRequest',
-        entityId: input.requestId,
-        note: `Approved join request for ${existing.fullName} — created User ${user.id}`,
-      });
       return user;
-    })
-    .catch((err) => {
-      if (err instanceof JoinRequestAlreadyReviewedError) return null;
-      throw err;
-    });
+    },
+    (user) => ({
+      locationId: existing.locationId,
+      actorId: input.reviewedById,
+      action: 'JOIN_APPROVED',
+      entityType: 'JoinRequest',
+      entityId: input.requestId,
+      note: `Approved join request for ${existing.fullName} — created User ${user.id}`,
+    }),
+  ).catch((err) => {
+    if (err instanceof JoinRequestAlreadyReviewedError) return null;
+    throw err;
+  });
   if (!created) return { result: 'already_reviewed' };
   return { result: 'ok', status: 'APPROVED', userId: created.id };
 }

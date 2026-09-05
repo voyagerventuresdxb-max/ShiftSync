@@ -16,7 +16,7 @@ import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, Ro
 import { uploadCache } from '../store/uploadCache.js';
 import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
 import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
-import { writeAuditLog } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -360,9 +360,10 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res
       if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      const persisted = await persistShifts(tx, batch.locationId, createdById, batch.rows);
-      await writeAuditLog(tx, {
+    const result = await withAuditedTransaction(
+      prisma,
+      (tx) => persistShifts(tx, batch.locationId, createdById, batch.rows),
+      (persisted) => ({
         locationId: batch.locationId,
         actorId: req.user!.id,
         action: 'SHIFT_CREATED',
@@ -370,9 +371,8 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, async (req, res
         entityId: persisted.rows[0]?.shiftId ?? batchId,
         shiftId: persisted.rows[0]?.shiftId ?? null,
         note: `Imported ${persisted.createdCount} shift(s) from roster upload (${persisted.skippedCount} skipped)`,
-      });
-      return persisted;
-    });
+      }),
+    );
     // Deleted only after the transaction commits — deleting it before commit
     // and then having the transaction roll back (e.g. the audit write fails)
     // would permanently strand the batch as unretryable with nothing
