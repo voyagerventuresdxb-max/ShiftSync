@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { MapPin } from 'lucide-react';
+import { MapPin, StickyNote } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/react';
 import { cn } from '../../lib/utils';
 import type { AssignmentSectionDto, Point } from '../../api/floorPlan';
@@ -62,6 +62,17 @@ function primaryLabel(section: AssignmentSectionDto): string {
 }
 
 /**
+ * Neither the notes textarea (`SectionEditor.tsx`) nor the server route
+ * caps note length — fine for `SectionDetail.tsx`'s full-detail view, but
+ * this pin's hover tooltip and aria-label are a compact, glanceable surface,
+ * not a place for an unbounded multi-sentence note to dump verbatim. The
+ * full, untruncated text is still one tap away in the detail panel.
+ */
+function truncateNote(note: string, maxLength = 80): string {
+  return note.length > maxLength ? `${note.slice(0, maxLength - 1).trimEnd()}…` : note;
+}
+
+/**
  * A small pin-style marker (section number + primary assignee + pax ratio)
  * anchored to the drawn polygon's centroid. The polygon's own bounding box
  * — invisible here, just the drop target — still spans the full drawn
@@ -82,7 +93,9 @@ export default function SectionOverlay({ section, warn, onTap }: Props) {
       onClick={onTap}
       role="button"
       tabIndex={0}
-      aria-label={`${section.label}, ${primaryLabel(section)}, ${section.assignments.length} of ${section.paxCapacity} pax`}
+      aria-label={`${section.label}, ${primaryLabel(section)}, ${section.assignments.length} of ${section.paxCapacity} pax${
+        section.notes ? `, note: ${truncateNote(section.notes)}` : ''
+      }`}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onTap();
       }}
@@ -103,6 +116,11 @@ export default function SectionOverlay({ section, warn, onTap }: Props) {
         >
           <MapPin className="h-2.5 w-2.5 shrink-0" />
           <span className="text-[9px] font-semibold leading-none">{sectionPinName(section.label)}</span>
+          {section.notes && (
+            <span title={truncateNote(section.notes)} aria-hidden className="flex shrink-0 items-center opacity-70">
+              <StickyNote className="h-2.5 w-2.5" />
+            </span>
+          )}
         </span>
         <span className="whitespace-nowrap rounded-full bg-background/85 px-1.5 py-0.5 text-[8px] font-medium leading-none text-foreground shadow-sm">
           {primaryLabel(section)}
