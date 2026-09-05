@@ -78,13 +78,13 @@ import OnboardingContent from './routes/OnboardingRoute';
  * so once the routes were actually protected, leaving the PAGE reachable
  * only bought a STAFF session a page-wide 403 wall instead of a clean
  * redirect. `managerOnly` added here to close that too, matching `/people`/
- * `/onboarding`'s existing pattern exactly. `/scheduling`'s own "Shift
- * editor" link is unconditionally rendered (not hidden for STAFF) — a STAFF
- * session that clicks it now lands straight back on `/my-shifts` via this
- * same redirect, the identical experience `/people`'s "Onboarding" link
- * would produce for a STAFF session if `/people` weren't already
- * unreachable to them for the same reason. Whether to also hide the link
- * itself was raised and left as a separate, not-yet-decided UX call.
+ * `/onboarding`'s existing pattern exactly — kept as a safety net for a
+ * stale bookmark or direct URL entry. **Decided (2026-09-05): the link
+ * itself must not render for STAFF either** — `/scheduling`'s "Shift
+ * editor" action is `<ShiftEditorLink />` (below), which returns `null` for
+ * a STAFF session instead of a link that then silently teleports them away
+ * on click with no explanation. `managerOnly` here is the backstop for the
+ * URL-typed case that component can't cover, not the primary UX.
  */
 function RequireSession({ children, managerOnly }: { children: ReactNode; managerOnly?: boolean }) {
   const { session } = useIdentity();
@@ -99,6 +99,40 @@ function RequireSession({ children, managerOnly }: { children: ReactNode; manage
   }
   if (managerOnly && session.user.systemRole === 'STAFF') return <Navigate to="/my-shifts" replace />;
   return <>{children}</>;
+}
+
+/**
+ * `/scheduling`'s header action — only rendered for a MANAGER/OWNER
+ * session. `/schedule` itself is `managerOnly`-gated (see `RequireSession`
+ * above) purely as a safety net for a stale bookmark or direct URL entry;
+ * the link that actually advertises it must not render for STAFF at all,
+ * not just redirect after the click — otherwise a STAFF session sees a
+ * normal-looking nav link that silently teleports them away the moment
+ * they click it, with no explanation. Hiding it here is the fix; the
+ * `managerOnly` redirect stays as the backstop for the URL-typed case this
+ * component can't cover.
+ *
+ * Positive check (render only for a confirmed MANAGER/OWNER), not a
+ * negative one (hide only for STAFF) — a caught-before-shipping bug in an
+ * earlier draft used `session?.user.systemRole === 'STAFF'`, which is
+ * `undefined === 'STAFF'` (`false`) when there's no session at all, so the
+ * link would render for a genuinely signed-out visitor too. `AppShell`
+ * reads this `handle.action` via `useMatches()` independent of
+ * `RequireSession`'s own redirect (they're sibling renders in the same
+ * commit, and `<Navigate>` fires its actual navigation in an effect, one
+ * tick after that first render) — so a negative check would have let a
+ * signed-out visitor's very first paint include a manager-only link before
+ * the redirect to `/join` took over.
+ */
+function ShiftEditorLink() {
+  const { session } = useIdentity();
+  if (session?.user.systemRole !== 'MANAGER' && session?.user.systemRole !== 'OWNER') return null;
+  return (
+    <Link to="/schedule" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+      <Pencil className="h-3.5 w-3.5" />
+      <span className="hidden sm:inline">Shift editor</span>
+    </Link>
+  );
 }
 
 /** Header text per route, read by AppShell via useMatches(). */
@@ -133,12 +167,7 @@ export const router = createBrowserRouter([
         ),
         handle: {
           title: 'Scheduling',
-          action: (
-            <Link to="/schedule" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
-              <Pencil className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Shift editor</span>
-            </Link>
-          ),
+          action: <ShiftEditorLink />,
         },
       },
       {
