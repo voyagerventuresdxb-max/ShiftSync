@@ -76,19 +76,27 @@ const ROLE_ALIASES: Record<string, string> = {
   // role common at Dubai/GCC fine-dining and hotel outlets; functionally
   // closest to Host among existing buckets (see report re: judgment call).
   'guest relations officer': 'Host',
+  'guest relations officers': 'Host',
   'guest relations': 'Host',
+  // A one-grade-up GRO title seen at some hotel-affiliated outlets — same
+  // function, so the same bucket.
+  'guest relations manager': 'Host',
+  'guest relations managers': 'Host',
   gro: 'Host',
   'guest relations associate': 'Host',
+  'guest relations associates': 'Host',
   gra: 'Host',
   chef: 'Chef',
   cooks: 'Chef',
   cook: 'Chef',
   'kitchen staff': 'Chef',
-  // "Commis chef" = junior/trainee kitchen chef — a real, distinct title
-  // (unlike bare "commis", which is ambiguous between kitchen and floor
-  // and is deliberately NOT added here — see report).
+  // "Commis chef"/"Commis de Cuisine" = junior/trainee kitchen chef — real,
+  // distinct kitchen titles (unlike bare "commis", which is ambiguous
+  // between kitchen and floor and is deliberately NOT added here — see
+  // report).
   'commis chef': 'Chef',
   'commis chefs': 'Chef',
+  'commis de cuisine': 'Chef',
   management: 'Management',
   'management floor': 'Management',
   'management / floor': 'Management',
@@ -119,13 +127,23 @@ const ROLE_ALIASES: Record<string, string> = {
   'chef de salle': 'Management',
   'outlet manager': 'Management',
   'outlet managers': 'Management',
-  // F&B / Food & Beverage Manager — both the spelled-out and "&"-punctuated
-  // forms are covered since normalization only collapses punctuation to a
-  // space, not the word "and" itself.
+  // F&B / Food & Beverage Manager — the spelled-out, "&"-punctuated, AND
+  // no-space "FB" forms are each their own distinct normalized key
+  // ("F&B" -> "f b" [two tokens], "FB" -> "fb" [one token] — normalization
+  // only collapses punctuation to a space, it doesn't merge/split letter
+  // runs), plus the plural of each, since a section header grouping
+  // several people under one manager title ("Food & Beverage Managers") is
+  // a realistic sheet shape distinct from an individual's own title.
   'f b manager': 'Management',
+  'f b managers': 'Management',
+  'fb manager': 'Management',
+  'fb managers': 'Management',
   'fnb manager': 'Management',
+  'fnb managers': 'Management',
   'food and beverage manager': 'Management',
+  'food and beverage managers': 'Management',
   'food beverage manager': 'Management',
+  'food beverage managers': 'Management',
   staff: 'Staff',
   'general staff': 'Staff',
 };
@@ -173,9 +191,20 @@ export async function resolveRowsAgainstDatabase(
 
   const previewRows: PreviewRow[] = rows.map((row) => {
     const issues: RowIssue[] = [];
-    // Resolve the role through the canonical alias map first, then fall back
-    // to the raw string — so "Floor", "Supervisor", "Head Waiter" etc. map to
-    // the seeded Role.name regardless of casing or synonym.
+    // Resolve the role via a RAW exact match against this venue's own seeded
+    // Role.name FIRST, falling back to the canonical alias map only when the
+    // raw string isn't itself a real role here. This ordering matters: a
+    // venue can seed a Role whose name happens to equal one of ROLE_ALIASES'
+    // own keys (a real, distinct "GRO"/"Captain"/"Outlet Manager" role,
+    // deliberately different from that generic bucket's "Host"/"Head
+    // Waiter"/"Management") — trying the alias-canonicalized name first
+    // would silently redirect every such row to the wrong, generic role
+    // with `status: 'matched'` and no warning surfaced at all, overriding a
+    // previously-correct exact match. Checking the raw string first doesn't
+    // weaken the intended synonym-matching case: a roster saying "Server"
+    // for a venue that seeded "Waiter" (not "Server") still falls through
+    // to the alias lookup exactly as before, since no venue seeds a role
+    // literally named after its own synonym.
     const canonicalRole = canonicalRoleName(row.roleName);
     const resolvedUserId = userByName.get(nameKey(row.employeeName)) ?? null;
     const matchedUser = userByNameFull.get(nameKey(row.employeeName));
@@ -189,8 +218,8 @@ export async function resolveRowsAgainstDatabase(
     // roleName is empty.
     const usedExistingRoleFallback = !row.roleName.trim() && !!matchedUser?.roleId;
     const resolvedRoleId =
-      roleByName.get(nameKey(canonicalRole)) ??
       roleByName.get(nameKey(row.roleName)) ??
+      roleByName.get(nameKey(canonicalRole)) ??
       (usedExistingRoleFallback ? matchedUser!.roleId : null);
 
     if (usedExistingRoleFallback) {

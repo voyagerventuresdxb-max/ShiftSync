@@ -168,10 +168,56 @@ test('Outlet Manager resolves to Management', () => {
   assert.equal(canonicalRoleName('outlet managers'), 'Management');
 });
 
-test('F&B / FnB / Food and Beverage Manager variants all resolve to Management', () => {
+test('F&B / FnB / FB / Food and Beverage Manager variants (singular and plural) all resolve to Management', () => {
   assert.equal(canonicalRoleName('F&B Manager'), 'Management');
   assert.equal(canonicalRoleName('F & B Manager'), 'Management');
+  assert.equal(canonicalRoleName('FB Manager'), 'Management'); // no-space form: normalizes to a single "fb" token, distinct from "F&B"'s two-token "f b"
   assert.equal(canonicalRoleName('FnB Manager'), 'Management');
   assert.equal(canonicalRoleName('Food and Beverage Manager'), 'Management');
   assert.equal(canonicalRoleName('Food & Beverage Manager'), 'Management');
+  assert.equal(canonicalRoleName('Food & Beverage Managers'), 'Management'); // plural: a section header grouping several people
+  assert.equal(canonicalRoleName('FB Managers'), 'Management');
+});
+
+test('Guest Relations Manager (one grade up from GRO) resolves to Host', () => {
+  assert.equal(canonicalRoleName('Guest Relations Manager'), 'Host');
+  assert.equal(canonicalRoleName('Guest Relations Managers'), 'Host');
+});
+
+test('Commis de Cuisine (standard French-kitchen junior title) resolves to Chef, parallel to Commis Chef', () => {
+  assert.equal(canonicalRoleName('Commis de Cuisine'), 'Chef');
+});
+
+// 2026-09-05 — a whole-branch review caught a real bug the alias expansion
+// above exposed: resolveRowsAgainstDatabase tried the alias-canonicalized
+// name BEFORE the raw exact match, so a venue that seeds its own Role whose
+// name happens to equal one of ROLE_ALIASES' keys (a real, distinct "GRO"
+// role, deliberately different from the generic "Host" bucket "GRO" maps
+// to) had every such row silently redirected to the wrong role, matched
+// with no warning at all. Fixed by trying the raw exact match first.
+test('a venue-specific Role whose name coincidentally matches a ROLE_ALIASES key resolves to ITS OWN role, not the generic alias bucket', async () => {
+  const roles = [
+    { id: 'role-gro', name: 'GRO' },
+    { id: 'role-host', name: 'Host' },
+  ];
+  const users = [{ id: 'user-fatima', fullName: 'Fatima', roleId: null }];
+  const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
+    row({ employeeName: 'Fatima', roleName: 'GRO' }),
+  ]);
+
+  assert.equal(previewRows[0].status, 'matched');
+  assert.equal(previewRows[0].resolvedRoleId, 'role-gro', 'must resolve to the venue\'s own distinct "GRO" role, not "Host"');
+});
+
+test('the alias fallback still applies when the venue has NOT seeded a role matching the raw string', async () => {
+  // Same scenario, but this venue never created a "GRO" role of its own —
+  // the alias-canonicalized fallback to "Host" must still fire.
+  const roles = [{ id: 'role-host', name: 'Host' }];
+  const users = [{ id: 'user-fatima', fullName: 'Fatima', roleId: null }];
+  const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
+    row({ employeeName: 'Fatima', roleName: 'GRO' }),
+  ]);
+
+  assert.equal(previewRows[0].status, 'matched');
+  assert.equal(previewRows[0].resolvedRoleId, 'role-host');
 });
