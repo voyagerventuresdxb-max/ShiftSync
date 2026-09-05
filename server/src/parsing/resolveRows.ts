@@ -117,11 +117,14 @@ const ROLE_ALIASES: Record<string, string> = {
   // service, above chef de rang and reporting to the F&B/restaurant
   // manager. Grouped with 'Management' to match this table's existing
   // "head of floor" / "floor management" entries rather than Supervisor.
-  // NOTE: nameKey/normalizeHeader replaces each accented char (é, î, ô…)
-  // with a space rather than folding it to its plain-ASCII letter, so a
-  // literal "Maître d'Hôtel" normalizes to "ma tre d h tel" and will NOT
-  // match this key — only the plain-ASCII spellings real Dubai rosters
-  // actually use ("Maitre D", "Maitre D'Hotel") match here.
+  // NOTE: nameKey/normalizeHeader preserves each accented char as its own
+  // Unicode letter (via \p{L}) rather than folding it to plain ASCII (an
+  // accent-folding attempt was tried and reverted — see templates.ts's own
+  // comment — because it broke Vietnamese name matching), so a literal
+  // "Maître d'Hôtel" normalizes to "maître d hôtel" — a DIFFERENT key from
+  // this ASCII one — and will NOT match this key. Only the plain-ASCII
+  // spellings real Dubai rosters actually use ("Maitre D", "Maitre
+  // D'Hotel") match here.
   'maitre d': 'Management',
   'maitre d hotel': 'Management',
   'chef de salle': 'Management',
@@ -155,7 +158,15 @@ const ROLE_ALIASES: Record<string, string> = {
  */
 export function canonicalRoleName(raw: string): string {
   const key = nameKey(raw);
-  return ROLE_ALIASES[key] ?? raw;
+  // Plain bracket access (`ROLE_ALIASES[key]`) also resolves inherited
+  // Object.prototype properties — a role/section label that normalizes to
+  // "constructor" would otherwise silently return the real Object
+  // constructor FUNCTION (truthy, so `?? raw` never kicks in) instead of
+  // falling through to the raw string, corrupting anything downstream that
+  // expects a string (e.g. a ParsedShiftRow.roleName). hasOwnProperty guards
+  // against that same class of collision templates.ts's normalizeHeader fix
+  // targets for name keys.
+  return Object.prototype.hasOwnProperty.call(ROLE_ALIASES, key) ? ROLE_ALIASES[key] : raw;
 }
 
 /**
@@ -166,7 +177,10 @@ export function canonicalRoleName(raw: string): string {
  * than position — see deterministicGridParser.ts.
  */
 export function isRecognizedRoleAlias(raw: string): boolean {
-  return nameKey(raw) in ROLE_ALIASES;
+  // `in` also matches inherited Object.prototype property names (see
+  // canonicalRoleName above) — a cell reading "constructor" or "toString"
+  // would otherwise be misreported as a recognized role alias.
+  return Object.prototype.hasOwnProperty.call(ROLE_ALIASES, nameKey(raw));
 }
 
 /**

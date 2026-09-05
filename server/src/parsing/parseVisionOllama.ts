@@ -13,6 +13,7 @@
 import { Agent, fetch as undiciFetch } from 'undici';
 import { ROSTER_VLM_SYSTEM_PROMPT, ROSTER_VLM_JSON_SCHEMA } from './vlmPrompt.js';
 import { mapVlmResponseToResult, VisionIngestionError, type VlmResponse } from './parseVision.js';
+import { normalizeHeader } from './templates.js';
 import type { ParsedVisionResult } from './types.js';
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
@@ -130,9 +131,18 @@ async function extractStaffNamesOnly(model: string, imageBase64: string, origina
   }
 }
 
-function normalizeNameForCompare(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
+/**
+ * Was its own local `[^a-z0-9]+` ASCII-only reimplementation — that meant
+ * two DIFFERENT Arabic names both normalized to the same empty string, so
+ * this completeness check couldn't distinguish "the extraction really has
+ * this Arabic employee" from "it's missing them," silently defeating the
+ * exact safety net this function exists to provide for a real GCC/Dubai
+ * roster. Now uses the shared, already-fixed `normalizeHeader` (see
+ * templates.ts and resolveRows.ts's `nameKey`, which use the identical
+ * function) so a fix to name-key collisions applies here too instead of
+ * drifting out of sync with a second, independent copy.
+ */
+const normalizeNameForCompare = normalizeHeader;
 
 /** Every employee name accounted for anywhere in the result — a shift row, an anomaly, or a leave record. */
 function namesInResult(result: ParsedVisionResult): Set<string> {

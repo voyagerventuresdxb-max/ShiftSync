@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PrismaClient } from '@prisma/client';
-import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
+import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey } from './resolveRows.js';
 import type { ParsedShiftRow } from './types.js';
 
 interface FakeRole {
@@ -163,6 +163,32 @@ test('Maitre D / Maitre D\'Hotel and Chef de Salle (senior FOH authority) resolv
   assert.equal(canonicalRoleName('Chef de Salle'), 'Management');
 });
 
+// 2026-09-05 — a review caught a real gap in the Unicode widening above:
+// `\p{L}` alone doesn't cover combining marks, so Arabic diacritics
+// (tashkeel) get replaced with a SPACE by the letter/number filter,
+// splitting one word into isolated letters ("مُحَمَّد" -> "م ح م د") —
+// the SAME name spelled with vs. without diacritics produces DIFFERENT
+// keys. An `.normalize('NFKD') + strip \p{M}` fix was tried and reverted:
+// it does fold Arabic diacritics correctly, but it also collapses two
+// DIFFERENT Vietnamese names to the same key ("Nguyễn"/"Nguyên" both ->
+// "nguyen", verified empirically) — reintroducing the exact
+// silent-collision bug this function exists to prevent, for a different
+// script. This is documented, accepted behavior, not an oversight: a
+// same-name diacritic mismatch fails SAFE (unmatched/new_employee, a
+// visible prompt for manual review), which is the correct tradeoff
+// against silently mismatching two different Vietnamese employees.
+test('nameKey: a name WITH Arabic diacritics (tashkeel) and the same name WITHOUT them currently produce DIFFERENT keys — documented, safe-failure-mode limitation, not a collision', () => {
+  assert.notEqual(nameKey('مُحَمَّد'), nameKey('محمد'), 'diacritic-marked and plain spellings do not currently match (fails safe, not a bug)');
+  assert.notEqual(nameKey('مُحَمَّد'), '', 'must still not collapse to empty — that was the original collision bug, and stays fixed');
+});
+
+test('accent-folding ("Maître d\'Hôtel" -> the plain-ASCII "maitre d hotel" key) was deliberately NOT implemented — would break Vietnamese name matching', () => {
+  // Both forms are real, valid, and distinct keys today; only the
+  // plain-ASCII spelling matches the seeded alias.
+  assert.notEqual(canonicalRoleName("Maître d'Hôtel"), 'Management');
+  assert.equal(canonicalRoleName("Maitre D'Hotel"), 'Management');
+});
+
 test('Outlet Manager resolves to Management', () => {
   assert.equal(canonicalRoleName('Outlet Manager'), 'Management');
   assert.equal(canonicalRoleName('outlet managers'), 'Management');
@@ -220,4 +246,84 @@ test('the alias fallback still applies when the venue has NOT seeded a role matc
 
   assert.equal(previewRows[0].status, 'matched');
   assert.equal(previewRows[0].resolvedRoleId, 'role-host');
+});
+
+// --- ROSTER-PARSING GAP: non-Latin (Arabic) name/role collision fix ---
+// normalizeHeader (aliased here as nameKey) used to strip every
+// non-ASCII-Latin character to nothing, so two DIFFERENT Arabic names (or
+// role labels) both collapsed to the SAME empty/whitespace key — a real
+// collision that could silently resolve one person's roster row to a
+// DIFFERENT person's DB record with status 'matched' and no warning. Fixed
+// by widening normalizeHeader's regex to a Unicode-aware `\p{L}`/`\p{N}`
+// class (see templates.ts) so any script's actual letters are preserved
+// instead of stripped, producing distinct keys for distinct names.
+
+test('nameKey: two different Arabic full names produce distinct, non-empty keys (no more collision to "")', () => {
+  const a = nameKey('محمد أحمد');
+  const b = nameKey('فاطمة علي');
+
+  assert.notEqual(a, '', 'Arabic name must not normalize to an empty key');
+  assert.notEqual(b, '', 'Arabic name must not normalize to an empty key');
+  assert.notEqual(a, b, 'two different Arabic names must not collide on the same key');
+});
+
+// 2026-09-05 — found while writing a regression test for a related legend-
+// code bug in deterministicGridParser.ts: `ROLE_ALIASES[key] ?? raw` and
+// `nameKey(raw) in ROLE_ALIASES` both use plain-object property access,
+// which also resolves inherited Object.prototype properties. A role/section
+// label that normalizes to "constructor" (or "toString", "hasOwnProperty",
+// etc.) used to make canonicalRoleName silently return the real Object
+// constructor FUNCTION instead of falling through to the raw string
+// (truthy, so `?? raw` never fired), and isRecognizedRoleAlias would
+// incorrectly report it as a known role. Fixed via hasOwnProperty.
+test('canonicalRoleName/isRecognizedRoleAlias do not resolve inherited Object.prototype property names', () => {
+  assert.equal(canonicalRoleName('constructor'), 'constructor', 'must fall through to the raw string, not the real Object constructor function');
+  assert.equal(canonicalRoleName('toString'), 'toString');
+  assert.equal(canonicalRoleName('hasOwnProperty'), 'hasOwnProperty');
+  assert.equal(isRecognizedRoleAlias('constructor'), false);
+  assert.equal(isRecognizedRoleAlias('toString'), false);
+  assert.equal(isRecognizedRoleAlias('hasOwnProperty'), false);
+});
+
+test('nameKey: plain English/French-service names and headers are unaffected by the Unicode widening', () => {
+  // \p{L}/\p{N} is a superset of a-z/0-9, so already-ASCII input must
+  // normalize identically to before.
+  assert.equal(nameKey('Andrea'), 'andrea');
+  assert.equal(nameKey('Employee Name'), 'employee name');
+  assert.equal(nameKey('Chef de Rang'), 'chef de rang');
+});
+
+test('two different Arabic-named employees resolve to their OWN distinct user record, not to each other or a random match', async () => {
+  const roles = [{ id: 'role-waiter', name: 'Waiter' }];
+  const users = [
+    { id: 'user-mohammed', fullName: 'محمد أحمد', roleId: 'role-waiter' },
+    { id: 'user-fatima', fullName: 'فاطمة علي', roleId: 'role-waiter' },
+  ];
+  const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
+    row({ rowNumber: 1, employeeName: 'محمد أحمد', roleName: 'Waiter' }),
+    row({ rowNumber: 2, employeeName: 'فاطمة علي', roleName: 'Waiter' }),
+  ]);
+
+  assert.equal(previewRows[0].status, 'matched');
+  assert.equal(previewRows[0].resolvedUserId, 'user-mohammed');
+  assert.equal(previewRows[1].status, 'matched');
+  assert.equal(previewRows[1].resolvedUserId, 'user-fatima');
+  assert.notEqual(
+    previewRows[0].resolvedUserId,
+    previewRows[1].resolvedUserId,
+    'two different Arabic-named employees must never resolve to the same user',
+  );
+});
+
+test('an Arabic role label distinguishes correctly from a different Arabic role label seeded for the same location', async () => {
+  const roles = [
+    { id: 'role-a', name: 'نادل' }, // "waiter"
+    { id: 'role-b', name: 'مدير' }, // "manager"
+  ];
+  const users = [{ id: 'user-1', fullName: 'Sample User', roleId: null }];
+  const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
+    row({ rowNumber: 1, employeeName: 'Sample User', roleName: 'نادل' }),
+  ]);
+
+  assert.equal(previewRows[0].resolvedRoleId, 'role-a', 'must resolve to the matching Arabic role, not the other one');
 });
