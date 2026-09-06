@@ -3,7 +3,7 @@ import { Check, ChevronDown, FileText, Lock, Timer, X } from 'lucide-react';
 import type { SwapRequestStatus } from '../../engine/types';
 import { cn } from '../../lib/utils';
 import { useConnectivity } from '../../state/ConnectivityContext';
-import { StaleDataNotice, OfflineEmptyState } from './OfflineNotice';
+import { StaleDataNotice, OfflineEmptyState, OfflineActionNotice } from './OfflineNotice';
 
 export interface ApprovalRequestView {
   id: string;
@@ -83,6 +83,12 @@ export function ApprovalsPanel({
     });
 
   const decide = async (id: string, action: 'approve' | 'deny') => {
+    // Blocked outright rather than attempted-then-rolled-back: this is
+    // shift/staffing coordination, where a decision that actually lands
+    // minutes or hours later than the manager thinks it did is worse than
+    // no decision at all. No auto-retry — the manager clicks again once
+    // back online (the buttons re-enable automatically via `online`).
+    if (!online) return;
     setRowErrors((prev) => {
       if (!(id in prev)) return prev;
       const next = { ...prev };
@@ -172,17 +178,20 @@ export function ApprovalsPanel({
                         <div className="flex gap-2">
                           <button
                             onClick={() => void decide(r.id, 'approve')}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
+                            disabled={!online}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <Check className="h-3.5 w-3.5" /> Approve
                           </button>
                           <button
                             onClick={() => void decide(r.id, 'deny')}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive"
+                            disabled={!online}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <X className="h-3.5 w-3.5" /> Decline
                           </button>
                         </div>
+                        {!online && <OfflineActionNotice />}
                         {rowErrors[r.id] && (
                           <div className="error-block mt-2" role="alert">
                             <p>{rowErrors[r.id]}</p>

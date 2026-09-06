@@ -9,7 +9,7 @@ import {
 } from '../../api/floorFeedback';
 import { useIdentity } from '../../state/IdentityContext';
 import { useConnectivity } from '../../state/ConnectivityContext';
-import { StaleDataNotice, OfflineEmptyState } from './OfflineNotice';
+import { StaleDataNotice, OfflineEmptyState, OfflineActionNotice } from './OfflineNotice';
 
 function FeedbackRowSkeleton() {
   return (
@@ -71,6 +71,9 @@ export default function FloorFeedbackReview() {
 
   const handleDecide = async (id: string, status: 'flagged' | 'reviewed') => {
     if (!session) return;
+    // Blocked outright while offline — no auto-retry; the manager clicks
+    // again once back online (buttons re-enable automatically).
+    if (!online) return;
     setDecidingId(id);
     setError(null);
     try {
@@ -159,7 +162,7 @@ export default function FloorFeedbackReview() {
                     {item.status === 'open' && (
                       <button
                         onClick={() => void handleDecide(item.id, 'flagged')}
-                        disabled={decidingId === item.id}
+                        disabled={decidingId === item.id || !online}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-warning/40 px-3 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Flag className="h-3.5 w-3.5" /> Flag
@@ -167,13 +170,14 @@ export default function FloorFeedbackReview() {
                     )}
                     <button
                       onClick={() => void handleDecide(item.id, 'reviewed')}
-                      disabled={decidingId === item.id}
+                      disabled={decidingId === item.id || !online}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" />
                       {decidingId === item.id ? 'Saving…' : 'Mark reviewed'}
                     </button>
                   </div>
+                  {!online && <OfflineActionNotice />}
                 </li>
               ))}
 

@@ -2,6 +2,8 @@ import { useCallback, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { CheckCircle2 } from 'lucide-react';
 import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { OfflineActionNotice } from './shiftsync/OfflineNotice';
 import {
   ApiError,
   confirmRoster,
@@ -40,6 +42,7 @@ interface Props {
 
 export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }: Props) {
   const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [phase, setPhase] = useState<Phase>('idle');
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -83,6 +86,12 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
 
   const onConfirm = useCallback(async () => {
     if (!data) return;
+    // Blocked outright while offline: committing a roster is a real,
+    // non-undoable staffing action — a commit that actually lands minutes or
+    // hours later than the manager thinks it did is worse than no commit at
+    // all. No auto-retry — the manager clicks again once back online (the
+    // button re-enables automatically via `online`, see PreviewReview).
+    if (!online) return;
     setPhase('confirming');
     try {
       const res = await confirmRoster(session!.token, data.batchId, createdById);
@@ -113,7 +122,7 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       }
       setPhase('error');
     }
-  }, [data, createdById, onCommitted, session]);
+  }, [data, createdById, onCommitted, session, online]);
 
   const reset = useCallback(() => {
     setPhase('idle');
@@ -245,6 +254,7 @@ function PreviewReview({
   onConfirm: () => void;
   onReset: () => void;
 }) {
+  const { online } = useConnectivity();
   const { preview, summary, templateDetected, parseIssues, anomalies, leaveRecords, legend } = data;
   const [filter, setFilter] = useState<'all' | 'error' | 'new_employee' | 'unmatched_role'>('all');
   const [reviewed, setReviewed] = useState<Set<number>>(new Set());
@@ -455,10 +465,11 @@ function PreviewReview({
           <button className="btn btn-ghost" onClick={onReset}>
             Discard
           </button>
-          <button className="btn btn-primary" onClick={onConfirm} disabled={outstanding > 0}>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={outstanding > 0 || !online}>
             Confirm &amp; Commit {summary.matchedRows} shift{summary.matchedRows === 1 ? '' : 's'}
           </button>
         </div>
+        {!online && <OfflineActionNotice />}
       </div>
     </div>
   );

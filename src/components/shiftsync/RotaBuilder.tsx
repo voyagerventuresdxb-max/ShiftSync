@@ -25,6 +25,8 @@ import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
+import { useConnectivity } from '@/state/ConnectivityContext';
+import { OfflineActionNotice } from '@/components/shiftsync/OfflineNotice';
 import { ApiError } from '@/api/schedules';
 import {
   fetchRotaTemplates,
@@ -90,6 +92,7 @@ export function RotaBuilder() {
     currentEmployeeId,
   } = useAppState();
   const { session } = useIdentity();
+  const { online } = useConnectivity();
 
   const [cardOpen, setCardOpen] = useState(true);
   const [templates, setTemplates] = useState<RotaTemplateDto[]>([]);
@@ -291,6 +294,10 @@ export function RotaBuilder() {
       say(roleOptions.length === 0 ? 'No roles are configured for this venue yet.' : 'Pick a role before saving.');
       return;
     }
+    // Blocked outright while offline — no auto-retry; the manager saves
+    // again once back online (the Save button re-enables automatically,
+    // see ShiftSheet).
+    if (!online) return;
     try {
       if (draft.id) {
         await updateRotaShift(draft.id, {
@@ -324,6 +331,7 @@ export function RotaBuilder() {
   };
 
   const removeShift = async (id: string) => {
+    if (!online) return;
     try {
       await deleteRotaShift(id, currentEmployeeId);
       bump();
@@ -339,6 +347,12 @@ export function RotaBuilder() {
       say('This week is published and locked — publish again after making changes to update it.');
       return;
     }
+    // Belt-and-suspenders: dragging is already disabled offline via
+    // ShiftChip's useDraggable `disabled` option below, so this should be
+    // unreachable in practice — kept as the same outright-block guard as
+    // every other write path here, in case a drag that started just before
+    // going offline still ends after.
+    if (!online) return;
     try {
       await updateRotaShift(id, { date, userId, actorId: currentEmployeeId });
       bump();
@@ -351,6 +365,10 @@ export function RotaBuilder() {
   const publish = async () => {
     if (weekShifts.length === 0) {
       say('Add some shifts before publishing this week.');
+      return;
+    }
+    if (!online) {
+      say("Requires connection — try again once you're back online.");
       return;
     }
     try {
@@ -373,6 +391,10 @@ export function RotaBuilder() {
       say('You must be signed in to do this.');
       return;
     }
+    // `say()`'s flash message renders behind SaveTemplateSheet's z-50
+    // overlay, so it wouldn't be visible here — SaveTemplateSheet shows its
+    // own inline OfflineActionNotice and disables its Save button instead.
+    if (!online) return;
     const entries: TemplateEntryInput[] = templatableShifts.map((s) => ({
       dayOffset: days.indexOf(s.date),
       roleId: roleIdByShiftId[s.id]!,
@@ -433,7 +455,7 @@ export function RotaBuilder() {
                 {locked ? <Lock className="h-3 w-3" /> : <PencilLine className="h-3 w-3" />}
                 {locked ? 'Published · locked' : publishInfo?.publishedAt ? 'Unpublished changes' : 'Draft'}
               </span>
-              <button onClick={() => void publish()} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground">
+              <button onClick={() => void publish()} disabled={!online} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
                 <Send className="h-3.5 w-3.5" /> {publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
               </button>
               <button onClick={() => setSheet({ kind: 'templates' })} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground">
@@ -491,7 +513,12 @@ export function RotaBuilder() {
                             shifts={cellShifts(d, person.userId)}
                             onAdd={() => openNew(d, person.userId)}
                             onEdit={openEdit}
-                            locked={locked}
+                            // Offline gets the same treatment as a published/
+                            // locked week: no drag, no "add shift" affordance —
+                            // this is separate from the "Published · locked"
+                            // badge above, which must keep reflecting real
+                            // publish state, not connectivity.
+                            locked={locked || !online}
                             suppressClick={suppressClick}
                             availabilityMark={person.userId ? availabilityByKey[`${person.userId}|${d}`] : undefined}
                           />
@@ -514,6 +541,7 @@ export function RotaBuilder() {
         <ShiftSheet
           draft={sheet.draft}
           roleOptions={roleOptions}
+          online={online}
           onClose={() => setSheet(null)}
           onSave={(d) => void saveDraft(d)}
           onDelete={(id) => void removeShift(id)}
@@ -522,12 +550,18 @@ export function RotaBuilder() {
       {sheet?.kind === 'templates' && (
         <TemplateSheet
           templates={templates}
+          online={online}
           onClose={() => setSheet(null)}
           onApply={async (t) => {
             if (!session) {
               say('You must be signed in to do this.');
               return;
             }
+            // `say()`'s flash renders behind this sheet's z-50 overlay on the
+            // failure path (the sheet only closes on success) — TemplateSheet
+            // shows its own inline OfflineActionNotice and disables its
+            // Apply/Delete buttons instead.
+            if (!online) return;
             try {
               const result = await applyRotaTemplate(session.token, t.id, weekStart, currentEmployeeId);
               await refetchWeekShifts();
@@ -544,6 +578,7 @@ export function RotaBuilder() {
               say('You must be signed in to do this.');
               return;
             }
+            if (!online) return;
             try {
               await deleteRotaTemplate(session.token, id);
               setTemplates((prev) => prev.filter((t) => t.id !== id));
@@ -557,6 +592,7 @@ export function RotaBuilder() {
         <SaveTemplateSheet
           shiftCount={templatableShifts.length}
           skippedCount={weekShifts.length - templatableShifts.length}
+          online={online}
           onClose={() => setSheet(null)}
           onSave={(name) => void saveWeekAsTemplate(name)}
         />
@@ -707,12 +743,14 @@ const label = 'mb-1 block text-[11px] font-medium text-muted-foreground';
 function ShiftSheet({
   draft,
   roleOptions,
+  online,
   onClose,
   onSave,
   onDelete,
 }: {
   draft: DraftShift;
   roleOptions: RoleOption[];
+  online: boolean;
   onClose: () => void;
   onSave: (d: DraftShift) => void;
   onDelete: (id: string) => void;
@@ -772,15 +810,16 @@ function ShiftSheet({
           />
         </div>
         <div className="flex gap-2 pt-1">
-          <button onClick={() => onSave(local)} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">
+          <button onClick={() => onSave(local)} disabled={!online} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
             <Check className="mr-1.5 inline h-4 w-4" /> {draft.id ? 'Save shift' : 'Add shift'}
           </button>
           {draft.id && (
-            <button onClick={() => onDelete(draft.id!)} aria-label="Delete shift" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive hover:bg-destructive/10">
+            <button onClick={() => onDelete(draft.id!)} disabled={!online} aria-label="Delete shift" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60">
               <Trash2 className="h-4 w-4" />
             </button>
           )}
         </div>
+        {!online && <OfflineActionNotice />}
       </div>
     </SheetShell>
   );
@@ -788,11 +827,13 @@ function ShiftSheet({
 
 function TemplateSheet({
   templates,
+  online,
   onClose,
   onApply,
   onDelete,
 }: {
   templates: RotaTemplateDto[];
+  online: boolean;
   onClose: () => void;
   onApply: (t: RotaTemplateDto) => void;
   onDelete: (id: string) => void;
@@ -810,8 +851,8 @@ function TemplateSheet({
                 <p className="text-[11px] text-muted-foreground">{t.entryCount} shifts</p>
               </div>
               <div className="flex shrink-0 gap-2">
-                <button onClick={() => onApply(t)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground">Apply</button>
-                <button onClick={() => onDelete(t.id)} aria-label="Delete template" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-destructive">
+                <button onClick={() => onApply(t)} disabled={!online} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">Apply</button>
+                <button onClick={() => onDelete(t.id)} disabled={!online} aria-label="Delete template" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -819,6 +860,7 @@ function TemplateSheet({
           ))}
         </ul>
       )}
+      {!online && <OfflineActionNotice />}
     </SheetShell>
   );
 }
@@ -827,11 +869,13 @@ function TemplateSheet({
 function SaveTemplateSheet({
   shiftCount,
   skippedCount,
+  online,
   onClose,
   onSave,
 }: {
   shiftCount: number;
   skippedCount: number;
+  online: boolean;
   onClose: () => void;
   onSave: (name: string) => void;
 }) {
@@ -860,11 +904,12 @@ function SaveTemplateSheet({
         </div>
         <button
           onClick={() => onSave(trimmed)}
-          disabled={!trimmed || shiftCount === 0}
+          disabled={!trimmed || shiftCount === 0 || !online}
           className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Save className="mr-1.5 inline h-4 w-4" /> Save template
         </button>
+        {!online && <OfflineActionNotice />}
       </div>
     </SheetShell>
   );

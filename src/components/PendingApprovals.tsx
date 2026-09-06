@@ -4,7 +4,7 @@ import { cn } from '../lib/utils';
 import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequestDto } from '../api/join';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
-import { StaleDataNotice, OfflineEmptyState } from './shiftsync/OfflineNotice';
+import { StaleDataNotice, OfflineEmptyState, OfflineActionNotice } from './shiftsync/OfflineNotice';
 
 function PendingApprovalRowSkeleton() {
   return (
@@ -77,6 +77,9 @@ export default function PendingApprovals({ locationId }: { locationId: string })
 
   const handleDecide = async (id: string, decision: 'approve' | 'decline') => {
     if (!session) return;
+    // Blocked outright while offline — no auto-retry; the manager clicks
+    // again once back online (buttons re-enable automatically).
+    if (!online) return;
     setDecidingId(id);
     try {
       await decideJoinRequest(session.token, id, decision);
@@ -130,27 +133,30 @@ export default function PendingApprovals({ locationId }: { locationId: string })
           ) : (
             <ul className="divide-y divide-border">
               {requests.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{r.fullName}</p>
-                    <p className="text-xs text-muted-foreground">{r.phone}</p>
+                <li key={r.id} className="p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{r.fullName}</p>
+                      <p className="text-xs text-muted-foreground">{r.phone}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        onClick={() => void handleDecide(r.id, 'approve')}
+                        disabled={decidingId === r.id || !online}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Check className="h-3.5 w-3.5" /> Approve
+                      </button>
+                      <button
+                        onClick={() => void handleDecide(r.id, 'decline')}
+                        disabled={decidingId === r.id || !online}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <X className="h-3.5 w-3.5" /> Decline
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <button
-                      onClick={() => void handleDecide(r.id, 'approve')}
-                      disabled={decidingId === r.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
-                    >
-                      <Check className="h-3.5 w-3.5" /> Approve
-                    </button>
-                    <button
-                      onClick={() => void handleDecide(r.id, 'decline')}
-                      disabled={decidingId === r.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium hover:border-destructive/40 hover:text-destructive"
-                    >
-                      <X className="h-3.5 w-3.5" /> Decline
-                    </button>
-                  </div>
+                  {!online && <OfflineActionNotice />}
                 </li>
               ))}
             </ul>

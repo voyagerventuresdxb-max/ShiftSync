@@ -8,7 +8,7 @@ import {
 import { ApiError } from '../api/schedules';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
-import { StaleDataNotice } from './shiftsync/OfflineNotice';
+import { StaleDataNotice, OfflineActionNotice } from './shiftsync/OfflineNotice';
 
 interface StaffDirectoryProps {
   locationId: string;
@@ -91,6 +91,10 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     // Editing is manager-only server-side; with no session there is no
     // token to send and the request could only ever 401.
     if (!session) return;
+    // Blocked outright while offline — no auto-retry; the input is disabled
+    // in that state too (see the `online` prop passed to StaffRow below), so
+    // this is a defensive backstop, not the primary gate.
+    if (!online) return;
     setSavingId(entry.id);
     try {
       const updated = await updateStaffMember(session.token, entry.id, updates);
@@ -113,6 +117,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     // Adding is manager-only server-side; with no session there is no
     // token to send and the request could only ever 401.
     if (!session) return;
+    if (!online) return;
     setAdding(true);
     try {
       const created = await addStaffMember(session.token, { fullName, jobTitle: newTitle.trim() || null });
@@ -191,6 +196,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                       key={entry.id}
                       entry={entry}
                       saving={savingId === entry.id}
+                      disabled={!online}
                       onSave={(updates, errorMessage) => handleFieldSave(entry, updates, errorMessage)}
                     />
                   ))}
@@ -213,6 +219,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+              disabled={!online}
             />
             <input
               className="staff-directory-input"
@@ -220,11 +227,13 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+              disabled={!online}
             />
-            <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim()}>
+            <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim() || !online}>
               {adding ? 'Adding…' : 'Add staff member'}
             </button>
           </div>
+          {!online && <OfflineActionNotice />}
         </div>
       )}
     </section>
@@ -234,10 +243,13 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
 function StaffRow({
   entry,
   saving,
+  disabled,
   onSave,
 }: {
   entry: StaffDirectoryEntry;
   saving: boolean;
+  /** True while offline — every field/toggle in this row is disabled, matching the "block outright" treatment for this write path. */
+  disabled: boolean;
   onSave: (updates: EditableFieldUpdates, errorMessage: string) => void;
 }) {
   const [title, setTitle] = useState(entry.jobTitle ?? '');
@@ -274,7 +286,7 @@ function StaffRow({
             onSave({ jobTitle: title || null }, 'Could not save that job title.');
           }}
           placeholder="Not set"
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
@@ -287,7 +299,7 @@ function StaffRow({
             onSave({ phone: phone || null }, 'Could not save that phone number.');
           }}
           placeholder="Not set"
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
@@ -301,7 +313,7 @@ function StaffRow({
             onSave({ preferredLanguage: preferredLanguage || null }, 'Could not save that preferred language.');
           }}
           placeholder="Not set"
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
@@ -314,14 +326,14 @@ function StaffRow({
             if (hiredAt === (entry.hiredAt ?? '')) return;
             onSave({ hiredAt: hiredAt || null }, 'Could not save that start date.');
           }}
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
         <button
           type="button"
           className={`chip${entry.isActive ? ' chip-active' : ''}`}
-          disabled={saving}
+          disabled={saving || disabled}
           onClick={() => onSave({ isActive: !entry.isActive }, 'Could not update employment status.')}
         >
           {entry.isActive ? 'Active' : 'Inactive'}

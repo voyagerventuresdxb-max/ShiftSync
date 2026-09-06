@@ -232,6 +232,11 @@ export default function SchedulingContent() {
 
   const handleClockIn = () => {
     if (!clockTargetId) return;
+    // Blocked outright while offline: a clock-in that actually lands minutes
+    // or hours later than the real moment it happened is a real compliance/
+    // payroll problem — no auto-retry, the button re-enables once back
+    // online and the person clocks in again manually.
+    if (!online) return;
     setClockError(null);
     clockIn(session!.token, clockTargetId)
       .then(() => refreshHours())
@@ -239,6 +244,7 @@ export default function SchedulingContent() {
   };
   const handleClockOut = () => {
     if (!clockTargetId) return;
+    if (!online) return;
     setClockError(null);
     clockOut(session!.token, clockTargetId)
       .then(() => refreshHours())
@@ -321,6 +327,7 @@ export default function SchedulingContent() {
             clockedIn={isStaffSession ? selfClockedIn : clockedIn}
             onClockIn={clockTargetId ? handleClockIn : undefined}
             onClockOut={clockTargetId ? handleClockOut : undefined}
+            online={online}
           />
         </aside>
       </div>

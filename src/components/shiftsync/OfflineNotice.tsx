@@ -1,5 +1,20 @@
 import { WifiOff } from 'lucide-react';
 
+/**
+ * Inline message for a write action that's disabled while offline — pair
+ * with `disabled={!online}` on the action's own button(s). Never auto-queues
+ * or auto-retries: the user must click the (now-enabled) action again once
+ * back online, which is the manual retry.
+ */
+export function OfflineActionNotice() {
+  return (
+    <p className="mt-2 flex items-center gap-1.5 text-xs text-warning">
+      <WifiOff className="h-3.5 w-3.5 shrink-0" />
+      Requires connection — try again once you're back online.
+    </p>
+  );
+}
+
 /** Subtle notice for a surface that already has data loaded, while offline — the data stays on screen (Phase 2 of the offline-support pass), this just flags that it might not reflect the latest server state. */
 export function StaleDataNotice() {
   return (

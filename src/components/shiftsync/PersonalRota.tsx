@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { ArrowLeftRight, CheckCircle2, Clock, MapPin, Moon, StickyNote } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useConnectivity } from '../../state/ConnectivityContext';
+import { OfflineActionNotice } from './OfflineNotice';
 
 export type RotaStatus = 'confirmed' | 'draft' | 'off' | 'swap-pending';
 
@@ -43,6 +45,7 @@ function ShiftCard({
   coverCandidates: CoverCandidate[];
   onRequestCover?: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
 }) {
+  const { online } = useConnectivity();
   const meta = statusMeta[shift.status];
   const isOff = shift.status === 'off';
   const [requesting, setRequesting] = useState(false);
@@ -53,6 +56,9 @@ function ShiftCard({
 
   const sendRequest = async () => {
     if (!onRequestCover) return;
+    // Blocked outright while offline — no auto-retry; the button re-enables
+    // once back online and the staff member sends it again manually.
+    if (!online) return;
     setSending(true);
     setSendError(null);
     try {
@@ -167,7 +173,7 @@ function ShiftCard({
                         </select>
                         <button
                           onClick={() => void sendRequest()}
-                          disabled={sending}
+                          disabled={sending || !online}
                           className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {sending && <span className="spinner" aria-hidden />}
@@ -184,6 +190,7 @@ function ShiftCard({
                           Cancel
                         </button>
                       </div>
+                      {!online && <OfflineActionNotice />}
                       {sendError && (
                         <div className="error-block mt-2" role="alert">
                           <p>{sendError}</p>
@@ -191,13 +198,17 @@ function ShiftCard({
                       )}
                     </div>
                   ) : (
-                    <button
-                      onClick={() => setRequesting(true)}
-                      className="inline-flex items-center gap-2 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-accent/50 hover:text-accent"
-                    >
-                      <ArrowLeftRight className="h-3.5 w-3.5" />
-                      Request cover
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setRequesting(true)}
+                        disabled={!online}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <ArrowLeftRight className="h-3.5 w-3.5" />
+                        Request cover
+                      </button>
+                      {!online && <OfflineActionNotice />}
+                    </>
                   )}
                 </div>
               )}
