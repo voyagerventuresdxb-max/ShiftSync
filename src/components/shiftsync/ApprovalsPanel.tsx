@@ -39,37 +39,52 @@ export function ApprovalsPanel({
   onDeny: (id: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  // Tracks the one request currently being decided, plus a per-row error
-  // message for the last decide attempt that failed on it. Rows are never
-  // patched optimistically — a row stays exactly where it is (pending, in
-  // `requests`) until the parent's refetch confirms the outcome, so a
-  // failure just means the row stops "processing" and shows why.
-  const [pendingId, setPendingId] = useState<string | null>(null);
+  // Optimistic status override, keyed by request id — set the instant
+  // Approve/Decline is clicked so the row moves to "decided" immediately,
+  // rather than sitting in "pending" until the parent's post-decide
+  // refetch lands. Cleared on both success (server truth has already
+  // replaced `requests` by then, via the refetch inside
+  // handleDecideRequest's `finally`) and failure (so the row falls back to
+  // whatever `requests` says — the same refetch keeps that current too,
+  // typically still 'pending'). `rowErrors` is the per-row message for the
+  // last decide attempt that failed.
+  const [optimisticStatus, setOptimisticStatus] = useState<Record<string, 'approved' | 'denied'>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
+  const clearOptimistic = (id: string) =>
+    setOptimisticStatus((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
   const decide = async (id: string, action: 'approve' | 'deny') => {
-    setPendingId(id);
     setRowErrors((prev) => {
       if (!(id in prev)) return prev;
       const next = { ...prev };
       delete next[id];
       return next;
     });
+    setOptimisticStatus((prev) => ({ ...prev, [id]: action === 'approve' ? 'approved' : 'denied' }));
     try {
       if (action === 'approve') await onApprove(id);
       else await onDeny(id);
+      clearOptimistic(id);
     } catch (err) {
+      clearOptimistic(id);
       setRowErrors((prev) => ({
         ...prev,
         [id]: err instanceof Error ? err.message : 'Could not process that request.',
       }));
-    } finally {
-      setPendingId(null);
     }
   };
 
-  const pending = requests.filter((r) => r.status === 'pending');
-  const decided = requests.filter((r) => r.status !== 'pending');
+  const viewRows = requests.map((r) =>
+    optimisticStatus[r.id] ? { ...r, status: optimisticStatus[r.id] } : r,
+  );
+  const pending = viewRows.filter((r) => r.status === 'pending');
+  const decided = viewRows.filter((r) => r.status !== 'pending');
   const nextClose = requests.length > 0 ? Math.max(...requests.map((r) => new Date(r.expiresAt).getTime())) : Date.now();
   const remaining = useCountdown(nextClose);
 
@@ -123,16 +138,13 @@ export function ApprovalsPanel({
                         <div className="flex gap-2">
                           <button
                             onClick={() => void decide(r.id, 'approve')}
-                            disabled={pendingId === r.id}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-transform duration-200 hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-transform duration-200 hover:scale-[1.03]"
                           >
-                            {pendingId === r.id ? <span className="spinner" aria-hidden /> : <Check className="h-3.5 w-3.5" />}
-                            Approve
+                            <Check className="h-3.5 w-3.5" /> Approve
                           </button>
                           <button
                             onClick={() => void decide(r.id, 'deny')}
-                            disabled={pendingId === r.id}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive"
                           >
                             <X className="h-3.5 w-3.5" /> Decline
                           </button>
