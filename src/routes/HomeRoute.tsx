@@ -15,7 +15,7 @@ function formatDayMonth(iso: string): string {
 }
 
 export default function HomeContent() {
-  const { mergedRoster, swapRequests, handleDecideRequest, bindAnonymousVenue } = useAppState();
+  const { mergedRoster, swapRequests, swapRequestsLoading, handleDecideRequest, bindAnonymousVenue } = useAppState();
   const { session } = useIdentity();
   const [searchParams] = useSearchParams();
 
@@ -66,6 +66,7 @@ export default function HomeContent() {
       <Shoutouts />
       <ApprovalsPanel
         requests={approvalRequests}
+        loading={swapRequestsLoading}
         onApprove={(id) => handleDecideRequest(id, 'approved')}
         onDeny={(id) => handleDecideRequest(id, 'denied')}
       />

@@ -65,7 +65,17 @@ interface AppStateValue {
    */
   bindAnonymousVenue: (locationId: string) => void;
   mergedRoster: Roster;
+  /**
+   * True until the FIRST `weekShifts` fetch (success or failure) settles,
+   * then false forever after — not a per-request spinner for week-nav
+   * reloads. Lets SchedulingRoute/PersonalRota/TeamMatrix distinguish "still
+   * loading the initial page" from "genuinely no shifts this week" so they
+   * don't flash a real empty state during the brief initial round trip.
+   */
+  initialScheduleLoading: boolean;
   swapRequests: SwapRequest[];
+  /** True until the first swap-requests fetch (success or failure) settles — same "initial load only" shape as `initialScheduleLoading`, for ApprovalsPanel. */
+  swapRequestsLoading: boolean;
   staffDirectory: StaffDirectoryEntry[];
   staffDirectoryByName: Map<string, StaffDirectoryEntry>;
   sections: GroupedSection<Employee>[];
@@ -150,7 +160,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     employees: [],
     shifts: [],
   });
+  const [initialScheduleLoading, setInitialScheduleLoading] = useState(true);
   const [swapRequests, setSwapRequests] = useState<SwapRequest[]>([]);
+  const [swapRequestsLoading, setSwapRequestsLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
@@ -171,6 +183,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // as the staff-directory/swap-requests effects below.
     if (!locationId) {
       setWeekShifts([]);
+      setInitialScheduleLoading(false);
       return;
     }
     const seq = ++reqSeqRef.current;
@@ -201,6 +214,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // freshly-loaded shifts.
       if (seq !== reqSeqRef.current) return;
       setWeekShifts([]);
+    } finally {
+      // Only ever flips the FIRST time this settles (see the field's doc
+      // comment) — subsequent week-nav reloads leave it `false`, since
+      // `setState(false)` when already `false` is a no-op re-render.
+      if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
   }, [weekStart, locationId]);
 
@@ -301,6 +319,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // doesn't keep rendering for whoever uses the device next.
     if (!session) {
       setSwapRequests([]);
+      setSwapRequestsLoading(false);
       return;
     }
     let cancelled = false;
@@ -310,6 +329,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         // ApprovalsPanel surfaces its own load error when rendered; nothing to show here.
+      })
+      .finally(() => {
+        // Only meaningfully flips once — see the field's doc comment.
+        if (!cancelled) setSwapRequestsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -487,7 +510,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       venueName,
       bindAnonymousVenue,
       mergedRoster,
+      initialScheduleLoading,
       swapRequests,
+      swapRequestsLoading,
       staffDirectory,
       staffDirectoryByName,
       sections,
@@ -516,7 +541,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       venueName,
       bindAnonymousVenue,
       mergedRoster,
+      initialScheduleLoading,
       swapRequests,
+      swapRequestsLoading,
       staffDirectory,
       staffDirectoryByName,
       sections,

@@ -209,15 +209,47 @@ function ShiftCard({
   );
 }
 
+function ShiftCardSkeleton({ index }: { index: number }) {
+  return (
+    <article
+      className="panel animate-rise overflow-hidden"
+      style={{ animationDelay: `${index * 60}ms` }}
+      aria-hidden
+    >
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-4 p-4 sm:p-5">
+        <div className="h-16 w-14 shrink-0 animate-pulse rounded-lg bg-muted" />
+        <div className="min-w-0 flex-1 space-y-2 py-1">
+          <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export function PersonalRota({
   shifts,
   coverCandidates = [],
   onRequestCover,
+  loading = false,
 }: {
   shifts: RotaCard[];
   coverCandidates?: CoverCandidate[];
   onRequestCover?: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
+  /** True only for the initial schedule fetch — not for a week-nav reload. */
+  loading?: boolean;
 }) {
+  if (loading) {
+    return (
+      <div className="space-y-3" aria-busy="true" aria-label="Loading personal rota">
+        {[0, 1, 2, 3].map((i) => (
+          <ShiftCardSkeleton key={i} index={i} />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {shifts.map((shift, i) => (

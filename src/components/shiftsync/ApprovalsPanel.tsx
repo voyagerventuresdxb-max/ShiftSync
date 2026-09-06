@@ -29,12 +29,29 @@ function useCountdown(target: number) {
   return `${d}d ${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
 }
 
+function ApprovalRowSkeleton() {
+  return (
+    <li className="p-4 sm:p-5" aria-hidden>
+      <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+      <div className="mt-2 h-3.5 w-48 animate-pulse rounded bg-muted" />
+      <div className="mt-2 h-3 w-40 animate-pulse rounded bg-muted" />
+      <div className="mt-3 flex gap-2">
+        <div className="h-7 w-24 animate-pulse rounded-lg bg-muted" />
+        <div className="h-7 w-24 animate-pulse rounded-lg bg-muted" />
+      </div>
+    </li>
+  );
+}
+
 export function ApprovalsPanel({
   requests,
+  loading = false,
   onApprove,
   onDeny,
 }: {
   requests: ApprovalRequestView[];
+  /** True only for the initial fetch — never for an in-flight approve/decide (that has its own per-row spinner, see `decide` below). */
+  loading?: boolean;
   onApprove: (id: string) => Promise<void>;
   onDeny: (id: string) => Promise<void>;
 }) {
@@ -114,7 +131,12 @@ export function ApprovalsPanel({
             Requests close Wednesday 17:00 GST. Overlapping requests auto-lock to protect published coverage.
           </p>
 
-          {requests.length === 0 ? (
+          {loading ? (
+            <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading approvals">
+              <ApprovalRowSkeleton />
+              <ApprovalRowSkeleton />
+            </ul>
+          ) : requests.length === 0 ? (
             <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
               <Timer className="h-5 w-5 text-muted-foreground" />
               No shift-swap requests yet. Requests raised from Personal Rota will appear here for approval.

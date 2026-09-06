@@ -37,6 +37,7 @@ export default function SchedulingContent() {
     weekStart,
     setWeekStart,
     mergedRoster,
+    initialScheduleLoading,
     config,
     venueName,
     currentEmployeeId,
@@ -281,7 +282,13 @@ export default function SchedulingContent() {
           )}
 
           <div key={mode} className="animate-rise">
-            {mergedRoster.employees.length === 0 ? (
+            {initialScheduleLoading ? (
+              mode === 'personal' ? (
+                <PersonalRota shifts={[]} loading />
+              ) : (
+                <TeamMatrix venueName={venueName ?? ''} days={matrixDays} members={[]} matrix={[]} loading />
+              )
+            ) : mergedRoster.employees.length === 0 ? (
               <p className="panel p-5 text-sm text-muted-foreground">
                 No staff parsed yet — upload a roster to see the personal and team views.
               </p>

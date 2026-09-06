@@ -4,6 +4,21 @@ import { cn } from '../lib/utils';
 import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequestDto } from '../api/join';
 import { useIdentity } from '../state/IdentityContext';
 
+function PendingApprovalRowSkeleton() {
+  return (
+    <li className="flex items-center justify-between gap-3 p-4" aria-hidden>
+      <div className="min-w-0 flex-1">
+        <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-1.5 h-3 w-20 animate-pulse rounded bg-muted" />
+      </div>
+      <div className="flex shrink-0 gap-2">
+        <div className="h-7 w-20 animate-pulse rounded-lg bg-muted" />
+        <div className="h-7 w-20 animate-pulse rounded-lg bg-muted" />
+      </div>
+    </li>
+  );
+}
+
 /**
  * Pending Approvals — the review queue for JoinRequest rows raised by the
  * phone/OTP join flow (src/api/join.ts) when no existing User auto-matches.
@@ -18,16 +33,25 @@ export default function PendingApprovals({ locationId }: { locationId: string })
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  // True until the first load (success or failure) settles, then false
+  // forever after — `load()` is also called to silently refresh the list
+  // after a decide succeeds, and that in-flight refresh must not re-trigger
+  // the skeleton (setLoading(false) when already false is a no-op).
+  const [loading, setLoading] = useState(true);
 
   const load = () => {
     // No session (or a staff session) means this can only ever 401/403 — the
     // route is manager-only now. Skip the request rather than firing one that
     // can't succeed; the list simply stays empty, same as the "nothing
     // pending" state below.
-    if (!session) return;
+    if (!session) {
+      setLoading(false);
+      return;
+    }
     fetchPendingJoinRequests(session.token, locationId)
       .then(setRequests)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.'));
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.'))
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
@@ -74,7 +98,12 @@ export default function PendingApprovals({ locationId }: { locationId: string })
               <p>{error}</p>
             </div>
           )}
-          {requests.length === 0 ? (
+          {loading ? (
+            <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading pending approvals">
+              <PendingApprovalRowSkeleton />
+              <PendingApprovalRowSkeleton />
+            </ul>
+          ) : requests.length === 0 ? (
             <p className="p-4 text-sm text-muted-foreground">No join requests waiting for review.</p>
           ) : (
             <ul className="divide-y divide-border">
