@@ -1,6 +1,7 @@
 import StaffDirectory from '../components/StaffDirectory';
 import PendingApprovals from '../components/PendingApprovals';
 import PolicyDocuments from '../components/PolicyDocuments';
+import FloorFeedbackReview from '../components/shiftsync/FloorFeedbackReview';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
 
@@ -18,6 +19,7 @@ export default function PeopleContent() {
   return (
     <div className="space-y-5">
       <PendingApprovals locationId={locationId} />
+      <FloorFeedbackReview />
       <StaffDirectory locationId={locationId} onChanged={setStaffDirectory} />
       <PolicyDocuments locationId={locationId} />
     </div>
