@@ -325,26 +325,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const handleRequestCover = useCallback(
     async (shiftId: string, coveringEmployeeId: string) => {
       // No session, no actor to attribute the request to — the server would
-      // 401 anyway; PersonalRota has no error slot for this today (same as
-      // the catch below), so this simply no-ops.
-      if (!session) return;
+      // 401 anyway. Thrown (not a silent no-op) so the caller (PersonalRota)
+      // doesn't flip to a false "sent" state when nothing was actually sent.
+      if (!session) throw new Error('You need to be signed in to request cover.');
       const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
-      if (!shift) return;
-      try {
-        const request = await createSwapRequest(session.token, {
-          shiftId,
-          // Only honored server-side for a MANAGER/OWNER session (filing on
-          // behalf of the employee selected in SchedulingRoute's "Viewing"
-          // dropdown); ignored outright for a STAFF session, which can only
-          // ever file for itself.
-          requestedById: shift.employeeId,
-          targetUserId: coveringEmployeeId,
-        });
-        setSwapRequests((prev) => [...prev, request]);
-      } catch {
-        // PersonalRota's cover-request UI has no error slot today — a follow-up
-        // phase can surface this; for now the request simply doesn't appear.
-      }
+      if (!shift) throw new Error('That shift could not be found — try refreshing.');
+      const request = await createSwapRequest(session.token, {
+        shiftId,
+        // Only honored server-side for a MANAGER/OWNER session (filing on
+        // behalf of the employee selected in SchedulingRoute's "Viewing"
+        // dropdown); ignored outright for a STAFF session, which can only
+        // ever file for itself.
+        requestedById: shift.employeeId,
+        targetUserId: coveringEmployeeId,
+      });
+      // Only mutate local state once the server has actually accepted the
+      // request — a thrown error above leaves this untouched, so the caller
+      // never mistakes a failed request for a successful one.
+      setSwapRequests((prev) => [...prev, request]);
     },
     [mergedRoster.shifts, session],
   );
@@ -353,30 +351,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     async (requestId: string, decision: 'approved' | 'denied') => {
       // Deciding is manager/owner-only server-side; with no session there is
       // no reviewer to attribute the decision to.
-      if (!session) return;
+      if (!session) throw new Error('You need to be signed in to decide swap requests.');
       // Whatever happens to THIS request, a decide attempt can change the
       // `locked` status of every sibling request on the same shift (the
       // server auto-locks the losing requests once one approval reassigns the
       // shift). Patching only the one row we just decided leaves those
       // siblings showing stale `locked: false` in local state until a full
-      // reload — so a manager could click Approve on an already-locked
-      // request and get a silent 409 with no visible feedback. Re-fetching
-      // the full list after every attempt (success or failure) keeps the
-      // client's view self-correcting instead.
+      // reload — so re-fetch the full list after every attempt (success or
+      // failure) to keep the client's view self-correcting. If the decide
+      // call itself fails, that error still propagates to the caller once
+      // the refetch below finishes, so ApprovalsPanel can show it against
+      // the row instead of leaving it in limbo.
       try {
         await decideSwapRequest(session.token, requestId, decision);
-      } catch {
-        // Surfacing a dedicated error message (e.g. for a locked-request 409)
-        // is ApprovalsPanel's job in a follow-up — the refetch below already
-        // makes the failure visible by flipping the row back to its true
-        // (now-locked) state instead of silently doing nothing.
       } finally {
         try {
           const fresh = await fetchSwapRequests(session.token, session.user.locationId);
           setSwapRequests(fresh);
         } catch {
-          // Load-error UI for this list is ApprovalsPanel's concern; leave the
-          // previous (possibly stale) list in place rather than clearing it.
+          // Best-effort reconciliation only — leave the previous (possibly
+          // stale) list in place rather than clearing it. Not the error the
+          // caller needs to see; the decide call's own outcome above is.
         }
       }
     },

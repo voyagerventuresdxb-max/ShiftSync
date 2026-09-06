@@ -41,13 +41,35 @@ function ShiftCard({
   shift: RotaCard;
   index: number;
   coverCandidates: CoverCandidate[];
-  onRequestCover?: (shiftId: string, coveringEmployeeId: string) => void;
+  onRequestCover?: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
 }) {
   const meta = statusMeta[shift.status];
   const isOff = shift.status === 'off';
   const [requesting, setRequesting] = useState(false);
   const [coveringId, setCoveringId] = useState(coverCandidates[0]?.id ?? '');
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+
+  const sendRequest = async () => {
+    if (!onRequestCover) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await onRequestCover(shift.id, coveringId);
+      // Only flip to the "sent" confirmation once the server has actually
+      // accepted the request — flipping it beforehand risked telling the
+      // staff member their request went through when it hadn't.
+      setSent(true);
+      setRequesting(false);
+    } catch (err) {
+      // Stay on the picker (pre-confirmation state) and show why, rather
+      // than silently doing nothing or falsely confirming.
+      setSendError(err instanceof Error ? err.message : 'Could not send that cover request.');
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <article
@@ -129,34 +151,44 @@ function ShiftCard({
                   {sent ? (
                     <p className="text-xs text-success">Cover request sent — awaiting manager approval.</p>
                   ) : requesting ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <select
-                        value={coveringId}
-                        onChange={(e) => setCoveringId(e.target.value)}
-                        className="rounded-lg border border-border bg-surface px-2 py-1 text-xs text-foreground"
-                      >
-                        {coverCandidates.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={() => {
-                          onRequestCover(shift.id, coveringId);
-                          setSent(true);
-                          setRequesting(false);
-                        }}
-                        className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
-                      >
-                        Send request
-                      </button>
-                      <button
-                        onClick={() => setRequesting(false)}
-                        className="rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-                      >
-                        Cancel
-                      </button>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={coveringId}
+                          onChange={(e) => setCoveringId(e.target.value)}
+                          disabled={sending}
+                          className="rounded-lg border border-border bg-surface px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                        >
+                          {coverCandidates.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => void sendRequest()}
+                          disabled={sending}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {sending && <span className="spinner" aria-hidden />}
+                          {sending ? 'Sending…' : 'Send request'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRequesting(false);
+                            setSendError(null);
+                          }}
+                          disabled={sending}
+                          className="rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      {sendError && (
+                        <div className="error-block mt-2" role="alert">
+                          <p>{sendError}</p>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <button
@@ -184,7 +216,7 @@ export function PersonalRota({
 }: {
   shifts: RotaCard[];
   coverCandidates?: CoverCandidate[];
-  onRequestCover?: (shiftId: string, coveringEmployeeId: string) => void;
+  onRequestCover?: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
 }) {
   return (
     <div className="space-y-3">

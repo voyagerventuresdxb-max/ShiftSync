@@ -35,10 +35,39 @@ export function ApprovalsPanel({
   onDeny,
 }: {
   requests: ApprovalRequestView[];
-  onApprove: (id: string) => void;
-  onDeny: (id: string) => void;
+  onApprove: (id: string) => Promise<void>;
+  onDeny: (id: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  // Tracks the one request currently being decided, plus a per-row error
+  // message for the last decide attempt that failed on it. Rows are never
+  // patched optimistically — a row stays exactly where it is (pending, in
+  // `requests`) until the parent's refetch confirms the outcome, so a
+  // failure just means the row stops "processing" and shows why.
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+
+  const decide = async (id: string, action: 'approve' | 'deny') => {
+    setPendingId(id);
+    setRowErrors((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      if (action === 'approve') await onApprove(id);
+      else await onDeny(id);
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [id]: err instanceof Error ? err.message : 'Could not process that request.',
+      }));
+    } finally {
+      setPendingId(null);
+    }
+  };
+
   const pending = requests.filter((r) => r.status === 'pending');
   const decided = requests.filter((r) => r.status !== 'pending');
   const nextClose = requests.length > 0 ? Math.max(...requests.map((r) => new Date(r.expiresAt).getTime())) : Date.now();
@@ -90,20 +119,30 @@ export function ApprovalsPanel({
                         <Lock className="h-3.5 w-3.5" /> Auto-locked — this shift was already reassigned
                       </span>
                     ) : (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => onApprove(r.id)}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-transform duration-200 hover:scale-[1.03]"
-                        >
-                          <Check className="h-3.5 w-3.5" /> Approve
-                        </button>
-                        <button
-                          onClick={() => onDeny(r.id)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive"
-                        >
-                          <X className="h-3.5 w-3.5" /> Decline
-                        </button>
-                      </div>
+                      <>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => void decide(r.id, 'approve')}
+                            disabled={pendingId === r.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-transform duration-200 hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
+                          >
+                            {pendingId === r.id ? <span className="spinner" aria-hidden /> : <Check className="h-3.5 w-3.5" />}
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => void decide(r.id, 'deny')}
+                            disabled={pendingId === r.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <X className="h-3.5 w-3.5" /> Decline
+                          </button>
+                        </div>
+                        {rowErrors[r.id] && (
+                          <div className="error-block mt-2" role="alert">
+                            <p>{rowErrors[r.id]}</p>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </li>

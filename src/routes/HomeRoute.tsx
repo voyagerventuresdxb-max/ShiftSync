@@ -66,8 +66,8 @@ export default function HomeContent() {
       <Shoutouts />
       <ApprovalsPanel
         requests={approvalRequests}
-        onApprove={(id) => void handleDecideRequest(id, 'approved')}
-        onDeny={(id) => void handleDecideRequest(id, 'denied')}
+        onApprove={(id) => handleDecideRequest(id, 'approved')}
+        onDeny={(id) => handleDecideRequest(id, 'denied')}
       />
       <SafetyValve />
     </div>
