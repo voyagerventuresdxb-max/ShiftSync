@@ -14,6 +14,25 @@
   box-sizing: border-box;
 }
 
+/*
+ * Tap/press feedback for every button, app-wide. Several surfaces
+ * (ApprovalsPanel, PendingApprovals, StaffDirectory, ShiftUpload,
+ * PersonalRota) only ever had hover: states, which never fire on touch
+ * devices — this is deliberately global (not per-file/per-button) so it
+ * covers every current and future button in one place. The `:not(:disabled)`
+ * clause pushes specificity to (0,2,1), which beats a plain Tailwind
+ * `hover:scale-*:hover` utility ((0,2,0), e.g. ApprovalsPanel's Approve
+ * button) so press wins over hover when both are true at once, such as a
+ * mouse click — rather than the two scales fighting or hover winning.
+ */
+button {
+  transition: transform 0.1s ease;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
 html,
 body,
 #root {
@@ -348,7 +367,10 @@ body {
   font-size: 0.9rem;
   font-weight: 600;
   cursor: pointer;
-  transition: filter 0.15s ease, background 0.15s ease;
+  /* `transform` included so the shared button:active press-scale (above)
+     animates here too, instead of snapping — this shorthand would
+     otherwise replace the base rule's transition list entirely. */
+  transition: filter 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
 
 .btn:hover {
