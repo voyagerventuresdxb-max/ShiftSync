@@ -19,11 +19,20 @@
  * (ApprovalsPanel, PendingApprovals, StaffDirectory, ShiftUpload,
  * PersonalRota) only ever had hover: states, which never fire on touch
  * devices — this is deliberately global (not per-file/per-button) so it
- * covers every current and future button in one place. The `:not(:disabled)`
- * clause pushes specificity to (0,2,1), which beats a plain Tailwind
- * `hover:scale-*:hover` utility ((0,2,0), e.g. ApprovalsPanel's Approve
- * button) so press wins over hover when both are true at once, such as a
- * mouse click — rather than the two scales fighting or hover winning.
+ * covers every current and future button in one place.
+ *
+ * Do NOT pair a button using this rule with Tailwind's `hover:scale-*` —
+ * Tailwind v4 compiles `scale-*` to the standalone CSS `scale` property,
+ * while this rule sets the legacy `transform: scale(...)`. Those are two
+ * different properties that COMPOSE (multiply) rather than one overriding
+ * the other, so on a real mouse click (where :hover stays true while
+ * :active fires) `hover:scale-[1.03]` × this rule's 0.97 nets out to
+ * ~0.999 — i.e. no visible press feedback at all. Confirmed live via
+ * Playwright (2026-09-06): every button that combined a Tailwind
+ * `hover:scale-*` with an onClick handler (ApprovalsPanel's Approve,
+ * Announcements' Post, and three in RotaBuilder) had its hover:scale
+ * removed for this reason, rather than trying to out-specificity it —
+ * `scale` and `transform` don't compete on specificity at all.
  */
 button {
   transition: transform 0.1s ease;

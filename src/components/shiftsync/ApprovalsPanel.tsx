@@ -160,7 +160,7 @@ export function ApprovalsPanel({
                         <div className="flex gap-2">
                           <button
                             onClick={() => void decide(r.id, 'approve')}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-transform duration-200 hover:scale-[1.03]"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
                           >
                             <Check className="h-3.5 w-3.5" /> Approve
                           </button>

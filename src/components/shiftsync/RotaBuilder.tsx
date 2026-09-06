@@ -433,7 +433,7 @@ export function RotaBuilder() {
                 {locked ? <Lock className="h-3 w-3" /> : <PencilLine className="h-3 w-3" />}
                 {locked ? 'Published · locked' : publishInfo?.publishedAt ? 'Unpublished changes' : 'Draft'}
               </span>
-              <button onClick={() => void publish()} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground transition-transform duration-200 hover:scale-[1.03]">
+              <button onClick={() => void publish()} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground">
                 <Send className="h-3.5 w-3.5" /> {publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
               </button>
               <button onClick={() => setSheet({ kind: 'templates' })} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground">
@@ -598,7 +598,7 @@ function ShiftChip({
         if (!suppressClick) onEdit(shift);
       }}
       className={cn(
-        'block w-full touch-none select-none rounded-md border border-accent/30 bg-accent/12 px-1.5 py-1 text-left text-[10px] leading-tight transition-transform hover:scale-[1.03]',
+        'block w-full touch-none select-none rounded-md border border-accent/30 bg-accent/12 px-1.5 py-1 text-left text-[10px] leading-tight',
         !locked && 'cursor-grab',
         isDragging && 'border-accent opacity-50',
       )}
@@ -772,7 +772,7 @@ function ShiftSheet({
           />
         </div>
         <div className="flex gap-2 pt-1">
-          <button onClick={() => onSave(local)} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition-transform hover:scale-[1.02]">
+          <button onClick={() => onSave(local)} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">
             <Check className="mr-1.5 inline h-4 w-4" /> {draft.id ? 'Save shift' : 'Add shift'}
           </button>
           {draft.id && (
@@ -861,7 +861,7 @@ function SaveTemplateSheet({
         <button
           onClick={() => onSave(trimmed)}
           disabled={!trimmed || shiftCount === 0}
-          className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition-transform hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+          className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Save className="mr-1.5 inline h-4 w-4" /> Save template
         </button>
