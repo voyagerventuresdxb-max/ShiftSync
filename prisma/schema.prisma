@@ -17,10 +17,10 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Organization {
-  id        String     @id @default(cuid())
+  id        String   @id @default(cuid())
   name      String
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   locations Location[]
 
@@ -55,6 +55,7 @@ model Location {
   eightySixItems  EightySixItem[]
   joinRequests    JoinRequest[]
   policyDocuments PolicyDocument[]
+  floorFeedback   FloorFeedback[]
 
   @@index([organizationId])
   @@map("locations")
@@ -141,10 +142,12 @@ model User {
   eightySixItemsCreated   EightySixItem[]            @relation("EightySixCreatedBy")
   eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
   sessions                Session[]
-  joinRequestsReviewed    JoinRequest[]               @relation("JoinRequestReviewedBy")
-  joinRequestsCreatedFrom JoinRequest[]               @relation("JoinRequestCreatedUser")
+  joinRequestsReviewed    JoinRequest[]              @relation("JoinRequestReviewedBy")
+  joinRequestsCreatedFrom JoinRequest[]              @relation("JoinRequestCreatedUser")
   availabilityMarks       AvailabilityMark[]
-  policyDocumentsUploaded PolicyDocument[]            @relation("PolicyDocumentUploadedBy")
+  policyDocumentsUploaded PolicyDocument[]           @relation("PolicyDocumentUploadedBy")
+  floorFeedbackSubmitted  FloorFeedback[]            @relation("FloorFeedbackSubmitter")
+  floorFeedbackReviewed   FloorFeedback[]            @relation("FloorFeedbackReviewedBy")
 
   @@index([locationId])
   @@index([roleId])
@@ -399,14 +402,14 @@ model FloorPlanImage {
 // screen's DOM overlay (`clip-path: polygon(...)`) stays correct at any
 // rendered image size without a resize-tracking recomputation step.
 model FloorSection {
-  id                String  @id @default(cuid())
-  locationId        String  @map("location_id")
-  floorPlanImageId  String  @map("floor_plan_image_id")
-  label             String
-  polygon           Json // [{x:number,y:number}, ...] fractional coords
-  paxCapacity       Int     @map("pax_capacity")
-  notes             String? // free-text venue note, e.g. "Shade after 17:00"
-  sortOrder         Int     @default(0) @map("sort_order")
+  id               String  @id @default(cuid())
+  locationId       String  @map("location_id")
+  floorPlanImageId String  @map("floor_plan_image_id")
+  label            String
+  polygon          Json // [{x:number,y:number}, ...] fractional coords
+  paxCapacity      Int     @map("pax_capacity")
+  notes            String? // free-text venue note, e.g. "Shade after 17:00"
+  sortOrder        Int     @default(0) @map("sort_order")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -439,7 +442,7 @@ model SectionAssignment {
   id          String           @id @default(cuid())
   sectionId   String           @map("section_id")
   staffId     String           @map("staff_id")
-  shiftDate   DateTime         @db.Date @map("shift_date")
+  shiftDate   DateTime         @map("shift_date") @db.Date
   period      AssignmentPeriod @default(AM)
   dutyLabel   String?          @map("duty_label")
   status      AssignmentStatus @default(DRAFT)
@@ -539,6 +542,39 @@ model Shoutout {
   @@map("shoutouts")
 }
 
+enum FloorFeedbackStatus {
+  OPEN
+  FLAGGED
+  REVIEWED
+}
+
+// Anonymous-to-management floor feedback (SafetyValve on the Home feed) —
+// anonymous in every manager-facing read, but NOT anonymous in storage:
+// `userId` is the real submitter, kept for moderation traceability (e.g. a
+// pattern of harassment complaints needs to be linkable even though no
+// single read exposes who filed it). Every GET /api/floor-feedback response
+// omits `userId` at the API layer, not just in the UI — see that route.
+// `OPEN` -> `FLAGGED` ("needs follow-up") -> `REVIEWED` ("closed, no action
+// needed"), or `OPEN` -> `REVIEWED` directly; `reviewedById`/`reviewedAt`
+// are set on either transition, mirroring JoinRequest's reviewedBy pattern.
+model FloorFeedback {
+  id           String              @id @default(cuid())
+  locationId   String              @map("location_id")
+  userId       String              @map("user_id")
+  content      String              @db.Text
+  status       FloorFeedbackStatus @default(OPEN)
+  reviewedById String?             @map("reviewed_by_id")
+  reviewedAt   DateTime?           @map("reviewed_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  user       User     @relation("FloorFeedbackSubmitter", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?    @relation("FloorFeedbackReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([locationId, status])
+  @@map("floor_feedback")
+}
+
 // ---------------------------------------------------------------------------
 // 8. ROTA BUILDER — reusable week templates + per-week publish tracking
 // ---------------------------------------------------------------------------
@@ -572,13 +608,13 @@ model RotaTemplate {
 model RotaPublish {
   id            String   @id @default(cuid())
   locationId    String   @map("location_id")
-  weekStart     DateTime @db.Date @map("week_start")
+  weekStart     DateTime @map("week_start") @db.Date
   publishedAt   DateTime @map("published_at")
   publishedById String?  @map("published_by_id")
   notifiedCount Int      @default(0) @map("notified_count")
 
   location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
-  publishedBy User?     @relation(fields: [publishedById], references: [id], onDelete: SetNull)
+  publishedBy User?    @relation(fields: [publishedById], references: [id], onDelete: SetNull)
 
   @@unique([locationId, weekStart])
   @@map("rota_publishes")
@@ -600,14 +636,14 @@ enum OtpPurpose {
 }
 
 model OtpCode {
-  id        String     @id @default(cuid())
-  phone     String
-  codeHash  String     @map("code_hash")
-  purpose   OtpPurpose
-  expiresAt DateTime   @map("expires_at")
-  consumedAt DateTime? @map("consumed_at")
-  attempts  Int        @default(0)
-  createdAt DateTime   @default(now()) @map("created_at")
+  id         String     @id @default(cuid())
+  phone      String
+  codeHash   String     @map("code_hash")
+  purpose    OtpPurpose
+  expiresAt  DateTime   @map("expires_at")
+  consumedAt DateTime?  @map("consumed_at")
+  attempts   Int        @default(0)
+  createdAt  DateTime   @default(now()) @map("created_at")
 
   @@index([phone, purpose])
   @@map("otp_codes")
@@ -642,15 +678,15 @@ enum JoinRequestStatus {
 }
 
 model JoinRequest {
-  id             String            @id @default(cuid())
-  locationId     String            @map("location_id")
-  phone          String
-  fullName       String            @map("full_name")
-  status         JoinRequestStatus @default(PENDING)
-  reviewedById   String?           @map("reviewed_by_id")
-  reviewedAt     DateTime?         @map("reviewed_at")
-  createdUserId  String?           @map("created_user_id")
-  createdAt      DateTime          @default(now()) @map("created_at")
+  id            String            @id @default(cuid())
+  locationId    String            @map("location_id")
+  phone         String
+  fullName      String            @map("full_name")
+  status        JoinRequestStatus @default(PENDING)
+  reviewedById  String?           @map("reviewed_by_id")
+  reviewedAt    DateTime?         @map("reviewed_at")
+  createdUserId String?           @map("created_user_id")
+  createdAt     DateTime          @default(now()) @map("created_at")
 
   location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
   reviewedBy  User?    @relation("JoinRequestReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
