@@ -7,8 +7,11 @@ import {
   deleteAnnouncement,
   type AnnouncementDto,
 } from '@/api/announcements';
+import { ApiError } from '@/api/schedules';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
+import { useConnectivity } from '@/state/ConnectivityContext';
+import { StaleDataNotice, OfflineEmptyState } from '@/components/shiftsync/OfflineNotice';
 
 /** "3h ago" / "2d ago" — coarse, matches the reference design's tone. */
 function timeAgo(iso: string): string {
@@ -26,9 +29,13 @@ function formatStamp(iso: string): string {
 export function Announcements() {
   const { locationId, currentEmployeeId, mergedRoster } = useAppState();
   const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [items, setItems] = useState<AnnouncementDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "no announcements" one.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [draft, setDraft] = useState<{ id: string | null; body: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -44,10 +51,21 @@ export function Announcements() {
     let cancelled = false;
     fetchAnnouncements(locationId)
       .then((list) => {
-        if (!cancelled) setItems(list);
+        if (cancelled) return;
+        setItems(list);
+        setError(null);
+        setLoadFailed(false);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load announcements.');
+        if (cancelled) return;
+        // `items` is left untouched (Phase 2 of the offline-support pass: a
+        // failed reload must not blank out data already on screen). Both
+        // fire together: `error` surfaces a genuine (non-connectivity)
+        // failure the same way a post-action failure does below, while
+        // `loadFailed` drives the offline-specific empty state when the
+        // list is also empty.
+        setError(err instanceof ApiError ? err.message : 'Could not load announcements.');
+        setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -80,7 +98,7 @@ export function Announcements() {
       }
       setDraft(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save the announcement.');
+      setError(err instanceof ApiError ? err.message : 'Could not save the announcement.');
     } finally {
       setSaving(false);
     }
@@ -91,7 +109,7 @@ export function Announcements() {
       await deleteAnnouncement(id);
       setItems((prev) => prev.filter((a) => a.id !== id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not delete the announcement.');
+      setError(err instanceof ApiError ? err.message : 'Could not delete the announcement.');
     }
   }
 
@@ -143,8 +161,16 @@ export function Announcements() {
         </div>
       )}
 
+      {!online && items.length > 0 && <StaleDataNotice />}
+
       {loading ? (
         <p className="mt-4 text-sm text-muted-foreground">Loading announcements…</p>
+      ) : items.length === 0 ? (
+        !online && loadFailed ? (
+          <OfflineEmptyState message="You're offline — announcements couldn't be loaded yet." />
+        ) : (
+          <p className="mt-4 rounded-xl border border-border p-4 text-center text-sm text-muted-foreground">No announcements yet.</p>
+        )
       ) : (
         <ul className="mt-4 space-y-3">
           {items.map((a) => (
@@ -177,11 +203,6 @@ export function Announcements() {
               </div>
             </li>
           ))}
-          {items.length === 0 && (
-            <li className="rounded-xl border border-border p-4 text-center text-sm text-muted-foreground">
-              No announcements yet.
-            </li>
-          )}
         </ul>
       )}
     </section>
