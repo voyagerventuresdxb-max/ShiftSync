@@ -39,7 +39,7 @@ export function SafetyValve() {
         <div className="min-w-0">
           <h2 className="text-base font-semibold tracking-tight">Direct Floor Feedback</h2>
           <p className="text-xs text-muted-foreground">
-            Anonymous to management · no name, device or timestamp attached
+            Anonymous to management · your identity isn't shown to managers, though submissions are logged for moderation
           </p>
         </div>
       </header>
