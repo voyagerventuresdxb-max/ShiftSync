@@ -19,7 +19,7 @@ export function SafetyValve() {
 
       {sent ? (
         <p className="mt-4 rounded-lg border border-signal/25 bg-signal/10 p-3 text-sm text-signal">
-          Sent anonymously. Ops leadership reviews floor feedback every Monday briefing.
+          Not connected to a review process yet — this note wasn't sent, stored, or seen by anyone.
         </p>
       ) : (
         <>
