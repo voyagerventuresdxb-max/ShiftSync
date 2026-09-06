@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, CalendarCheck } from 'lucide-react';
+import { Bell, CalendarCheck, WifiOff } from 'lucide-react';
 import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
 import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
+import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
 
 /**
@@ -115,6 +116,7 @@ export function AppShell() {
   const action = handle?.action;
 
   const { session } = useIdentity();
+  const { online } = useConnectivity();
 
   // `voiceOn` means "actively recording" (mic armed, first tap already
   // happened); `voiceProcessing` covers the transcribe -> parse-intent
@@ -345,6 +347,15 @@ export function AppShell() {
           </div>
         </div>
       </header>
+
+      {!online && (
+        <div className="mx-auto mt-2.5 max-w-6xl px-3 sm:px-4" role="status">
+          <div className="flex items-center justify-center gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-center text-xs font-medium text-warning">
+            <WifiOff className="h-3.5 w-3.5 shrink-0" />
+            You're offline — some actions are unavailable until your connection returns.
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
         <Outlet />
