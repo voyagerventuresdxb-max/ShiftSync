@@ -8,6 +8,8 @@ import {
   type FloorFeedbackDto,
 } from '../../api/floorFeedback';
 import { useIdentity } from '../../state/IdentityContext';
+import { useConnectivity } from '../../state/ConnectivityContext';
+import { StaleDataNotice, OfflineEmptyState } from './OfflineNotice';
 
 function FeedbackRowSkeleton() {
   return (
@@ -32,10 +34,14 @@ function FeedbackRowSkeleton() {
  */
 export default function FloorFeedbackReview() {
   const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [items, setItems] = useState<FloorFeedbackDto[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "nothing submitted" one.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
   const load = () => {
@@ -44,8 +50,17 @@ export default function FloorFeedbackReview() {
       return;
     }
     fetchFloorFeedback(session.token)
-      .then(setItems)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load floor feedback.'))
+      .then((list) => {
+        setItems(list);
+        setError(null);
+        setLoadFailed(false);
+      })
+      .catch((err) => {
+        // `items` is left untouched (Phase 2 of the offline-support pass: a
+        // failed reload must not blank out data already on screen).
+        setError(err instanceof ApiError ? err.message : 'Could not load floor feedback.');
+        setLoadFailed(true);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -104,13 +119,19 @@ export default function FloorFeedbackReview() {
             </div>
           )}
 
+          {!online && items.length > 0 && <StaleDataNotice />}
+
           {loading ? (
             <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading floor feedback">
               <FeedbackRowSkeleton />
               <FeedbackRowSkeleton />
             </ul>
           ) : items.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">No floor feedback submitted yet.</p>
+            !online && loadFailed ? (
+              <OfflineEmptyState message="You're offline — floor feedback couldn't be loaded yet." />
+            ) : (
+              <p className="p-4 text-sm text-muted-foreground">No floor feedback submitted yet.</p>
+            )
           ) : (
             <ul className="divide-y divide-border">
               {needsAttention.map((item) => (

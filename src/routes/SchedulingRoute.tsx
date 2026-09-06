@@ -12,6 +12,8 @@ import ShiftUpload from '../components/ShiftUpload';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { ApiError } from '../api/schedules';
 
@@ -32,12 +34,14 @@ const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
   const { session } = useIdentity();
+  const { online } = useConnectivity();
   const {
     locationId,
     weekStart,
     setWeekStart,
     mergedRoster,
     initialScheduleLoading,
+    scheduleLoadFailed,
     config,
     venueName,
     currentEmployeeId,
@@ -281,6 +285,8 @@ export default function SchedulingContent() {
             </div>
           )}
 
+          {!initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />}
+
           <div key={mode} className="animate-rise">
             {initialScheduleLoading ? (
               mode === 'personal' ? (
@@ -290,7 +296,9 @@ export default function SchedulingContent() {
               )
             ) : mergedRoster.employees.length === 0 ? (
               <p className="panel p-5 text-sm text-muted-foreground">
-                No staff parsed yet — upload a roster to see the personal and team views.
+                {!online && scheduleLoadFailed
+                  ? "You're offline — nothing has loaded yet for this week."
+                  : 'No staff parsed yet — upload a roster to see the personal and team views.'}
               </p>
             ) : mode === 'personal' ? (
               <PersonalRota shifts={rotaCards} coverCandidates={coverCandidates} onRequestCover={handleRequestCover} />

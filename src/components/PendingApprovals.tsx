@@ -3,6 +3,8 @@ import { Check, ChevronDown, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequestDto } from '../api/join';
 import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { StaleDataNotice, OfflineEmptyState } from './shiftsync/OfflineNotice';
 
 function PendingApprovalRowSkeleton() {
   return (
@@ -29,9 +31,14 @@ function PendingApprovalRowSkeleton() {
  */
 export default function PendingApprovals({ locationId }: { locationId: string }) {
   const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [requests, setRequests] = useState<JoinRequestDto[]>([]);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "nothing pending" one.
+  // Reset on every successful load, unlike `error` below wasn't previously.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [decidingId, setDecidingId] = useState<string | null>(null);
   // True until the first load (success or failure) settles, then false
   // forever after — `load()` is also called to silently refresh the list
@@ -49,8 +56,17 @@ export default function PendingApprovals({ locationId }: { locationId: string })
       return;
     }
     fetchPendingJoinRequests(session.token, locationId)
-      .then(setRequests)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.'))
+      .then((list) => {
+        setRequests(list);
+        setError(null);
+        setLoadFailed(false);
+      })
+      .catch((err) => {
+        // The list itself is left untouched (Phase 2 of the offline-support
+        // pass: a failed refresh must not blank out data already on screen).
+        setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.');
+        setLoadFailed(true);
+      })
       .finally(() => setLoading(false));
   };
 
@@ -98,13 +114,19 @@ export default function PendingApprovals({ locationId }: { locationId: string })
               <p>{error}</p>
             </div>
           )}
+          {!online && requests.length > 0 && <StaleDataNotice />}
+
           {loading ? (
             <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading pending approvals">
               <PendingApprovalRowSkeleton />
               <PendingApprovalRowSkeleton />
             </ul>
           ) : requests.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">No join requests waiting for review.</p>
+            !online && loadFailed ? (
+              <OfflineEmptyState message="You're offline — pending approvals couldn't be loaded yet." />
+            ) : (
+              <p className="p-4 text-sm text-muted-foreground">No join requests waiting for review.</p>
+            )
           ) : (
             <ul className="divide-y divide-border">
               {requests.map((r) => (

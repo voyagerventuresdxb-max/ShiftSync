@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Check, ChevronDown, FileText, Lock, Timer, X } from 'lucide-react';
 import type { SwapRequestStatus } from '../../engine/types';
 import { cn } from '../../lib/utils';
+import { useConnectivity } from '../../state/ConnectivityContext';
+import { StaleDataNotice, OfflineEmptyState } from './OfflineNotice';
 
 export interface ApprovalRequestView {
   id: string;
@@ -46,15 +48,19 @@ function ApprovalRowSkeleton() {
 export function ApprovalsPanel({
   requests,
   loading = false,
+  loadFailed = false,
   onApprove,
   onDeny,
 }: {
   requests: ApprovalRequestView[];
   /** True only for the initial fetch — never for an in-flight approve/decide (that has its own per-row spinner, see `decide` below). */
   loading?: boolean;
+  /** True when the most recent fetch failed — distinguishes an offline cold-load empty state from a genuine "no requests" one. */
+  loadFailed?: boolean;
   onApprove: (id: string) => Promise<void>;
   onDeny: (id: string) => Promise<void>;
 }) {
+  const { online } = useConnectivity();
   const [open, setOpen] = useState(false);
   // Optimistic status override, keyed by request id — set the instant
   // Approve/Decline is clicked so the row moves to "decided" immediately,
@@ -131,16 +137,22 @@ export function ApprovalsPanel({
             Requests close Wednesday 17:00 GST. Overlapping requests auto-lock to protect published coverage.
           </p>
 
+          {!online && requests.length > 0 && <StaleDataNotice />}
+
           {loading ? (
             <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading approvals">
               <ApprovalRowSkeleton />
               <ApprovalRowSkeleton />
             </ul>
           ) : requests.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
-              <Timer className="h-5 w-5 text-muted-foreground" />
-              No shift-swap requests yet. Requests raised from Personal Rota will appear here for approval.
-            </div>
+            !online && loadFailed ? (
+              <OfflineEmptyState message="You're offline — approvals couldn't be loaded yet." />
+            ) : (
+              <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
+                <Timer className="h-5 w-5 text-muted-foreground" />
+                No shift-swap requests yet. Requests raised from Personal Rota will appear here for approval.
+              </div>
+            )
           ) : (
             <ul className="divide-y divide-border">
               {pending.map((r) => (

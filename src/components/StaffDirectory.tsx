@@ -7,6 +7,8 @@ import {
 } from '../api/staffDirectory';
 import { ApiError } from '../api/schedules';
 import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { StaleDataNotice } from './shiftsync/OfflineNotice';
 
 interface StaffDirectoryProps {
   locationId: string;
@@ -31,9 +33,13 @@ type EditableFieldUpdates = Partial<
  */
 export default function StaffDirectory({ locationId, onChanged }: StaffDirectoryProps) {
   const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "no staff yet" one.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newTitle, setNewTitle] = useState('');
@@ -57,10 +63,14 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
         setStaff(list);
         onChanged?.(list);
         setError(null);
+        setLoadFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
+        // `staff` itself is left untouched (Phase 2 of the offline-support
+        // pass: a failed reload must not blank out data already on screen).
         setError(err instanceof ApiError ? err.message : 'Could not load the staff directory.');
+        setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -147,6 +157,8 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
             </div>
           )}
 
+          {!online && staff.length > 0 && <StaleDataNotice />}
+
           <datalist id="staff-directory-languages">
             {knownLanguages.map((lang) => (
               <option key={lang} value={lang} />
@@ -185,7 +197,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                   {staff.length === 0 && (
                     <tr>
                       <td colSpan={8} className="cell-num">
-                        No staff yet — add one below.
+                        {!online && loadFailed ? "You're offline — the staff directory couldn't be loaded yet." : 'No staff yet — add one below.'}
                       </td>
                     </tr>
                   )}

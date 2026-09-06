@@ -73,9 +73,13 @@ interface AppStateValue {
    * don't flash a real empty state during the brief initial round trip.
    */
   initialScheduleLoading: boolean;
+  /** True when the most recent weekShifts fetch failed — distinct from `initialScheduleLoading`, which only covers the first load. Lets SchedulingRoute tell "offline, nothing cached for this week" apart from a genuine "no staff parsed yet" empty state. */
+  scheduleLoadFailed: boolean;
   swapRequests: SwapRequest[];
   /** True until the first swap-requests fetch (success or failure) settles — same "initial load only" shape as `initialScheduleLoading`, for ApprovalsPanel. */
   swapRequestsLoading: boolean;
+  /** True when the most recent swap-requests fetch failed — lets ApprovalsPanel tell "offline, nothing cached" apart from a genuine "no requests" empty state. */
+  swapRequestsLoadFailed: boolean;
   staffDirectory: StaffDirectoryEntry[];
   staffDirectoryByName: Map<string, StaffDirectoryEntry>;
   sections: GroupedSection<Employee>[];
@@ -163,6 +167,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [initialScheduleLoading, setInitialScheduleLoading] = useState(true);
   const [swapRequests, setSwapRequests] = useState<SwapRequest[]>([]);
   const [swapRequestsLoading, setSwapRequestsLoading] = useState(true);
+  const [swapRequestsLoadFailed, setSwapRequestsLoadFailed] = useState(false);
+  const [scheduleLoadFailed, setScheduleLoadFailed] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
@@ -176,6 +182,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // different week. Every request takes a sequence number and discards itself
   // if a newer request has started since.
   const reqSeqRef = useRef(0);
+  // The week the CURRENTLY-HELD `weekShifts` state actually corresponds to
+  // (distinct from `weekStart`, which flips the instant Prev/Next is
+  // clicked, before the new week's fetch has even started). Lets the catch
+  // block below tell "this failure is for a week we have no cached data for
+  // at all" (must clear — the old bug this ref exists to prevent) apart from
+  // "this failure is a same-week connectivity blip" (must NOT clear — Phase
+  // 2 of the offline-support pass: don't wipe data the user can already see
+  // just because a request failed).
+  const loadedWeekShiftsWeekRef = useRef<string | null>(null);
 
   const refetchWeekShifts = useCallback(async () => {
     // No session, no real venue to scope this fetch to — clear rather than
@@ -183,10 +198,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // as the staff-directory/swap-requests effects below.
     if (!locationId) {
       setWeekShifts([]);
+      loadedWeekShiftsWeekRef.current = null;
       setInitialScheduleLoading(false);
       return;
     }
     const seq = ++reqSeqRef.current;
+    const targetWeek = weekStart;
     try {
       const dtos = await fetchWeekShifts(locationId, weekStart);
       if (seq !== reqSeqRef.current) return;
@@ -205,15 +222,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           sidework: s.sidework,
         })),
       );
+      loadedWeekShiftsWeekRef.current = targetWeek;
+      setScheduleLoadFailed(false);
     } catch {
-      // A failed fetch for the new week must not leave the previous week's
-      // shifts rendered (that would look like correct data for the wrong
-      // week) — clear to empty so RotaBuilder/Team Matrix show their own
-      // empty state instead of stale data. A stale failure is discarded for
-      // the same reason a stale success is: it must not clear a newer week's
-      // freshly-loaded shifts.
+      // A stale failure is discarded for the same reason a stale success is:
+      // it must not clear a newer week's freshly-loaded shifts.
       if (seq !== reqSeqRef.current) return;
-      setWeekShifts([]);
+      setScheduleLoadFailed(true);
+      if (loadedWeekShiftsWeekRef.current !== targetWeek) {
+        // We hold no valid cached data for THIS week at all (first load of
+        // it, or whatever's in `weekShifts` is leftover from a different
+        // week) — leaving it in place would show the wrong week's shifts
+        // under this week's header, so clearing is the only safe option.
+        setWeekShifts([]);
+      }
+      // Else: the failure is for the SAME week already on screen (e.g. a
+      // transient offline blip) — the currently-displayed data is still
+      // valid for the week the user is looking at, so it stays put rather
+      // than being wiped just because this one request failed.
     } finally {
       // Only ever flips the FIRST time this settles (see the field's doc
       // comment) — subsequent week-nav reloads leave it `false`, since
@@ -320,15 +346,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     if (!session) {
       setSwapRequests([]);
       setSwapRequestsLoading(false);
+      setSwapRequestsLoadFailed(false);
       return;
     }
     let cancelled = false;
     fetchSwapRequests(session.token, session.user.locationId)
       .then((list) => {
-        if (!cancelled) setSwapRequests(list);
+        if (cancelled) return;
+        setSwapRequests(list);
+        setSwapRequestsLoadFailed(false);
       })
       .catch(() => {
-        // ApprovalsPanel surfaces its own load error when rendered; nothing to show here.
+        // The list itself is left untouched on failure (Phase 2 of the
+        // offline-support pass: a request that fails while data is already
+        // loaded must not blank it out) — this flag only distinguishes a
+        // genuinely empty list from a cold load that couldn't reach the
+        // server at all, for ApprovalsPanel's offline empty state.
+        if (!cancelled) setSwapRequestsLoadFailed(true);
       })
       .finally(() => {
         // Only meaningfully flips once — see the field's doc comment.
@@ -511,8 +545,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       bindAnonymousVenue,
       mergedRoster,
       initialScheduleLoading,
+      scheduleLoadFailed,
       swapRequests,
       swapRequestsLoading,
+      swapRequestsLoadFailed,
       staffDirectory,
       staffDirectoryByName,
       sections,
@@ -542,8 +578,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       bindAnonymousVenue,
       mergedRoster,
       initialScheduleLoading,
+      scheduleLoadFailed,
       swapRequests,
       swapRequestsLoading,
+      swapRequestsLoadFailed,
       staffDirectory,
       staffDirectoryByName,
       sections,
