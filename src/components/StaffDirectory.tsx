@@ -34,6 +34,15 @@ type EditableFieldUpdates = Partial<
 export default function StaffDirectory({ locationId, onChanged }: StaffDirectoryProps) {
   const { session } = useIdentity();
   const { online } = useConnectivity();
+  // Positive check (render editable only for a confirmed MANAGER/OWNER), not
+  // a negative one — same rationale as router.tsx's RequireSession/
+  // ShiftEditorLink: a corrupted/unexpected systemRole string must fail
+  // closed into the read-only view, not fall through to editable. The
+  // server already enforces this (POST/PATCH are requireManager-gated,
+  // GET is requireSession-only) — this only stops STAFF from seeing
+  // controls that would 403 on click, now that /people (where this
+  // renders) is reachable by every session, not just managers.
+  const isManager = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +206,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                       entry={entry}
                       saving={savingId === entry.id}
                       disabled={!online}
+                      isManager={isManager}
                       onSave={(updates, errorMessage) => handleFieldSave(entry, updates, errorMessage)}
                     />
                   ))}
@@ -212,28 +222,32 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
             </div>
           )}
 
-          <div className="staff-directory-add">
-            <input
-              className="staff-directory-input"
-              placeholder="Full name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
-              disabled={!online}
-            />
-            <input
-              className="staff-directory-input"
-              placeholder="Job title (e.g. Restaurant Manager)"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
-              disabled={!online}
-            />
-            <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim() || !online}>
-              {adding ? 'Adding…' : 'Add staff member'}
-            </button>
-          </div>
-          {!online && <OfflineActionNotice />}
+          {isManager && (
+            <>
+              <div className="staff-directory-add">
+                <input
+                  className="staff-directory-input"
+                  placeholder="Full name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+                  disabled={!online}
+                />
+                <input
+                  className="staff-directory-input"
+                  placeholder="Job title (e.g. Restaurant Manager)"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+                  disabled={!online}
+                />
+                <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim() || !online}>
+                  {adding ? 'Adding…' : 'Add staff member'}
+                </button>
+              </div>
+              {!online && <OfflineActionNotice />}
+            </>
+          )}
         </div>
       )}
     </section>
@@ -244,12 +258,15 @@ function StaffRow({
   entry,
   saving,
   disabled,
+  isManager,
   onSave,
 }: {
   entry: StaffDirectoryEntry;
   saving: boolean;
   /** True while offline — every field/toggle in this row is disabled, matching the "block outright" treatment for this write path. */
   disabled: boolean;
+  /** False for a STAFF session — every field renders as plain text, matching Floor Plan's AssignmentBoard read-only treatment rather than showing editable controls that would 403 on click. */
+  isManager: boolean;
   onSave: (updates: EditableFieldUpdates, errorMessage: string) => void;
 }) {
   const [title, setTitle] = useState(entry.jobTitle ?? '');
@@ -272,6 +289,23 @@ function StaffRow({
   useEffect(() => {
     setHiredAt(entry.hiredAt ?? '');
   }, [entry.hiredAt]);
+
+  if (!isManager) {
+    return (
+      <tr>
+        <td>{entry.fullName}</td>
+        <td className="cell-num">{entry.jobTitle || '—'}</td>
+        <td className="cell-num">{entry.phone || '—'}</td>
+        <td className="cell-num">{entry.preferredLanguage || '—'}</td>
+        <td className="cell-num">{entry.hiredAt || '—'}</td>
+        <td>
+          <span className={`chip${entry.isActive ? ' chip-active' : ''}`}>{entry.isActive ? 'Active' : 'Inactive'}</span>
+        </td>
+        <td className="cell-num">{entry.venueName}</td>
+        <td className="cell-num">{entry.roleName ?? '—'}</td>
+      </tr>
+    );
+  }
 
   return (
     <tr>

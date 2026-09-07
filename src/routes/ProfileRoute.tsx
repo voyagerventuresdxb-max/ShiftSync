@@ -1,5 +1,4 @@
 import { useIdentity } from '../state/IdentityContext';
-import { NotificationSettings } from '../components/shiftsync/NotificationSettings';
 
 export default function ProfileContent() {
   const { session, logout } = useIdentity();
@@ -18,8 +17,6 @@ export default function ProfileContent() {
           Sign out
         </button>
       </section>
-
-      <NotificationSettings />
     </div>
   );
 }

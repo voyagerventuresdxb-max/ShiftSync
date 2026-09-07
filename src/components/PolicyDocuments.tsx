@@ -9,7 +9,7 @@ import { useIdentity } from '../state/IdentityContext';
  * Follows the same free-text-category-grouping + <datalist> autocomplete
  * pattern established by EightySixBoard.tsx in the Floor Plan phase.
  */
-export default function PolicyDocuments({ locationId }: { locationId: string }) {
+export default function PolicyDocuments({ locationId, isManager }: { locationId: string; isManager: boolean }) {
   const { session } = useIdentity();
   const [docs, setDocs] = useState<PolicyDocumentDto[]>([]);
   const [category, setCategory] = useState('');
@@ -94,34 +94,36 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <input
-          className="staff-directory-input"
-          list="policy-doc-categories"
-          placeholder="Category (e.g. Onboarding, Food Safety)"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        />
-        <datalist id="policy-doc-categories">
-          {knownCategories.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-        <input
-          className="staff-directory-input"
-          placeholder="Document title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        <button
-          className="btn btn-primary"
-          onClick={() => void handleUpload()}
-          disabled={uploading || !file || !category.trim() || !title.trim()}
-        >
-          <Upload className="h-4 w-4" /> Upload
-        </button>
-      </div>
+      {isManager && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <input
+            className="staff-directory-input"
+            list="policy-doc-categories"
+            placeholder="Category (e.g. Onboarding, Food Safety)"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          />
+          <datalist id="policy-doc-categories">
+            {knownCategories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+          <input
+            className="staff-directory-input"
+            placeholder="Document title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleUpload()}
+            disabled={uploading || !file || !category.trim() || !title.trim()}
+          >
+            <Upload className="h-4 w-4" /> Upload
+          </button>
+        </div>
+      )}
 
       {grouped.length === 0 ? (
         <p className="hint mt-4">No documents uploaded yet.</p>
@@ -140,9 +142,11 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
                     >
                       <FileText className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{d.title}</span>
                     </button>
-                    <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="shrink-0 text-muted-foreground hover:text-destructive">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {isManager && (
+                      <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="shrink-0 text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>

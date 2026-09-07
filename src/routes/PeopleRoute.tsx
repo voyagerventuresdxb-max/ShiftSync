@@ -2,6 +2,7 @@ import StaffDirectory from '../components/StaffDirectory';
 import PendingApprovals from '../components/PendingApprovals';
 import PolicyDocuments from '../components/PolicyDocuments';
 import FloorFeedbackReview from '../components/shiftsync/FloorFeedbackReview';
+import { NotificationSettings } from '../components/shiftsync/NotificationSettings';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
 
@@ -16,12 +17,23 @@ export default function PeopleContent() {
   const { session } = useIdentity();
   if (!session) return null;
   const locationId = session.user.locationId;
+  // Positive check (same rationale as StaffDirectory.tsx/router.tsx) — People
+  // is now reachable by every session, not just managers, so the
+  // manager-only review panels below (join requests, anonymous feedback
+  // moderation) must be hidden outright for STAFF, not merely left to 403
+  // on their own API calls.
+  const isManager = session.user.systemRole === 'MANAGER' || session.user.systemRole === 'OWNER';
   return (
     <div className="space-y-5">
-      <PendingApprovals locationId={locationId} />
-      <FloorFeedbackReview />
+      {isManager && (
+        <>
+          <PendingApprovals locationId={locationId} />
+          <FloorFeedbackReview />
+        </>
+      )}
       <StaffDirectory locationId={locationId} onChanged={setStaffDirectory} />
-      <PolicyDocuments locationId={locationId} />
+      <PolicyDocuments locationId={locationId} isManager={isManager} />
+      <NotificationSettings />
     </div>
   );
 }
