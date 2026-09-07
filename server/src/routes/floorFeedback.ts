@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
+import { notifyUser } from '../lib/push.js';
 import type { FloorFeedbackStatus } from '@prisma/client';
 
 export const floorFeedbackRouter = Router();
@@ -125,6 +126,23 @@ floorFeedbackRouter.patch('/:id', requireSession, requireManager, async (req, re
         reviewedAt: new Date(),
       },
       select: FEEDBACK_SELECT,
+    });
+
+    // Real delivery to the original submitter, using `existing.userId` —
+    // fetched above via a plain findUnique with no `select`, so it was
+    // already in hand server-side; it is NOT added to FEEDBACK_SELECT or
+    // any manager-facing query/response, and this stays the only place that
+    // reads it. Copy is deliberately generic for BOTH 'flagged' and
+    // 'reviewed' outcomes: no feedback content, no reviewer identity, and
+    // no distinction between the two statuses, since even that could hint
+    // at how a manager reacted. No audit log entry is written for this —
+    // this route has never audited its actions (unlike most mutation routes
+    // in this codebase), and this must not be the first side effect that
+    // changes that.
+    void notifyUser(existing.userId, {
+      title: 'Feedback update',
+      body: 'Your feedback has been reviewed.',
+      url: '/',
     });
 
     return res.status(200).json({ feedback: toDto(updated) });
