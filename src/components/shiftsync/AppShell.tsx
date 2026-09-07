@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, CalendarCheck, WifiOff } from 'lucide-react';
+import { CalendarCheck, WifiOff } from 'lucide-react';
 import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
 import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
+import { NotificationBell } from '@/components/shiftsync/NotificationBell';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
@@ -283,8 +284,6 @@ export function AppShell() {
     }
   }, [voiceResult, session]);
 
-  const [unread, setUnread] = useState(true);
-
   // My Shifts is the staff-facing home screen, so it needs a real destination
   // in the shell chrome exactly like /profile has — the four-tab RadialDock is
   // the manager-side nav and has no room for it.
@@ -323,27 +322,7 @@ export function AppShell() {
             >
               <CalendarCheck className="h-4 w-4" strokeWidth={onMyShifts ? 2.4 : 1.6} />
             </Link>
-            <button
-              onClick={() => setUnread((u) => !u)}
-              aria-label={unread ? 'Unread notifications' : 'Notifications'}
-              className={cn(
-                'relative grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
-                unread
-                  ? 'glow-gold border-accent/50 bg-accent/15 text-accent'
-                  : 'border-border text-foreground/40 hover:text-foreground/70',
-              )}
-              style={{ transitionTimingFunction: 'cubic-bezier(0.34,1.56,0.64,1)' }}
-            >
-              <Bell
-                className="h-4 w-4"
-                strokeWidth={unread ? 2.4 : 1.6}
-                fill={unread ? 'currentColor' : 'none'}
-                fillOpacity={unread ? 0.22 : 0}
-              />
-              {unread && (
-                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-accent shadow-glow" />
-              )}
-            </button>
+            <NotificationBell />
           </div>
         </div>
       </header>

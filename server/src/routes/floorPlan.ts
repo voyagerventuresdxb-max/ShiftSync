@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma.js';
 import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasterize.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { notifyUser } from '../lib/push.js';
 
 /**
  * Floor Plan — Sections & Duties.
@@ -530,6 +531,17 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requi
       }),
     );
 
+    // Real delivery on top of the existing flag-stamp above — never inside
+    // the transaction (a push failure must not roll back notifiedAt, which
+    // is a manager-facing "I did this" record independent of whether the
+    // device-level send actually succeeds).
+    const dateStr = existing.shiftDate.toISOString().slice(0, 10);
+    void notifyUser(existing.staffId, {
+      title: 'New section assignment',
+      body: `You've been assigned to ${existing.section.label} for ${dateStr} (${existing.period}).`,
+      url: '/my-shifts',
+    });
+
     return res.status(200).json({ notifiedAt: updated.notifiedAt!.toISOString() });
   } catch (err) {
     console.error('[floorPlan.assignments.notify] failed', err);
@@ -565,11 +577,21 @@ floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, asy
 
     const result = await withAuditedTransaction(
       prisma,
-      (tx) =>
-        tx.sectionAssignment.updateMany({
+      async (tx) => {
+        // Captured BEFORE the update, on the same where-clause, so the
+        // digest below knows exactly which staff/sections this call
+        // actually flipped to PUBLISHED — updateMany itself only returns a
+        // count, not the affected rows.
+        const affected = await tx.sectionAssignment.findMany({
+          where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
+          select: { staffId: true, section: { select: { label: true } } },
+        });
+        const updateResult = await tx.sectionAssignment.updateMany({
           where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
           data: { status: 'PUBLISHED', publishedAt: now, notifiedAt: now },
-        }),
+        });
+        return { count: updateResult.count, affected };
+      },
       (updateResult) =>
         updateResult.count > 0
           ? {
@@ -583,6 +605,28 @@ floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, asy
             }
           : null,
     );
+
+    // Real delivery on top of the existing flag-stamp above (never inside
+    // the transaction — see the per-assignment notify handler's comment).
+    // One digest notification per affected staff member, not one per
+    // assignment, so someone assigned to three sections in this batch gets
+    // a single push, not three.
+    const byStaff = new Map<string, string[]>();
+    for (const a of result.affected) {
+      const labels = byStaff.get(a.staffId) ?? [];
+      labels.push(a.section.label);
+      byStaff.set(a.staffId, labels);
+    }
+    for (const [staffId, labels] of byStaff) {
+      void notifyUser(staffId, {
+        title: 'New section assignment',
+        body:
+          labels.length === 1
+            ? `You've been assigned to ${labels[0]} for ${dateStr} (${period}).`
+            : `You've been assigned to ${labels.length} sections for ${dateStr} (${period}): ${labels.join(', ')}.`,
+        url: '/my-shifts',
+      });
+    }
 
     return res.status(200).json({ publishedCount: result.count });
   } catch (err) {

@@ -76,3 +76,22 @@ export async function sendPushToUsers(userIds: string[], payload: PushPayload): 
     { sent: 0, removed: 0 },
   );
 }
+
+/**
+ * The one function features should actually call: records the notification
+ * in-app (so it shows up in the notification bell / history even on a
+ * device with push off or unsupported) AND attempts real push delivery.
+ * Never throws — a push failure must not roll back or hide the in-app
+ * record, and a caller notifying several people in a loop must not have
+ * one failure block the rest.
+ */
+export async function notifyUser(userId: string, payload: PushPayload): Promise<void> {
+  try {
+    await prisma.notification.create({
+      data: { userId, title: payload.title, body: payload.body, url: payload.url },
+    });
+  } catch (err) {
+    console.error('[push.notifyUser] failed to record notification', userId, err);
+  }
+  await sendPushToUser(userId, payload);
+}

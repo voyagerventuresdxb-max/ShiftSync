@@ -143,6 +143,7 @@ model User {
   eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
   sessions                Session[]
   pushSubscriptions       PushSubscription[]
+  notifications           Notification[]
   joinRequestsReviewed    JoinRequest[]              @relation("JoinRequestReviewedBy")
   joinRequestsCreatedFrom JoinRequest[]              @relation("JoinRequestCreatedUser")
   availabilityMarks       AvailabilityMark[]
@@ -689,6 +690,29 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+// The in-app notification bell's real backing store — one row per
+// notification-worthy event for one user, independent of whether that
+// user has push enabled on any device. Push (above) is an optional extra
+// delivery channel for the same event, not a replacement for this log;
+// server/src/lib/push.ts's `notifyUser` writes one of these AND attempts
+// push in the same call. Generic on purpose (title/body/url, no
+// Floor-Plan-specific columns) so any future feature reuses the same
+// table instead of growing its own.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  title     String
+  body      String
+  url       String?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
 }
 
 // A self-registration attempt whose phone number did NOT match an existing
