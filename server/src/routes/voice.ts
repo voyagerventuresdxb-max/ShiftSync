@@ -6,7 +6,7 @@ import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rat
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
-import { createSwapRequest, decideSwapRequest } from '../lib/actions/swapActions.js';
+import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
@@ -224,6 +224,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
           (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
         );
+        // Same notification path as the REST route (routes/swapRequests.ts's
+        // POST) — never inside the transaction above.
+        void notifySwapRequested(created, locationId);
         return res.status(201).json({ executed: true, result: created });
       }
       case 'APPROVE_SWAP':
@@ -275,6 +278,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           entityId: intent.swapRequestId,
           note,
         });
+        // Same notification path as the REST route (routes/swapRequests.ts's
+        // PATCH) — never inside the audit write above.
+        void notifySwapDecided(result.request, decision);
         return res.status(200).json({ executed: true, result: result.request });
       }
       case 'APPROVE_JOIN':

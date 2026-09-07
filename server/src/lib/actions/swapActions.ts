@@ -1,7 +1,28 @@
 import { Prisma } from '@prisma/client';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../prisma.js';
 import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js';
 import { withAuditedTransaction } from '../auditLog.js';
+import { notifyUser } from '../push.js';
+import { getManagerIdsForLocation } from '../managers.js';
+
+dayjs.extend(utc);
+
+/**
+ * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00". Formatted in
+ * UTC (same rationale as `parsing/normalize.ts`): the stored wall-clock
+ * date/time is what matters, not how the server's local timezone happens to
+ * render it. Shared by routes/swapRequests.ts's DTO and the notification
+ * copy below, so the request list and its notifications never describe the
+ * same shift differently.
+ */
+export function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date }): string {
+  const day = dayjs.utc(shift.date).format('ddd D MMM');
+  const start = dayjs.utc(shift.startTime).format('HH:mm');
+  const end = dayjs.utc(shift.endTime).format('HH:mm');
+  return `${day} · ${start}–${end}`;
+}
 
 /**
  * The Prisma `include` every swap-request read uses. Kept in one place so the
@@ -151,4 +172,60 @@ export async function decideSwapRequest(input: {
 
   if (!updated) return { result: 'conflict' };
   return { result: 'ok', request: updated };
+}
+
+/**
+ * Notifies every manager at the location that a new cover request needs
+ * review. Shared by routes/swapRequests.ts's POST and routes/voice.ts's
+ * REQUEST_SWAP — both create requests via createSwapRequest above and must
+ * not develop two different notification behaviors. Callers invoke this
+ * AFTER their own transaction commits (never inside one — a push failure
+ * must not roll back the request itself), which is why this takes the
+ * already-created request rather than creating one itself.
+ */
+export async function notifySwapRequested(request: SwapRequestWithRelations, locationId: string): Promise<void> {
+  const managerIds = await getManagerIdsForLocation(locationId);
+  const coveringName = request.targetUser?.fullName ?? 'a colleague';
+  const label = shiftLabelOf(request.shift);
+  await Promise.all(
+    managerIds.map((managerId) =>
+      notifyUser(managerId, {
+        title: 'New swap request',
+        body: `${request.requestedBy.fullName} asked ${coveringName} to cover their shift, ${label}.`,
+        url: '/',
+      }),
+    ),
+  );
+}
+
+/**
+ * Notifies the original requester (always) and, on approval, the covering
+ * staff member — they're getting a shift they never asked for, so that
+ * notification says so explicitly rather than reusing generic "schedule
+ * updated" copy. Shared by routes/swapRequests.ts's PATCH and
+ * routes/voice.ts's APPROVE_SWAP/DECLINE_SWAP, called after their
+ * transaction commits, same rationale as notifySwapRequested above.
+ */
+export async function notifySwapDecided(request: SwapRequestWithRelations, decision: 'approved' | 'declined'): Promise<void> {
+  const label = shiftLabelOf(request.shift);
+  if (decision === 'approved') {
+    await notifyUser(request.requestedById, {
+      title: 'Swap request approved',
+      body: `Your swap request for ${label} was approved — ${request.targetUser?.fullName ?? 'your colleague'} will cover it.`,
+      url: '/my-shifts',
+    });
+    if (request.targetUserId) {
+      await notifyUser(request.targetUserId, {
+        title: 'You were added to a shift',
+        body: `${request.requestedBy.fullName} asked you to cover their shift, ${label}, and it's been approved — this shift is now on your schedule.`,
+        url: '/my-shifts',
+      });
+    }
+  } else {
+    await notifyUser(request.requestedById, {
+      title: 'Swap request declined',
+      body: `Your swap request for ${label} was declined.`,
+      url: '/my-shifts',
+    });
+  }
 }

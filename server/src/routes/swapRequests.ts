@@ -1,6 +1,4 @@
 import { Router } from 'express';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../lib/prisma.js';
 import { isRequestLocked } from '../lib/swapRequestPolicy.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
@@ -9,26 +7,12 @@ import {
   SWAP_REQUEST_INCLUDE,
   createSwapRequest,
   decideSwapRequest,
+  notifySwapRequested,
+  notifySwapDecided,
+  shiftLabelOf,
 } from '../lib/actions/swapActions.js';
 
-dayjs.extend(utc);
-
 export const swapRequestsRouter = Router();
-
-/**
- * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00".
- *
- * Built server-side so the Approvals panel does not depend on an in-memory
- * roster that is empty on a fresh page load. Formatted in UTC (same rationale
- * as `parsing/normalize.ts`): the stored wall-clock date/time is what matters,
- * not how the server's local timezone happens to render it.
- */
-function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date }): string {
-  const day = dayjs.utc(shift.date).format('ddd D MMM');
-  const start = dayjs.utc(shift.startTime).format('HH:mm');
-  const end = dayjs.utc(shift.endTime).format('HH:mm');
-  return `${day} · ${start}–${end}`;
-}
 
 function toDto(
   r: {
@@ -164,6 +148,12 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
       }),
     );
 
+    // Real delivery on top of the write above (never inside the transaction
+    // — a push failure must not roll back the request). Shared with
+    // routes/voice.ts's REQUEST_SWAP, which creates requests the same way
+    // via createSwapRequest — one notification path for both entry points.
+    void notifySwapRequested(created, locationId);
+
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {
     console.error('[swapRequests.create] failed', err);
@@ -206,6 +196,13 @@ swapRequestsRouter.patch('/:id', requireSession, requireManager, async (req, res
         error: 'This shift was already reassigned by another approved request — this one can no longer be approved.',
       });
     }
+
+    // Real delivery on top of the write above (never inside the transaction
+    // — a push failure must not roll back the decision). Shared with
+    // routes/voice.ts's APPROVE_SWAP/DECLINE_SWAP, which decides requests
+    // the same way via decideSwapRequest — one notification path for both
+    // entry points.
+    void notifySwapDecided(outcome.request, decision === 'approved' ? 'approved' : 'declined');
 
     return res.status(200).json({ request: toDto(outcome.request) });
   } catch (err) {
