@@ -15,6 +15,7 @@ import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
+import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -96,6 +97,31 @@ export default function SchedulingContent() {
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
 
+  // Floor Plan section assignments for the currently-viewed employee, across
+  // this week — feeds PersonalRota's "You're covering: [section]" line.
+  // PUBLISHED only (the endpoint itself never returns DRAFT rows).
+  const [myAssignments, setMyAssignments] = useState<MyAssignmentDto[]>([]);
+  useEffect(() => {
+    if (!session || !locationId || !activeEmployee) {
+      setMyAssignments([]);
+      return;
+    }
+    let cancelled = false;
+    fetchMyAssignments(session.token, locationId, activeEmployee.id, dates[0]!, dates[6]!)
+      .then((list) => {
+        if (!cancelled) setMyAssignments(list);
+      })
+      .catch(() => {
+        // Personal Rota has no error slot for this today — a failed load
+        // just means the "You're covering" line doesn't appear, same as
+        // "no assignment yet" (nothing is contradicted or lost either way).
+        if (!cancelled) setMyAssignments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, locationId, activeEmployee, dates]);
+
   // The rota builder's prev/next-week buttons move `weekStart`, which silently
   // retargets the hours panel too — so it has to say which week it is showing,
   // or a future week's 0.0h everywhere reads as a broken fetch.
@@ -139,9 +165,12 @@ export default function SchedulingContent() {
         status: isDraft ? 'draft' : isPendingSwap ? 'swap-pending' : 'confirmed',
         briefingNote: dayShifts[0].briefingNote,
         sidework: dayShifts[0].sidework,
+        sectionAssignments: myAssignments
+          .filter((a) => a.shiftDate === date)
+          .map((a) => `${a.sectionLabel} (${a.period})`),
       };
     });
-  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests]);
+  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests, myAssignments]);
 
   const coverCandidates: CoverCandidate[] = activeEmployee
     ? mergedRoster.employees.filter((e) => e.id !== activeEmployee.id).map((e) => ({ id: e.id, name: e.name }))

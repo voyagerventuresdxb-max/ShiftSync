@@ -152,6 +152,33 @@ export async function fetchAssignments(
   return request(`/api/floor-plan/${locationId}/assignments?date=${date}&period=${period}`, { headers: withAuth(token) });
 }
 
+export interface MyAssignmentDto {
+  shiftDate: string;
+  period: 'AM' | 'PM';
+  sectionLabel: string;
+}
+
+/**
+ * GET /api/floor-plan/:locationId/my-assignments — one staff member's
+ * PUBLISHED assignments across a date range, for PersonalRota's
+ * "You're covering: [section]" line. DRAFT assignments never come back
+ * from this endpoint.
+ */
+export async function fetchMyAssignments(
+  token: string,
+  locationId: string,
+  staffId: string,
+  startDate: string,
+  endDate: string,
+): Promise<MyAssignmentDto[]> {
+  const params = new URLSearchParams({ staffId, startDate, endDate });
+  const data = await request<{ assignments: MyAssignmentDto[] }>(
+    `/api/floor-plan/${locationId}/my-assignments?${params.toString()}`,
+    { headers: withAuth(token) },
+  );
+  return data.assignments;
+}
+
 /** POST /api/floor-plan/assignments — assign staff to a section for a date+period (drag-drop or tap-to-pick). */
 export async function assignStaff(
   token: string,

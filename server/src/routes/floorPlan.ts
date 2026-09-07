@@ -326,6 +326,58 @@ floorPlanRouter.get('/:locationId/assignments', requireSession, async (req, res)
 });
 
 /**
+ * GET /api/floor-plan/:locationId/my-assignments?staffId=&startDate=&endDate=
+ *
+ * A flat list of one staff member's PUBLISHED assignments across a date
+ * range (Personal Rota's week), for the "You're covering: [section]" line
+ * next to their shift cards — DRAFT assignments are deliberately excluded,
+ * since nothing has actually been decided/notified for those yet. No extra
+ * access check beyond the existing requireSession + assertOwnsLocation:
+ * this exposes nothing a session at this venue can't already see via the
+ * venue-wide `/assignments` endpoint above (unchanged by the Fix 1
+ * role-based-UI pass, which only hid client-side controls, not server
+ * reads), so a STAFF caller passing someone else's staffId is not a new
+ * data-scoping hole.
+ */
+floorPlanRouter.get('/:locationId/my-assignments', requireSession, async (req, res) => {
+  try {
+    const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
+    const staffId = String(req.query.staffId ?? '').trim();
+    const startDateStr = String(req.query.startDate ?? '').trim();
+    const endDateStr = String(req.query.endDate ?? '').trim();
+    if (!staffId) return res.status(400).json({ error: 'staffId query param is required.' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(endDateStr)) {
+      return res.status(400).json({ error: 'startDate and endDate query params are required, as YYYY-MM-DD.' });
+    }
+    const startDate = new Date(`${startDateStr}T00:00:00.000Z`);
+    const endDate = new Date(`${endDateStr}T00:00:00.000Z`);
+
+    const rows = await prisma.sectionAssignment.findMany({
+      where: {
+        staffId,
+        status: 'PUBLISHED',
+        shiftDate: { gte: startDate, lte: endDate },
+        section: { locationId },
+      },
+      include: { section: { select: { label: true } } },
+      orderBy: { shiftDate: 'asc' },
+    });
+
+    return res.status(200).json({
+      assignments: rows.map((a) => ({
+        shiftDate: a.shiftDate.toISOString().slice(0, 10),
+        period: a.period,
+        sectionLabel: a.section.label,
+      })),
+    });
+  } catch (err) {
+    console.error('[floorPlan.myAssignments] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while loading assignments.' });
+  }
+});
+
+/**
  * POST /api/floor-plan/assignments
  * body: { sectionId, staffId, shiftDate, period, dutyLabel? }
  * createdById is derived from the manager's own session, never from the body.

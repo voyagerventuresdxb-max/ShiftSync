@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeftRight, CheckCircle2, Clock, MapPin, Moon, StickyNote } from 'lucide-react';
+import { ArrowLeftRight, CheckCircle2, Clock, LayoutGrid, MapPin, Moon, StickyNote } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useConnectivity } from '../../state/ConnectivityContext';
 import { OfflineActionNotice } from './OfflineNotice';
@@ -18,6 +18,8 @@ export interface RotaCard {
   status: RotaStatus;
   briefingNote?: string;
   sidework?: string[];
+  /** "Terrace (AM)"-style labels for this day's PUBLISHED Floor Plan section assignments, if any — DRAFT assignments never appear here. Empty/omitted means no assignment yet, not "loading". */
+  sectionAssignments?: string[];
 }
 
 export interface CoverCandidate {
@@ -131,6 +133,13 @@ function ShiftCard({
                 </span>
                 <span className="text-muted-foreground tabular-nums">{shift.hours.toFixed(1)}h</span>
               </p>
+
+              {shift.sectionAssignments && shift.sectionAssignments.length > 0 && (
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                  <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-accent" />
+                  You're covering: {shift.sectionAssignments.join(', ')}
+                </p>
+              )}
 
               {shift.briefingNote && (
                 <div className="mt-3 rounded-lg border border-border bg-background/50 p-3">
