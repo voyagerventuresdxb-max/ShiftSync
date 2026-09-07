@@ -61,6 +61,13 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   // the actor derived server-side from this session's Bearer token — never
   // from a client-supplied id.
   const { session } = useIdentity();
+  // Positive check (true only for a confirmed MANAGER/OWNER), not a negative
+  // "not STAFF" one — same fail-closed reasoning as router.tsx's
+  // ShiftEditorLink: a null session or an unexpected role value must hide
+  // manager controls, not show them. The server already 403s the underlying
+  // writes for a STAFF session; this just makes the UI stop offering
+  // actions that would fail, per the role-based-UI fix.
+  const isManager = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const [date, setDate] = useState(todayIso());
   const [period, setPeriod] = useState<'AM' | 'PM'>('AM');
   const [image, setImage] = useState<FloorPlanImageDto | null>(null);
@@ -112,8 +119,11 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   const handleAssign = useCallback(
     async (sectionId: string, staffId: string, dutyLabel?: string | null) => {
       // Assigning is manager-only server-side; with no session there is no
-      // token to send and the request could only ever 401.
-      if (!session) return;
+      // token to send and the request could only ever 401. Also guarded
+      // client-side for a non-manager session — StaffChip's drag is already
+      // disabled in that case, so this is a defensive backstop, not the
+      // primary gate.
+      if (!session || !isManager) return;
       try {
         // Only send the dutyLabel key when the caller actually gave one
         // (the tap-to-pick picker, with something typed). A plain
@@ -133,14 +143,16 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         setError(err instanceof ApiError ? err.message : 'Could not assign staff.');
       }
     },
-    [date, period, load, session],
+    [date, period, load, session, isManager],
   );
 
   const handleRemove = useCallback(
     async (assignmentId: string) => {
       // Removing is manager-only server-side; with no session there is no
-      // token to send and the request could only ever 401.
-      if (!session) return;
+      // token to send and the request could only ever 401. Also guarded
+      // client-side — SectionDetail already hides this action for a
+      // non-manager session, so this is a defensive backstop.
+      if (!session || !isManager) return;
       try {
         await removeAssignment(session.token, assignmentId);
         load();
@@ -148,14 +160,16 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         setError(err instanceof ApiError ? err.message : 'Could not remove that assignment.');
       }
     },
-    [load, session],
+    [load, session, isManager],
   );
 
   const handleNotify = useCallback(
     async (assignmentId: string) => {
       // Notifying is manager-only server-side; with no session there is no
-      // token to send and the request could only ever 401.
-      if (!session) return;
+      // token to send and the request could only ever 401. Also guarded
+      // client-side — SectionDetail already hides this action for a
+      // non-manager session, so this is a defensive backstop.
+      if (!session || !isManager) return;
       try {
         await notifyAssignment(session.token, assignmentId);
         load();
@@ -163,7 +177,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         setError(err instanceof ApiError ? err.message : 'Could not mark this assignment notified.');
       }
     },
-    [load, session],
+    [load, session, isManager],
   );
 
   const handleUpdateDutyLabel = useCallback(
@@ -178,8 +192,10 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
       const assignment = owning?.assignments.find((a) => a.id === assignmentId);
       if (!owning || !assignment) return;
       // Editing is manager-only server-side; with no session there is no
-      // token to send and the request could only ever 401.
-      if (!session) return;
+      // token to send and the request could only ever 401. Also guarded
+      // client-side — SectionDetail already renders this read-only for a
+      // non-manager session, so this is a defensive backstop.
+      if (!session || !isManager) return;
       try {
         await assignStaff(session.token, {
           sectionId: owning.id,
@@ -193,13 +209,15 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
         setError(err instanceof ApiError ? err.message : 'Could not update the duty label.');
       }
     },
-    [sections, date, period, load, session],
+    [sections, date, period, load, session, isManager],
   );
 
   const handlePublish = useCallback(async () => {
     // Publishing is manager-only server-side; with no session there is no
-    // token to send and the request could only ever 401.
-    if (!session) return;
+    // token to send and the request could only ever 401. Also guarded
+    // client-side — the "Publish & notify" button is already hidden for a
+    // non-manager session, so this is a defensive backstop.
+    if (!session || !isManager) return;
     setPublishing(true);
     setPublishResult(null);
     try {
@@ -211,7 +229,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     } finally {
       setPublishing(false);
     }
-  }, [locationId, date, period, load, session]);
+  }, [locationId, date, period, load, session, isManager]);
 
   // Soft pax-capacity warning: flag a high-capacity section whose
   // assigned-headcount ratio looks thin next to sections that do have
@@ -255,9 +273,11 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     return (
       <div className="status-block">
         <p>No floor plan uploaded for this venue yet.</p>
-        <button className="btn btn-primary" onClick={onEditSections}>
-          Upload floor plan
-        </button>
+        {isManager && (
+          <button className="btn btn-primary" onClick={onEditSections}>
+            Upload floor plan
+          </button>
+        )}
       </div>
     );
   }
@@ -266,9 +286,11 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     return (
       <div className="status-block">
         <p>Floor plan uploaded, but no sections drawn yet.</p>
-        <button className="btn btn-primary" onClick={onEditSections}>
-          Draw sections
-        </button>
+        {isManager && (
+          <button className="btn btn-primary" onClick={onEditSections}>
+            Draw sections
+          </button>
+        )}
       </div>
     );
   }
@@ -290,12 +312,16 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
             </button>
           ))}
         </div>
-        <button className="btn btn-ghost" onClick={onEditSections}>
-          Edit sections
-        </button>
-        <button className="btn btn-primary" onClick={() => void handlePublish()} disabled={publishing}>
-          {publishing ? 'Publishing…' : 'Publish & notify'}
-        </button>
+        {isManager && (
+          <button className="btn btn-ghost" onClick={onEditSections}>
+            Edit sections
+          </button>
+        )}
+        {isManager && (
+          <button className="btn btn-primary" onClick={() => void handlePublish()} disabled={publishing}>
+            {publishing ? 'Publishing…' : 'Publish & notify'}
+          </button>
+        )}
       </div>
 
       {error && (
@@ -332,6 +358,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
               staffId={s.id}
               staffName={s.fullName}
               assignedCount={sections.reduce((n, sec) => n + sec.assignments.filter((a) => a.staffId === s.id).length, 0)}
+              disabled={!isManager}
             />
           ))}
           {staff.length === 0 && <p className="hint">No staff in the directory yet.</p>}
@@ -364,6 +391,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
           onRemoveAssignment={(assignmentId) => void handleRemove(assignmentId)}
           onNotify={handleNotify}
           onUpdateDutyLabel={(assignmentId, dutyLabel) => void handleUpdateDutyLabel(assignmentId, dutyLabel)}
+          readOnly={!isManager}
         />
       )}
 

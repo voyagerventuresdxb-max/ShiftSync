@@ -12,6 +12,8 @@ interface Props {
   onRemoveAssignment: (assignmentId: string) => void;
   onNotify: (assignmentId: string) => Promise<void>;
   onUpdateDutyLabel: (assignmentId: string, dutyLabel: string) => void;
+  /** True for a non-manager session — view-only: no assign/notify/remove/duty-edit, matching the server's own manager-only gate on those writes. */
+  readOnly?: boolean;
 }
 
 /**
@@ -28,6 +30,7 @@ export default function SectionDetail({
   onRemoveAssignment,
   onNotify,
   onUpdateDutyLabel,
+  readOnly = false,
 }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState('');
@@ -72,7 +75,9 @@ export default function SectionDetail({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium">{a.staffName}</p>
-                  {editingId === a.id ? (
+                  {readOnly ? (
+                    <p className="truncate text-[11px] text-muted-foreground">{a.dutyLabel || '—'}</p>
+                  ) : editingId === a.id ? (
                     <input
                       autoFocus
                       className="staff-directory-input mt-0.5 w-full text-[11px]"
@@ -104,13 +109,15 @@ export default function SectionDetail({
                     </button>
                   )}
                 </div>
-                <button
-                  onClick={() => onRemoveAssignment(a.id)}
-                  aria-label={`Remove ${a.staffName}`}
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+                {!readOnly && (
+                  <button
+                    onClick={() => onRemoveAssignment(a.id)}
+                    aria-label={`Remove ${a.staffName}`}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
               <div className="flex items-center justify-between gap-2 pl-9">
                 <span
@@ -122,37 +129,42 @@ export default function SectionDetail({
                   {a.notifiedAt ? <Check className="h-2.5 w-2.5" /> : <BellRing className="h-2.5 w-2.5" />}
                   {a.notifiedAt ? 'Notified' : 'Not sent'}
                 </span>
-                {/* Always available: after a reassignment (or a later shift
-                    change) a manager needs to be able to notify the same
-                    person again — the badge to the left, not this button's
-                    presence, is what reports notification status. */}
-                <button
-                  onClick={async () => {
-                    setNotifyingId(a.id);
-                    try {
-                      await onNotify(a.id);
-                    } finally {
-                      setNotifyingId(null);
-                    }
-                  }}
-                  disabled={notifyingId === a.id}
-                  aria-label={`${a.notifiedAt ? 'Re-notify' : 'Notify'} ${a.staffName}`}
-                  className="text-[10px] font-medium text-accent hover:underline disabled:opacity-50 disabled:pointer-events-none"
-                >
-                  {notifyingId === a.id ? 'Notifying…' : a.notifiedAt ? 'Re-notify' : 'Notify'}
-                </button>
+                {/* Always available (to a manager): after a reassignment (or
+                    a later shift change) a manager needs to be able to
+                    notify the same person again — the badge to the left,
+                    not this button's presence, is what reports notification
+                    status. */}
+                {!readOnly && (
+                  <button
+                    onClick={async () => {
+                      setNotifyingId(a.id);
+                      try {
+                        await onNotify(a.id);
+                      } finally {
+                        setNotifyingId(null);
+                      }
+                    }}
+                    disabled={notifyingId === a.id}
+                    aria-label={`${a.notifiedAt ? 'Re-notify' : 'Notify'} ${a.staffName}`}
+                    className="text-[10px] font-medium text-accent hover:underline disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    {notifyingId === a.id ? 'Notifying…' : a.notifiedAt ? 'Re-notify' : 'Notify'}
+                  </button>
+                )}
               </div>
             </li>
           ))}
           {section.assignments.length === 0 && <p className="hint">No staff assigned yet.</p>}
         </ul>
 
-        <button
-          onClick={onAssign}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border-strong px-3 py-2 text-xs font-medium transition-colors hover:border-accent/50 hover:text-accent"
-        >
-          <UserPlus className="h-3.5 w-3.5" /> Assign staff
-        </button>
+        {!readOnly && (
+          <button
+            onClick={onAssign}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border-strong px-3 py-2 text-xs font-medium transition-colors hover:border-accent/50 hover:text-accent"
+          >
+            <UserPlus className="h-3.5 w-3.5" /> Assign staff
+          </button>
+        )}
       </div>
     </div>
   );
