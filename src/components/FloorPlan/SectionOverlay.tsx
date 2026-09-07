@@ -130,7 +130,7 @@ export default function SectionOverlay({ section, warn, onTap }: Props) {
           )}
         >
           <MapPin className="h-2.5 w-2.5 shrink-0" />
-          <span className="text-[9px] font-semibold leading-none">{sectionPinName(section.label)}</span>
+          <span className="text-[8px] font-semibold leading-none">{sectionPinName(section.label)}</span>
           {section.notes && (
             <span title={truncateNote(section.notes)} aria-hidden className="flex shrink-0 items-center opacity-70">
               <StickyNote className="h-2.5 w-2.5" />

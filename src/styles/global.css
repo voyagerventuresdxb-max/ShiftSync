@@ -52,7 +52,7 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -68,13 +68,15 @@ body {
 
 .section-title {
   margin: 0 0 0.5rem;
-  font-size: 1.1rem;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
   color: var(--text);
 }
 
 .hint {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   margin: 0 0 0.75rem;
 }
 
@@ -90,14 +92,14 @@ body {
   color: var(--text-secondary);
   border-radius: 999px;
   padding: 0.2rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
 }
 
 .warnings ul {
   margin: 0;
   padding-left: 1.25rem;
   color: var(--danger);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
 }
 
 .roster-table-grid {
@@ -117,7 +119,7 @@ body {
   background: var(--surface-2);
   border-radius: 6px;
   padding: 0.4rem 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   min-height: 2.2rem;
   display: flex;
   align-items: center;
@@ -137,7 +139,7 @@ body {
 
 .cell .role {
   color: var(--text-secondary);
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
 }
 
 .cell.shift {
@@ -192,7 +194,7 @@ body {
   cursor: pointer;
   color: var(--text);
   font-weight: 700;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   text-align: left;
   transition: background 0.15s ease;
 }
@@ -238,13 +240,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  font-size: 0.72rem;
+  font-size: var(--text-xs);
   line-height: 1.1;
 }
 
 .cell.shift .split .period {
   color: var(--text-secondary);
-  font-size: 0.62rem;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -301,7 +303,7 @@ body {
 .dropzone-sub {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
 }
 
 .status-block {
@@ -373,8 +375,8 @@ body {
   border: none;
   border-radius: 8px;
   padding: 0.55rem 1.1rem;
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 500;
   cursor: pointer;
   /* `transform` included so the shared button:active press-scale (above)
      animates here too, instead of snapping — this shorthand would
@@ -439,7 +441,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -464,7 +466,7 @@ body {
   border-left-width: 3px;
   border-radius: 8px;
   padding: 0.75rem 1rem;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -483,7 +485,7 @@ body {
   color: var(--text-secondary);
   border-radius: 999px;
   padding: 0.3rem 0.85rem;
-  font-size: 0.8rem;
+  font-size: var(--text-xs);
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
@@ -506,7 +508,7 @@ body {
 .preview-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .preview-table th,
@@ -544,7 +546,7 @@ body {
   color: var(--accent);
   border-radius: 4px;
   padding: 0 0.3rem;
-  font-size: 0.7rem;
+  font-size: var(--text-xs);
 }
 
 .status-tag {
@@ -632,7 +634,7 @@ body {
 .preview-sticky-count {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
 .staff-directory {
@@ -654,8 +656,9 @@ body {
   padding: 0.5rem 0;
   cursor: pointer;
   color: var(--text);
-  font-weight: 700;
-  font-size: 0.95rem;
+  font-weight: 600;
+  font-size: var(--text-lg);
+  letter-spacing: var(--tracking-tight);
   text-align: left;
 }
 
@@ -812,7 +815,10 @@ body {
 
 .fp-picker-head h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--tracking-tight);
 }
 
 .fp-picker-list {
@@ -890,7 +896,10 @@ body {
 
 .fp-86-header h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--tracking-tight);
 }
 
 .fp-86-add {

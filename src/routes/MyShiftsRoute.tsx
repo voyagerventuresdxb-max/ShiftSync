@@ -213,7 +213,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
               >
                 <span className="uppercase tracking-wide">{weekdayOf(date)}</span>
                 <span>{date.slice(8)}</span>
-                <span className="text-[9px] normal-case">
+                <span className="text-[10px] normal-case">
                   {state === 'UNAVAILABLE' ? 'Unavailable' : state === 'PREFERRED_OFF' ? 'Prefer off' : '—'}
                 </span>
               </button>
