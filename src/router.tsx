@@ -230,7 +230,11 @@ export const router = createBrowserRouter([
         // /floor-plan for their own manager-only sub-actions — see
         // OnboardingLink below for why the header action still needs its
         // own explicit role check independent of this page-level gate.
-        element: <PeopleContent />,
+        element: (
+          <RequireSession>
+            <PeopleContent />
+          </RequireSession>
+        ),
         handle: {
           title: 'People',
           action: <OnboardingLink />,
