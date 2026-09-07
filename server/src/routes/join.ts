@@ -3,6 +3,8 @@ import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { notifyUser } from '../lib/push.js';
+import { getManagerIdsForLocation } from '../lib/managers.js';
 
 export const joinRouter = Router();
 
@@ -91,6 +93,21 @@ joinRouter.post('/verify-otp', async (req, res) => {
     const joinRequest = await prisma.joinRequest.create({
       data: { locationId, phone, fullName, status: 'PENDING' },
     });
+
+    // Real delivery on top of the write above (never blocking the response
+    // — a push failure must not stop the applicant's request from going
+    // through). The applicant themselves cannot be notified here or on
+    // decision — they have no User/session/push subscription until a
+    // manager approves them, a separate deferred infra gap.
+    const managerIds = await getManagerIdsForLocation(locationId);
+    for (const managerId of managerIds) {
+      void notifyUser(managerId, {
+        title: 'New join request',
+        body: `${fullName} wants to join — review their request.`,
+        url: '/people',
+      });
+    }
+
     return res.status(201).json({ pending: true, joinRequestId: joinRequest.id });
   } catch (err) {
     console.error('[join.verifyOtp] failed', err);
