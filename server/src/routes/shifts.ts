@@ -4,6 +4,7 @@ import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize
 import { formatVenueTime } from '../lib/venueTime.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 
 export const shiftsRouter = Router();
 
@@ -370,6 +371,14 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
         data: { status: 'PUBLISHED', updatedAt: publishedAt },
       }),
     ]);
+
+    // Real delivery on top of the flag-stamp above (never inside the
+    // transaction — a push failure must not roll back the publish). Was
+    // purely cosmetic before: `notifiedCount` counted distinct assigned
+    // staff but nothing was ever actually sent to them.
+    const affectedUserIds = shiftGroups.filter((g): g is typeof g & { userId: string } => g.userId !== null).map((g) => g.userId);
+    void notifySchedulePublished(affectedUserIds, weekStart);
+
     return res.status(200).json({ publishedAt: publish.publishedAt.toISOString(), notifiedCount: publish.notifiedCount });
   } catch (err) {
     console.error('[shifts.publish] failed', err);

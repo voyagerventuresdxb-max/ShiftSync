@@ -5,7 +5,7 @@ import type { PreviewRow } from './types.js';
 export interface PersistShiftsResult {
   createdCount: number;
   skippedCount: number;
-  rows: { rowNumber: number; shiftId: string; userId: string | null }[];
+  rows: { rowNumber: number; shiftId: string; userId: string | null; date: string }[];
 }
 
 /**
@@ -72,6 +72,7 @@ export async function persistShifts(
       rowNumber: importable[i]!.rowNumber,
       shiftId: shift.id,
       userId: shift.userId,
+      date: importable[i]!.date,
     })),
   };
 }

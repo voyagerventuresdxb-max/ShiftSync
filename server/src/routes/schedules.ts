@@ -17,6 +17,7 @@ import { uploadCache } from '../store/uploadCache.js';
 import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { notifySchedulePublished, mondayOfWeek } from '../lib/scheduleNotifications.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -393,6 +394,26 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
     // actually persisted. This does leave a narrow window where a duplicate
     // concurrent confirm on the same batchId isn't caught (see MEMORY.md).
     uploadCache.delete(batchId);
+
+    // Real delivery on top of the write above (never inside the transaction
+    // — see shifts.ts's publish route for the same rationale). Uploaded
+    // shifts are written straight to PUBLISHED, bypassing the manual
+    // /publish endpoint entirely — without this, staff whose schedule
+    // arrives via roster upload would never be notified at all. Grouped by
+    // week (a single upload can span several) so one person with shifts in
+    // two different weeks gets two digests, each naming the right week, not
+    // one digest naming an ambiguous or arbitrary date.
+    const byWeek = new Map<string, Set<string>>();
+    for (const row of result.rows) {
+      if (!row.userId) continue;
+      const weekStart = mondayOfWeek(row.date);
+      const userIds = byWeek.get(weekStart) ?? new Set<string>();
+      userIds.add(row.userId);
+      byWeek.set(weekStart, userIds);
+    }
+    for (const [weekStart, userIds] of byWeek) {
+      void notifySchedulePublished([...userIds], weekStart);
+    }
 
     return res.status(201).json({
       message: `Imported ${result.createdCount} shift(s).`,
