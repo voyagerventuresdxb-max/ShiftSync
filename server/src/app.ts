@@ -7,6 +7,7 @@ import { floorPlanRouter, floorPlanFilesRouter } from './routes/floorPlan.js';
 import { announcementsRouter } from './routes/announcements.js';
 import { shoutoutsRouter } from './routes/shoutouts.js';
 import { floorFeedbackRouter } from './routes/floorFeedback.js';
+import { pushRouter } from './routes/push.js';
 import { swapRequestsRouter } from './routes/swapRequests.js';
 import { shiftsRouter } from './routes/shifts.js';
 import { rotaTemplatesRouter } from './routes/rotaTemplates.js';
@@ -53,6 +54,7 @@ export function createApp() {
   app.use('/api/announcements', announcementsRouter);
   app.use('/api/shoutouts', shoutoutsRouter);
   app.use('/api/floor-feedback', floorFeedbackRouter);
+  app.use('/api/push', pushRouter);
   app.use('/api/swap-requests', swapRequestsRouter);
   app.use('/api/shifts', shiftsRouter);
   app.use('/api/rota-templates', rotaTemplatesRouter);

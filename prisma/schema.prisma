@@ -142,6 +142,7 @@ model User {
   eightySixItemsCreated   EightySixItem[]            @relation("EightySixCreatedBy")
   eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
   sessions                Session[]
+  pushSubscriptions       PushSubscription[]
   joinRequestsReviewed    JoinRequest[]              @relation("JoinRequestReviewedBy")
   joinRequestsCreatedFrom JoinRequest[]              @relation("JoinRequestCreatedUser")
   availabilityMarks       AvailabilityMark[]
@@ -664,6 +665,30 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+// One Web Push subscription per (browser, device) a user has opted into —
+// a user can have several (phone + desktop, say), each a separate row.
+// `endpoint` is globally unique because it IS the push service's own
+// per-registration URL (FCM/Mozilla/etc.), not something we generate — the
+// same shape as `User.phone`'s uniqueness reasoning, just enforced by the
+// browser instead of by us. `p256dh`/`auth` are the two keys off
+// `PushSubscription.toJSON().keys` in the browser's own Push API, kept as
+// plain columns rather than one Json blob since the shape is fixed and
+// always exactly these two strings — consistent with this schema's general
+// preference for typed columns over Json where the shape doesn't vary.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
 }
 
 // A self-registration attempt whose phone number did NOT match an existing

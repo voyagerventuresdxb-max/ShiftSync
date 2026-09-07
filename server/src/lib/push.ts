@@ -1,0 +1,78 @@
+/**
+ * Generic Web Push (VAPID) delivery — not tied to any one feature. Floor
+ * Plan's "Publish & notify" is the first caller, but any future feature
+ * that needs to reach a user's device calls sendPushToUser(s) the same way.
+ */
+import webpush from 'web-push';
+import { prisma } from './prisma.js';
+
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? 'mailto:ops@example.com';
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  // Fail soft, not silent: a misconfigured deploy still boots (push is an
+  // enhancement, not a hard dependency), but every send attempt logs why
+  // nothing went out instead of pretending to succeed.
+  console.warn('[push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set — push notifications are disabled.');
+}
+
+export function getVapidPublicKey(): string {
+  return VAPID_PUBLIC_KEY;
+}
+
+export interface PushPayload {
+  title: string;
+  body: string;
+  /** Client-side path to focus/open on notification click, e.g. "/scheduling". Defaults to "/" in the service worker if omitted. */
+  url?: string;
+}
+
+/**
+ * Sends one push notification to every device/browser a user has
+ * subscribed (a user can have several). A subscription the push service
+ * reports as gone (404/410 — uninstalled, permission revoked, expired) is
+ * deleted here rather than left to fail forever on every future send.
+ * Any other failure is logged, not thrown — one bad subscription, or one
+ * user with none, must not block delivery to anyone else in a batch call.
+ */
+export async function sendPushToUser(userId: string, payload: PushPayload): Promise<{ sent: number; removed: number }> {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return { sent: 0, removed: 0 };
+
+  const subscriptions = await prisma.pushSubscription.findMany({ where: { userId } });
+  let sent = 0;
+  let removed = 0;
+
+  await Promise.all(
+    subscriptions.map(async (sub) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          JSON.stringify(payload),
+        );
+        sent += 1;
+      } catch (err) {
+        const statusCode = (err as { statusCode?: number }).statusCode;
+        if (statusCode === 404 || statusCode === 410) {
+          await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {});
+          removed += 1;
+        } else {
+          console.error('[push.send] failed for subscription', sub.id, err);
+        }
+      }
+    }),
+  );
+
+  return { sent, removed };
+}
+
+/** Same as sendPushToUser, for several users at once (e.g. every staff member affected by one publish action). */
+export async function sendPushToUsers(userIds: string[], payload: PushPayload): Promise<{ sent: number; removed: number }> {
+  const results = await Promise.all(userIds.map((id) => sendPushToUser(id, payload)));
+  return results.reduce(
+    (acc, r) => ({ sent: acc.sent + r.sent, removed: acc.removed + r.removed }),
+    { sent: 0, removed: 0 },
+  );
+}
