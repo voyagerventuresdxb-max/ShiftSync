@@ -145,6 +145,26 @@ function ShiftEditorLink() {
   );
 }
 
+/**
+ * `/people`'s header action — same manager-only-render pattern as
+ * `ShiftEditorLink` above, and newly necessary here now that `/people`
+ * itself is no longer `managerOnly`-gated at the router level: without this
+ * component's own check, a STAFF session would see a normal-looking
+ * "Onboarding" link that 403s the moment they click it (onboarding is
+ * entirely a manager/venue-setup action), the exact silently-teleports-you
+ * anti-pattern this codebase keeps fixing elsewhere.
+ */
+function OnboardingLink() {
+  const { session } = useIdentity();
+  if (session?.user.systemRole !== 'MANAGER' && session?.user.systemRole !== 'OWNER') return null;
+  return (
+    <Link to="/onboarding" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+      <Rocket className="h-3.5 w-3.5" />
+      <span className="hidden sm:inline">Onboarding</span>
+    </Link>
+  );
+}
+
 /** Header text per route, read by AppShell via useMatches(). */
 const handles = {
   home: { title: 'ShiftSync' },
@@ -200,22 +220,20 @@ export const router = createBrowserRouter([
       },
       {
         path: '/people',
-        element: (
-          <RequireSession managerOnly>
-            <PeopleContent />
-          </RequireSession>
-        ),
-        // Onboarding is a venue-setup action a manager reaches from People —
-        // the same header-action pattern /scheduling uses for the Shift editor.
-        // Without it the wizard was reachable only by typing the URL.
+        // No longer managerOnly (2026-09-07): People is one of the app's 4
+        // primary always-visible nav tabs (RadialDock), not a manager-only
+        // page tucked behind a hidden link — a STAFF session must be able to
+        // open it at all. The manager-only sub-sections within it
+        // (PendingApprovals, FloorFeedbackReview, StaffDirectory's write
+        // actions) are gated individually inside PeopleRoute.tsx instead,
+        // the same per-component pattern already used by /scheduling and
+        // /floor-plan for their own manager-only sub-actions — see
+        // OnboardingLink below for why the header action still needs its
+        // own explicit role check independent of this page-level gate.
+        element: <PeopleContent />,
         handle: {
           title: 'People',
-          action: (
-            <Link to="/onboarding" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
-              <Rocket className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Onboarding</span>
-            </Link>
-          ),
+          action: <OnboardingLink />,
         },
       },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
