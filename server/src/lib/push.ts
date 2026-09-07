@@ -95,3 +95,23 @@ export async function notifyUser(userId: string, payload: PushPayload): Promise<
   }
   await sendPushToUser(userId, payload);
 }
+
+/**
+ * Same delivery as notifyUser, for a full-roster broadcast (e.g. an
+ * announcement) rather than a small, already-known-affected set. Every
+ * digest notification elsewhere in this codebase fires its (small) list of
+ * recipients as one concurrent batch, which is fine at that scale — a
+ * whole-location fan-out can be large enough that doing the same thing
+ * naively opens one DB connection per recipient at once, and this project's
+ * shared dev Postgres pool has a real, previously-observed cap (~15
+ * concurrent connections) that a large-enough roster could exhaust,
+ * starving unrelated concurrent requests. Processes recipients in small
+ * sequential batches instead of one giant Promise.all — no new
+ * infrastructure (no queue/worker), just a bounded concurrency loop.
+ */
+export async function notifyUsersBatched(userIds: string[], payload: PushPayload, batchSize = 5): Promise<void> {
+  for (let i = 0; i < userIds.length; i += batchSize) {
+    const batch = userIds.slice(i, i + batchSize);
+    await Promise.all(batch.map((userId) => notifyUser(userId, payload)));
+  }
+}
