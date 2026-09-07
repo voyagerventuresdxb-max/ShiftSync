@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { notifyUser } from '../lib/push.js';
 
 export const shoutoutsRouter = Router();
 
@@ -64,6 +65,18 @@ shoutoutsRouter.post('/', async (req, res) => {
       data: { locationId, employeeId, authorId, shiftSnapshot, note },
       include: { employee: { select: { fullName: true } }, author: { select: { fullName: true } } },
     });
+
+    // Real delivery on top of the write above (never blocking the
+    // response). Skipped for the rare self-tag case (employeeId === authorId)
+    // — nobody needs telling they recognized themselves.
+    if (created.employeeId !== created.authorId) {
+      void notifyUser(created.employeeId, {
+        title: 'You got a shoutout!',
+        body: `${created.author?.fullName ?? 'Someone'} recognized you: "${created.note}"`,
+        url: '/',
+      });
+    }
+
     return res.status(201).json({
       shoutout: {
         id: created.id,
