@@ -11,6 +11,11 @@ import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDe
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { createShift, updateShift } from '../lib/actions/shiftActions.js';
+import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
+import { updateInteractionOutcome } from '../voice/interactionLog.js';
+import { combineDateAndTime } from '../parsing/normalize.js';
+import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
 
 export const voiceRouter = Router();
 
@@ -30,6 +35,7 @@ function isNonEmptyString(v: unknown): v is string {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^\d{2}:\d{2}$/;
 
 /**
  * What the END USER is told when the Gemini-backed half of the pipeline is
@@ -87,6 +93,30 @@ function validateIntentShape(intent: ParsedIntent): string | null {
     case 'DECLINE_JOIN':
       if (!isNonEmptyString(intent.joinRequestId)) return 'joinRequestId is required.';
       return null;
+    case 'CREATE_SHIFT': {
+      if (!isNonEmptyString(intent.roleId)) return 'roleId is required.';
+      if (!DATE_RE.test(intent.date)) return 'date must be YYYY-MM-DD.';
+      const d = new Date(`${intent.date}T00:00:00.000Z`);
+      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.date) {
+        return 'date must be a real calendar date (YYYY-MM-DD).';
+      }
+      if (!TIME_RE.test(intent.start) || !TIME_RE.test(intent.end)) return 'start/end must be HH:MM.';
+      return null;
+    }
+    case 'EDIT_SHIFT': {
+      if (!isNonEmptyString(intent.shiftId)) return 'shiftId is required.';
+      if (intent.date !== undefined && !DATE_RE.test(intent.date)) return 'date must be YYYY-MM-DD.';
+      if (intent.start !== undefined && !TIME_RE.test(intent.start)) return 'start must be HH:MM.';
+      if (intent.end !== undefined && !TIME_RE.test(intent.end)) return 'end must be HH:MM.';
+      return null;
+    }
+    case 'ASSIGN_SECTION': {
+      if (!isNonEmptyString(intent.sectionId)) return 'sectionId is required.';
+      if (!isNonEmptyString(intent.staffId)) return 'staffId is required.';
+      if (!DATE_RE.test(intent.shiftDate)) return 'shiftDate must be YYYY-MM-DD.';
+      if (intent.period !== 'AM' && intent.period !== 'PM') return 'period must be "AM" or "PM".';
+      return null;
+    }
     case 'UNRECOGNIZED':
       return null;
     default:
@@ -152,53 +182,49 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
   }
 });
 
-/**
- * POST /api/voice/execute — body: { transcript, intent: ParsedIntent }.
- * The "execute" half. Re-derives role from session (never trusts that
- * /parse-intent already scoped this correctly — a client could call this
- * directly with a hand-crafted intent) and re-validates every referenced
- * entity fresh before writing anything.
- *
- * THIS IS THE ONLY REAL SECURITY BOUNDARY IN THE VOICE FEATURE. Everything
- * upstream (the Gemini response-schema restriction in /parse-intent) is
- * enforcement by the model, not a structural guarantee — a client can call
- * this endpoint directly with a hand-crafted body, bypassing /parse-intent
- * entirely. The role-permission check below MUST hold on its own.
- */
 voiceRouter.post('/execute', requireSession, async (req, res) => {
+  const transcript = String(req.body?.transcript ?? '');
+  const intent = req.body?.intent as ParsedIntent | undefined;
+  const voiceLogId = typeof req.body?.voiceLogId === 'string' ? req.body.voiceLogId : null;
+
+  /**
+   * Every response path in this handler routes through here so
+   * VoiceInteractionLog's outcome always reflects what actually happened —
+   * a caller that never sent a voiceLogId (a hand-crafted request) still
+   * gets the normal response, just with no log row to update.
+   */
+  const respond = async (
+    status: number,
+    body: Record<string, unknown>,
+    outcome: 'EXECUTED' | 'REJECTED_VALIDATION' | 'REJECTED_PERMISSION' | 'ERROR',
+    declineReason?: string,
+  ) => {
+    if (voiceLogId) {
+      await updateInteractionOutcome(voiceLogId, outcome, declineReason).catch((err) =>
+        console.error('[voice.execute] failed to update interaction log', err),
+      );
+    }
+    return res.status(status).json(body);
+  };
+
   try {
-    const transcript = String(req.body?.transcript ?? '');
-    const intent = req.body?.intent as ParsedIntent | undefined;
     if (!intent || typeof intent.intent !== 'string') {
-      return res.status(400).json({ error: 'A parsed intent is required.' });
+      return respond(400, { error: 'A parsed intent is required.' }, 'REJECTED_VALIDATION', 'A parsed intent is required.');
     }
 
-    // Check membership in the FULL known intent set FIRST, before the
-    // role-permission check runs — this is what makes the switch's own
-    // `default: … 400 'Unknown intent.'` branch below reachable at all.
-    // Without this ordering, a garbage/unknown intent string fell through
-    // to the same misleading 403 as a real-but-not-permitted intent
-    // ("Your role does not permit the \"DELETE_EVERYTHING\" action.").
     if (!ALL_INTENTS.includes(intent.intent)) {
-      return res.status(400).json({ error: `"${intent.intent}" is not a recognized voice command.` });
+      const msg = `"${intent.intent}" is not a recognized voice command.`;
+      return respond(400, { error: msg }, 'REJECTED_VALIDATION', msg);
     }
 
-    // 'UNRECOGNIZED' is exempt from the role-permission check: it is not a
-    // real, role-restricted action (it's the model's own "I couldn't
-    // confidently resolve this" signal), and it is deliberately absent from
-    // both allowedIntentsFor()'s STAFF_INTENTS/MANAGER_INTENTS arrays — those
-    // only ever list real actions. Without this exemption, a legitimate
-    // UNRECOGNIZED parse would be misreported as a 403 permission error
-    // instead of reaching its own dedicated 400 branch in the switch below.
     const allowed = allowedIntentsFor(req.user!.systemRole);
     if (intent.intent !== 'UNRECOGNIZED' && !allowed.includes(intent.intent as (typeof allowed)[number])) {
-      return res.status(403).json({ error: `Your role does not permit the "${intent.intent}" action.` });
+      const msg = `Your role does not permit the "${intent.intent}" action.`;
+      return respond(403, { error: msg }, 'REJECTED_PERMISSION', msg);
     }
 
-    // Real, permitted intent (or UNRECOGNIZED) — now check its shape is
-    // actually usable before any Prisma call is made.
     const shapeError = validateIntentShape(intent);
-    if (shapeError) return res.status(400).json({ error: shapeError });
+    if (shapeError) return respond(400, { error: shapeError }, 'REJECTED_VALIDATION', shapeError);
 
     const note = `[voice] "${transcript}"`;
     const actorId = req.user!.id;
@@ -206,83 +232,60 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
 
     switch (intent.intent) {
       case 'MARK_AVAILABILITY': {
-        // markAvailability() upserts unconditionally (one row per (userId, date))
-        // and only ever returns { result: 'ok' } — there is no 'not_found' case
-        // to handle here, unlike the swap/join actions below.
         const result = await withAuditedTransaction(
           prisma,
           (tx) => markAvailability({ userId: actorId, date: intent.date, type: intent.type, note }, tx),
           (marked) => ({ locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: marked.mark.id, note }),
         );
-        return res.status(200).json({ executed: true, result: result.mark });
+        return respond(200, { executed: true, result: result.mark }, 'EXECUTED');
       }
       case 'REQUEST_SWAP': {
         const shift = await prisma.shift.findUnique({ where: { id: intent.shiftId }, select: { userId: true, locationId: true } });
         if (!shift || shift.userId !== actorId || shift.locationId !== locationId) {
-          return res.status(404).json({ error: 'That shift could not be found among your own upcoming shifts.' });
+          const msg = 'That shift could not be found among your own upcoming shifts.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
-        // The proposed cover must be a real, active staff member at the SAME
-        // location — otherwise this either silently creates a swap request
-        // naming an out-of-location (or nonexistent) "cover", or blows up as
-        // a bare Prisma FK-violation 500. Mirrors the equivalent validation
-        // in the REST route (server/src/routes/swapRequests.ts).
         const target = await prisma.user.findFirst({
           where: { id: intent.targetUserId, locationId, isActive: true },
           select: { id: true },
         });
         if (!target) {
-          return res.status(404).json({ error: 'That staff member could not be found at your location.' });
+          const msg = 'That staff member could not be found at your location.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
         const created = await withAuditedTransaction(
           prisma,
           (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
           (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
         );
-        // Same notification path as the REST route (routes/swapRequests.ts's
-        // POST) — never inside the transaction above.
         void notifySwapRequested(created, locationId);
-        return res.status(201).json({ executed: true, result: created });
+        return respond(201, { executed: true, result: created }, 'EXECUTED');
       }
       case 'APPROVE_SWAP':
       case 'DECLINE_SWAP': {
-        // The referenced ShiftSwapRequest must belong to the caller's own
-        // location — otherwise a manager at Location A could approve/decline
-        // (and, on approval, reassign a shift for) a request that belongs to
-        // Location B entirely. REQUEST_SWAP already gets this right for
-        // shifts (above); this is the same treatment for the decide path.
         const sr = await prisma.shiftSwapRequest.findUnique({
           where: { id: intent.swapRequestId },
           select: { status: true, shift: { select: { locationId: true } } },
         });
         if (!sr || sr.shift.locationId !== locationId) {
-          return res.status(404).json({ error: 'That swap request could not be found.' });
+          const msg = 'That swap request could not be found.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
-        // decideSwapRequest's 'conflict' result means specifically "a DIFFERENT
-        // request already reassigned this shift" — it does NOT catch "this
-        // exact request was already approved or declined", so without this
-        // guard voice could flip an already-DECLINED request to APPROVED.
-        // Mirrors the sibling join path's `already_reviewed` handling below.
         if (sr.status !== 'PENDING') {
-          return res.status(409).json({ error: `That swap request was already ${sr.status.toLowerCase()}.` });
+          const msg = `That swap request was already ${sr.status.toLowerCase()}.`;
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
 
         const decision = intent.intent === 'APPROVE_SWAP' ? 'approved' : 'declined';
         const result = await decideSwapRequest({ id: intent.swapRequestId, decision, reviewedById: actorId });
-        if (result.result === 'not_found') return res.status(404).json({ error: 'That swap request could not be found.' });
-        // 'conflict' is NOT "already decided" (the PENDING guard above covers
-        // that) — isRequestLocked() only ever fires on a still-PENDING request
-        // whose shift a DIFFERENT approved request already reassigned.
-        if (result.result === 'conflict') {
-          return res.status(409).json({ error: 'That shift was already reassigned by another swap request.' });
+        if (result.result === 'not_found') {
+          const msg = 'That swap request could not be found.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
-        // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
-        // SWAP_DECLINED) inside its transaction — append the voice transcript by
-        // writing a SECOND, linked row rather than mutating the first, keeping
-        // the shared action function's own audit write untouched. This row
-        // carries the entity's own shiftId (from result.request, which we
-        // already have in hand) and its own locationId (from the `sr` lookup
-        // above) rather than null/the caller's locationId, matching how
-        // REQUEST_SWAP's voice row already does it.
+        if (result.result === 'conflict') {
+          const msg = 'That shift was already reassigned by another swap request.';
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
         await writeAuditLog(prisma, {
           locationId: sr.shift.locationId,
           actorId,
@@ -292,24 +295,27 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           entityId: intent.swapRequestId,
           note,
         });
-        // Same notification path as the REST route (routes/swapRequests.ts's
-        // PATCH) — never inside the audit write above.
         void notifySwapDecided(result.request, decision);
-        return res.status(200).json({ executed: true, result: result.request });
+        return respond(200, { executed: true, result: result.request }, 'EXECUTED');
       }
       case 'APPROVE_JOIN':
       case 'DECLINE_JOIN': {
-        // Same location-scoping treatment as APPROVE_SWAP/DECLINE_SWAP above,
-        // against JoinRequest.locationId directly.
         const jr = await prisma.joinRequest.findUnique({ where: { id: intent.joinRequestId }, select: { locationId: true } });
         if (!jr || jr.locationId !== locationId) {
-          return res.status(404).json({ error: 'That join request could not be found.' });
+          const msg = 'That join request could not be found.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
 
         const decision = intent.intent === 'APPROVE_JOIN' ? 'approve' : 'decline';
         const result = await decideJoinRequest({ requestId: intent.joinRequestId, decision, reviewedById: actorId });
-        if (result.result === 'not_found') return res.status(404).json({ error: 'That join request could not be found.' });
-        if (result.result === 'already_reviewed') return res.status(409).json({ error: 'That join request was already reviewed.' });
+        if (result.result === 'not_found') {
+          const msg = 'That join request could not be found.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        if (result.result === 'already_reviewed') {
+          const msg = 'That join request was already reviewed.';
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
         await writeAuditLog(prisma, {
           locationId: jr.locationId,
           actorId,
@@ -318,19 +324,136 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           entityId: intent.joinRequestId,
           note,
         });
-        // Return the entity itself, like every sibling branch does
-        // (result.mark, result.request, created) — not the whole
-        // action-function envelope, which nested confusingly as
-        // {"result":{"result":"ok",...}}.
-        return res.status(200).json({ executed: true, result: { status: result.status, userId: result.userId } });
+        return respond(200, { executed: true, result: { status: result.status, userId: result.userId } }, 'EXECUTED');
       }
-      case 'UNRECOGNIZED':
-        return res.status(400).json({ error: 'This command was not recognized — nothing was executed.' });
-      default:
-        return res.status(400).json({ error: 'Unknown intent.' });
+      case 'CREATE_SHIFT': {
+        const role = await prisma.role.findUnique({ where: { id: intent.roleId } });
+        if (!role || role.locationId !== locationId) {
+          const msg = `Role "${intent.roleId}" not found.`;
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        if (intent.userId) {
+          const staff = await prisma.user.findUnique({ where: { id: intent.userId } });
+          if (!staff || staff.locationId !== locationId) {
+            const msg = `Staff member "${intent.userId}" not found.`;
+            return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+          }
+        }
+        const timezone = await venueTimezoneFor(locationId);
+        const overnight = intent.end <= intent.start;
+        const startTime = combineDateAndTime(intent.date, intent.start, timezone);
+        const endTime = combineDateAndTime(intent.date, intent.end, timezone, overnight);
+
+        const created = await withAuditedTransaction(
+          prisma,
+          (tx) =>
+            createShift(
+              {
+                locationId,
+                roleId: intent.roleId,
+                userId: intent.userId,
+                createdById: actorId,
+                date: new Date(`${intent.date}T00:00:00.000Z`),
+                startTime,
+                endTime,
+                breakMinutes: 0,
+                sidework: [],
+                status: 'DRAFT',
+              } as unknown as Parameters<typeof createShift>[0],
+              tx,
+            ),
+          (shift) => ({ locationId, actorId, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id, note }),
+        );
+        return respond(201, { executed: true, result: created }, 'EXECUTED');
+      }
+      case 'EDIT_SHIFT': {
+        const existing = await prisma.shift.findUnique({ where: { id: intent.shiftId } });
+        if (!existing || existing.locationId !== locationId) {
+          const msg = `Shift "${intent.shiftId}" not found.`;
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        const timezone = await venueTimezoneFor(locationId);
+        const data: Record<string, unknown> = {};
+        if (intent.roleId !== undefined) {
+          const role = await prisma.role.findUnique({ where: { id: intent.roleId } });
+          if (!role || role.locationId !== locationId) {
+            const msg = `Role "${intent.roleId}" not found.`;
+            return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+          }
+          data.roleId = intent.roleId;
+        }
+        if (intent.userId !== undefined) {
+          if (intent.userId) {
+            const staff = await prisma.user.findUnique({ where: { id: intent.userId } });
+            if (!staff || staff.locationId !== locationId) {
+              const msg = `Staff member "${intent.userId}" not found.`;
+              return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+            }
+            data.userId = intent.userId;
+          } else {
+            data.userId = null;
+          }
+        }
+        const nextDate = intent.date ?? existing.date.toISOString().slice(0, 10);
+        const nextStart = intent.start ?? formatVenueTime(existing.startTime, timezone);
+        const nextEnd = intent.end ?? formatVenueTime(existing.endTime, timezone);
+        if (intent.date !== undefined || intent.start !== undefined || intent.end !== undefined) {
+          const overnight = nextEnd <= nextStart;
+          data.date = new Date(`${nextDate}T00:00:00.000Z`);
+          data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
+          data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
+        }
+
+        const updated = await withAuditedTransaction(
+          prisma,
+          (tx) => updateShift(intent.shiftId, data as Parameters<typeof updateShift>[1], tx),
+          () => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: intent.shiftId, note }),
+        );
+        return respond(200, { executed: true, result: updated }, 'EXECUTED');
+      }
+      case 'ASSIGN_SECTION': {
+        const section = await prisma.floorSection.findUnique({ where: { id: intent.sectionId } });
+        if (!section || section.locationId !== locationId) {
+          const msg = `Section "${intent.sectionId}" not found.`;
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        const staff = await prisma.user.findUnique({ where: { id: intent.staffId } });
+        if (!staff || staff.locationId !== locationId) {
+          const msg = `Staff member "${intent.staffId}" not found.`;
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        const shiftDate = new Date(`${intent.shiftDate}T00:00:00.000Z`);
+
+        const assignment = await withAuditedTransaction(
+          prisma,
+          (tx) =>
+            upsertSectionAssignment(
+              { sectionId: intent.sectionId, staffId: intent.staffId, shiftDate, period: intent.period, dutyLabel: intent.dutyLabel, createdById: actorId, touchDutyLabel: true },
+              tx,
+            ),
+          (upserted) => ({
+            locationId,
+            actorId,
+            shiftId: null,
+            action: 'SHIFT_ASSIGNED',
+            entityType: 'SectionAssignment',
+            entityId: upserted.id,
+            note,
+          }),
+        );
+        return respond(201, { executed: true, result: assignment }, 'EXECUTED');
+      }
+      case 'UNRECOGNIZED': {
+        const msg = 'This command was not recognized — nothing was executed.';
+        return respond(400, { error: msg }, 'REJECTED_VALIDATION', 'unrecognized');
+      }
+      default: {
+        const msg = 'Unknown intent.';
+        return respond(400, { error: msg }, 'REJECTED_VALIDATION', msg);
+      }
     }
   } catch (err) {
     console.error('[voice.execute] failed', err);
-    return res.status(500).json({ error: 'Unexpected error while executing the voice command.' });
+    return respond(500, { error: 'Unexpected error while executing the voice command.' }, 'ERROR');
   }
 });
