@@ -66,6 +66,13 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
     lines.push(...ctx.floorSections.map((s) => `- ${s.label} → ${s.id}`));
   }
 
+  if (allowed.includes('QUERY_MY_SCHEDULE')) {
+    lines.push(
+      ``,
+      `For QUERY_MY_SCHEDULE specifically: answer using ONLY the caller's own upcoming shifts already listed above — you have no visibility into anyone else's schedule, so never claim to. Put the direct, final answer to their question directly in "summary" (e.g. "You're working Friday 6pm-close and Saturday 2pm-10pm this weekend", or "You have no shifts scheduled this week") — do NOT describe a pending action, since nothing will be written. If the question's date range is genuinely ambiguous (e.g. "next week" without clear bounds you can resolve against today's date), respond with UNRECOGNIZED instead of guessing.`,
+    );
+  }
+
   lines.push(
     ``,
     `If a name, date, time, role, shift, or section is ambiguous or you cannot find a confident match in the lists above, respond with intent=UNRECOGNIZED and explain why in unrecognizedReason — never guess an id that isn't listed above, and never invent a date or time.`,
