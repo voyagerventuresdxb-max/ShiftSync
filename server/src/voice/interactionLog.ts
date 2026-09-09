@@ -8,9 +8,10 @@ import type { VoiceIntentResolution } from './parseIntent.js';
  * EXECUTED/REJECTED_* only happen later, at /execute (see
  * updateInteractionOutcome below).
  */
-function outcomeAtParseTime(resolution: VoiceIntentResolution): VoiceInteractionOutcome {
+export function outcomeAtParseTime(resolution: VoiceIntentResolution): VoiceInteractionOutcome {
   if (resolution.attempted.intent === 'UNRECOGNIZED') return 'UNRECOGNIZED';
   if (resolution.response.intent === 'UNRECOGNIZED') return 'LOW_CONFIDENCE';
+  if (resolution.response.intent === 'QUERY_MY_SCHEDULE') return 'ANSWERED';
   return 'PENDING_CONFIRMATION';
 }
 
