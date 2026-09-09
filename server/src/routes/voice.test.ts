@@ -984,3 +984,205 @@ test('POST /api/voice/execute: requires a real session (401 without a bearer tok
     assert.equal(res.status, 401);
   });
 });
+
+test('POST /api/voice/execute: CREATE_SHIFT from a MANAGER session creates a real Shift with a [voice] AuditLog row', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task13-test__ create-shift manager', systemRole: 'MANAGER' },
+  });
+
+  let createdShiftId = '';
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'create a shift tomorrow 9 to 5',
+          intent: { intent: 'CREATE_SHIFT', roleId: role!.id, date: '2026-09-22', start: '09:00', end: '17:00', userId: null, confidence: 0.9, summary: 'Create an open shift, Sept 22nd, 9am-5pm.' },
+        }),
+      });
+      assert.equal(res.status, 201, 'MANAGER must be able to execute CREATE_SHIFT');
+      const body = (await res.json()) as { executed: boolean; result: { id: string } };
+      assert.equal(body.executed, true);
+      createdShiftId = body.result.id;
+    });
+
+    const shift = await prisma.shift.findUnique({ where: { id: createdShiftId } });
+    assert.ok(shift, 'a real Shift row must exist');
+    assert.equal(shift!.roleId, role!.id);
+    assert.equal(shift!.userId, null);
+
+    const auditRow = await prisma.auditLog.findFirst({
+      where: { entityType: 'Shift', entityId: createdShiftId, action: 'SHIFT_CREATED', note: { contains: '[voice]' } },
+    });
+    assert.ok(auditRow, 'a real AuditLog row with action SHIFT_CREATED and a [voice] note must exist');
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { entityType: 'Shift', entityId: createdShiftId } });
+    await prisma.shift.delete({ where: { id: createdShiftId } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: a STAFF session cannot CREATE_SHIFT even with a hand-crafted intent — 403, nothing created', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task13-test__ create-shift staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'create a shift for myself',
+          intent: { intent: 'CREATE_SHIFT', roleId: role!.id, date: '2026-09-22', start: '09:00', end: '17:00', userId: null, confidence: 0.9, summary: 'x' },
+        }),
+      });
+      assert.equal(res.status, 403);
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /does not permit/i);
+    });
+
+    const leaked = await prisma.shift.findMany({ where: { locationId: location!.id, date: new Date('2026-09-22T00:00:00.000Z'), roleId: role!.id, userId: null } });
+    assert.equal(leaked.length, 0, 'no Shift may be created from a STAFF-session CREATE_SHIFT attempt');
+  } finally {
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: ASSIGN_SECTION from a MANAGER session creates a real SectionAssignment', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const floorPlanImage = await prisma.floorPlanImage.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && floorPlanImage, 'seed data (location + a floor plan image) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task13-test__ assign-section manager', systemRole: 'MANAGER' },
+  });
+  const staff = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task13-test__ assign-section staff', systemRole: 'STAFF' },
+  });
+  const section = await prisma.floorSection.create({
+    data: { locationId: location!.id, floorPlanImageId: floorPlanImage!.id, label: '__task13-test__ Bar', polygon: [], paxCapacity: 6 },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'move the staff member to the bar section tomorrow afternoon',
+          intent: { intent: 'ASSIGN_SECTION', sectionId: section.id, staffId: staff.id, shiftDate: '2026-09-23', period: 'PM', dutyLabel: null, confidence: 0.9, summary: 'x' },
+        }),
+      });
+      assert.equal(res.status, 201);
+      const body = (await res.json()) as { executed: boolean; result: { id: string; staffId: string } };
+      assert.equal(body.executed, true);
+      assert.equal(body.result.staffId, staff.id);
+    });
+
+    const assignment = await prisma.sectionAssignment.findFirst({ where: { sectionId: section.id, staffId: staff.id } });
+    assert.ok(assignment, 'a real SectionAssignment row must exist');
+
+    const auditRow = await prisma.auditLog.findFirst({
+      where: { entityType: 'SectionAssignment', entityId: assignment!.id, action: 'SHIFT_ASSIGNED', note: { contains: '[voice]' } },
+    });
+    assert.ok(auditRow, 'a real AuditLog row with a [voice] note must exist');
+  } finally {
+    await prisma.sectionAssignment.deleteMany({ where: { sectionId: section.id } });
+    await prisma.floorSection.delete({ where: { id: section.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staff.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: a real voiceLogId gets its outcome updated to EXECUTED on success', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task13-test__ log-outcome staff', systemRole: 'STAFF' },
+  });
+
+  const logRow = await prisma.voiceInteractionLog.create({
+    data: {
+      locationId: location!.id,
+      actorId: staffCaller.id,
+      transcript: "I can't work next Monday",
+      resolvedIntent: 'MARK_AVAILABILITY',
+      confidence: 0.95,
+      outcome: 'PENDING_CONFIRMATION',
+    },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: "I can't work next Monday",
+          intent: { intent: 'MARK_AVAILABILITY', date: '2026-09-28', type: 'UNAVAILABLE', confidence: 0.95, summary: 'x' },
+          voiceLogId: logRow.id,
+        }),
+      });
+      assert.equal(res.status, 200);
+    });
+
+    const updated = await prisma.voiceInteractionLog.findUnique({ where: { id: logRow.id } });
+    assert.equal(updated!.outcome, 'EXECUTED');
+  } finally {
+    await prisma.availabilityMark.deleteMany({ where: { userId: staffCaller.id } });
+    await prisma.auditLog.deleteMany({ where: { actorId: staffCaller.id } });
+    await prisma.voiceInteractionLog.delete({ where: { id: logRow.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/parse-intent returns voiceLogId and writes a real VoiceInteractionLog row', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+  if (!process.env.GEMINI_API_KEY) {
+    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
+    return;
+  }
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task13-test__ parse-log staff', systemRole: 'STAFF' },
+  });
+
+  let voiceLogId = '';
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ transcript: 'complete gibberish asdkjfh laksjdhf' }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { voiceLogId: string };
+      assert.ok(body.voiceLogId);
+      voiceLogId = body.voiceLogId;
+    });
+
+    const row = await prisma.voiceInteractionLog.findUnique({ where: { id: voiceLogId } });
+    assert.ok(row, 'a real VoiceInteractionLog row must exist');
+    assert.equal(row!.actorId, staffCaller.id);
+  } finally {
+    if (voiceLogId) await prisma.voiceInteractionLog.delete({ where: { id: voiceLogId } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
