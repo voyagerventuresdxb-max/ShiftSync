@@ -1260,3 +1260,120 @@ test('POST /api/voice/parse-intent returns voiceLogId and writes a real VoiceInt
     await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
   }
 });
+
+test('POST /api/voice/parse-intent: QUERY_MY_SCHEDULE from a STAFF session resolves and logs ANSWERED', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+  if (!process.env.GEMINI_API_KEY) {
+    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
+    return;
+  }
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task7-test__ query-schedule staff', systemRole: 'STAFF' },
+  });
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location!.id, roleId: role!.id, userId: staffCaller.id,
+      date: new Date('2026-09-18T00:00:00.000Z'), startTime: new Date('2026-09-18T18:00:00.000Z'), endTime: new Date('2026-09-19T02:00:00.000Z'), status: 'PUBLISHED',
+    },
+  });
+
+  let voiceLogId = '';
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ transcript: "what's my next shift" }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { intent: { intent: string; summary: string }; voiceLogId: string };
+      assert.equal(body.intent.intent, 'QUERY_MY_SCHEDULE', `expected QUERY_MY_SCHEDULE, got ${body.intent.intent}`);
+      assert.ok(body.intent.summary.trim().length > 0, 'summary must be a non-empty answer');
+      assert.ok(body.voiceLogId);
+      voiceLogId = body.voiceLogId;
+    });
+
+    const row = await prisma.voiceInteractionLog.findUnique({ where: { id: voiceLogId } });
+    assert.ok(row, 'a real VoiceInteractionLog row must exist');
+    assert.equal(row!.outcome, 'ANSWERED', 'a resolved QUERY_MY_SCHEDULE must log ANSWERED, not PENDING_CONFIRMATION');
+  } finally {
+    if (voiceLogId) await prisma.voiceInteractionLog.delete({ where: { id: voiceLogId } }).catch(() => {});
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/parse-intent: QUERY_MY_SCHEDULE from a MANAGER session also resolves (STAFF_INTENTS inheritance)', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+  if (!process.env.GEMINI_API_KEY) {
+    return;
+  }
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task7-test__ query-schedule manager', systemRole: 'MANAGER' },
+  });
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location!.id, roleId: role!.id, userId: manager.id,
+      date: new Date('2026-09-19T00:00:00.000Z'), startTime: new Date('2026-09-19T09:00:00.000Z'), endTime: new Date('2026-09-19T17:00:00.000Z'), status: 'PUBLISHED',
+    },
+  });
+
+  let voiceLogId = '';
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ transcript: "what's my schedule this week" }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { intent: { intent: string }; voiceLogId: string };
+      assert.equal(body.intent.intent, 'QUERY_MY_SCHEDULE', 'a MANAGER session must also be able to resolve this staff-tier intent');
+      voiceLogId = body.voiceLogId;
+    });
+  } finally {
+    if (voiceLogId) await prisma.voiceInteractionLog.delete({ where: { id: voiceLogId } }).catch(() => {});
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: QUERY_MY_SCHEDULE gets a real 400 (fail-closed — this intent never has an execute path)', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task7-test__ query-schedule execute-reject staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: "what's my next shift",
+          intent: { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'You are working Friday.' },
+        }),
+      });
+      // QUERY_MY_SCHEDULE passes ALL_INTENTS/allowedIntentsFor (it's a real,
+      // permitted STAFF intent) but has no case in /execute's switch, so it
+      // falls to that switch's own `default: 400 'Unknown intent.'` branch —
+      // not a 403 (proves this isn't a permission rejection) and not a 500.
+      assert.equal(res.status, 400, 'QUERY_MY_SCHEDULE must never execute — it has no mutator to call');
+      const body = (await res.json()) as { error: string };
+      assert.doesNotMatch(body.error, /does not permit/i, 'must not be misreported as a permission error');
+    });
+  } finally {
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
