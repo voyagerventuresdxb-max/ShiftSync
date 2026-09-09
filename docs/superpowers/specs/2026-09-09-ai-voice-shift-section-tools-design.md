@@ -125,37 +125,55 @@ rows distinctly from UI-originated ones." No new field on `AuditLog`.
 ## 5. Backend: mutator extraction
 
 Mirror the existing `lib/actions/{swapActions,joinActions,availabilityActions}.ts`
-pattern.
+pattern **exactly**, including where validation lives. Looking at the
+precedent closely: `swapActions.ts`'s `createSwapRequest()` is a pure
+mutator (takes already-validated input, does the `prisma.shiftSwapRequest.create`
+call, nothing else) — the shift-ownership and target-user-location checks
+live in each *caller* (`routes/swapRequests.ts`'s POST, and
+`routes/voice.ts`'s `REQUEST_SWAP` case, independently, worded slightly
+differently for each surface's error copy). This spec follows that same
+division, not a new fully-centralized-validation variant — consistent
+with how the six shipped intents already work, so a reviewer familiar
+with `swapActions.ts` sees the same shape here.
 
 **`server/src/lib/actions/shiftActions.ts`** (new)
-- `createShift(input, actorId)` — the exact body of `shiftsRouter.post('/')`'s
-  handler today (role lookup, user-location check, date/time validation,
-  `combineDateAndTime`, `withAuditedTransaction` write with `SHIFT_CREATED`),
-  minus the Express `req`/`res` plumbing. Returns the created shift (with
-  `SHIFT_INCLUDE`) or a discriminated result for the two 404 cases
-  (`role_not_found` / `user_not_found`) so both the REST route and voice
-  can translate them to the right HTTP status / user-facing message.
-- `updateShift(id, input, actorId)` — same extraction from
-  `shiftsRouter.patch('/:id')`, preserving the existing partial-update
-  semantics (only fields present in `input` are touched) and the same
-  same-location re-validation for `roleId`/`userId`.
+- `createShift(data, client = prisma)` — exactly the
+  `tx.shift.create({ data, include: SHIFT_INCLUDE })` call
+  `shiftsRouter.post('/')` makes today, parameterized. No validation
+  inside — the caller (REST route or voice execute) validates
+  `roleId`/`userId` existence and same-location membership first, exactly
+  as `shiftsRouter.post('/')` already does today.
+- `updateShift(id, data, client = prisma)` — exactly the
+  `tx.shift.update({ where: { id }, data, include: SHIFT_INCLUDE })` call
+  `shiftsRouter.patch('/:id')` makes today. Same division: caller
+  validates first.
+- Both re-export `SHIFT_INCLUDE` and a `ShiftWithRelations` type so
+  `routes/shifts.ts`, `routes/voice.ts`, and their tests share one
+  Prisma-payload type instead of redefining the include shape.
 
 **`server/src/lib/actions/sectionActions.ts`** (new)
-- `assignToSection(input, actorId)` — the exact body of
-  `floorPlanRouter.post('/assignments')`'s handler (section/staff lookup,
-  same-location check, the `hasDutyLabelKey` upsert semantics, the
-  `SHIFT_ASSIGNED` audit write). Same discriminated-result approach for
-  the two 404 cases.
+- `upsertSectionAssignment(data, client = prisma)` — exactly the
+  `tx.sectionAssignment.upsert(...)` call
+  `floorPlanRouter.post('/assignments')` makes today (including the
+  `hasDutyLabelKey` conditional-update semantics — that flag becomes an
+  explicit parameter, not re-derived). Caller validates section/staff
+  existence and same-location membership first, exactly as
+  `floorPlanRouter.post('/assignments')` already does today.
 
-`routes/shifts.ts` and `routes/floorPlan.ts` become thin wrappers: parse
-`req.body`, call the action, translate the discriminated result to an
-HTTP response. **No behavior change** to the REST API — this is a pure
-extraction, matching the precedent already noted in `auditLog.ts`'s
-comments about `withAuditedTransaction` being introduced the same way.
+`routes/shifts.ts` and `routes/floorPlan.ts` are modified to call these
+extracted functions instead of inlining the `tx.shift.create`/`.update`/
+`.upsert` calls, wrapped in `withAuditedTransaction` exactly as before.
+**No behavior change** to the REST API or its validation — this is a
+pure mechanical extraction of the write call only, matching the
+precedent already noted in `auditLog.ts`'s comments about
+`withAuditedTransaction` being introduced the same way. `routes/voice.ts`
+duplicates the same validation these routes already do (matching how
+`REQUEST_SWAP` duplicates `routes/swapRequests.ts`'s validation today)
+and then calls the same extracted mutator.
 
-Existing REST route tests (`shifts.test.ts`, `floorPlan.test.ts` if
-present) must continue passing unmodified — they're the regression guard
-that the extraction didn't change behavior.
+Existing REST route tests (`shifts.test.ts`, `floorPlan.test.ts`) must
+continue passing unmodified — they're the regression guard that the
+extraction didn't change behavior.
 
 ## 6. Backend: voice intent schema & context
 
