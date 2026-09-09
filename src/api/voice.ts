@@ -20,12 +20,15 @@ import { withAuth } from './identity';
 export { ApiError };
 
 export type ParsedIntent =
-  | { intent: 'MARK_AVAILABILITY'; date: string; type: 'UNAVAILABLE' | 'PREFERRED_OFF'; summary: string }
-  | { intent: 'REQUEST_SWAP'; shiftId: string; targetUserId: string; targetUserName: string; reason: string | null; summary: string }
-  | { intent: 'APPROVE_SWAP'; swapRequestId: string; summary: string }
-  | { intent: 'DECLINE_SWAP'; swapRequestId: string; summary: string }
-  | { intent: 'APPROVE_JOIN'; joinRequestId: string; summary: string }
-  | { intent: 'DECLINE_JOIN'; joinRequestId: string; summary: string }
+  | { intent: 'MARK_AVAILABILITY'; date: string; type: 'UNAVAILABLE' | 'PREFERRED_OFF'; confidence: number; summary: string }
+  | { intent: 'REQUEST_SWAP'; shiftId: string; targetUserId: string; targetUserName: string; reason: string | null; confidence: number; summary: string }
+  | { intent: 'APPROVE_SWAP'; swapRequestId: string; confidence: number; summary: string }
+  | { intent: 'DECLINE_SWAP'; swapRequestId: string; confidence: number; summary: string }
+  | { intent: 'APPROVE_JOIN'; joinRequestId: string; confidence: number; summary: string }
+  | { intent: 'DECLINE_JOIN'; joinRequestId: string; confidence: number; summary: string }
+  | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; confidence: number; summary: string }
+  | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; confidence: number; summary: string }
+  | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
