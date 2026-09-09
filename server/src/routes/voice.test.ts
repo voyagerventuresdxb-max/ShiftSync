@@ -1075,6 +1075,7 @@ test('POST /api/voice/execute: ASSIGN_SECTION from a MANAGER session creates a r
     data: { locationId: location!.id, floorPlanImageId: floorPlanImage!.id, label: '__task13-test__ Bar', polygon: [], paxCapacity: 6 },
   });
 
+  let assignmentId = '';
   try {
     const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
@@ -1094,12 +1095,14 @@ test('POST /api/voice/execute: ASSIGN_SECTION from a MANAGER session creates a r
 
     const assignment = await prisma.sectionAssignment.findFirst({ where: { sectionId: section.id, staffId: staff.id } });
     assert.ok(assignment, 'a real SectionAssignment row must exist');
+    assignmentId = assignment!.id;
 
     const auditRow = await prisma.auditLog.findFirst({
       where: { entityType: 'SectionAssignment', entityId: assignment!.id, action: 'SHIFT_ASSIGNED', note: { contains: '[voice]' } },
     });
     assert.ok(auditRow, 'a real AuditLog row with a [voice] note must exist');
   } finally {
+    if (assignmentId) await prisma.auditLog.deleteMany({ where: { entityType: 'SectionAssignment', entityId: assignmentId } });
     await prisma.sectionAssignment.deleteMany({ where: { sectionId: section.id } });
     await prisma.floorSection.delete({ where: { id: section.id } }).catch(() => {});
     await prisma.user.delete({ where: { id: staff.id } }).catch(() => {});
