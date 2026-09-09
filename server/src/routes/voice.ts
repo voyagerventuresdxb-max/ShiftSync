@@ -5,6 +5,7 @@ import { requireSession } from '../middleware/requireSession.js';
 import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
+import { logParsedInteraction } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
@@ -121,13 +122,14 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
     const transcript = String(req.body?.transcript ?? '').trim();
     if (!transcript) return res.status(400).json({ error: 'transcript is required.' });
 
-    const intent = await parseVoiceIntent(transcript, {
+    const resolution = await parseVoiceIntent(transcript, {
       id: req.user!.id,
       systemRole: req.user!.systemRole,
       fullName: req.user!.fullName,
       locationId: req.user!.locationId,
     });
-    return res.status(200).json({ transcript, intent });
+    const voiceLogId = await logParsedInteraction({ id: req.user!.id, locationId: req.user!.locationId }, transcript, resolution);
+    return res.status(200).json({ transcript, intent: resolution.response, voiceLogId });
   } catch (err) {
     if (err instanceof VoiceIntentError) {
       console.error('[voice.parseIntent] unavailable', err);
