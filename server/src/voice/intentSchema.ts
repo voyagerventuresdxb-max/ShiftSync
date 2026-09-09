@@ -1,7 +1,7 @@
 import type { SystemRole } from '@prisma/client';
 import { Type } from '@google/genai';
 
-export const STAFF_INTENTS = ['MARK_AVAILABILITY', 'REQUEST_SWAP'] as const;
+export const STAFF_INTENTS = ['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE'] as const;
 
 export const MANAGER_INTENTS = [
   ...STAFF_INTENTS,
@@ -28,6 +28,7 @@ export type ParsedIntent =
   | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; confidence: number; summary: string }
   | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; confidence: number; summary: string }
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
+  | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
 function schemaFor(intents: readonly string[]) {

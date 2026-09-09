@@ -29,6 +29,7 @@ export type ParsedIntent =
   | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; confidence: number; summary: string }
   | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; confidence: number; summary: string }
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
+  | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
