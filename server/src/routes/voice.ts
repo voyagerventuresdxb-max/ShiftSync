@@ -128,7 +128,19 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
       fullName: req.user!.fullName,
       locationId: req.user!.locationId,
     });
-    const voiceLogId = await logParsedInteraction({ id: req.user!.id, locationId: req.user!.locationId }, transcript, resolution);
+    // Logging the interaction is observability, not the confirm-before-execute
+    // flow itself — a successfully-parsed command must still reach the user
+    // for confirmation even if this write fails (e.g. a transient DB error).
+    // Isolate it from the handler's generic catch below so a logging failure
+    // degrades to voiceLogId: null instead of masquerading as a parse failure
+    // via a misleading 500. /execute (Task 9) treats a missing/null
+    // voiceLogId as "skip the log update, proceed normally".
+    let voiceLogId: string | null = null;
+    try {
+      voiceLogId = await logParsedInteraction({ id: req.user!.id, locationId: req.user!.locationId }, transcript, resolution);
+    } catch (logErr) {
+      console.error('[voice.parseIntent] failed to write interaction log', logErr);
+    }
     return res.status(200).json({ transcript, intent: resolution.response, voiceLogId });
   } catch (err) {
     if (err instanceof VoiceIntentError) {
