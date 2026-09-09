@@ -49,8 +49,10 @@ written.
 
 - Any other tool from the v2 roadmap (Slices 3/4) — separate specs.
 - Time-off voice tools — removed from the roadmap entirely (§1).
-- Querying anyone else's schedule, under any phrasing — see §5's structural
-  (not prompt-level) guarantee.
+- Querying anyone else's schedule, under any phrasing — see §5's guarantee
+  against this (structural for STAFF-tier callers; prompt-enforced
+  defense-in-depth for MANAGER/OWNER-tier callers, who already have
+  venue-wide shift data in context for other intents).
 - Any change to the confirm-before-execute pipeline for mutating intents —
   unaffected by this slice.
 
@@ -103,11 +105,28 @@ are already fetched unconditionally into `ctx.callerShifts` (used today for
 `REQUEST_SWAP`) and already shown to the model via the existing "The
 caller's own upcoming shifts" block, which fires whenever `allowed.includes
 ('REQUEST_SWAP')` — true for every role tier today, since `REQUEST_SWAP` is
-in `STAFF_INTENTS`. This is the entire safeguard against leaking another
-person's schedule: the data for anyone else's shifts is **never in the
-model's context at all**, so no phrasing can extract it. This is structural,
-not a prompt instruction that could be argued around — the prompt
-instruction above is guidance for a good answer, not the security boundary.
+in `STAFF_INTENTS`.
+
+**This safeguard is tier-dependent, not uniformly structural.** For
+STAFF-tier callers it is structural in the strong sense: no other person's
+shift data is ever fetched into `ctx` at all for that caller, so no phrasing
+can extract it — there is nothing in context to leak. For MANAGER/OWNER-tier
+callers, `buildContext` *also* populates `ctx.weekShifts` with the entire
+venue's shifts for the next 7 days, including every assignee's full name
+(built for `EDIT_SHIFT`/`ASSIGN_SECTION`, §5 of the v1 spec), and that block
+is rendered into the same system prompt this intent's request also uses. So
+for a manager, the "never another person's schedule" guarantee for
+`QUERY_MY_SCHEDULE` specifically relies on the prompt instruction above (and
+the strengthened one added alongside it — see `prompts.ts`) telling the
+model `ctx.weekShifts` is not a valid source for this intent and that a
+question about a named third party is out of scope, not on the data being
+absent from context. This is prompt-level defense-in-depth for that tier,
+not a structural boundary — worth stating honestly rather than claiming a
+uniform structural guarantee that only actually holds for STAFF. It is not a
+data leak on its own (a manager can already see the full roster via the REST
+UI), but a misrouted third-party question would log misleadingly as a
+legitimate self-query in the `VoiceInteractionLog` audit trail, which is the
+real risk this distinction matters for.
 
 ### 5.3 `parseIntent.ts`'s `normalizeParsedIntent`
 

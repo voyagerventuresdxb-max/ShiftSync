@@ -36,7 +36,10 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
     ...ctx.staffDirectory.map((s) => `- ${s.fullName} → ${s.id}`),
   ];
 
-  if (allowed.includes('REQUEST_SWAP')) {
+  // Both REQUEST_SWAP and QUERY_MY_SCHEDULE depend on this block for their
+  // only source of the caller's own shift data — keep this condition in
+  // sync with STAFF_INTENTS if either intent's gating ever changes.
+  if (allowed.includes('REQUEST_SWAP') || allowed.includes('QUERY_MY_SCHEDULE')) {
     lines.push(``, `The caller's own upcoming shifts (id → date, time):`);
     lines.push(...ctx.callerShifts.map((s) => `- ${s.id} → ${s.date}, ${s.startTime}-${s.endTime}`));
   }
@@ -69,14 +72,14 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
   if (allowed.includes('QUERY_MY_SCHEDULE')) {
     lines.push(
       ``,
-      `For QUERY_MY_SCHEDULE specifically: answer using ONLY the caller's own upcoming shifts already listed above — you have no visibility into anyone else's schedule, so never claim to. Put the direct, final answer to their question directly in "summary" (e.g. "You're working Friday 6pm-close and Saturday 2pm-10pm this weekend", or "You have no shifts scheduled this week") — do NOT describe a pending action, since nothing will be written. If the question's date range is genuinely ambiguous (e.g. "next week" without clear bounds you can resolve against today's date), respond with UNRECOGNIZED instead of guessing.`,
+      `For QUERY_MY_SCHEDULE specifically: answer using ONLY the caller's own upcoming shifts already listed above — you have no visibility into anyone else's schedule, so never claim to. Put the direct, final answer to their question directly in "summary" (e.g. "You're working Friday 6pm-close and Saturday 2pm-10pm this weekend", or "You have no shifts scheduled this week") — do NOT describe a pending action, since nothing will be written. If the question's date range is genuinely ambiguous (e.g. "next week" without clear bounds you can resolve against today's date), respond with UNRECOGNIZED instead of guessing. If a venue-wide shift list also appears below (it will for manager/owner callers), it is NOT a valid source for this intent — never use it to answer QUERY_MY_SCHEDULE, even though you may use it for other intents. If the question is actually asking about a different named person's schedule, that is out of scope for QUERY_MY_SCHEDULE and no tool available to this role can answer it — respond UNRECOGNIZED rather than answering from the venue-wide list.`,
     );
   }
 
   lines.push(
     ``,
     `If a name, date, time, role, shift, or section is ambiguous or you cannot find a confident match in the lists above, respond with intent=UNRECOGNIZED and explain why in unrecognizedReason — never guess an id that isn't listed above, and never invent a date or time.`,
-    `Always fill in "summary" with one plain-English sentence describing exactly what will happen if this is confirmed, e.g. "Mark you unavailable on Friday, August 29th", "Approve Sarah's swap request for her Tuesday shift", "Create a Bartender shift for Ahmed, Friday 6pm-2am", or "Move Ahmed to the Bar section, Friday PM."`,
+    `Always fill in "summary" with one plain-English sentence describing exactly what will happen if this is confirmed (except for QUERY_MY_SCHEDULE, where summary is the direct answer itself, as described above) — e.g. "Mark you unavailable on Friday, August 29th", "Approve Sarah's swap request for her Tuesday shift", "Create a Bartender shift for Ahmed, Friday 6pm-2am", or "Move Ahmed to the Bar section, Friday PM."`,
     `Always fill in "confidence" (0 to 1) with how certain you are that this exactly matches what the caller asked for and that every id/date/time you filled in is correct — lower it whenever a name, date, or time was even slightly ambiguous before you resolved it.`,
   );
 
