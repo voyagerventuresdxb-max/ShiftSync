@@ -8,6 +8,7 @@ import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasteriz
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { notifyUser } from '../lib/push.js';
+import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 
 /**
  * Floor Plan — Sections & Duties.
@@ -419,15 +420,10 @@ floorPlanRouter.post('/assignments', requireSession, requireManager, async (req,
     const assignment = await withAuditedTransaction(
       prisma,
       (tx) =>
-        tx.sectionAssignment.upsert({
-          where: { sectionId_staffId_shiftDate_period: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM' } },
-          create: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById },
-          // Only touch dutyLabel on an existing row when the request actually
-          // sent the key — a plain re-assign (drag-drop, or tap-to-pick with no
-          // label typed) must not clobber a label set earlier via inline edit.
-          update: hasDutyLabelKey ? { dutyLabel } : {},
-          include: { staff: { select: { id: true, fullName: true } } },
-        }),
+        upsertSectionAssignment(
+          { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById, touchDutyLabel: hasDutyLabelKey },
+          tx,
+        ),
       (upserted) => ({
         locationId: section.locationId,
         actorId: createdById,
