@@ -46,6 +46,7 @@ model Location {
   users           User[]
   shifts          Shift[]
   auditLogs       AuditLog[]
+  voiceInteractionLogs VoiceInteractionLog[]
   floorPlanImages FloorPlanImage[]
   floorSections   FloorSection[]
   announcements   Announcement[]
@@ -132,6 +133,7 @@ model User {
   attendanceLogs          AttendanceLog[]
   monthlyAttendance       MonthlyAttendanceSummary[]
   auditLogsActor          AuditLog[]                 @relation("AuditActor")
+  voiceInteractionLogs    VoiceInteractionLog[]
   sectionAssignments      SectionAssignment[]        @relation("SectionAssignmentStaff")
   sectionAssignmentsMade  SectionAssignment[]        @relation("SectionAssignmentCreatedBy")
   announcements           Announcement[]
@@ -313,6 +315,35 @@ model AuditLog {
   @@index([locationId, createdAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+enum VoiceInteractionOutcome {
+  PENDING_CONFIRMATION
+  LOW_CONFIDENCE
+  UNRECOGNIZED
+  EXECUTED
+  REJECTED_VALIDATION
+  REJECTED_PERMISSION
+  ERROR
+}
+
+model VoiceInteractionLog {
+  id             String                  @id @default(cuid())
+  locationId     String                  @map("location_id")
+  actorId        String                  @map("actor_id")
+  transcript     String                  @db.Text
+  resolvedIntent String                  @map("resolved_intent")
+  confidence     Float?
+  outcome        VoiceInteractionOutcome
+  declineReason  String?                 @map("decline_reason") @db.Text
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  actor    User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([locationId, createdAt])
+  @@map("voice_interaction_logs")
 }
 
 enum AttendanceStatus {
