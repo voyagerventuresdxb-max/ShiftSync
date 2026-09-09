@@ -182,6 +182,19 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
   }
 });
 
+/**
+ * POST /api/voice/execute — body: { transcript, intent: ParsedIntent }.
+ * The "execute" half. Re-derives role from session (never trusts that
+ * /parse-intent already scoped this correctly — a client could call this
+ * directly with a hand-crafted intent) and re-validates every referenced
+ * entity fresh before writing anything.
+ *
+ * THIS IS THE ONLY REAL SECURITY BOUNDARY IN THE VOICE FEATURE. Everything
+ * upstream (the Gemini response-schema restriction in /parse-intent) is
+ * enforcement by the model, not a structural guarantee — a client can call
+ * this endpoint directly with a hand-crafted body, bypassing /parse-intent
+ * entirely. The role-permission check below MUST hold on its own.
+ */
 voiceRouter.post('/execute', requireSession, async (req, res) => {
   const transcript = String(req.body?.transcript ?? '');
   const intent = req.body?.intent as ParsedIntent | undefined;
@@ -200,7 +213,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
     declineReason?: string,
   ) => {
     if (voiceLogId) {
-      await updateInteractionOutcome(voiceLogId, outcome, declineReason).catch((err) =>
+      await updateInteractionOutcome(voiceLogId, req.user!.id, outcome, declineReason).catch((err) =>
         console.error('[voice.execute] failed to update interaction log', err),
       );
     }
@@ -212,11 +225,24 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
       return respond(400, { error: 'A parsed intent is required.' }, 'REJECTED_VALIDATION', 'A parsed intent is required.');
     }
 
+    // Check membership in the FULL known intent set FIRST, before the
+    // role-permission check runs — this is what makes the switch's own
+    // `default: … 400 'Unknown intent.'` branch below reachable at all.
+    // Without this ordering, a garbage/unknown intent string fell through
+    // to the same misleading 403 as a real-but-not-permitted intent
+    // ("Your role does not permit the \"DELETE_EVERYTHING\" action.").
     if (!ALL_INTENTS.includes(intent.intent)) {
       const msg = `"${intent.intent}" is not a recognized voice command.`;
       return respond(400, { error: msg }, 'REJECTED_VALIDATION', msg);
     }
 
+    // 'UNRECOGNIZED' is exempt from the role-permission check: it is not a
+    // real, role-restricted action (it's the model's own "I couldn't
+    // confidently resolve this" signal), and it is deliberately absent from
+    // both allowedIntentsFor()'s STAFF_INTENTS/MANAGER_INTENTS arrays — those
+    // only ever list real actions. Without this exemption, a legitimate
+    // UNRECOGNIZED parse would be misreported as a 403 permission error
+    // instead of reaching its own dedicated 400 branch in the switch below.
     const allowed = allowedIntentsFor(req.user!.systemRole);
     if (intent.intent !== 'UNRECOGNIZED' && !allowed.includes(intent.intent as (typeof allowed)[number])) {
       const msg = `Your role does not permit the "${intent.intent}" action.`;
@@ -428,7 +454,15 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           prisma,
           (tx) =>
             upsertSectionAssignment(
-              { sectionId: intent.sectionId, staffId: intent.staffId, shiftDate, period: intent.period, dutyLabel: intent.dutyLabel, createdById: actorId, touchDutyLabel: true },
+              {
+                sectionId: intent.sectionId,
+                staffId: intent.staffId,
+                shiftDate,
+                period: intent.period,
+                dutyLabel: intent.dutyLabel,
+                createdById: actorId,
+                touchDutyLabel: intent.dutyLabel !== null,
+              },
               tx,
             ),
           (upserted) => ({

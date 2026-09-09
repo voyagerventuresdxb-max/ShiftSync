@@ -43,14 +43,24 @@ export async function logParsedInteraction(
   return row.id;
 }
 
-/** Called from /execute right before its response is sent, to record the final outcome of a PENDING_CONFIRMATION row. */
+/**
+ * Called from /execute right before its response is sent, to record the
+ * final outcome of a PENDING_CONFIRMATION row. Scoped to `actorId` — a
+ * client can send an arbitrary `voiceLogId` in its /execute request body,
+ * and without this scope that would let any authenticated session overwrite
+ * another user's (or another location's) audit-trail row. `updateMany`
+ * silently no-ops when `logId` doesn't belong to `actorId`, consistent with
+ * this call's already-established best-effort/non-blocking semantics (it's
+ * wrapped in a `.catch()` at the call site).
+ */
 export async function updateInteractionOutcome(
   logId: string,
+  actorId: string,
   outcome: VoiceInteractionOutcome,
   declineReason?: string,
 ): Promise<void> {
-  await prisma.voiceInteractionLog.update({
-    where: { id: logId },
+  await prisma.voiceInteractionLog.updateMany({
+    where: { id: logId, actorId },
     data: { outcome, declineReason: declineReason ?? null },
   });
 }
