@@ -34,7 +34,7 @@ let client: GoogleGenAI | null = null;
  */
 export const CONFIDENCE_THRESHOLD = 0.6;
 
-async function buildContext(user: { id: string; systemRole: SystemRole; fullName: string; locationId: string }): Promise<PromptContext> {
+export async function buildContext(user: { id: string; systemRole: SystemRole; fullName: string; locationId: string }): Promise<PromptContext> {
   // Everything the model is told about "now" must be in the VENUE's local
   // zone, not UTC. A Dubai (UTC+4) venue's 00:00-04:00 — exactly when a
   // closing shift ends — is still the previous UTC day, so a UTC "today"
@@ -251,6 +251,8 @@ function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
         };
       }
       break;
+    case 'QUERY_MY_SCHEDULE':
+      return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
     case 'ASSIGN_SECTION':
       if (typeof raw.sectionId === 'string' && typeof raw.staffId === 'string' && typeof raw.shiftDate === 'string' && (raw.period === 'AM' || raw.period === 'PM')) {
         return {
