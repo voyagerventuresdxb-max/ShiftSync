@@ -56,9 +56,13 @@ const RECORDER_MIME_CANDIDATES = [
  * MediaRecorder, so a tap-and-forget would otherwise record until the tab
  * closed — with the only backstop being multer's 10MB upload cap, which
  * surfaces as a confusing generic "File too large" AFTER the whole
- * recording is discarded. 45s is far beyond any real spoken command.
+ * recording is discarded.
+ *
+ * 10s hard cap — matches the product requirement that voice commands stay
+ * short and specific; MediaRecorder otherwise records until the tab is
+ * closed or stop() is called.
  */
-const MAX_RECORDING_MS = 45_000;
+const MAX_RECORDING_MS = 10_000;
 
 function pickRecorderMimeType(): string {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
@@ -130,7 +134,7 @@ export function AppShell() {
   // and a state value exist.
   const [voiceStarting, setVoiceStarting] = useState(false);
   const [voiceProcessing, setVoiceProcessing] = useState(false);
-  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent } | null>(null);
+  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent; voiceLogId: string } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
@@ -181,8 +185,8 @@ export function AppShell() {
       setVoiceProcessing(true);
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
-        const { intent } = await parseVoiceIntent(session.token, transcript);
-        setVoiceResult({ transcript, intent });
+        const { intent, voiceLogId } = await parseVoiceIntent(session.token, transcript);
+        setVoiceResult({ transcript, intent, voiceLogId });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
       } finally {
@@ -216,7 +220,9 @@ export function AppShell() {
     voiceStartingRef.current = true;
     setVoiceStarting(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
+      });
       const mimeType = pickRecorderMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
@@ -274,7 +280,7 @@ export function AppShell() {
     }
     setVoiceExecuting(true);
     try {
-      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent);
+      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
       setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
     } catch (err) {
       setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not execute the voice command.' });
