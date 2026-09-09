@@ -1028,6 +1028,77 @@ test('POST /api/voice/execute: CREATE_SHIFT from a MANAGER session creates a rea
   }
 });
 
+test('POST /api/voice/execute: EDIT_SHIFT from a MANAGER session updates only the field the intent supplied, leaving everything else untouched', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role, 'seed data (location + role) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-final-fix-test__ edit-shift manager', systemRole: 'MANAGER' },
+  });
+  const originalAssignee = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-final-fix-test__ edit-shift original assignee', systemRole: 'STAFF' },
+  });
+  const newAssignee = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-final-fix-test__ edit-shift new assignee', systemRole: 'STAFF' },
+  });
+
+  const originalDate = new Date('2026-09-24T00:00:00.000Z');
+  const originalStart = new Date('2026-09-24T09:00:00.000Z');
+  const originalEnd = new Date('2026-09-24T17:00:00.000Z');
+  const shift = await prisma.shift.create({
+    data: {
+      locationId: location!.id,
+      roleId: role!.id,
+      userId: originalAssignee.id,
+      date: originalDate,
+      startTime: originalStart,
+      endTime: originalEnd,
+      status: 'PUBLISHED',
+    },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'reassign that shift to the new assignee',
+          intent: { intent: 'EDIT_SHIFT', shiftId: shift.id, userId: newAssignee.id, confidence: 0.9, summary: 'Reassign the shift.' },
+        }),
+      });
+      assert.equal(res.status, 200, 'MANAGER must be able to execute EDIT_SHIFT');
+      const body = (await res.json()) as { executed: boolean; result: { id: string } };
+      assert.equal(body.executed, true);
+    });
+
+    const updated = await prisma.shift.findUnique({ where: { id: shift.id } });
+    assert.ok(updated, 'the Shift row must still exist');
+    assert.equal(updated!.userId, newAssignee.id, 'the field the intent supplied (userId) must have changed');
+    // Critical assertion: fields NOT included in the intent must be
+    // untouched by the partial-update fallback logic — this is exactly
+    // what would break if EDIT_SHIFT's "fall back to the existing shift's
+    // value" logic had a bug.
+    assert.equal(updated!.date.toISOString(), originalDate.toISOString(), 'date must be unchanged — it was not part of the intent');
+    assert.equal(updated!.startTime.toISOString(), originalStart.toISOString(), 'startTime must be unchanged — it was not part of the intent');
+    assert.equal(updated!.endTime.toISOString(), originalEnd.toISOString(), 'endTime must be unchanged — it was not part of the intent');
+    assert.equal(updated!.roleId, role!.id, 'roleId must be unchanged — it was not part of the intent');
+
+    const auditRow = await prisma.auditLog.findFirst({
+      where: { entityType: 'Shift', entityId: shift.id, action: 'SHIFT_UPDATED', note: { contains: '[voice]' } },
+    });
+    assert.ok(auditRow, 'a real AuditLog row with action SHIFT_UPDATED and a [voice] note must exist');
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { entityType: 'Shift', entityId: shift.id } });
+    await prisma.shift.delete({ where: { id: shift.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: originalAssignee.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: newAssignee.id } }).catch(() => {});
+  }
+});
+
 test('POST /api/voice/execute: a STAFF session cannot CREATE_SHIFT even with a hand-crafted intent — 403, nothing created', async () => {
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });

@@ -2,10 +2,13 @@ import type { SystemRole } from '@prisma/client';
 import { allowedIntentsFor } from './intentSchema.js';
 
 export interface PromptContext {
-  today: string;
+  today: string; // YYYY-MM-DD
   callerName: string;
+  /** The caller's own upcoming shifts — only relevant/populated for REQUEST_SWAP. */
   callerShifts: { id: string; date: string; startTime: string; endTime: string }[];
+  /** Every active staff member at this location, for name resolution. */
   staffDirectory: { id: string; fullName: string }[];
+  /** Only populated for manager-tier callers — the pending decisions they could be asked to act on. */
   pendingSwapRequests?: { id: string; requesterName: string; shiftLabel: string }[];
   pendingJoinRequests?: { id: string; fullName: string; phone: string }[];
   /** Manager-tier only — every role at this venue, for CREATE_SHIFT/EDIT_SHIFT. */
@@ -16,6 +19,12 @@ export interface PromptContext {
   floorSections?: { id: string; label: string }[];
 }
 
+/**
+ * Builds the role-scoped system prompt. The allowed-intents list is generated
+ * from the SAME array `intentSchemaFor` restricts the response schema to —
+ * this function never hand-types a separate list, so the prompt text and the
+ * schema enum can never drift apart.
+ */
 export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): string {
   const allowed = allowedIntentsFor(systemRole);
   const lines = [

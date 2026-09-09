@@ -135,17 +135,31 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file uploaded.' });
 
-    const [staff, sections, roles] = await Promise.all([
-      prisma.user.findMany({ where: { locationId: req.user!.locationId, isActive: true }, select: { fullName: true } }),
-      prisma.floorSection.findMany({ where: { locationId: req.user!.locationId }, select: { label: true } }),
-      prisma.role.findMany({ where: { locationId: req.user!.locationId }, select: { name: true } }),
-    ]);
-    const vocabulary = [
-      ...staff.map((s) => s.fullName),
-      ...sections.map((s) => s.label),
-      ...roles.map((r) => r.name),
-      'rota', 'floor', 'section', 'swap', 'cover', 'shift',
-    ].join(', ');
+    // The vocabulary hint is purely an accuracy optimization, not a
+    // requirement — this endpoint previously touched no database at all.
+    // Isolate the lookups so a transient DB blip degrades to "transcription
+    // without the vocabulary boost" instead of failing the whole request.
+    let vocabulary: string | undefined;
+    try {
+      const [staff, sections, roles] = await Promise.all([
+        prisma.user.findMany({ where: { locationId: req.user!.locationId, isActive: true }, select: { fullName: true } }),
+        prisma.floorSection.findMany({ where: { locationId: req.user!.locationId }, select: { label: true } }),
+        prisma.role.findMany({ where: { locationId: req.user!.locationId }, select: { name: true } }),
+      ]);
+      const vocabularyTerms = [
+        ...staff.map((s) => s.fullName),
+        ...sections.map((s) => s.label),
+        ...roles.map((r) => r.name),
+        'rota', 'floor', 'section', 'swap', 'cover', 'shift',
+      ];
+      // Cap (and, as a side effect, de-dupe via Set) so a venue with hundreds
+      // of staff/sections/roles doesn't blow up the prompt appended to every
+      // transcription — this is a hint, not a directory.
+      vocabulary = [...new Set(vocabularyTerms)].slice(0, 150).join(', ');
+    } catch (vocabErr) {
+      console.error('[voice.transcribe] failed to build vocabulary hint, transcribing without it', vocabErr);
+      vocabulary = undefined;
+    }
 
     const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
     return res.status(200).json({ transcript });
@@ -271,6 +285,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
 
     switch (intent.intent) {
       case 'MARK_AVAILABILITY': {
+        // markAvailability() upserts unconditionally (one row per (userId, date))
+        // and only ever returns { result: 'ok' } — there is no 'not_found' case
+        // to handle here, unlike the swap/join actions below.
         const result = await withAuditedTransaction(
           prisma,
           (tx) => markAvailability({ userId: actorId, date: intent.date, type: intent.type, note }, tx),
@@ -284,6 +301,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That shift could not be found among your own upcoming shifts.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // The proposed cover must be a real, active staff member at the SAME
+        // location — otherwise this either silently creates a swap request
+        // naming an out-of-location (or nonexistent) "cover", or blows up as
+        // a bare Prisma FK-violation 500. Mirrors the equivalent validation
+        // in the REST route (server/src/routes/swapRequests.ts).
         const target = await prisma.user.findFirst({
           where: { id: intent.targetUserId, locationId, isActive: true },
           select: { id: true },
@@ -297,11 +319,18 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
           (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
         );
+        // Same notification path as the REST route (routes/swapRequests.ts's
+        // POST) — never inside the transaction above.
         void notifySwapRequested(created, locationId);
         return respond(201, { executed: true, result: created }, 'EXECUTED');
       }
       case 'APPROVE_SWAP':
       case 'DECLINE_SWAP': {
+        // The referenced ShiftSwapRequest must belong to the caller's own
+        // location — otherwise a manager at Location A could approve/decline
+        // (and, on approval, reassign a shift for) a request that belongs to
+        // Location B entirely. REQUEST_SWAP already gets this right for
+        // shifts (above); this is the same treatment for the decide path.
         const sr = await prisma.shiftSwapRequest.findUnique({
           where: { id: intent.swapRequestId },
           select: { status: true, shift: { select: { locationId: true } } },
@@ -310,6 +339,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That swap request could not be found.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // decideSwapRequest's 'conflict' result means specifically "a DIFFERENT
+        // request already reassigned this shift" — it does NOT catch "this
+        // exact request was already approved or declined", so without this
+        // guard voice could flip an already-DECLINED request to APPROVED.
+        // Mirrors the sibling join path's `already_reviewed` handling below.
         if (sr.status !== 'PENDING') {
           const msg = `That swap request was already ${sr.status.toLowerCase()}.`;
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
@@ -321,10 +355,21 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That swap request could not be found.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // 'conflict' is NOT "already decided" (the PENDING guard above covers
+        // that) — isRequestLocked() only ever fires on a still-PENDING request
+        // whose shift a DIFFERENT approved request already reassigned.
         if (result.result === 'conflict') {
           const msg = 'That shift was already reassigned by another swap request.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
+        // SWAP_DECLINED) inside its transaction — append the voice transcript by
+        // writing a SECOND, linked row rather than mutating the first, keeping
+        // the shared action function's own audit write untouched. This row
+        // carries the entity's own shiftId (from result.request, which we
+        // already have in hand) and its own locationId (from the `sr` lookup
+        // above) rather than null/the caller's locationId, matching how
+        // REQUEST_SWAP's voice row already does it.
         await writeAuditLog(prisma, {
           locationId: sr.shift.locationId,
           actorId,
@@ -334,11 +379,15 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           entityId: intent.swapRequestId,
           note,
         });
+        // Same notification path as the REST route (routes/swapRequests.ts's
+        // PATCH) — never inside the audit write above.
         void notifySwapDecided(result.request, decision);
         return respond(200, { executed: true, result: result.request }, 'EXECUTED');
       }
       case 'APPROVE_JOIN':
       case 'DECLINE_JOIN': {
+        // Same location-scoping treatment as APPROVE_SWAP/DECLINE_SWAP above,
+        // against JoinRequest.locationId directly.
         const jr = await prisma.joinRequest.findUnique({ where: { id: intent.joinRequestId }, select: { locationId: true } });
         if (!jr || jr.locationId !== locationId) {
           const msg = 'That join request could not be found.';
@@ -363,6 +412,10 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           entityId: intent.joinRequestId,
           note,
         });
+        // Return the entity itself, like every sibling branch does
+        // (result.mark, result.request, created) — not the whole
+        // action-function envelope, which nested confusingly as
+        // {"result":{"result":"ok",...}}.
         return respond(200, { executed: true, result: { status: result.status, userId: result.userId } }, 'EXECUTED');
       }
       case 'CREATE_SHIFT': {

@@ -42,21 +42,21 @@ model Location {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  roles           Role[]
-  users           User[]
-  shifts          Shift[]
-  auditLogs       AuditLog[]
+  roles                Role[]
+  users                User[]
+  shifts               Shift[]
+  auditLogs            AuditLog[]
   voiceInteractionLogs VoiceInteractionLog[]
-  floorPlanImages FloorPlanImage[]
-  floorSections   FloorSection[]
-  announcements   Announcement[]
-  shoutouts       Shoutout[]
-  rotaTemplates   RotaTemplate[]
-  rotaPublishes   RotaPublish[]
-  eightySixItems  EightySixItem[]
-  joinRequests    JoinRequest[]
-  policyDocuments PolicyDocument[]
-  floorFeedback   FloorFeedback[]
+  floorPlanImages      FloorPlanImage[]
+  floorSections        FloorSection[]
+  announcements        Announcement[]
+  shoutouts            Shoutout[]
+  rotaTemplates        RotaTemplate[]
+  rotaPublishes        RotaPublish[]
+  eightySixItems       EightySixItem[]
+  joinRequests         JoinRequest[]
+  policyDocuments      PolicyDocument[]
+  floorFeedback        FloorFeedback[]
 
   @@index([organizationId])
   @@map("locations")

@@ -71,7 +71,7 @@ export async function transcribeAudio(token: string, audioBlob: Blob): Promise<{
 }
 
 /** POST /api/voice/parse-intent — body: { transcript }. Never mutates anything — the "propose" half of confirm-before-execute. */
-export async function parseVoiceIntent(token: string, transcript: string): Promise<{ transcript: string; intent: ParsedIntent; voiceLogId: string }> {
+export async function parseVoiceIntent(token: string, transcript: string): Promise<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null }> {
   return request('/api/voice/parse-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
@@ -80,16 +80,16 @@ export async function parseVoiceIntent(token: string, transcript: string): Promi
 }
 
 /**
- * POST /api/voice/execute — body: { transcript, intent }. The "execute" half
- * of confirm-before-execute. The real permission/shape re-validation lives
- * server-side (see server/src/routes/voice.ts) — this client call carries
- * whatever intent /parse-intent returned, unmodified.
+ * POST /api/voice/execute — body: { transcript, intent, voiceLogId }. The
+ * "execute" half of confirm-before-execute. The real permission/shape
+ * re-validation lives server-side (see server/src/routes/voice.ts) — this
+ * client call carries whatever intent /parse-intent returned, unmodified.
  */
 export async function executeVoiceIntent(
   token: string,
   transcript: string,
   intent: ParsedIntent,
-  voiceLogId: string,
+  voiceLogId: string | null,
 ): Promise<{ executed: boolean; result: unknown }> {
   return request('/api/voice/execute', {
     method: 'POST',
