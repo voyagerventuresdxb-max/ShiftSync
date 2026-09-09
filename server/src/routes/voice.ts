@@ -134,7 +134,20 @@ function validateIntentShape(intent: ParsedIntent): string | null {
 voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file uploaded.' });
-    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype);
+
+    const [staff, sections, roles] = await Promise.all([
+      prisma.user.findMany({ where: { locationId: req.user!.locationId, isActive: true }, select: { fullName: true } }),
+      prisma.floorSection.findMany({ where: { locationId: req.user!.locationId }, select: { label: true } }),
+      prisma.role.findMany({ where: { locationId: req.user!.locationId }, select: { name: true } }),
+    ]);
+    const vocabulary = [
+      ...staff.map((s) => s.fullName),
+      ...sections.map((s) => s.label),
+      ...roles.map((r) => r.name),
+      'rota', 'floor', 'section', 'swap', 'cover', 'shift',
+    ].join(', ');
+
+    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
     return res.status(200).json({ transcript });
   } catch (err) {
     if (err instanceof VoiceTranscriptionError) {
