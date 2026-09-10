@@ -96,6 +96,7 @@ export function parseRosterText(
       end: parsed.end,
       type: parsed.type,
       overnight: isOvernight(parsed.start, parsed.end),
+      requiredRole: parsed.role ?? emp.role,
       source: raw,
     });
 

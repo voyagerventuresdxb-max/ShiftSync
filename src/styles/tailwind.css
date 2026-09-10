@@ -1,0 +1,135 @@
+@import "tailwindcss" source(none);
+@source "../";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Tailwind theme tokens for the ported ShiftSync dashboard components.
+ * Values are pinned to the palette already defined in styles/global.css
+ * (AGENTS.md "Dark Luxury Speakeasy") so there is one source of truth,
+ * not a second Lovable-provided palette living alongside it.
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-2);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface-2);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #17130a;
+  --color-secondary: var(--surface-2);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--accent);
+  --color-accent-foreground: #17130a;
+  --color-signal: #4fb8e0;
+  --color-signal-foreground: #0b2530;
+  --color-success: var(--success);
+  --color-warning: #d9a53c;
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-border-strong: #3a3a4a;
+  --color-input: #3a3a4a;
+  --color-ring: color-mix(in oklab, var(--accent) 55%, transparent);
+  --color-ring-offset-background: var(--bg);
+  --font-sans:
+    "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --shadow-lux: 0 24px 60px -24px rgb(0 0 0 / 0.75);
+  --shadow-glow: 0 0 0 1px var(--accent-dim), 0 12px 40px -20px var(--accent-dim);
+  --animate-rise: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+:root {
+  --radius: 0.875rem;
+  --accent-dim: color-mix(in oklab, var(--accent) 22%, transparent);
+  --glass-blur: 22px;
+  --glass-border: color-mix(in oklab, oklch(1 0 0) 12%, transparent);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklab, var(--accent) 55%, transparent),
+      0 0 10px -2px color-mix(in oklab, var(--accent) 45%, transparent);
+    transform: scale(1.04);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px color-mix(in oklab, var(--accent) 70%, transparent),
+      0 0 18px 0 color-mix(in oklab, var(--accent) 50%, transparent);
+    transform: scale(1.09);
+  }
+}
+
+@utility panel {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+}
+
+@utility panel-raised {
+  background-color: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+}
+
+@utility gold-rule {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent) 40%,
+    var(--color-accent) 60%,
+    transparent
+  );
+}
+
+@utility eyebrow {
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+}
+
+/* Shared glassmorphic chrome for the top bar and the bottom radial dock. */
+@utility glass-bar {
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--color-accent) 9%, transparent),
+    color-mix(in oklab, oklch(1 0 0) 8%, transparent)
+  );
+  background-color: color-mix(in oklab, var(--color-background) 55%, transparent);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  border: 1px solid var(--glass-border);
+}
+
+@utility glow-gold {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-accent) 45%, transparent),
+    0 0 10px -2px color-mix(in oklab, var(--color-accent) 50%, transparent),
+    0 0 20px -8px color-mix(in oklab, var(--color-accent) 35%, transparent);
+}

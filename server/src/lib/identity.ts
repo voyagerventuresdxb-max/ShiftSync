@@ -1,0 +1,119 @@
+import { randomInt, randomBytes, createHash } from 'node:crypto';
+import { prisma } from './prisma.js';
+import type { OtpPurpose, User } from '@prisma/client';
+
+const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — long-lived, no refresh flow in this lightweight model
+const MAX_OTP_ATTEMPTS = 5;
+
+/**
+ * Digits only, dropping a leading international-dialing prefix so
+ * "+971 50 123 4567", "00971501234567", and "0501234567" can all match the
+ * same stored number. Shared by identity.ts (login) and join.ts
+ * (self-registration) so phone matching stays consistent between the two.
+ */
+export function phoneDigits(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  const withoutIntlPrefix = digits.replace(/^00/, '').replace(/^971/, '');
+  return withoutIntlPrefix.replace(/^0/, '');
+}
+
+/** Real 6-digit numeric code. Never logged/returned in production (see the request-otp routes). */
+export function generateOtp(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
+}
+
+/** sha256 hex digest — codes and session tokens are never stored in plaintext. */
+export function hashOtp(code: string): string {
+  return createHash('sha256').update(code).digest('hex');
+}
+
+/**
+ * Creates and stores a new OTP for (phone, purpose), invalidating any prior
+ * unconsumed code for the same (phone, purpose) pair so only the most
+ * recently requested code is ever valid.
+ *
+ * `OtpCode.phone` is stored as NORMALIZED digits (via `phoneDigits`), not the
+ * raw submitted string — so a code requested as "+971 50 123 4567" can be
+ * verified as "0501234567", exactly like user-matching already treats phone
+ * numbers. Keying on the raw string only worked by coincidence (the client
+ * happening to send an identical string both times).
+ */
+export async function createOtpCode(
+  phone: string,
+  purpose: OtpPurpose,
+): Promise<{ id: string; plainCode: string; expiresAt: Date }> {
+  const normalizedPhone = phoneDigits(phone);
+  await prisma.otpCode.updateMany({
+    where: { phone: normalizedPhone, purpose, consumedAt: null },
+    data: { consumedAt: new Date() }, // invalidate — not a real "use," just supersession
+  });
+  const plainCode = generateOtp();
+  const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+  const created = await prisma.otpCode.create({
+    data: { phone: normalizedPhone, purpose, codeHash: hashOtp(plainCode), expiresAt },
+  });
+  return { id: created.id, plainCode, expiresAt };
+}
+
+/**
+ * Verifies a submitted code against the most recent unconsumed OTP for
+ * (phone, purpose). Consumes it (success or failure) so a code can never be
+ * replayed, and rate-limits guesses via `attempts`.
+ */
+export async function verifyOtpCode(
+  phone: string,
+  purpose: OtpPurpose,
+  submittedCode: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  // Look up on the same normalized digits `createOtpCode` stored (see there).
+  const record = await prisma.otpCode.findFirst({
+    where: { phone: phoneDigits(phone), purpose, consumedAt: null },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (!record) return { ok: false, reason: 'No active code for this phone number — request a new one.' };
+  if (record.expiresAt < new Date()) {
+    await prisma.otpCode.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+    return { ok: false, reason: 'That code has expired — request a new one.' };
+  }
+  if (record.attempts >= MAX_OTP_ATTEMPTS) {
+    await prisma.otpCode.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+    return { ok: false, reason: 'Too many incorrect attempts — request a new code.' };
+  }
+  if (hashOtp(submittedCode) !== record.codeHash) {
+    await prisma.otpCode.update({ where: { id: record.id }, data: { attempts: { increment: 1 } } });
+    return { ok: false, reason: 'Incorrect code.' };
+  }
+  await prisma.otpCode.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+  return { ok: true };
+}
+
+/** Issues a new bearer session token for a real, already-verified User. */
+export async function issueSession(userId: string): Promise<{ plainToken: string; expiresAt: Date }> {
+  const plainToken = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  await prisma.session.create({
+    data: { userId, tokenHash: hashOtp(plainToken), expiresAt },
+  });
+  return { plainToken, expiresAt };
+}
+
+/**
+ * Deletes the Session row backing a bearer token, ending it server-side.
+ * Idempotent: a token that resolves to no row (already revoked, expired and
+ * cleaned up, or never valid) is a silent no-op rather than an error — a
+ * sign-out must never fail just because there was nothing left to sign out of.
+ */
+export async function revokeSession(plainToken: string): Promise<void> {
+  await prisma.session.deleteMany({ where: { tokenHash: hashOtp(plainToken) } });
+}
+
+/** Resolves a bearer token to its real User, or null if missing/expired/unknown. */
+export async function resolveSession(plainToken: string): Promise<User | null> {
+  const session = await prisma.session.findUnique({
+    where: { tokenHash: hashOtp(plainToken) },
+    include: { user: true },
+  });
+  if (!session || session.expiresAt < new Date()) return null;
+  return session.user;
+}

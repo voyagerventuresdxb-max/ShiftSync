@@ -1,0 +1,91 @@
+/**
+ * Client for the Staff Directory API (server/src/routes/staffDirectory.ts)
+ * — the venue-configured staff-name -> job-title mapping, set manually
+ * once, never inferred from an uploaded roster.
+ *
+ * Extended to also carry phone, preferred language, start date (hiredAt),
+ * employment status (isActive), and a read-only venue name (joined from
+ * Location.name) — see the 2026-08-28 People/Identity plan, Task 5.
+ */
+import { ApiError } from './schedules';
+
+export interface StaffDirectoryEntry {
+  id: string;
+  fullName: string;
+  jobTitle: string | null;
+  /** The venue Role's DB id — what every shift-write endpoint requires. Null for staff with no role assigned yet. */
+  roleId: string | null;
+  roleName: string | null;
+  phone: string | null;
+  preferredLanguage: string | null;
+  /** ISO date, YYYY-MM-DD, or null if never set. */
+  hiredAt: string | null;
+  /** Employment status is the isActive + terminatedAt pair, not a separate enum. */
+  isActive: boolean;
+  /** ISO date, YYYY-MM-DD, set when isActive flips to false and cleared when it flips back. */
+  terminatedAt: string | null;
+  /** Read-only, joined from Location.name. */
+  venueName: string;
+}
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // non-JSON error body; keep the generic message
+    }
+    throw new ApiError(message, res.status);
+  }
+  return (await res.json()) as T;
+}
+
+/**
+ * GET /api/staff-directory/:locationId — returns ALL staff for a location,
+ * including inactive/terminated ones (the server deliberately does not
+ * filter by isActive so a manager can see and un-terminate someone).
+ * Callers that render staff as assignable (e.g. Floor Plan) must filter
+ * on `isActive` themselves.
+ */
+export async function fetchStaffDirectory(locationId: string): Promise<StaffDirectoryEntry[]> {
+  const data = await request<{ staff: StaffDirectoryEntry[] }>(`/api/staff-directory/${locationId}`);
+  return data.staff;
+}
+
+/** POST /api/staff-directory — body: { locationId, fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? } */
+export async function addStaffMember(input: {
+  locationId: string;
+  fullName: string;
+  jobTitle?: string | null;
+  phone?: string | null;
+  preferredLanguage?: string | null;
+  hiredAt?: string | null;
+}): Promise<StaffDirectoryEntry> {
+  return request<StaffDirectoryEntry>('/api/staff-directory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+/** PATCH /api/staff-directory/:userId — accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, isActive. */
+export async function updateStaffMember(
+  userId: string,
+  updates: {
+    fullName?: string;
+    jobTitle?: string | null;
+    phone?: string | null;
+    preferredLanguage?: string | null;
+    hiredAt?: string | null;
+    isActive?: boolean;
+  },
+): Promise<StaffDirectoryEntry> {
+  return request<StaffDirectoryEntry>(`/api/staff-directory/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+}

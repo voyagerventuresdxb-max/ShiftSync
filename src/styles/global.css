@@ -28,35 +28,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.app-shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1.5rem;
-  padding: 2rem;
-}
-
-.app-header {
-  text-align: center;
-}
-
-.brand {
-  color: var(--accent);
-  font-size: 2.5rem;
-  letter-spacing: 0.05em;
-  margin: 0;
-}
-
-.tagline {
-  color: var(--text-secondary);
-  margin: 0;
-  max-width: 32rem;
-}
-
-.parser,
-.roster,
-.warnings {
+.roster {
   width: 100%;
   max-width: 56rem;
   background: var(--surface);
@@ -76,23 +48,6 @@ body {
   color: var(--text-secondary);
   font-size: 0.9rem;
   margin: 0 0 0.75rem;
-}
-
-.paste-area {
-  width: 100%;
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem;
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 0.9rem;
-  resize: vertical;
-}
-
-.paste-area:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .meta {
@@ -117,7 +72,7 @@ body {
   font-size: 0.9rem;
 }
 
-.grid {
+.roster-table-grid {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -186,4 +141,754 @@ body {
   justify-content: flex-end;
   color: var(--accent);
   font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+ * Categorized roster grid — grouped role sections
+ * ------------------------------------------------------------------------- */
+
+.roster-section {
+  display: contents;
+}
+
+.roster-section-head {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(7, 1fr) 0.8fr;
+  gap: 2px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.5rem;
+  margin: 0.5rem 0 0.25rem;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.roster-section-head:hover {
+  background: var(--surface-2);
+}
+
+.roster-section-head-warn {
+  border-color: #d9a441;
+}
+
+.roster-section-head-warn .section-label {
+  color: #d9a441;
+}
+
+.section-caret {
+  display: inline-block;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+  margin-right: 0.4rem;
+}
+
+.section-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.section-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.section-count {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.75rem;
+  margin-left: 0.5rem;
+}
+
+/* AM/PM split shifts render as two compact time blocks in one cell. */
+.cell.shift .split {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.72rem;
+  line-height: 1.1;
+}
+
+.cell.shift .split .period {
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ---------------------------------------------------------------------------
+ * Upload & preview review (ShiftUpload)
+ * ------------------------------------------------------------------------- */
+
+.upload-card {
+  width: 100%;
+  max-width: 56rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  text-align: left;
+}
+
+.upload-header {
+  margin-bottom: 1rem;
+}
+
+.dropzone {
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropzone:hover,
+.dropzone-active {
+  border-color: var(--accent);
+  background: rgba(229, 169, 60, 0.05);
+}
+
+.dropzone-icon {
+  font-size: 2rem;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.dropzone-title {
+  margin: 0.5rem 0 0.25rem;
+  color: var(--text);
+}
+
+.dropzone-title span {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.dropzone-sub {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.status-block {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  color: var(--text-secondary);
+}
+
+.status-block p {
+  margin: 0;
+}
+
+.spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error-block {
+  border: 1px solid var(--danger);
+  background: rgba(229, 72, 77, 0.08);
+  border-radius: 10px;
+  padding: 1rem;
+  color: var(--danger);
+}
+
+.error-block p {
+  margin: 0 0 0.75rem;
+}
+
+/* Expired upload-session warning — rendered as a prominent toast so the
+   manager immediately understands the preview lapsed and must re-upload. */
+.error-block-toast {
+  border-color: var(--accent);
+  background: rgba(229, 169, 60, 0.1);
+  color: var(--accent);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.success-block {
+  border: 1px solid var(--success);
+  background: rgba(46, 158, 91, 0.08);
+  border-radius: 10px;
+  padding: 1rem;
+  color: var(--text);
+}
+
+.success-block p {
+  margin: 0 0 0.75rem;
+}
+
+.success-warn {
+  color: var(--accent);
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 1.1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover {
+  filter: brightness(1.1);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #1a1a22;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  border-color: var(--text-secondary);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.badge-ok {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.badge-new {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.badge-warn {
+  color: #d9a441;
+  border-color: #d9a441;
+}
+
+.badge-err {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.parse-issues {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.parse-issues strong {
+  color: var(--text);
+}
+
+.parse-issues ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.anomaly-block {
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.anomaly-block strong {
+  color: var(--accent);
+}
+
+.anomaly-block ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.chip:hover {
+  color: var(--text);
+}
+
+.chip-active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.preview-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.preview-table th,
+.preview-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.preview-table thead th {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+.preview-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.preview-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cell-num {
+  color: var(--text-secondary);
+}
+
+.overnight-tag {
+  margin-left: 0.35rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  font-size: 0.7rem;
+}
+
+.status-tag {
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.status-matched {
+  background: rgba(46, 158, 91, 0.15);
+  color: var(--success);
+}
+
+.status-new_employee {
+  background: rgba(229, 169, 60, 0.15);
+  color: var(--accent);
+}
+
+.status-unmatched_role {
+  background: rgba(217, 164, 65, 0.15);
+  color: #d9a441;
+}
+
+.status-error {
+  background: rgba(229, 72, 77, 0.15);
+  color: var(--danger);
+}
+
+.row-issues {
+  margin-left: 0.4rem;
+  color: var(--danger);
+  cursor: help;
+}
+
+.preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+/* Needs-Review / Matched roster sections — bordered sub-panels inside the
+   already-bordered .upload-card, same treatment as .parse-issues /
+   .anomaly-block (surface-2 fill, hairline border, rounded corners). */
+.preview-section {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.preview-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.preview-section-header .hint {
+  margin: 0;
+}
+
+/* Bottom-anchored bar that replaces the plain .preview-actions row once the
+   preview is split into sections — same right-aligned button pair (nesting
+   .preview-actions unchanged), plus outstanding-count text on the left. */
+.preview-sticky-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  padding: 0.75rem 0 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.preview-sticky-count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.staff-directory {
+  width: 100%;
+  max-width: 56rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.75rem 1.25rem;
+  text-align: left;
+}
+
+.staff-directory-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.5rem 0;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-align: left;
+}
+
+.staff-directory-body {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+}
+
+.staff-directory-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.staff-directory-input {
+  flex: 1 1 12rem;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.staff-directory-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.staff-directory-input-inline {
+  width: 100%;
+  min-width: 10rem;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Floor Plan                                                              */
+/* ---------------------------------------------------------------------- */
+
+.fp-tab {
+  width: 100%;
+  max-width: 56rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.fp-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.fp-tab-header .section-title {
+  margin: 0;
+}
+
+.fp-mode-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.fp-upload-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.fp-editor,
+.fp-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.fp-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.fp-canvas-wrap {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  line-height: 0;
+}
+
+.fp-canvas-wrap-editor {
+  cursor: crosshair;
+}
+
+.fp-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+
+/* Roster strip (staff chips) and section pin drop targets are now styled
+   with Tailwind utility classes directly in StaffChip.tsx/SectionOverlay.tsx
+   (matching the restyled Lovable UI's design language) instead of these
+   bespoke classes. */
+.fp-roster-strip {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.35rem;
+}
+
+.fp-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 1.5rem;
+}
+
+.fp-picker {
+  width: 100%;
+  max-width: 24rem;
+  max-height: 80vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+
+.fp-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fp-picker-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.fp-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-y: auto;
+}
+
+.fp-picker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.fp-picker-item:hover {
+  border-color: var(--accent);
+}
+
+.fp-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fp-section-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fp-pax-input {
+  max-width: 6rem;
+  flex: 0 0 auto;
+}
+
+.fp-notes-input {
+  flex: 1 1 14rem;
+  resize: vertical;
+  font-family: inherit;
+}
+
+/* AM/PM period toggle on the daily assignment board — same chip-row
+   language as the tab's own .fp-mode-toggle. */
+.fp-period-toggle {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* 86 List — container/section spacing mirrors .fp-board, header mirrors
+   .fp-tab-header, and the history block uses the same secondary-section
+   top rule as .staff-directory-body. */
+.fp-86-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.fp-86-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.fp-86-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.fp-86-add {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.fp-86-add .staff-directory-input {
+  min-width: 0;
+}
+
+.fp-86-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.fp-86-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.fp-86-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }

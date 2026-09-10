@@ -27,6 +27,14 @@ export interface Employee {
   status: EmploymentStatus;
   /** Required credentials for the role (e.g. DHA license, guard license). */
   requiredCredentials?: string[];
+  /**
+   * True when this employee came from an upload row whose role couldn't be
+   * resolved (`unmatched_role`) — never persisted to the DB (Shift.roleId is
+   * a required FK), shown here purely so the row doesn't silently vanish
+   * from the manager's view after confirm. Cleared once the role is fixed
+   * and re-imported.
+   */
+  needsRoleReview?: boolean;
 }
 
 /** A single shift assignment for one employee on one day. */
@@ -42,8 +50,22 @@ export interface Shift {
   type: ShiftType;
   /** True when the shift crosses midnight (end < start). */
   overnight: boolean;
+  /**
+   * The role/position this shift actually needs, as extracted from the
+   * source roster at parse time. Distinct from the assigned employee's own
+   * role: after a cover/swap reassignment, the covering employee's role may
+   * differ from what the shift requires (e.g. a server covering a
+   * bartender shift is still a bartender shift).
+   */
+  requiredRole?: string;
   /** Raw source text this shift was parsed from (for audit/debug). */
   source?: string;
+  /** DRAFT/PUBLISHED from the real backend — undefined for shifts that only ever came from the upload flow (not built via RotaBuilder/Shift Editor). */
+  status?: 'draft' | 'published';
+  /** Manager's floor directive for this specific shift (backed by Shift.managerNotes). */
+  briefingNote?: string;
+  /** Discrete side-work checklist items for this shift. */
+  sidework?: string[];
 }
 
 /** A weekly roster: employees + their shifts for a date range. */
@@ -101,6 +123,36 @@ export interface VenueConfig {
   roleLabels: string[];
   /** Known staff names (used to disambiguate parsing). */
   knownStaff?: string[];
+}
+
+export type SwapRequestStatus = 'pending' | 'approved' | 'denied';
+
+/** A cover/swap request against one real shift, made by its current owner. */
+export interface SwapRequest {
+  id: string;
+  shiftId: string;
+  /** Employee who currently owns the shift and is requesting cover. */
+  requestedBy: string;
+  /** Employee proposed to take over the shift. */
+  coveringEmployeeId: string;
+  status: SwapRequestStatus;
+  createdAt: string;
+  decidedAt?: string;
+  /** ISO datetime the request window closes — drives the countdown timer. */
+  expiresAt: string;
+  /** True when a different approved request already reassigned this shift out from under this one. */
+  locked: boolean;
+  /** Human-readable audit line (e.g. "Approved · shift reassigned to Priya"). */
+  auditNote?: string;
+  /**
+   * Display fields resolved server-side, so the Approvals panel can render real
+   * names/times without depending on an in-memory roster that is empty on a
+   * fresh page load. Optional because cached or locally-constructed requests
+   * may predate them; consumers fall back to a roster lookup when absent.
+   */
+  requesterName?: string;
+  coveringName?: string;
+  shiftLabel?: string;
 }
 
 /** Result of a parse operation. */

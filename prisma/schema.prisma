@@ -1,0 +1,679 @@
+// ShiftSync — Prisma schema
+// Restaurant-rota architecture (7shifts-style) adapted for Dubai/GCC hospitality:
+// fixed monthly salaries (no hourly wage), MOHRE compliance audit trail, WPS-ready
+// attendance tallies.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// 1. TENANCY: Organizations (restaurant groups) -> Locations (venues)
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String     @id @default(cuid())
+  name      String
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  locations Location[]
+
+  @@map("organizations")
+}
+
+model Location {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  emirate        String? // e.g. Dubai, Abu Dhabi, Sharjah
+  address        String?
+  timezone       String   @default("Asia/Dubai")
+  currency       String   @default("AED")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  roles           Role[]
+  users           User[]
+  shifts          Shift[]
+  auditLogs       AuditLog[]
+  floorPlanImages FloorPlanImage[]
+  floorSections   FloorSection[]
+  announcements   Announcement[]
+  shoutouts       Shoutout[]
+  rotaTemplates   RotaTemplate[]
+  rotaPublishes   RotaPublish[]
+  eightySixItems  EightySixItem[]
+  joinRequests    JoinRequest[]
+  policyDocuments PolicyDocument[]
+
+  @@index([organizationId])
+  @@map("locations")
+}
+
+// ---------------------------------------------------------------------------
+// 2. USERS & ROLES
+// ---------------------------------------------------------------------------
+
+enum SystemRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+model Role {
+  id         String   @id @default(cuid())
+  locationId String   @map("location_id")
+  name       String // e.g. Floor Staff, Bartender, Runner, Host, Chef
+  colorTag   String? // UI chip color, hex
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  users    User[]
+  shifts   Shift[]
+
+  @@unique([locationId, name])
+  @@map("roles")
+}
+
+model User {
+  id                String     @id @default(cuid())
+  locationId        String     @map("location_id")
+  roleId            String?    @map("role_id")
+  systemRole        SystemRole @default(STAFF) @map("system_role")
+  fullName          String     @map("full_name")
+  // Venue-configured job title (e.g. "Restaurant Manager", "Assistant
+  // Restaurant Manager") — the Staff Directory. Distinct from `role`
+  // (the shift-scheduling category like "Waiter"/"Runner"): this is set
+  // manually by the venue once, never inferred from an uploaded roster,
+  // and is what the roster grid's Management tier is populated from.
+  jobTitle          String?    @map("job_title")
+  email             String?    @unique
+  phone             String?
+  preferredLanguage String?    @map("preferred_language")
+  emiratesIdNumber  String?    @map("emirates_id_number")
+  laborCardNumber   String?    @map("labor_card_number")
+  baseMonthlySalary Decimal    @default(0) @map("base_monthly_salary") @db.Decimal(10, 2)
+  currency          String     @default("AED")
+  hiredAt           DateTime?  @map("hired_at")
+  terminatedAt      DateTime?  @map("terminated_at")
+  isActive          Boolean    @default(true) @map("is_active")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  role     Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
+
+  shifts                  Shift[]                    @relation("ShiftAssignee")
+  shiftsCreated           Shift[]                    @relation("ShiftCreatedBy")
+  swapRequestsInitiated   ShiftSwapRequest[]         @relation("SwapRequestedBy")
+  swapRequestsAsTarget    ShiftSwapRequest[]         @relation("SwapTargetUser")
+  swapRequestsReviewed    ShiftSwapRequest[]         @relation("SwapReviewedBy")
+  timeOffRequests         TimeOffRequest[]           @relation("TimeOffRequestedBy")
+  timeOffRequestsReviewed TimeOffRequest[]           @relation("TimeOffReviewedBy")
+  attendanceLogs          AttendanceLog[]
+  monthlyAttendance       MonthlyAttendanceSummary[]
+  auditLogsActor          AuditLog[]                 @relation("AuditActor")
+  sectionAssignments      SectionAssignment[]        @relation("SectionAssignmentStaff")
+  sectionAssignmentsMade  SectionAssignment[]        @relation("SectionAssignmentCreatedBy")
+  announcements           Announcement[]
+  shoutoutsReceived       Shoutout[]                 @relation("ShoutoutRecipient")
+  shoutoutsAuthored       Shoutout[]                 @relation("ShoutoutAuthor")
+  rotaTemplatesCreated    RotaTemplate[]
+  rotaPublishesMade       RotaPublish[]
+  eightySixItemsCreated   EightySixItem[]            @relation("EightySixCreatedBy")
+  eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
+  sessions                Session[]
+  joinRequestsReviewed    JoinRequest[]               @relation("JoinRequestReviewedBy")
+  joinRequestsCreatedFrom JoinRequest[]               @relation("JoinRequestCreatedUser")
+  availabilityMarks       AvailabilityMark[]
+  policyDocumentsUploaded PolicyDocument[]            @relation("PolicyDocumentUploadedBy")
+
+  @@index([locationId])
+  @@index([roleId])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// 3. SHIFTS (7shifts rota model)
+// ---------------------------------------------------------------------------
+
+enum ShiftStatus {
+  DRAFT
+  PUBLISHED
+  COMPLETED
+  CANCELLED
+}
+
+model Shift {
+  id           String      @id @default(cuid())
+  locationId   String      @map("location_id")
+  roleId       String      @map("role_id")
+  userId       String?     @map("user_id") // null = open/unassigned shift
+  createdById  String?     @map("created_by_id")
+  date         DateTime    @db.Date
+  startTime    DateTime    @map("start_time")
+  endTime      DateTime    @map("end_time")
+  breakMinutes Int         @default(0) @map("break_minutes")
+  status       ShiftStatus @default(DRAFT)
+  managerNotes String?     @map("manager_notes") @db.Text // floor directives / side-work notes
+  sidework     String[]    @default([]) @map("sidework") // discrete checklist items, e.g. ["Polish glassware", "Restock ice"]
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assignee  User?    @relation("ShiftAssignee", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("ShiftCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  swapRequests   ShiftSwapRequest[]
+  attendanceLogs AttendanceLog[]
+  auditLogs      AuditLog[]
+
+  @@index([locationId, date])
+  @@index([userId])
+  @@index([roleId])
+  @@map("shifts")
+}
+
+// ---------------------------------------------------------------------------
+// 4. SHIFT SWAPS & TIME-OFF (request engine)
+// ---------------------------------------------------------------------------
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum SwapRequestType {
+  SWAP // requester trades their shift with target user's shift
+  DROP // requester wants to give up shift, target user picks it up
+  COVER // requester asks target user to cover, no reciprocal shift
+}
+
+model ShiftSwapRequest {
+  id            String          @id @default(cuid())
+  shiftId       String          @map("shift_id")
+  requestedById String          @map("requested_by_id")
+  targetUserId  String?         @map("target_user_id") // proposed substitute
+  type          SwapRequestType @default(SWAP)
+  status        RequestStatus   @default(PENDING)
+  reason        String?         @db.Text
+  expiresAt     DateTime        @map("expires_at") // weekly request-window cutoff
+  reviewedById  String?         @map("reviewed_by_id")
+  reviewedAt    DateTime?       @map("reviewed_at")
+  managerNote   String?         @map("manager_note") @db.Text // override / audit note
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  shift       Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  requestedBy User  @relation("SwapRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  targetUser  User? @relation("SwapTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  reviewedBy  User? @relation("SwapReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([shiftId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("shift_swap_requests")
+}
+
+model TimeOffRequest {
+  id           String        @id @default(cuid())
+  userId       String        @map("user_id")
+  startDate    DateTime      @map("start_date") @db.Date
+  endDate      DateTime      @map("end_date") @db.Date
+  reason       String?       @db.Text
+  status       RequestStatus @default(PENDING)
+  expiresAt    DateTime      @map("expires_at") // weekly request-window cutoff
+  reviewedById String?       @map("reviewed_by_id")
+  reviewedAt   DateTime?     @map("reviewed_at")
+  managerNote  String?       @map("manager_note") @db.Text
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  user       User  @relation("TimeOffRequestedBy", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("TimeOffReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@map("time_off_requests")
+}
+
+// ---------------------------------------------------------------------------
+// 5. AUDIT & ATTENDANCE LOGS (WPS / local accounting readiness)
+// ---------------------------------------------------------------------------
+
+enum AuditAction {
+  SHIFT_CREATED
+  SHIFT_UPDATED
+  SHIFT_DELETED
+  SHIFT_ASSIGNED
+  SWAP_APPROVED
+  SWAP_DECLINED
+  TIME_OFF_APPROVED
+  TIME_OFF_DECLINED
+  MANUAL_OVERRIDE
+  ASSIGNMENT_NOTIFIED
+  ITEM_86D
+  ITEM_BACK_ON
+  JOIN_APPROVED
+  JOIN_DECLINED
+  AVAILABILITY_MARKED
+  SWAP_REQUESTED
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  locationId String      @map("location_id")
+  actorId    String?     @map("actor_id") // null = system-generated
+  shiftId    String?     @map("shift_id")
+  action     AuditAction
+  entityType String      @map("entity_type") // e.g. "Shift", "ShiftSwapRequest"
+  entityId   String      @map("entity_id")
+  note       String?     @db.Text
+  createdAt  DateTime    @default(now()) @map("created_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  actor    User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  shift    Shift?   @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([locationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  NO_SHOW
+  EXCUSED
+}
+
+model AttendanceLog {
+  id         String           @id @default(cuid())
+  userId     String           @map("user_id")
+  shiftId    String?          @map("shift_id")
+  clockInAt  DateTime?        @map("clock_in_at")
+  clockOutAt DateTime?        @map("clock_out_at")
+  status     AttendanceStatus @default(PRESENT)
+  source     String           @default("manual") // manual | biometric | kiosk
+  notes      String?          @db.Text
+  createdAt  DateTime         @default(now()) @map("created_at")
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shift Shift? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([shiftId])
+  @@map("attendance_logs")
+}
+
+// Monthly rollup for WPS submission and local payroll accounting.
+model MonthlyAttendanceSummary {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  month           Int // 1-12
+  year            Int
+  daysPresent     Int      @default(0) @map("days_present")
+  daysAbsent      Int      @default(0) @map("days_absent")
+  daysLate        Int      @default(0) @map("days_late")
+  daysOnLeave     Int      @default(0) @map("days_on_leave")
+  overtimeMinutes Int      @default(0) @map("overtime_minutes")
+  deductionAmount Decimal  @default(0) @map("deduction_amount") @db.Decimal(10, 2)
+  generatedAt     DateTime @default(now()) @map("generated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, month, year])
+  @@map("monthly_attendance_summaries")
+}
+
+// ---------------------------------------------------------------------------
+// 6. FLOOR PLAN — section drawing (admin setup) + daily staff assignment
+// ---------------------------------------------------------------------------
+
+// The uploaded venue floor-plan image (rasterized from PDF if needed). Lives
+// server-side (not on-device) since multiple staff view the same plan.
+// A location can re-upload a new plan version over time; sections are tied
+// to the specific image version they were drawn on, and the most recent
+// image is what the app resolves as "the" current floor plan.
+model FloorPlanImage {
+  id           String   @id @default(cuid())
+  locationId   String   @map("location_id")
+  fileUrl      String   @map("file_url") // server-relative URL, e.g. /uploads/floor-plans/<id>.png
+  originalName String?  @map("original_name")
+  mimeType     String   @map("mime_type")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  location Location       @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  sections FloorSection[]
+
+  @@index([locationId, createdAt])
+  @@map("floor_plan_images")
+}
+
+// A manager-drawn freeform polygon over the floor plan image (a table
+// cluster, a bar area, etc). Coordinates are stored as fractions (0-1) of
+// the image's width/height, not absolute pixels, so the daily assignment
+// screen's DOM overlay (`clip-path: polygon(...)`) stays correct at any
+// rendered image size without a resize-tracking recomputation step.
+model FloorSection {
+  id                String  @id @default(cuid())
+  locationId        String  @map("location_id")
+  floorPlanImageId  String  @map("floor_plan_image_id")
+  label             String
+  polygon           Json // [{x:number,y:number}, ...] fractional coords
+  paxCapacity       Int     @map("pax_capacity")
+  notes             String? // free-text venue note, e.g. "Shade after 17:00"
+  sortOrder         Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  location       Location            @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  floorPlanImage FloorPlanImage      @relation(fields: [floorPlanImageId], references: [id], onDelete: Cascade)
+  assignments    SectionAssignment[]
+
+  @@index([locationId])
+  @@index([floorPlanImageId])
+  @@map("floor_sections")
+}
+
+enum AssignmentStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum AssignmentPeriod {
+  AM
+  PM
+}
+
+// A staff member assigned to a floor section for one shift date. Written by
+// both the drag-and-drop and tap-to-pick interaction paths (same table,
+// different trigger). `status` starts DRAFT and flips to PUBLISHED by the
+// Phase 3 publish action — assignment writes only for now, notification
+// delivery is a separate, explicitly-gated follow-up.
+model SectionAssignment {
+  id          String           @id @default(cuid())
+  sectionId   String           @map("section_id")
+  staffId     String           @map("staff_id")
+  shiftDate   DateTime         @db.Date @map("shift_date")
+  period      AssignmentPeriod @default(AM)
+  dutyLabel   String?          @map("duty_label")
+  status      AssignmentStatus @default(DRAFT)
+  createdById String?          @map("created_by_id")
+  publishedAt DateTime?        @map("published_at")
+  notifiedAt  DateTime?        @map("notified_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  section   FloorSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  staff     User         @relation("SectionAssignmentStaff", fields: [staffId], references: [id], onDelete: Cascade)
+  createdBy User?        @relation("SectionAssignmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([sectionId, staffId, shiftDate, period])
+  @@index([shiftDate])
+  @@index([staffId])
+  @@map("section_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// 9. 86 LIST — real shared out-of-stock board by station
+// ---------------------------------------------------------------------------
+
+enum EightySixStatus {
+  EIGHTY_SIXED
+  BACK_ON
+}
+
+// A single out-of-stock item, tracked by kitchen/bar station. `station` is a
+// free-text label (not a foreign key to FloorSection — floor sections are
+// staff-assignment zones, not kitchen prep stations; a venue's station
+// vocabulary is its own, separate thing this model doesn't otherwise model).
+// Rows are never deleted — a resolved (`BACK_ON`) row is the item's own
+// audit trail entry, alongside the mirrored AuditLog writes every mutation
+// makes for cross-feature consistency with the rest of this codebase.
+model EightySixItem {
+  id            String          @id @default(cuid())
+  locationId    String          @map("location_id")
+  itemName      String          @map("item_name")
+  station       String
+  status        EightySixStatus @default(EIGHTY_SIXED)
+  note          String?         @db.Text
+  createdById   String?         @map("created_by_id")
+  backOnById    String?         @map("back_on_by_id")
+  eightySixedAt DateTime        @default(now()) @map("eighty_sixed_at")
+  backOnAt      DateTime?       @map("back_on_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("EightySixCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  backOnBy  User?    @relation("EightySixBackOnBy", fields: [backOnById], references: [id], onDelete: SetNull)
+
+  @@index([locationId, status])
+  @@map("eighty_six_items")
+}
+
+// ---------------------------------------------------------------------------
+// 7. HOME FEED — announcements (manager broadcast) and shoutouts (peer recognition)
+// ---------------------------------------------------------------------------
+
+model Announcement {
+  id         String    @id @default(cuid())
+  locationId String    @map("location_id")
+  authorId   String?   @map("author_id")
+  body       String    @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at")
+  editedAt   DateTime? @map("edited_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  author   User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([locationId, createdAt])
+  @@map("announcements")
+}
+
+// A colleague recognized for a specific shift. `shiftSnapshot` is a
+// denormalized text summary ("Wed 20 Aug · 16:00–23:30 · Waiter") captured
+// at creation time rather than a live FK to Shift — the frontend's parsed
+// roster does not reliably carry a real Shift.id for every displayed shift
+// (see the shift-ID-continuity fix elsewhere in this plan), so a shoutout's
+// shift reference is a point-in-time snapshot, not a live relation.
+model Shoutout {
+  id            String   @id @default(cuid())
+  locationId    String   @map("location_id")
+  employeeId    String   @map("employee_id")
+  authorId      String?  @map("author_id")
+  shiftSnapshot String?  @map("shift_snapshot")
+  note          String   @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  employee User     @relation("ShoutoutRecipient", fields: [employeeId], references: [id], onDelete: Cascade)
+  author   User?    @relation("ShoutoutAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([locationId, createdAt])
+  @@index([employeeId])
+  @@map("shoutouts")
+}
+
+// ---------------------------------------------------------------------------
+// 8. ROTA BUILDER — reusable week templates + per-week publish tracking
+// ---------------------------------------------------------------------------
+
+// A reusable weekly shift pattern, applied to any week from RotaBuilder's
+// "Templates" sheet. `entries` is a JSON array of
+// `{ dayOffset: 0-6, roleId: string, userId: string | null, start: "HH:MM",
+//   end: "HH:MM", note?: string }` — role/user ids are real FKs to look up
+// at apply-time, not denormalized names, so a template stays valid even if
+// a role is renamed after the template was saved.
+model RotaTemplate {
+  id          String   @id @default(cuid())
+  locationId  String   @map("location_id")
+  name        String
+  entries     Json
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([locationId])
+  @@map("rota_templates")
+}
+
+// One row per (location, week) once that week has been published at least
+// once. `publishedAt` is compared against each shift's own `updatedAt` to
+// tell RotaBuilder whether a published week has unpublished edits sitting
+// on top of it — a week can have shifts added/edited after publishing
+// without a second model per shift to track that.
+model RotaPublish {
+  id            String   @id @default(cuid())
+  locationId    String   @map("location_id")
+  weekStart     DateTime @db.Date @map("week_start")
+  publishedAt   DateTime @map("published_at")
+  publishedById String?  @map("published_by_id")
+  notifiedCount Int      @default(0) @map("notified_count")
+
+  location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  publishedBy User?     @relation(fields: [publishedById], references: [id], onDelete: SetNull)
+
+  @@unique([locationId, weekStart])
+  @@map("rota_publishes")
+}
+
+// ---------------------------------------------------------------------------
+// 10. IDENTITY — lightweight phone+OTP, not a full account/password system
+// ---------------------------------------------------------------------------
+
+// A one-time code sent to a phone number, for either the login path
+// (identity.ts, phone must already match a real User) or the join path
+// (join.ts, phone may not match anyone yet). `purpose` keeps the two from
+// being interchangeable — a code requested for login can't be replayed to
+// join, and vice versa. `codeHash` is sha256, never the plaintext code.
+enum OtpPurpose {
+  LOGIN
+  JOIN
+}
+
+model OtpCode {
+  id        String     @id @default(cuid())
+  phone     String
+  codeHash  String     @map("code_hash")
+  purpose   OtpPurpose
+  expiresAt DateTime   @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  attempts  Int        @default(0)
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@index([phone, purpose])
+  @@map("otp_codes")
+}
+
+// A logged-in session — a bearer token issued after a successful OTP
+// verification against a real, matched User. No password, no email/OAuth;
+// this IS the account system, deliberately lightweight per the product
+// decision this phase implements.
+model Session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// A self-registration attempt whose phone number did NOT match an existing
+// User at verification time. Sits in Pending Approvals until a manager
+// approves (creating or linking a real User) or declines it. An
+// auto-matched join never creates one of these — only the "fallback to
+// manual entry" path the directive describes.
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+model JoinRequest {
+  id             String            @id @default(cuid())
+  locationId     String            @map("location_id")
+  phone          String
+  fullName       String            @map("full_name")
+  status         JoinRequestStatus @default(PENDING)
+  reviewedById   String?           @map("reviewed_by_id")
+  reviewedAt     DateTime?         @map("reviewed_at")
+  createdUserId  String?           @map("created_user_id")
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  reviewedBy  User?    @relation("JoinRequestReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdUser User?    @relation("JoinRequestCreatedUser", fields: [createdUserId], references: [id], onDelete: SetNull)
+
+  @@index([locationId, status])
+  @@map("join_requests")
+}
+
+// ---------------------------------------------------------------------------
+// 11. SELF-SERVICE AVAILABILITY — informational only, never a hard block
+// ---------------------------------------------------------------------------
+
+enum AvailabilityType {
+  UNAVAILABLE
+  PREFERRED_OFF
+}
+
+model AvailabilityMark {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  date      DateTime         @db.Date
+  type      AvailabilityType
+  note      String?
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("availability_marks")
+}
+
+// ---------------------------------------------------------------------------
+// 12. TRAINING & POLICY DOCUMENT HUB
+// ---------------------------------------------------------------------------
+
+model PolicyDocument {
+  id           String   @id @default(cuid())
+  locationId   String   @map("location_id")
+  category     String
+  title        String
+  fileUrl      String   @map("file_url")
+  originalName String?  @map("original_name")
+  mimeType     String   @map("mime_type")
+  uploadedById String?  @map("uploaded_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation("PolicyDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([locationId, category])
+  @@map("policy_documents")
+}
