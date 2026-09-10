@@ -3,7 +3,7 @@ import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
 import { parseWorkbookBuffer, buildMergeExpandedGrid, TemplateDetectionError } from '../parsing/parseWorkbook.js';
-import { parseExcelGrid } from '../parsing/deterministicGridParser.js';
+import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
 import { extractPdfGrid, hasPdfTextLayer } from '../parsing/pdfTableExtractor.js';
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
 import { parseRosterGrid, VisionIngestionError } from '../parsing/parseVision.js';
@@ -328,6 +328,13 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
       })),
     });
   } catch (err) {
+    if (err instanceof RosterExtractionAnomalyError) {
+      // A day-grid shape WAS recognized but real shift data was dropped
+      // during classification (e.g. an ALL-CAPS staff row misread as a
+      // section header) — a loud, visible failure for the manager to see
+      // and retry/escalate, not a silent 200-success with missing rows.
+      return res.status(422).json({ error: err.message, errorCode: 'roster_extraction_anomaly' });
+    }
     console.error('[schedules.upload] failed', err);
     if (err instanceof Error) {
       console.error('[schedules.upload] stack:', err.stack);
