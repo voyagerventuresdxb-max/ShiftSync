@@ -19,6 +19,39 @@ import { notifySchedulePublished, mondayOfWeek } from '../lib/scheduleNotificati
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
+// Guards on the paid vision-fallback path only (hosted Gemini/Vertex AI
+// call for image/scanned-PDF uploads) — the deterministic Excel/CSV/
+// text-layer-PDF path is unaffected by either limit.
+const VISION_FALLBACK_MAX_BYTES = 5 * 1024 * 1024;
+const VISION_FALLBACK_RATE_LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Returns a user-facing rejection message when the vision-fallback path
+ * shouldn't run for this upload (file too large, or this venue already
+ * used its one-per-week allowance) — null when it's allowed to proceed.
+ */
+async function checkVisionFallbackAllowed(fileSize: number, locationId: string): Promise<string | null> {
+  if (fileSize > VISION_FALLBACK_MAX_BYTES) {
+    return `This file is ${(fileSize / (1024 * 1024)).toFixed(1)}MB, over the ${VISION_FALLBACK_MAX_BYTES / (1024 * 1024)}MB limit for AI-assisted roster reading. Please upload a smaller image/PDF, or use an Excel/CSV export instead.`;
+  }
+  const location = await prisma.location.findUnique({ where: { id: locationId }, select: { lastVisionFallbackUsedAt: true } });
+  const lastUsed = location?.lastVisionFallbackUsedAt;
+  if (lastUsed && Date.now() - lastUsed.getTime() < VISION_FALLBACK_RATE_LIMIT_MS) {
+    const nextAvailable = new Date(lastUsed.getTime() + VISION_FALLBACK_RATE_LIMIT_MS);
+    return (
+      `AI-assisted roster reading for this venue was already used this week ` +
+      `(last used ${lastUsed.toISOString().slice(0, 10)}) — it's limited to once per venue per week. ` +
+      `It'll be available again on ${nextAvailable.toISOString().slice(0, 10)}. Try an Excel/CSV export in the meantime.`
+    );
+  }
+  return null;
+}
+
+/** Records that this venue's one-per-week vision-fallback allowance was just used. Call only after a successful parse. */
+async function markVisionFallbackUsed(locationId: string): Promise<void> {
+  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: new Date() } });
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
@@ -104,12 +137,15 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
       // vision model in a single call. No local OCR/geometry pre-pass — the
       // model reads the matrix (staff column x day header row) directly off
       // the pixels. See parseVision.ts for EU-region Vertex AI config.
+      const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
+      if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
       try {
         const visionResult = await parseRosterImage(req.file.buffer, req.file.mimetype, req.file.originalname, weekStart);
         parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
         anomalies = visionResult.anomalies;
         leaveRecords = visionResult.leaveRecords;
         legend = visionResult.legend;
+        await markVisionFallbackUsed(locationId);
       } catch (err) {
         if (err instanceof VisionIngestionError) {
           return res.status(422).json({ error: err.message });
@@ -175,6 +211,8 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
           leaveRecords = doclingResult.leaveRecords;
           legend = doclingResult.legend;
         } else {
+          const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
+          if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
           try {
             // Gemini/Vertex accepts PDF bytes directly (unlike the old
             // Ollama path, which needed a rasterized PNG because its image
@@ -185,6 +223,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
             anomalies = visionResult.anomalies;
             leaveRecords = visionResult.leaveRecords;
             legend = visionResult.legend;
+            await markVisionFallbackUsed(locationId);
           } catch (err) {
             if (err instanceof VisionIngestionError) {
               return res.status(422).json({ error: err.message });
@@ -203,12 +242,15 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
         if (textResult && textResult.rows.length > 0) {
           parsed = { rows: textResult.rows, issues: textResult.issues, templateLabel: 'PDF Text Roster' };
         } else {
+          const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
+          if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
           try {
             const visionResult = await parseRosterImage(req.file.buffer, 'application/pdf', req.file.originalname, weekStart);
             parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
             anomalies = visionResult.anomalies;
             leaveRecords = visionResult.leaveRecords;
             legend = visionResult.legend;
+            await markVisionFallbackUsed(locationId);
           } catch (err) {
             if (err instanceof VisionIngestionError) {
               return res.status(422).json({ error: err.message });
