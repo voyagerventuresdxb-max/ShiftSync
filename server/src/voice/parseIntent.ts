@@ -162,11 +162,9 @@ export async function parseVoiceIntent(
     });
     const raw = JSON.parse(response.text ?? '{}');
     const attempted = normalizeParsedIntent(raw);
-    // A missing/non-boolean value fails CLOSED to false — an absent flag
-    // must never fabricate a "there's more" prompt the model didn't
-    // actually make. Computed independently of confidence/the gate below —
-    // this line must never move inside either branch of that gate.
-    const hasAdditionalRequest = typeof raw.hasAdditionalRequest === 'boolean' ? raw.hasAdditionalRequest : false;
+    // Computed independently of confidence/the gate below — this line must
+    // never move inside either branch of that gate.
+    const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
     if (attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD) {
       return { response: attempted, attempted, hasAdditionalRequest };
     }
@@ -182,6 +180,14 @@ export async function parseVoiceIntent(
     if (err instanceof VoiceIntentError) throw err;
     throw new VoiceIntentError('Unexpected error while parsing the voice command.', err);
   }
+}
+
+/**
+ * A missing/non-boolean value fails CLOSED to false — an absent flag must
+ * never fabricate a "there's more" prompt the model didn't actually make.
+ */
+export function normalizeHasAdditionalRequest(raw: Record<string, unknown>): boolean {
+  return typeof raw.hasAdditionalRequest === 'boolean' ? raw.hasAdditionalRequest : false;
 }
 
 /**

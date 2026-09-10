@@ -73,7 +73,7 @@ export function VoiceCommandSheet({
       <div className="panel w-full max-w-sm shadow-lux" onClick={(e) => e.stopPropagation()}>
         <div className="p-5">
           <p className="eyebrow">{eyebrow}</p>
-          {transcript.trim() && <p className="mt-2 text-xs text-foreground/60">You said: "{transcript.trim()}"</p>}
+          {transcript.trim() && <p className="mt-2 text-xs text-foreground/60">You said: “{transcript.trim()}”</p>}
           <p className="mt-2 text-sm">{executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary}</p>
           {reason && <p className="mt-2 text-xs text-foreground/60">{reason}</p>}
           {showFollowUp && (

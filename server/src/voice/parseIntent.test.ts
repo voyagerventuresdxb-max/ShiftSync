@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
-import { buildContext } from './parseIntent.js';
+import { buildContext, normalizeHasAdditionalRequest } from './parseIntent.js';
 
 const prisma = new PrismaClient();
 
@@ -109,4 +109,22 @@ test("buildContext populates a MANAGER-tier caller's own shift in callerShifts c
     await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
     await prisma.user.delete({ where: { id: staffer.id } }).catch(() => {});
   }
+});
+
+test('normalizeHasAdditionalRequest: true stays true', () => {
+  assert.equal(normalizeHasAdditionalRequest({ hasAdditionalRequest: true }), true);
+});
+
+test('normalizeHasAdditionalRequest: false stays false', () => {
+  assert.equal(normalizeHasAdditionalRequest({ hasAdditionalRequest: false }), false);
+});
+
+test('normalizeHasAdditionalRequest: missing fails closed to false', () => {
+  assert.equal(normalizeHasAdditionalRequest({}), false);
+});
+
+test('normalizeHasAdditionalRequest: non-boolean fails closed to false', () => {
+  assert.equal(normalizeHasAdditionalRequest({ hasAdditionalRequest: 'true' }), false);
+  assert.equal(normalizeHasAdditionalRequest({ hasAdditionalRequest: 1 }), false);
+  assert.equal(normalizeHasAdditionalRequest({ hasAdditionalRequest: null }), false);
 });
