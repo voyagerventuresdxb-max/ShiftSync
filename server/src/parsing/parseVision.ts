@@ -193,15 +193,14 @@ function getClient(): GoogleGenAI {
 
   // Vertex AI (preferred for production — EU-region-pinned, billed to a
   // GCP project, authenticated via Application Default Credentials rather
-  // than a bearer API key) when GEMINI_VERTEX_PROJECT is set.
+  // than a bearer API key) when GEMINI_VERTEX_PROJECT is set. Location
+  // defaults to europe-west4 (the project's chosen EU region — see
+  // docs/gcp-vertex-setup.md) so a deployment only needs to set the
+  // project id; override GEMINI_VERTEX_LOCATION explicitly for a
+  // different EU region.
   const project = process.env.GEMINI_VERTEX_PROJECT;
   if (project) {
-    const location = process.env.GEMINI_VERTEX_LOCATION;
-    if (!location) {
-      throw new VisionIngestionError(
-        'GEMINI_VERTEX_PROJECT is set but GEMINI_VERTEX_LOCATION is not — both are required to use Vertex AI. Pick an EU region (e.g. "europe-west4" or "europe-west1").',
-      );
-    }
+    const location = process.env.GEMINI_VERTEX_LOCATION || 'europe-west4';
     // Auth is handled by google-auth-library's Application Default
     // Credentials (a service account key file via GOOGLE_APPLICATION_CREDENTIALS,
     // or workload identity in a GCP-hosted deployment) — no key material
