@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, fetchFloorPlan, type FloorPlanImageDto, type FloorSectionDto } from '../../api/floorPlan';
+import { useIdentity } from '../../state/IdentityContext';
 import SectionEditor from './SectionEditor';
 import AssignmentBoard from './AssignmentBoard';
 import EightySixBoard from './EightySixBoard';
@@ -17,6 +18,12 @@ type Mode = 'assign' | 'setup' | '86';
  * with nothing uploaded yet is dropped straight into setup.
  */
 export default function FloorPlanTab({ locationId }: Props) {
+  const { session } = useIdentity();
+  // Positive check (true only for a confirmed MANAGER/OWNER) — same
+  // fail-closed reasoning as AssignmentBoard's own isManager: a null
+  // session or unexpected role value must hide the setup/edit entry
+  // points, not show them.
+  const isManager = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const [image, setImage] = useState<FloorPlanImageDto | null>(null);
   const [sections, setSections] = useState<FloorSectionDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,14 +32,27 @@ export default function FloorPlanTab({ locationId }: Props) {
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
+    // Reads are session-gated server-side now — with no session yet there is
+    // no token to send, so skip the call rather than firing a request that
+    // can only 401.
+    if (!session) {
+      setLoading(false);
+      setInitialized(true);
+      return;
+    }
     let cancelled = false;
-    fetchFloorPlan(locationId)
+    setLoading(true);
+    fetchFloorPlan(session.token, locationId)
       .then((data) => {
         if (cancelled) return;
         setImage(data.image);
         setSections(data.sections);
-        // First time in: jump straight to setup if there's nothing to assign against yet.
-        if (!data.image || data.sections.length === 0) setMode('setup');
+        // First time in: jump straight to setup if there's nothing to assign
+        // against yet — manager-only, since setup is a manager-only editing
+        // tool. A staff session with nothing set up yet stays on 'assign',
+        // where AssignmentBoard's own "no floor plan yet" message renders
+        // without the (manager-only) upload/draw-sections buttons.
+        if (isManager && (!data.image || data.sections.length === 0)) setMode('setup');
       })
       .catch((err) => {
         if (cancelled) return;
@@ -47,7 +67,7 @@ export default function FloorPlanTab({ locationId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [locationId]);
+  }, [locationId, session, isManager]);
 
   const handleChanged = useCallback((nextImage: FloorPlanImageDto, nextSections: FloorSectionDto[]) => {
     setImage(nextImage);
@@ -74,9 +94,11 @@ export default function FloorPlanTab({ locationId }: Props) {
             <button className={`chip${mode === 'assign' ? ' chip-active' : ''}`} onClick={() => setMode('assign')}>
               Daily Assignment
             </button>
-            <button className={`chip${mode === 'setup' ? ' chip-active' : ''}`} onClick={() => setMode('setup')}>
-              Sections
-            </button>
+            {isManager && (
+              <button className={`chip${mode === 'setup' ? ' chip-active' : ''}`} onClick={() => setMode('setup')}>
+                Sections
+              </button>
+            )}
             <button className={`chip${mode === '86' ? ' chip-active' : ''}`} onClick={() => setMode('86')}>
               86 List
             </button>
@@ -90,7 +112,7 @@ export default function FloorPlanTab({ locationId }: Props) {
         </div>
       )}
 
-      {mode === 'setup' ? (
+      {mode === 'setup' && isManager ? (
         <SectionEditor
           locationId={locationId}
           image={image}

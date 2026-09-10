@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Bell, CalendarCheck } from 'lucide-react';
+import { CalendarCheck, WifiOff } from 'lucide-react';
 import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
 import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
+import { NotificationBell } from '@/components/shiftsync/NotificationBell';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
+import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
 
 /**
@@ -54,9 +56,13 @@ const RECORDER_MIME_CANDIDATES = [
  * MediaRecorder, so a tap-and-forget would otherwise record until the tab
  * closed — with the only backstop being multer's 10MB upload cap, which
  * surfaces as a confusing generic "File too large" AFTER the whole
- * recording is discarded. 45s is far beyond any real spoken command.
+ * recording is discarded.
+ *
+ * 10s hard cap — matches the product requirement that voice commands stay
+ * short and specific; MediaRecorder otherwise records until the tab is
+ * closed or stop() is called.
  */
-const MAX_RECORDING_MS = 45_000;
+const MAX_RECORDING_MS = 10_000;
 
 function pickRecorderMimeType(): string {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
@@ -106,12 +112,16 @@ export function AppShell() {
     .filter(isRouteHandle)
     .at(-1);
 
-  const { config } = useAppState();
-  const title = handle?.title ?? config.name;
-  const eyebrow = handle?.eyebrow ?? config.name;
+  // `venueName` is the real signed-in venue's actual name (null while
+  // loading, or for an anonymous kiosk visit) — never `config.name`, a
+  // hardcoded placeholder unrelated to any real venue (see AppStateContext).
+  const { venueName } = useAppState();
+  const title = handle?.title ?? venueName ?? 'ShiftSync';
+  const eyebrow = handle?.eyebrow ?? venueName ?? 'ShiftSync';
   const action = handle?.action;
 
   const { session } = useIdentity();
+  const { online } = useConnectivity();
 
   // `voiceOn` means "actively recording" (mic armed, first tap already
   // happened); `voiceProcessing` covers the transcribe -> parse-intent
@@ -124,7 +134,7 @@ export function AppShell() {
   // and a state value exist.
   const [voiceStarting, setVoiceStarting] = useState(false);
   const [voiceProcessing, setVoiceProcessing] = useState(false);
-  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent } | null>(null);
+  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
@@ -175,8 +185,8 @@ export function AppShell() {
       setVoiceProcessing(true);
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
-        const { intent } = await parseVoiceIntent(session.token, transcript);
-        setVoiceResult({ transcript, intent });
+        const { intent, voiceLogId } = await parseVoiceIntent(session.token, transcript);
+        setVoiceResult({ transcript, intent, voiceLogId });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
       } finally {
@@ -210,7 +220,9 @@ export function AppShell() {
     voiceStartingRef.current = true;
     setVoiceStarting(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
+      });
       const mimeType = pickRecorderMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
@@ -268,7 +280,7 @@ export function AppShell() {
     }
     setVoiceExecuting(true);
     try {
-      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent);
+      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
       setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
     } catch (err) {
       setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not execute the voice command.' });
@@ -277,8 +289,6 @@ export function AppShell() {
       setVoiceResult(null);
     }
   }, [voiceResult, session]);
-
-  const [unread, setUnread] = useState(true);
 
   // My Shifts is the staff-facing home screen, so it needs a real destination
   // in the shell chrome exactly like /profile has — the four-tab RadialDock is
@@ -295,7 +305,7 @@ export function AppShell() {
               aria-label="Open your profile"
               className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-sm font-bold text-accent transition-transform duration-200 hover:scale-105 active:scale-95"
             >
-              {avatarInitial(config.name)}
+              {avatarInitial(venueName ?? 'ShiftSync')}
             </Link>
 
             <div className="min-w-0">
@@ -318,30 +328,19 @@ export function AppShell() {
             >
               <CalendarCheck className="h-4 w-4" strokeWidth={onMyShifts ? 2.4 : 1.6} />
             </Link>
-            <button
-              onClick={() => setUnread((u) => !u)}
-              aria-label={unread ? 'Unread notifications' : 'Notifications'}
-              className={cn(
-                'relative grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
-                unread
-                  ? 'glow-gold border-accent/50 bg-accent/15 text-accent'
-                  : 'border-border text-foreground/40 hover:text-foreground/70',
-              )}
-              style={{ transitionTimingFunction: 'cubic-bezier(0.34,1.56,0.64,1)' }}
-            >
-              <Bell
-                className="h-4 w-4"
-                strokeWidth={unread ? 2.4 : 1.6}
-                fill={unread ? 'currentColor' : 'none'}
-                fillOpacity={unread ? 0.22 : 0}
-              />
-              {unread && (
-                <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-accent shadow-glow" />
-              )}
-            </button>
+            <NotificationBell />
           </div>
         </div>
       </header>
+
+      {!online && (
+        <div className="mx-auto mt-2.5 max-w-6xl px-3 sm:px-4" role="status">
+          <div className="flex items-center justify-center gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-center text-xs font-medium text-warning">
+            <WifiOff className="h-3.5 w-3.5 shrink-0" />
+            You're offline — some actions are unavailable until your connection returns.
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
         <Outlet />

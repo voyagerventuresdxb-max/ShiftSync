@@ -1,9 +1,18 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { notifyUsersBatched } from '../lib/push.js';
 
 export const announcementsRouter = Router();
 
-/** GET /api/announcements/:locationId — newest first. */
+/**
+ * GET /api/announcements/:locationId — newest first.
+ * Deliberately NOT behind `requireSession` — this is the kiosk-access-fork
+ * decision (Option 3, 2026-08-31 — see MEMORY.md): `/` (Home) stays
+ * anonymous-friendly for the "walk up to the shared venue device" use case,
+ * and Announcements is one of the two read surfaces (with Shoutouts) that
+ * decision explicitly restores anonymous access to. Confirmed still correct
+ * by the follow-up anonymous-read sweep, not newly decided here.
+ */
 announcementsRouter.get('/:locationId', async (req, res) => {
   try {
     const { locationId } = req.params;
@@ -53,6 +62,24 @@ announcementsRouter.post('/', async (req, res) => {
       data: { locationId, authorId, body },
       include: { author: { select: { fullName: true } } },
     });
+
+    // Real delivery on top of the write above (never blocking the
+    // response). Every active staff member at the location, immediate, one
+    // per post — not digested, unlike the affected-set notifications
+    // elsewhere, since each announcement is its own deliberate broadcast.
+    // The poster themselves is excluded — they don't need telling about
+    // their own post. Batched (notifyUsersBatched, not one big Promise.all)
+    // since this is the one full-roster fan-out in the app, not a small
+    // known-affected set.
+    const recipients = await prisma.user.findMany({
+      where: { locationId, isActive: true, id: { not: authorId ?? undefined } },
+      select: { id: true },
+    });
+    void notifyUsersBatched(
+      recipients.map((r) => r.id),
+      { title: 'New announcement', body, url: '/' },
+    );
+
     return res.status(201).json({
       announcement: {
         id: created.id,

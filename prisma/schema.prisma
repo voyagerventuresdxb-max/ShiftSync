@@ -17,10 +17,10 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model Organization {
-  id        String     @id @default(cuid())
+  id        String   @id @default(cuid())
   name      String
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   locations Location[]
 
@@ -32,6 +32,7 @@ model Location {
   organizationId String   @map("organization_id")
   name           String
   emirate        String? // e.g. Dubai, Abu Dhabi, Sharjah
+  venueType      String?  @map("venue_type") // free-text category chosen from the onboarding wizard's card picker, e.g. "Fine Dining", "Nightclub"
   address        String?
   timezone       String   @default("Asia/Dubai")
   currency       String   @default("AED")
@@ -41,19 +42,21 @@ model Location {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  roles           Role[]
-  users           User[]
-  shifts          Shift[]
-  auditLogs       AuditLog[]
-  floorPlanImages FloorPlanImage[]
-  floorSections   FloorSection[]
-  announcements   Announcement[]
-  shoutouts       Shoutout[]
-  rotaTemplates   RotaTemplate[]
-  rotaPublishes   RotaPublish[]
-  eightySixItems  EightySixItem[]
-  joinRequests    JoinRequest[]
-  policyDocuments PolicyDocument[]
+  roles                Role[]
+  users                User[]
+  shifts               Shift[]
+  auditLogs            AuditLog[]
+  voiceInteractionLogs VoiceInteractionLog[]
+  floorPlanImages      FloorPlanImage[]
+  floorSections        FloorSection[]
+  announcements        Announcement[]
+  shoutouts            Shoutout[]
+  rotaTemplates        RotaTemplate[]
+  rotaPublishes        RotaPublish[]
+  eightySixItems       EightySixItem[]
+  joinRequests         JoinRequest[]
+  policyDocuments      PolicyDocument[]
+  floorFeedback        FloorFeedback[]
 
   @@index([organizationId])
   @@map("locations")
@@ -99,7 +102,13 @@ model User {
   // and is what the roster grid's Management tier is populated from.
   jobTitle          String?    @map("job_title")
   email             String?    @unique
-  phone             String?
+  // Globally unique, not per-Organization — under Decision A1 (one User =
+  // one Location = one login) phone IS the login credential, and the OTP
+  // identity system's existing-account lookup has no location context to
+  // scope by (see findPhoneMatches in server/src/lib/identity.ts). Postgres
+  // allows unlimited NULLs alongside a unique index, so users with no phone
+  // set are unaffected.
+  phone             String?    @unique
   preferredLanguage String?    @map("preferred_language")
   emiratesIdNumber  String?    @map("emirates_id_number")
   laborCardNumber   String?    @map("labor_card_number")
@@ -124,6 +133,7 @@ model User {
   attendanceLogs          AttendanceLog[]
   monthlyAttendance       MonthlyAttendanceSummary[]
   auditLogsActor          AuditLog[]                 @relation("AuditActor")
+  voiceInteractionLogs    VoiceInteractionLog[]
   sectionAssignments      SectionAssignment[]        @relation("SectionAssignmentStaff")
   sectionAssignmentsMade  SectionAssignment[]        @relation("SectionAssignmentCreatedBy")
   announcements           Announcement[]
@@ -134,10 +144,14 @@ model User {
   eightySixItemsCreated   EightySixItem[]            @relation("EightySixCreatedBy")
   eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
   sessions                Session[]
-  joinRequestsReviewed    JoinRequest[]               @relation("JoinRequestReviewedBy")
-  joinRequestsCreatedFrom JoinRequest[]               @relation("JoinRequestCreatedUser")
+  pushSubscriptions       PushSubscription[]
+  notifications           Notification[]
+  joinRequestsReviewed    JoinRequest[]              @relation("JoinRequestReviewedBy")
+  joinRequestsCreatedFrom JoinRequest[]              @relation("JoinRequestCreatedUser")
   availabilityMarks       AvailabilityMark[]
-  policyDocumentsUploaded PolicyDocument[]            @relation("PolicyDocumentUploadedBy")
+  policyDocumentsUploaded PolicyDocument[]           @relation("PolicyDocumentUploadedBy")
+  floorFeedbackSubmitted  FloorFeedback[]            @relation("FloorFeedbackSubmitter")
+  floorFeedbackReviewed   FloorFeedback[]            @relation("FloorFeedbackReviewedBy")
 
   @@index([locationId])
   @@index([roleId])
@@ -273,6 +287,14 @@ enum AuditAction {
   JOIN_DECLINED
   AVAILABILITY_MARKED
   SWAP_REQUESTED
+  STAFF_CREATED
+  STAFF_UPDATED
+  CLOCKED_IN
+  CLOCKED_OUT
+  ROTA_TEMPLATE_CREATED
+  ROTA_TEMPLATE_DELETED
+  POLICY_DOCUMENT_UPLOADED
+  POLICY_DOCUMENT_DELETED
 }
 
 model AuditLog {
@@ -295,6 +317,36 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+enum VoiceInteractionOutcome {
+  PENDING_CONFIRMATION
+  LOW_CONFIDENCE
+  UNRECOGNIZED
+  EXECUTED
+  REJECTED_VALIDATION
+  REJECTED_PERMISSION
+  ERROR
+  ANSWERED
+}
+
+model VoiceInteractionLog {
+  id             String                  @id @default(cuid())
+  locationId     String                  @map("location_id")
+  actorId        String                  @map("actor_id")
+  transcript     String                  @db.Text
+  resolvedIntent String                  @map("resolved_intent")
+  confidence     Float?
+  outcome        VoiceInteractionOutcome
+  declineReason  String?                 @map("decline_reason") @db.Text
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  actor    User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([locationId, createdAt])
+  @@map("voice_interaction_logs")
+}
+
 enum AttendanceStatus {
   PRESENT
   LATE
@@ -303,6 +355,13 @@ enum AttendanceStatus {
   EXCUSED
 }
 
+// A partial unique index enforcing "at most one open clock-in per user"
+// (user_id, WHERE clock_out_at IS NULL) exists on this table via raw
+// migration SQL (prisma/migrations/20260904152729_attendance_one_open_clock_in_per_user) —
+// intentionally NOT representable as an @@unique here, since Prisma's schema
+// DSL can't express a conditional/partial unique index. Don't wonder why one
+// isn't declared below; it's enforced at the DB level instead. See
+// attendance.ts's POST /clock-in for how the resulting P2002 is handled.
 model AttendanceLog {
   id         String           @id @default(cuid())
   userId     String           @map("user_id")
@@ -319,6 +378,11 @@ model AttendanceLog {
 
   @@index([userId])
   @@index([shiftId])
+  // Supports the weekly-hours screen's date-range query (attendance.ts),
+  // which otherwise has no index to prune by clockInAt and must scan every
+  // historical row for the requested users before filtering by date in
+  // Postgres (found by the 2026-09-05 performance audit).
+  @@index([userId, clockInAt])
   @@map("attendance_logs")
 }
 
@@ -372,14 +436,14 @@ model FloorPlanImage {
 // screen's DOM overlay (`clip-path: polygon(...)`) stays correct at any
 // rendered image size without a resize-tracking recomputation step.
 model FloorSection {
-  id                String  @id @default(cuid())
-  locationId        String  @map("location_id")
-  floorPlanImageId  String  @map("floor_plan_image_id")
-  label             String
-  polygon           Json // [{x:number,y:number}, ...] fractional coords
-  paxCapacity       Int     @map("pax_capacity")
-  notes             String? // free-text venue note, e.g. "Shade after 17:00"
-  sortOrder         Int     @default(0) @map("sort_order")
+  id               String  @id @default(cuid())
+  locationId       String  @map("location_id")
+  floorPlanImageId String  @map("floor_plan_image_id")
+  label            String
+  polygon          Json // [{x:number,y:number}, ...] fractional coords
+  paxCapacity      Int     @map("pax_capacity")
+  notes            String? // free-text venue note, e.g. "Shade after 17:00"
+  sortOrder        Int     @default(0) @map("sort_order")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -412,7 +476,7 @@ model SectionAssignment {
   id          String           @id @default(cuid())
   sectionId   String           @map("section_id")
   staffId     String           @map("staff_id")
-  shiftDate   DateTime         @db.Date @map("shift_date")
+  shiftDate   DateTime         @map("shift_date") @db.Date
   period      AssignmentPeriod @default(AM)
   dutyLabel   String?          @map("duty_label")
   status      AssignmentStatus @default(DRAFT)
@@ -512,6 +576,39 @@ model Shoutout {
   @@map("shoutouts")
 }
 
+enum FloorFeedbackStatus {
+  OPEN
+  FLAGGED
+  REVIEWED
+}
+
+// Anonymous-to-management floor feedback (SafetyValve on the Home feed) —
+// anonymous in every manager-facing read, but NOT anonymous in storage:
+// `userId` is the real submitter, kept for moderation traceability (e.g. a
+// pattern of harassment complaints needs to be linkable even though no
+// single read exposes who filed it). Every GET /api/floor-feedback response
+// omits `userId` at the API layer, not just in the UI — see that route.
+// `OPEN` -> `FLAGGED` ("needs follow-up") -> `REVIEWED` ("closed, no action
+// needed"), or `OPEN` -> `REVIEWED` directly; `reviewedById`/`reviewedAt`
+// are set on either transition, mirroring JoinRequest's reviewedBy pattern.
+model FloorFeedback {
+  id           String              @id @default(cuid())
+  locationId   String              @map("location_id")
+  userId       String              @map("user_id")
+  content      String              @db.Text
+  status       FloorFeedbackStatus @default(OPEN)
+  reviewedById String?             @map("reviewed_by_id")
+  reviewedAt   DateTime?           @map("reviewed_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  user       User     @relation("FloorFeedbackSubmitter", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?    @relation("FloorFeedbackReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([locationId, status])
+  @@map("floor_feedback")
+}
+
 // ---------------------------------------------------------------------------
 // 8. ROTA BUILDER — reusable week templates + per-week publish tracking
 // ---------------------------------------------------------------------------
@@ -545,13 +642,13 @@ model RotaTemplate {
 model RotaPublish {
   id            String   @id @default(cuid())
   locationId    String   @map("location_id")
-  weekStart     DateTime @db.Date @map("week_start")
+  weekStart     DateTime @map("week_start") @db.Date
   publishedAt   DateTime @map("published_at")
   publishedById String?  @map("published_by_id")
   notifiedCount Int      @default(0) @map("notified_count")
 
   location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
-  publishedBy User?     @relation(fields: [publishedById], references: [id], onDelete: SetNull)
+  publishedBy User?    @relation(fields: [publishedById], references: [id], onDelete: SetNull)
 
   @@unique([locationId, weekStart])
   @@map("rota_publishes")
@@ -569,17 +666,18 @@ model RotaPublish {
 enum OtpPurpose {
   LOGIN
   JOIN
+  SIGNUP
 }
 
 model OtpCode {
-  id        String     @id @default(cuid())
-  phone     String
-  codeHash  String     @map("code_hash")
-  purpose   OtpPurpose
-  expiresAt DateTime   @map("expires_at")
-  consumedAt DateTime? @map("consumed_at")
-  attempts  Int        @default(0)
-  createdAt DateTime   @default(now()) @map("created_at")
+  id         String     @id @default(cuid())
+  phone      String
+  codeHash   String     @map("code_hash")
+  purpose    OtpPurpose
+  expiresAt  DateTime   @map("expires_at")
+  consumedAt DateTime?  @map("consumed_at")
+  attempts   Int        @default(0)
+  createdAt  DateTime   @default(now()) @map("created_at")
 
   @@index([phone, purpose])
   @@map("otp_codes")
@@ -602,6 +700,53 @@ model Session {
   @@map("sessions")
 }
 
+// One Web Push subscription per (browser, device) a user has opted into —
+// a user can have several (phone + desktop, say), each a separate row.
+// `endpoint` is globally unique because it IS the push service's own
+// per-registration URL (FCM/Mozilla/etc.), not something we generate — the
+// same shape as `User.phone`'s uniqueness reasoning, just enforced by the
+// browser instead of by us. `p256dh`/`auth` are the two keys off
+// `PushSubscription.toJSON().keys` in the browser's own Push API, kept as
+// plain columns rather than one Json blob since the shape is fixed and
+// always exactly these two strings — consistent with this schema's general
+// preference for typed columns over Json where the shape doesn't vary.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// The in-app notification bell's real backing store — one row per
+// notification-worthy event for one user, independent of whether that
+// user has push enabled on any device. Push (above) is an optional extra
+// delivery channel for the same event, not a replacement for this log;
+// server/src/lib/push.ts's `notifyUser` writes one of these AND attempts
+// push in the same call. Generic on purpose (title/body/url, no
+// Floor-Plan-specific columns) so any future feature reuses the same
+// table instead of growing its own.
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  title     String
+  body      String
+  url       String?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
 // A self-registration attempt whose phone number did NOT match an existing
 // User at verification time. Sits in Pending Approvals until a manager
 // approves (creating or linking a real User) or declines it. An
@@ -614,21 +759,27 @@ enum JoinRequestStatus {
 }
 
 model JoinRequest {
-  id             String            @id @default(cuid())
-  locationId     String            @map("location_id")
-  phone          String
-  fullName       String            @map("full_name")
-  status         JoinRequestStatus @default(PENDING)
-  reviewedById   String?           @map("reviewed_by_id")
-  reviewedAt     DateTime?         @map("reviewed_at")
-  createdUserId  String?           @map("created_user_id")
-  createdAt      DateTime          @default(now()) @map("created_at")
+  id            String            @id @default(cuid())
+  locationId    String            @map("location_id")
+  phone         String
+  fullName      String            @map("full_name")
+  status        JoinRequestStatus @default(PENDING)
+  reviewedById  String?           @map("reviewed_by_id")
+  reviewedAt    DateTime?         @map("reviewed_at")
+  createdUserId String?           @map("created_user_id")
+  createdAt     DateTime          @default(now()) @map("created_at")
 
   location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
   reviewedBy  User?    @relation("JoinRequestReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   createdUser User?    @relation("JoinRequestCreatedUser", fields: [createdUserId], references: [id], onDelete: SetNull)
 
   @@index([locationId, status])
+  // Supports myShifts.ts's "do I have a pending join request?" lookup,
+  // filtered by phone + status with no locationId in the query at all —
+  // the existing [locationId, status] index gives zero help there. This
+  // route is hit on every staff home-screen load (found by the 2026-09-05
+  // performance audit).
+  @@index([phone, status])
   @@map("join_requests")
 }
 
@@ -665,7 +816,13 @@ model PolicyDocument {
   locationId   String   @map("location_id")
   category     String
   title        String
-  fileUrl      String   @map("file_url")
+  // Unique by construction — always `/uploads/policy-documents/${randomUUID()}.pdf`
+  // (policyDocuments.ts). The file-serve route looks a document up by this
+  // field alone with no locationId in the query, so it had zero index
+  // support at all before this — every file view did a full-table scan
+  // across every venue's policy documents (found by the 2026-09-05
+  // performance audit).
+  fileUrl      String   @unique @map("file_url")
   originalName String?  @map("original_name")
   mimeType     String   @map("mime_type")
   uploadedById String?  @map("uploaded_by_id")

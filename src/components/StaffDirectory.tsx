@@ -6,6 +6,9 @@ import {
   type StaffDirectoryEntry,
 } from '../api/staffDirectory';
 import { ApiError } from '../api/schedules';
+import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { StaleDataNotice, OfflineActionNotice } from './shiftsync/OfflineNotice';
 
 interface StaffDirectoryProps {
   locationId: string;
@@ -29,9 +32,23 @@ type EditableFieldUpdates = Partial<
  * venue column (joined server-side from Location.name).
  */
 export default function StaffDirectory({ locationId, onChanged }: StaffDirectoryProps) {
+  const { session } = useIdentity();
+  const { online } = useConnectivity();
+  // Positive check (render editable only for a confirmed MANAGER/OWNER), not
+  // a negative one — same rationale as router.tsx's RequireSession/
+  // ShiftEditorLink: a corrupted/unexpected systemRole string must fail
+  // closed into the read-only view, not fall through to editable. The
+  // server already enforces this (POST/PATCH are requireManager-gated,
+  // GET is requireSession-only) — this only stops STAFF from seeing
+  // controls that would 403 on click, now that /people (where this
+  // renders) is reachable by every session, not just managers.
+  const isManager = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "no staff yet" one.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newTitle, setNewTitle] = useState('');
@@ -39,18 +56,30 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
+    // Reads are session-gated server-side now — with no session yet (e.g. a
+    // fresh load before login resolves) there is no token to send, so skip
+    // the call rather than firing a request that can only 401. Resolve the
+    // loading state immediately instead of leaving the spinner stuck.
+    if (!session) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
-    fetchStaffDirectory(locationId)
+    fetchStaffDirectory(session.token, locationId)
       .then((list) => {
         if (cancelled) return;
         setStaff(list);
         onChanged?.(list);
         setError(null);
+        setLoadFailed(false);
       })
       .catch((err) => {
         if (cancelled) return;
+        // `staff` itself is left untouched (Phase 2 of the offline-support
+        // pass: a failed reload must not blank out data already on screen).
         setError(err instanceof ApiError ? err.message : 'Could not load the staff directory.');
+        setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -58,7 +87,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     return () => {
       cancelled = true;
     };
-  }, [locationId, onChanged]);
+  }, [locationId, onChanged, session]);
 
   // Previously-seen preferred languages, for the datalist autocomplete —
   // same idea as the 86 List's station autocomplete (EightySixBoard.tsx).
@@ -68,9 +97,16 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   );
 
   const handleFieldSave = async (entry: StaffDirectoryEntry, updates: EditableFieldUpdates, errorMessage: string) => {
+    // Editing is manager-only server-side; with no session there is no
+    // token to send and the request could only ever 401.
+    if (!session) return;
+    // Blocked outright while offline — no auto-retry; the input is disabled
+    // in that state too (see the `online` prop passed to StaffRow below), so
+    // this is a defensive backstop, not the primary gate.
+    if (!online) return;
     setSavingId(entry.id);
     try {
-      const updated = await updateStaffMember(entry.id, updates);
+      const updated = await updateStaffMember(session.token, entry.id, updates);
       setStaff((prev) => {
         const next = prev.map((s) => (s.id === entry.id ? updated : s));
         onChanged?.(next);
@@ -87,9 +123,13 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   const handleAdd = async () => {
     const fullName = newName.trim();
     if (!fullName) return;
+    // Adding is manager-only server-side; with no session there is no
+    // token to send and the request could only ever 401.
+    if (!session) return;
+    if (!online) return;
     setAdding(true);
     try {
-      const created = await addStaffMember({ locationId, fullName, jobTitle: newTitle.trim() || null });
+      const created = await addStaffMember(session.token, { fullName, jobTitle: newTitle.trim() || null });
       setStaff((prev) => {
         const next = [...prev, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
         onChanged?.(next);
@@ -131,6 +171,8 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
             </div>
           )}
 
+          {!online && staff.length > 0 && <StaleDataNotice />}
+
           <datalist id="staff-directory-languages">
             {knownLanguages.map((lang) => (
               <option key={lang} value={lang} />
@@ -163,13 +205,15 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                       key={entry.id}
                       entry={entry}
                       saving={savingId === entry.id}
+                      disabled={!online}
+                      isManager={isManager}
                       onSave={(updates, errorMessage) => handleFieldSave(entry, updates, errorMessage)}
                     />
                   ))}
                   {staff.length === 0 && (
                     <tr>
                       <td colSpan={8} className="cell-num">
-                        No staff yet — add one below.
+                        {!online && loadFailed ? "You're offline — the staff directory couldn't be loaded yet." : 'No staff yet — add one below.'}
                       </td>
                     </tr>
                   )}
@@ -178,25 +222,32 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
             </div>
           )}
 
-          <div className="staff-directory-add">
-            <input
-              className="staff-directory-input"
-              placeholder="Full name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
-            />
-            <input
-              className="staff-directory-input"
-              placeholder="Job title (e.g. Restaurant Manager)"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
-            />
-            <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim()}>
-              {adding ? 'Adding…' : 'Add staff member'}
-            </button>
-          </div>
+          {isManager && (
+            <>
+              <div className="staff-directory-add">
+                <input
+                  className="staff-directory-input"
+                  placeholder="Full name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+                  disabled={!online}
+                />
+                <input
+                  className="staff-directory-input"
+                  placeholder="Job title (e.g. Restaurant Manager)"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+                  disabled={!online}
+                />
+                <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim() || !online}>
+                  {adding ? 'Adding…' : 'Add staff member'}
+                </button>
+              </div>
+              {!online && <OfflineActionNotice />}
+            </>
+          )}
         </div>
       )}
     </section>
@@ -206,10 +257,16 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
 function StaffRow({
   entry,
   saving,
+  disabled,
+  isManager,
   onSave,
 }: {
   entry: StaffDirectoryEntry;
   saving: boolean;
+  /** True while offline — every field/toggle in this row is disabled, matching the "block outright" treatment for this write path. */
+  disabled: boolean;
+  /** False for a STAFF session — every field renders as plain text, matching Floor Plan's AssignmentBoard read-only treatment rather than showing editable controls that would 403 on click. */
+  isManager: boolean;
   onSave: (updates: EditableFieldUpdates, errorMessage: string) => void;
 }) {
   const [title, setTitle] = useState(entry.jobTitle ?? '');
@@ -233,6 +290,23 @@ function StaffRow({
     setHiredAt(entry.hiredAt ?? '');
   }, [entry.hiredAt]);
 
+  if (!isManager) {
+    return (
+      <tr>
+        <td>{entry.fullName}</td>
+        <td className="cell-num">{entry.jobTitle || '—'}</td>
+        <td className="cell-num">{entry.phone || '—'}</td>
+        <td className="cell-num">{entry.preferredLanguage || '—'}</td>
+        <td className="cell-num">{entry.hiredAt || '—'}</td>
+        <td>
+          <span className={`chip${entry.isActive ? ' chip-active' : ''}`}>{entry.isActive ? 'Active' : 'Inactive'}</span>
+        </td>
+        <td className="cell-num">{entry.venueName}</td>
+        <td className="cell-num">{entry.roleName ?? '—'}</td>
+      </tr>
+    );
+  }
+
   return (
     <tr>
       <td>{entry.fullName}</td>
@@ -246,7 +320,7 @@ function StaffRow({
             onSave({ jobTitle: title || null }, 'Could not save that job title.');
           }}
           placeholder="Not set"
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
@@ -259,7 +333,7 @@ function StaffRow({
             onSave({ phone: phone || null }, 'Could not save that phone number.');
           }}
           placeholder="Not set"
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
@@ -273,7 +347,7 @@ function StaffRow({
             onSave({ preferredLanguage: preferredLanguage || null }, 'Could not save that preferred language.');
           }}
           placeholder="Not set"
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
@@ -286,14 +360,14 @@ function StaffRow({
             if (hiredAt === (entry.hiredAt ?? '')) return;
             onSave({ hiredAt: hiredAt || null }, 'Could not save that start date.');
           }}
-          disabled={saving}
+          disabled={saving || disabled}
         />
       </td>
       <td>
         <button
           type="button"
           className={`chip${entry.isActive ? ' chip-active' : ''}`}
-          disabled={saving}
+          disabled={saving || disabled}
           onClick={() => onSave({ isActive: !entry.isActive }, 'Could not update employment status.')}
         >
           {entry.isActive ? 'Active' : 'Inactive'}

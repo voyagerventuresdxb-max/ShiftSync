@@ -1,11 +1,11 @@
-import type { PrismaClient } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from './normalize.js';
 import type { PreviewRow } from './types.js';
 
 export interface PersistShiftsResult {
   createdCount: number;
   skippedCount: number;
-  rows: { rowNumber: number; shiftId: string; userId: string | null }[];
+  rows: { rowNumber: number; shiftId: string; userId: string | null; date: string }[];
 }
 
 /**
@@ -13,9 +13,21 @@ export interface PersistShiftsResult {
  * table. Rows still missing a resolvedRoleId are skipped (they cannot
  * satisfy the required Shift.roleId FK) — the caller should have already
  * surfaced these in the preview step for the manager to fix upstream.
+ *
+ * Accepts either the top-level `prisma` client or a `tx` handed in from
+ * inside `prisma.$transaction(...)` — the caller (routes/schedules.ts) needs
+ * these creates to commit atomically with the audit-log row it writes right
+ * after this returns, so it wraps both in one interactive transaction and
+ * passes `tx` through here. Because a `tx` cannot itself open a nested
+ * `$transaction`, the creates below run sequentially in a plain loop rather
+ * than the array form of `$transaction` — an interactive-transaction client
+ * is bound to a single reserved DB connection, so firing them concurrently
+ * (e.g. via `Promise.all`) wouldn't parallelize anyway and risks tripping
+ * the transaction's own timeout under some drivers/poolers. Sequential is
+ * both correct and no slower in practice for a single-connection client.
  */
 export async function persistShifts(
-  prisma: PrismaClient,
+  prisma: Prisma.TransactionClient | PrismaClient,
   locationId: string,
   createdById: string | null,
   rows: PreviewRow[],
@@ -29,12 +41,13 @@ export async function persistShifts(
   const location = await prisma.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
   const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
 
-  const created = await prisma.$transaction(
-    importable.map((row) => {
-      const startTime = combineDateAndTime(row.date, row.startTime, timezone);
-      const endTime = combineDateAndTime(row.date, row.endTime, timezone, row.overnight);
+  const created: { id: string; userId: string | null }[] = [];
+  for (const row of importable) {
+    const startTime = combineDateAndTime(row.date, row.startTime, timezone);
+    const endTime = combineDateAndTime(row.date, row.endTime, timezone, row.overnight);
 
-      return prisma.shift.create({
+    created.push(
+      await prisma.shift.create({
         data: {
           locationId,
           roleId: row.resolvedRoleId!,
@@ -48,9 +61,9 @@ export async function persistShifts(
           status: 'PUBLISHED',
         },
         select: { id: true, userId: true },
-      });
-    }),
-  );
+      }),
+    );
+  }
 
   return {
     createdCount: created.length,
@@ -59,6 +72,7 @@ export async function persistShifts(
       rowNumber: importable[i]!.rowNumber,
       shiftId: shift.id,
       userId: shift.userId,
+      date: importable[i]!.date,
     })),
   };
 }

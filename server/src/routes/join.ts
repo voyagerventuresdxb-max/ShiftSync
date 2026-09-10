@@ -2,6 +2,9 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { notifyUser } from '../lib/push.js';
+import { getManagerIdsForLocation } from '../lib/managers.js';
 
 export const joinRouter = Router();
 
@@ -74,7 +77,13 @@ joinRouter.post('/verify-otp', async (req, res) => {
         pending: false,
         token: plainToken,
         expiresAt: expiresAt.toISOString(),
-        user: { id: match.id, fullName: match.fullName, jobTitle: match.jobTitle },
+        user: {
+          id: match.id,
+          fullName: match.fullName,
+          jobTitle: match.jobTitle,
+          locationId: match.locationId,
+          systemRole: match.systemRole,
+        },
       });
     }
 
@@ -84,6 +93,21 @@ joinRouter.post('/verify-otp', async (req, res) => {
     const joinRequest = await prisma.joinRequest.create({
       data: { locationId, phone, fullName, status: 'PENDING' },
     });
+
+    // Real delivery on top of the write above (never blocking the response
+    // — a push failure must not stop the applicant's request from going
+    // through). The applicant themselves cannot be notified here or on
+    // decision — they have no User/session/push subscription until a
+    // manager approves them, a separate deferred infra gap.
+    const managerIds = await getManagerIdsForLocation(locationId);
+    for (const managerId of managerIds) {
+      void notifyUser(managerId, {
+        title: 'New join request',
+        body: `${fullName} wants to join — review their request.`,
+        url: '/people',
+      });
+    }
+
     return res.status(201).json({ pending: true, joinRequestId: joinRequest.id });
   } catch (err) {
     console.error('[join.verifyOtp] failed', err);
@@ -91,10 +115,11 @@ joinRouter.post('/verify-otp', async (req, res) => {
   }
 });
 
-/** GET /api/join/:locationId/pending — list PENDING join requests for Pending Approvals. */
-joinRouter.get('/:locationId/pending', async (req, res) => {
+/** GET /api/join/:locationId/pending — list PENDING join requests for Pending Approvals. Manager-only, own location. */
+joinRouter.get('/:locationId/pending', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const requests = await prisma.joinRequest.findMany({
       where: { locationId, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
@@ -114,23 +139,27 @@ joinRouter.get('/:locationId/pending', async (req, res) => {
 });
 
 /**
- * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', reviewedById?, jobTitle? }
+ * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle? }
  * Approving creates a real, active User from the request's phone/fullName
  * and links it back onto the request — this is the one place a JoinRequest
- * ever produces a real staff member.
+ * ever produces a real staff member. Manager-only, scoped to the caller's
+ * own location; the reviewer is always the authenticated caller — there is
+ * no legitimate on-behalf-of case for reviewing someone else's join request.
  */
-joinRouter.patch('/:requestId', async (req, res) => {
+joinRouter.patch('/:requestId', requireSession, requireManager, async (req, res) => {
   try {
     const { requestId } = req.params;
     const decision = String(req.body?.decision ?? '');
-    const reviewedById = req.body?.reviewedById ? String(req.body.reviewedById).trim() : null;
     if (decision !== 'approve' && decision !== 'decline') {
       return res.status(400).json({ error: 'decision must be "approve" or "decline".' });
     }
 
+    const jr = await prisma.joinRequest.findUnique({ where: { id: requestId } });
+    if (!ownedOrNotFound(req, res, jr, 'That join request could not be found.')) return;
+
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
 
-    const outcome = await decideJoinRequest({ requestId, decision, reviewedById, jobTitle });
+    const outcome = await decideJoinRequest({ requestId, decision, reviewedById: req.user!.id, jobTitle });
 
     if (outcome.result === 'not_found') return res.status(404).json({ error: `Join request "${requestId}" not found.` });
     if (outcome.result === 'already_reviewed') {

@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Award, Plus, X } from 'lucide-react';
 import { fetchShoutouts, postShoutout, type ShoutoutDto } from '@/api/shoutouts';
+import { ApiError } from '@/api/schedules';
 import { useAppState } from '@/state/AppStateContext';
+import { useIdentity } from '@/state/IdentityContext';
+import { useConnectivity } from '@/state/ConnectivityContext';
+import { StaleDataNotice, OfflineEmptyState } from '@/components/shiftsync/OfflineNotice';
 import { weekdayOf } from '@/engine/rosterView';
 
 function initials(name: string): string {
@@ -16,10 +20,15 @@ function timeAgo(iso: string): string {
 }
 
 export function Shoutouts() {
-  const { mergedRoster, currentEmployeeId } = useAppState();
+  const { locationId, mergedRoster, currentEmployeeId } = useAppState();
+  const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [items, setItems] = useState<ShoutoutDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "no shoutouts" one.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [employeeId, setEmployeeId] = useState('');
   const [shiftId, setShiftId] = useState('');
@@ -27,13 +36,32 @@ export function Shoutouts() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    // Same reasoning as Announcements.tsx (this component's two hosts, Home
+    // and My Shifts, are both session-optional) — no locationId means no
+    // real venue to load shoutouts for.
+    if (!locationId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
-    fetchShoutouts('seed-location')
+    fetchShoutouts(locationId)
       .then((list) => {
-        if (!cancelled) setItems(list);
+        if (cancelled) return;
+        setItems(list);
+        setError(null);
+        setLoadFailed(false);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load shoutouts.');
+        if (cancelled) return;
+        // `items` is left untouched (Phase 2 of the offline-support pass: a
+        // failed reload must not blank out data already on screen). Both
+        // fire together: `error` surfaces a genuine (non-connectivity)
+        // failure the same way a post-action failure does below, while
+        // `loadFailed` drives the offline-specific empty state when the
+        // list is also empty.
+        setError(err instanceof ApiError ? err.message : 'Could not load shoutouts.');
+        setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -41,7 +69,7 @@ export function Shoutouts() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [locationId]);
 
   const shiftsForEmployee = useMemo(
     () => mergedRoster.shifts.filter((s) => s.employeeId === employeeId).sort((a, b) => b.date.localeCompare(a.date)),
@@ -50,13 +78,20 @@ export function Shoutouts() {
 
   async function submit() {
     if (!employeeId || !shiftId || !note.trim()) return;
+    // Guards on `session`, not `locationId` — see the matching comment in
+    // Announcements.tsx's `save()` for why this changed with the
+    // kiosk-access fork resolution (2026-08-31, MEMORY.md).
+    if (!session || !locationId) {
+      setError('You must be signed in to give a shoutout.');
+      return;
+    }
     const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
     const snapshot = shift ? `${weekdayOf(shift.date)} · ${shift.start}–${shift.end} · ${shift.requiredRole ?? ''}`.trim() : undefined;
     setSaving(true);
     setError(null);
     try {
       const created = await postShoutout({
-        locationId: 'seed-location',
+        locationId,
         employeeId,
         authorId: currentEmployeeId,
         shiftSnapshot: snapshot,
@@ -68,7 +103,7 @@ export function Shoutouts() {
       setShiftId('');
       setNote('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save the shoutout.');
+      setError(err instanceof ApiError ? err.message : 'Could not save the shoutout.');
     } finally {
       setSaving(false);
     }
@@ -146,8 +181,16 @@ export function Shoutouts() {
         </div>
       )}
 
+      {!online && items.length > 0 && <StaleDataNotice />}
+
       {loading ? (
         <p className="mt-4 text-sm text-muted-foreground">Loading shoutouts…</p>
+      ) : items.length === 0 ? (
+        !online && loadFailed ? (
+          <OfflineEmptyState message="You're offline — shoutouts couldn't be loaded yet." />
+        ) : (
+          <p className="mt-4 rounded-xl border border-border p-4 text-center text-sm text-muted-foreground">No shoutouts yet — recognise someone's shift.</p>
+        )
       ) : (
         <ul className="mt-4 space-y-3">
           {items.map((s) => (
@@ -166,11 +209,6 @@ export function Shoutouts() {
               </div>
             </li>
           ))}
-          {items.length === 0 && (
-            <li className="rounded-xl border border-border p-4 text-center text-sm text-muted-foreground">
-              No shoutouts yet — recognise someone's shift.
-            </li>
-          )}
         </ul>
       )}
     </section>

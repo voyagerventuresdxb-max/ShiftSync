@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
+import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 
 export const eightySixRouter = Router();
 
@@ -36,10 +38,16 @@ function itemToDto(item: {
  * only because every EIGHTY_SIXED row has a null backOnAt — an invariant
  * nothing in the schema enforces. Active always comes first in the response,
  * preserving the previous `status: 'asc'` group order.
+ *
+ * Session-gated (2026-08-31 — see MEMORY.md): unlike `shifts.ts`, this
+ * route has no anonymous/kiosk consumer to preserve — `EightySixBoard` only
+ * ever renders inside `/floor-plan`, already behind `RequireSession` — so
+ * there was no reason for the read to stay open either.
  */
-eightySixRouter.get('/:locationId', async (req, res) => {
+eightySixRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const includeResolved = req.query.includeResolved === '1';
 
     const active = await prisma.eightySixItem.findMany({
@@ -61,37 +69,43 @@ eightySixRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/eighty-six — body: { locationId, itemName, station, note?, createdById? } */
-eightySixRouter.post('/', async (req, res) => {
+/**
+ * POST /api/eighty-six — body: { itemName, station, note?, createdById? }
+ * Session-gated; `locationId` comes from the session, not the body.
+ * `createdById` is only honored for a MANAGER/OWNER session (same
+ * "Viewing" on-behalf-of pattern as `shifts.ts`'s POST /, above it) — a
+ * STAFF session is always attributed as itself.
+ */
+eightySixRouter.post('/', requireSession, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const itemName = String(req.body?.itemName ?? '').trim();
     const station = String(req.body?.station ?? '').trim();
     const note = req.body?.note ? String(req.body.note).trim() : null;
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
 
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!itemName) return res.status(400).json({ error: 'itemName is required.' });
     if (!station) return res.status(400).json({ error: 'station is required.' });
 
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
-
-    const item = await prisma.eightySixItem.create({
-      data: { locationId, itemName, station, note, createdById },
-    });
-
-    await prisma.auditLog.create({
-      data: {
+    const item = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.eightySixItem.create({
+          data: { locationId, itemName, station, note, createdById },
+        }),
+      (created) => ({
         locationId,
         actorId: createdById,
         shiftId: null,
         action: 'ITEM_86D',
         entityType: 'EightySixItem',
-        entityId: item.id,
+        entityId: created.id,
         note: `86'd "${itemName}" (${station})`,
-      },
-    });
+      }),
+    );
 
     return res.status(201).json({ item: itemToDto(item) });
   } catch (err) {
@@ -100,33 +114,41 @@ eightySixRouter.post('/', async (req, res) => {
   }
 });
 
-/** PATCH /api/eighty-six/:itemId/back-on — body: { actorId? } */
-eightySixRouter.patch('/:itemId/back-on', async (req, res) => {
+/**
+ * PATCH /api/eighty-six/:itemId/back-on — body: { actorId? }
+ * Session-gated; `actorId` in the body is only honored for a MANAGER/OWNER
+ * session — same on-behalf-of rule as POST /, above.
+ */
+eightySixRouter.patch('/:itemId/back-on', requireSession, async (req, res) => {
   try {
     const { itemId } = req.params;
     const existing = await prisma.eightySixItem.findUnique({ where: { id: itemId } });
-    if (!existing) return res.status(404).json({ error: `Item "${itemId}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Item "${itemId}" not found.`)) return;
     if (existing.status === 'BACK_ON') {
       return res.status(409).json({ error: 'This item is already back on.' });
     }
 
-    const backOnById = req.body?.actorId ? String(req.body.actorId).trim() : null;
-    const item = await prisma.eightySixItem.update({
-      where: { id: itemId },
-      data: { status: 'BACK_ON', backOnAt: new Date(), backOnById },
-    });
-
-    await prisma.auditLog.create({
-      data: {
+    const backOnById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    const item = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.eightySixItem.update({
+          where: { id: itemId },
+          data: { status: 'BACK_ON', backOnAt: new Date(), backOnById },
+        }),
+      (updated) => ({
         locationId: existing.locationId,
         actorId: backOnById,
         shiftId: null,
         action: 'ITEM_BACK_ON',
         entityType: 'EightySixItem',
-        entityId: item.id,
+        entityId: updated.id,
         note: `"${existing.itemName}" back on (${existing.station})`,
-      },
-    });
+      }),
+    );
 
     return res.status(200).json({ item: itemToDto(item) });
   } catch (err) {

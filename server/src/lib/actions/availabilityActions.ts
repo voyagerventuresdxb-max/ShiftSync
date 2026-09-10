@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
 
 export type AvailabilityMarkDto = {
@@ -10,17 +11,22 @@ export type AvailabilityMarkDto = {
 /**
  * Upserts one availability mark per (userId, date). `date` is assumed
  * already validated as YYYY-MM-DD by the caller (the HTTP route, or a
- * future voice caller).
+ * future voice caller). Accepts either the top-level `prisma` client or a
+ * `tx` — routes/voice.ts's MARK_AVAILABILITY passes `tx` so this upsert
+ * commits atomically with the audit-log row it writes right after.
  */
-export async function markAvailability(input: {
-  userId: string;
-  date: string;
-  type: 'UNAVAILABLE' | 'PREFERRED_OFF';
-  note?: string | null;
-}): Promise<{ result: 'ok'; mark: AvailabilityMarkDto }> {
+export async function markAvailability(
+  input: {
+    userId: string;
+    date: string;
+    type: 'UNAVAILABLE' | 'PREFERRED_OFF';
+    note?: string | null;
+  },
+  client: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<{ result: 'ok'; mark: AvailabilityMarkDto }> {
   const date = new Date(`${input.date}T00:00:00.000Z`);
   const note = input.note ?? null;
-  const mark = await prisma.availabilityMark.upsert({
+  const mark = await client.availabilityMark.upsert({
     where: { userId_date: { userId: input.userId, date } },
     create: { userId: input.userId, date, type: input.type, note },
     update: { type: input.type, note },

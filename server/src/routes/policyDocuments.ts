@@ -4,10 +4,45 @@ import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const policyDocumentsRouter = Router();
 
+/**
+ * Serves the actual uploaded PDF bytes — mounted directly at
+ * `/uploads/policy-documents` in `app.ts`, BEFORE the generic `/uploads`
+ * static fallback, so it intercepts this one subpath. Floor-plan images got
+ * the identical treatment via `floorPlanFilesRouter` in floorPlan.ts — both
+ * upload types are now session-gated, nothing still falls through to the
+ * generic unauthenticated static mount.
+ *
+ * The stored `fileUrl` values (`/uploads/policy-documents/<uuid>.pdf`)
+ * never change, so no data migration is needed — only which handler answers
+ * that URL.
+ */
+export const policyDocumentFilesRouter = Router();
+
 const UPLOAD_DIR = join(import.meta.dirname, '..', '..', 'uploads', 'policy-documents');
+
+/** Matches exactly the `${randomUUID()}.pdf` shape every upload is stored under — rejects anything else before it ever reaches the filesystem. */
+const SAFE_FILENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.pdf$/i;
+
+policyDocumentFilesRouter.get('/:filename', requireSession, async (req, res) => {
+  try {
+    const { filename } = req.params;
+    if (!SAFE_FILENAME_RE.test(filename)) return res.status(404).json({ error: 'Document not found.' });
+
+    const fileUrl = `/uploads/policy-documents/${filename}`;
+    const doc = await prisma.policyDocument.findFirst({ where: { fileUrl } });
+    if (!ownedOrNotFound(req, res, doc, 'Document not found.')) return;
+
+    return res.sendFile(join(UPLOAD_DIR, filename));
+  } catch (err) {
+    console.error('[policyDocuments.serveFile] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while serving the document.' });
+  }
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -18,10 +53,16 @@ const upload = multer({
   },
 });
 
-/** GET /api/policy-documents/:locationId — grouped by category client-side; server returns a flat list. */
-policyDocumentsRouter.get('/:locationId', async (req, res) => {
+/**
+ * GET /api/policy-documents/:locationId — grouped by category client-side; server returns a flat list.
+ * Session-gated (2026-08-31 — see MEMORY.md): compliance documents are real
+ * sensitive data, not just structural metadata; this was closed alongside
+ * the matching `/uploads/policy-documents` file-serving gap in the same file.
+ */
+policyDocumentsRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const docs = await prisma.policyDocument.findMany({
       where: { locationId },
       orderBy: [{ category: 'asc' }, { createdAt: 'desc' }],
@@ -42,29 +83,57 @@ policyDocumentsRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/policy-documents/upload — multipart: file, locationId, category, title, uploadedById? */
-policyDocumentsRouter.post('/upload', upload.single('file'), async (req, res) => {
+/**
+ * POST /api/policy-documents/upload — multipart: file, category, title, uploadedById?
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
+ * gap the `withAuditedTransaction` review found: this route and `DELETE
+ * /:id` below were both `requireSession`-only, so any authenticated STAFF
+ * session could upload or permanently delete a compliance document — this
+ * file's own GET route comment already calls these "real sensitive data").
+ * `locationId` comes from the session, not the body. `uploadedById` is only
+ * honored for a MANAGER/OWNER session — the `STAFF ? self : ...` branch
+ * below is now unreachable and kept only as defense in depth, matching
+ * `shifts.ts`.
+ */
+policyDocumentsRouter.post('/upload', requireSession, requireManager, upload.single('file'), async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const category = String(req.body?.category ?? '').trim();
     const title = String(req.body?.title ?? '').trim();
-    const uploadedById = req.body?.uploadedById ? String(req.body.uploadedById).trim() : null;
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
+    const uploadedById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.uploadedById ? String(req.body.uploadedById).trim() : '') || req.user!.id;
+
+    if (uploadedById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: uploadedById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${uploadedById}" not found.`)) return;
+    }
+
     if (!category) return res.status(400).json({ error: 'category is required.' });
     if (!title) return res.status(400).json({ error: 'title is required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
     await mkdir(UPLOAD_DIR, { recursive: true });
     const filename = `${randomUUID()}.pdf`;
     await writeFile(join(UPLOAD_DIR, filename), req.file.buffer);
     const fileUrl = `/uploads/policy-documents/${filename}`;
 
-    const doc = await prisma.policyDocument.create({
-      data: { locationId, category, title, fileUrl, originalName: req.file.originalname, mimeType: req.file.mimetype, uploadedById },
-    });
+    const doc = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.policyDocument.create({
+          data: { locationId, category, title, fileUrl, originalName: req.file!.originalname, mimeType: req.file!.mimetype, uploadedById },
+        }),
+      (created) => ({
+        locationId,
+        actorId: req.user!.id,
+        action: 'POLICY_DOCUMENT_UPLOADED',
+        entityType: 'PolicyDocument',
+        entityId: created.id,
+        note: `Uploaded "${title}" (${category})`,
+      }),
+    );
     return res.status(201).json({
       document: { id: doc.id, category: doc.category, title: doc.title, fileUrl: doc.fileUrl, originalName: doc.originalName, createdAt: doc.createdAt.toISOString() },
     });
@@ -74,13 +143,24 @@ policyDocumentsRouter.post('/upload', upload.single('file'), async (req, res) =>
   }
 });
 
-/** DELETE /api/policy-documents/:id */
-policyDocumentsRouter.delete('/:id', async (req, res) => {
+/** DELETE /api/policy-documents/:id — `requireManager`-gated (2026-09-05, same fix as POST /upload, above), own venue only. */
+policyDocumentsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.policyDocument.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Document "${id}" not found.` });
-    await prisma.policyDocument.delete({ where: { id } });
+    if (!ownedOrNotFound(req, res, existing, `Document "${id}" not found.`)) return;
+    await withAuditedTransaction(
+      prisma,
+      (tx) => tx.policyDocument.delete({ where: { id } }),
+      () => ({
+        locationId: existing.locationId,
+        actorId: req.user!.id,
+        action: 'POLICY_DOCUMENT_DELETED',
+        entityType: 'PolicyDocument',
+        entityId: id,
+        note: `Deleted "${existing.title}" (${existing.category})`,
+      }),
+    );
     return res.status(204).send();
   } catch (err) {
     console.error('[policyDocuments.delete] failed', err);

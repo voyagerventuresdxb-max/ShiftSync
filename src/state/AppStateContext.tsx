@@ -7,7 +7,24 @@ import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
+import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
+import { fetchLocation } from '../api/locations';
+import { useIdentity } from './IdentityContext';
 
+/**
+ * Shared UI vocabulary (role/shift-type labels) plus a compliance ruleset —
+ * genuinely global for this pilot (every venue is UAE-mainland Dubai/GCC
+ * hospitality per this product's own scope; see AGENTS.md), not a
+ * per-venue value that should come from session. `id`/`name`/`knownStaff`
+ * are NOT real venue identity, despite the shape — inert legacy
+ * placeholders that only satisfy `VenueConfig`'s type for `src/engine/
+ * parser.ts`'s `parseRosterText`, which is dead code today (only its own
+ * test file calls it; no live route or component does — confirmed via
+ * `grep` during the 2026-08-31 hardcoded-reference sweep, see MEMORY.md).
+ * No live UI reads `config.name`/`config.id` for anything real-venue
+ * -identifying — every display surface reads `venueName` (below) instead,
+ * fetched from the actual signed-in session's own `Location` row.
+ */
 const config: VenueConfig = {
   id: 'venue-1',
   name: 'Demo Venue',
@@ -20,8 +37,49 @@ const config: VenueConfig = {
 
 interface AppStateValue {
   config: VenueConfig;
+  /**
+   * The real signed-in venue's actual display name, fetched from the
+   * database — `null` until it loads, or for an anonymous kiosk visit
+   * (`GET /api/locations/:id` requires a session; an anonymous binding has
+   * no way to fetch this). Every UI surface that shows a venue name reads
+   * this, never `config.name` (a hardcoded placeholder — see the comment on
+   * `config`, below).
+   */
+  venueName: string | null;
+  /**
+   * The venue every read-effect should scope itself to — a real session's
+   * venue when signed in, otherwise the anonymous kiosk venue bound via
+   * `bindAnonymousVenue` (see below), otherwise null. Both sources resolve
+   * to a real `Location.id`; the two are never mixed (a signed-in session
+   * always wins over any bound kiosk venue). Every write path below reads
+   * `session` directly instead, so an anonymous kiosk binding can only ever
+   * unlock reads, never writes — see MEMORY.md's kiosk-access fork entry.
+   */
+  locationId: string | null;
+  /**
+   * Binds `/` (Home) to a venue for an anonymous, no-session visit — the
+   * "shared kiosk device" case. Persisted to localStorage so the binding
+   * survives future visits with no `?venue=` param present. No-ops while a
+   * real session exists, so a bookmarked kiosk link can never override a
+   * signed-in user's own venue.
+   */
+  bindAnonymousVenue: (locationId: string) => void;
   mergedRoster: Roster;
+  /**
+   * True until the FIRST `weekShifts` fetch (success or failure) settles,
+   * then false forever after — not a per-request spinner for week-nav
+   * reloads. Lets SchedulingRoute/PersonalRota/TeamMatrix distinguish "still
+   * loading the initial page" from "genuinely no shifts this week" so they
+   * don't flash a real empty state during the brief initial round trip.
+   */
+  initialScheduleLoading: boolean;
+  /** True when the most recent weekShifts fetch failed — distinct from `initialScheduleLoading`, which only covers the first load. Lets SchedulingRoute tell "offline, nothing cached for this week" apart from a genuine "no staff parsed yet" empty state. */
+  scheduleLoadFailed: boolean;
   swapRequests: SwapRequest[];
+  /** True until the first swap-requests fetch (success or failure) settles — same "initial load only" shape as `initialScheduleLoading`, for ApprovalsPanel. */
+  swapRequestsLoading: boolean;
+  /** True when the most recent swap-requests fetch failed — lets ApprovalsPanel tell "offline, nothing cached" apart from a genuine "no requests" empty state. */
+  swapRequestsLoadFailed: boolean;
   staffDirectory: StaffDirectoryEntry[];
   staffDirectoryByName: Map<string, StaffDirectoryEntry>;
   sections: GroupedSection<Employee>[];
@@ -36,10 +94,10 @@ interface AppStateValue {
   weekStart: string;
   setWeekStart: React.Dispatch<React.SetStateAction<string>>;
   refetchWeekShifts: () => Promise<void>;
-  createRotaShift: (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => Promise<void>;
-  updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[1]) => Promise<void>;
+  createRotaShift: (input: Omit<Parameters<typeof createShift>[1], 'locationId'>) => Promise<void>;
+  updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[2]) => Promise<void>;
   deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
-  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => Promise<void>;
+  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => Promise<void>;
   publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
   publishInfo: PublishInfo | null;
   /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
@@ -56,6 +114,38 @@ interface PublishInfo {
 const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const { session } = useIdentity();
+  const [anonymousVenueId, setAnonymousVenueId] = useState<string | null>(() => loadBoundVenue());
+  const locationId = session?.user.locationId ?? anonymousVenueId;
+  const bindAnonymousVenue = useCallback((id: string) => {
+    saveBoundVenue(id);
+    setAnonymousVenueId(id);
+  }, []);
+
+  // The real venue's display name — never `config.name` (see the comment on
+  // `config`, above). `GET /api/locations/:id` requires a session, so an
+  // anonymous kiosk visit (no session, only a bound venue id) has no way to
+  // fetch this and stays `null` — every consumer already has to handle a
+  // loading/unknown state, so this is the same shape, not a new one.
+  const [venueName, setVenueName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!session) {
+      setVenueName(null);
+      return;
+    }
+    let cancelled = false;
+    fetchLocation(session.token, session.user.locationId)
+      .then((location) => {
+        if (!cancelled) setVenueName(location.name);
+      })
+      .catch(() => {
+        if (!cancelled) setVenueName(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
   const [weekStart, setWeekStart] = useState(currentWeekStart());
 
   const roster: Roster = useMemo(
@@ -74,7 +164,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     employees: [],
     shifts: [],
   });
+  const [initialScheduleLoading, setInitialScheduleLoading] = useState(true);
   const [swapRequests, setSwapRequests] = useState<SwapRequest[]>([]);
+  const [swapRequestsLoading, setSwapRequestsLoading] = useState(true);
+  const [swapRequestsLoadFailed, setSwapRequestsLoadFailed] = useState(false);
+  const [scheduleLoadFailed, setScheduleLoadFailed] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
@@ -88,11 +182,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // different week. Every request takes a sequence number and discards itself
   // if a newer request has started since.
   const reqSeqRef = useRef(0);
+  // The week the CURRENTLY-HELD `weekShifts` state actually corresponds to
+  // (distinct from `weekStart`, which flips the instant Prev/Next is
+  // clicked, before the new week's fetch has even started). Lets the catch
+  // block below tell "this failure is for a week we have no cached data for
+  // at all" (must clear — the old bug this ref exists to prevent) apart from
+  // "this failure is a same-week connectivity blip" (must NOT clear — Phase
+  // 2 of the offline-support pass: don't wipe data the user can already see
+  // just because a request failed).
+  const loadedWeekShiftsWeekRef = useRef<string | null>(null);
 
   const refetchWeekShifts = useCallback(async () => {
+    // No session, no real venue to scope this fetch to — clear rather than
+    // fetch against a hardcoded/wrong location. Same shared-device reasoning
+    // as the staff-directory/swap-requests effects below.
+    if (!locationId) {
+      setWeekShifts([]);
+      loadedWeekShiftsWeekRef.current = null;
+      setInitialScheduleLoading(false);
+      return;
+    }
     const seq = ++reqSeqRef.current;
+    const targetWeek = weekStart;
     try {
-      const dtos = await fetchWeekShifts('seed-location', weekStart);
+      const dtos = await fetchWeekShifts(locationId, weekStart);
       if (seq !== reqSeqRef.current) return;
       setWeekShifts(
         dtos.map((s) => ({
@@ -109,17 +222,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           sidework: s.sidework,
         })),
       );
+      loadedWeekShiftsWeekRef.current = targetWeek;
+      setScheduleLoadFailed(false);
     } catch {
-      // A failed fetch for the new week must not leave the previous week's
-      // shifts rendered (that would look like correct data for the wrong
-      // week) — clear to empty so RotaBuilder/Team Matrix show their own
-      // empty state instead of stale data. A stale failure is discarded for
-      // the same reason a stale success is: it must not clear a newer week's
-      // freshly-loaded shifts.
+      // A stale failure is discarded for the same reason a stale success is:
+      // it must not clear a newer week's freshly-loaded shifts.
       if (seq !== reqSeqRef.current) return;
-      setWeekShifts([]);
+      setScheduleLoadFailed(true);
+      if (loadedWeekShiftsWeekRef.current !== targetWeek) {
+        // We hold no valid cached data for THIS week at all (first load of
+        // it, or whatever's in `weekShifts` is leftover from a different
+        // week) — leaving it in place would show the wrong week's shifts
+        // under this week's header, so clearing is the only safe option.
+        setWeekShifts([]);
+      }
+      // Else: the failure is for the SAME week already on screen (e.g. a
+      // transient offline blip) — the currently-displayed data is still
+      // valid for the week the user is looking at, so it stays put rather
+      // than being wiped just because this one request failed.
+    } finally {
+      // Only ever flips the FIRST time this settles (see the field's doc
+      // comment) — subsequent week-nav reloads leave it `false`, since
+      // `setState(false)` when already `false` is a no-op re-render.
+      if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
-  }, [weekStart]);
+  }, [weekStart, locationId]);
 
   useEffect(() => {
     void refetchWeekShifts();
@@ -180,8 +307,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [staffDirectory]);
 
   useEffect(() => {
+    // Reads are session-gated server-side now. With no session — either a
+    // fresh load before login resolves, OR a sign-out on the shared venue
+    // device this app runs on — there is no token to send, so skip the call
+    // AND clear whatever the previous session's data left behind: this
+    // provider never unmounts across a logout (no route requires a session
+    // to render), so without this a departed manager's staff directory
+    // (names/phone numbers/preferred language) would keep rendering for
+    // whoever uses the device next.
+    if (!session) {
+      setStaffDirectory([]);
+      return;
+    }
     let cancelled = false;
-    fetchStaffDirectory('seed-location')
+    fetchStaffDirectory(session.token, session.user.locationId)
       .then((list) => {
         if (!cancelled) setStaffDirectory(list);
       })
@@ -191,7 +330,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     if (currentEmployeeId === undefined && mergedRoster.employees.length > 0) {
@@ -200,18 +339,39 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [currentEmployeeId, mergedRoster.employees]);
 
   useEffect(() => {
+    // Swap requests are session-gated server-side now. Same shared-device
+    // reasoning as the staff-directory effect above: clear on sign-out, not
+    // just skip the refetch, so a departed user's swap-request history
+    // doesn't keep rendering for whoever uses the device next.
+    if (!session) {
+      setSwapRequests([]);
+      setSwapRequestsLoading(false);
+      setSwapRequestsLoadFailed(false);
+      return;
+    }
     let cancelled = false;
-    fetchSwapRequests('seed-location')
+    fetchSwapRequests(session.token, session.user.locationId)
       .then((list) => {
-        if (!cancelled) setSwapRequests(list);
+        if (cancelled) return;
+        setSwapRequests(list);
+        setSwapRequestsLoadFailed(false);
       })
       .catch(() => {
-        // ApprovalsPanel surfaces its own load error when rendered; nothing to show here.
+        // The list itself is left untouched on failure (Phase 2 of the
+        // offline-support pass: a request that fails while data is already
+        // loaded must not blank it out) — this flag only distinguishes a
+        // genuinely empty list from a cold load that couldn't reach the
+        // server at all, for ApprovalsPanel's offline empty state.
+        if (!cancelled) setSwapRequestsLoadFailed(true);
+      })
+      .finally(() => {
+        // Only meaningfully flips once — see the field's doc comment.
+        if (!cancelled) setSwapRequestsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [session]);
 
   const sections = useMemo(() => {
     const jobTitleByName = new Map<string, string | null | undefined>();
@@ -221,50 +381,59 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const handleRequestCover = useCallback(
     async (shiftId: string, coveringEmployeeId: string) => {
+      // No session, no actor to attribute the request to — the server would
+      // 401 anyway. Thrown (not a silent no-op) so the caller (PersonalRota)
+      // doesn't flip to a false "sent" state when nothing was actually sent.
+      if (!session) throw new Error('You need to be signed in to request cover.');
       const shift = mergedRoster.shifts.find((s) => s.id === shiftId);
-      if (!shift) return;
-      try {
-        const request = await createSwapRequest({
-          shiftId,
-          requestedById: shift.employeeId,
-          targetUserId: coveringEmployeeId,
-        });
-        setSwapRequests((prev) => [...prev, request]);
-      } catch {
-        // PersonalRota's cover-request UI has no error slot today — a follow-up
-        // phase can surface this; for now the request simply doesn't appear.
-      }
+      if (!shift) throw new Error('That shift could not be found — try refreshing.');
+      const request = await createSwapRequest(session.token, {
+        shiftId,
+        // Only honored server-side for a MANAGER/OWNER session (filing on
+        // behalf of the employee selected in SchedulingRoute's "Viewing"
+        // dropdown); ignored outright for a STAFF session, which can only
+        // ever file for itself.
+        requestedById: shift.employeeId,
+        targetUserId: coveringEmployeeId,
+      });
+      // Only mutate local state once the server has actually accepted the
+      // request — a thrown error above leaves this untouched, so the caller
+      // never mistakes a failed request for a successful one.
+      setSwapRequests((prev) => [...prev, request]);
     },
-    [mergedRoster.shifts],
+    [mergedRoster.shifts, session],
   );
 
-  const handleDecideRequest = useCallback(async (requestId: string, decision: 'approved' | 'denied') => {
-    // Whatever happens to THIS request, a decide attempt can change the
-    // `locked` status of every sibling request on the same shift (the
-    // server auto-locks the losing requests once one approval reassigns the
-    // shift). Patching only the one row we just decided leaves those
-    // siblings showing stale `locked: false` in local state until a full
-    // reload — so a manager could click Approve on an already-locked
-    // request and get a silent 409 with no visible feedback. Re-fetching
-    // the full list after every attempt (success or failure) keeps the
-    // client's view self-correcting instead.
-    try {
-      await decideSwapRequest(requestId, decision);
-    } catch {
-      // Surfacing a dedicated error message (e.g. for a locked-request 409)
-      // is ApprovalsPanel's job in a follow-up — the refetch below already
-      // makes the failure visible by flipping the row back to its true
-      // (now-locked) state instead of silently doing nothing.
-    } finally {
+  const handleDecideRequest = useCallback(
+    async (requestId: string, decision: 'approved' | 'denied') => {
+      // Deciding is manager/owner-only server-side; with no session there is
+      // no reviewer to attribute the decision to.
+      if (!session) throw new Error('You need to be signed in to decide swap requests.');
+      // Whatever happens to THIS request, a decide attempt can change the
+      // `locked` status of every sibling request on the same shift (the
+      // server auto-locks the losing requests once one approval reassigns the
+      // shift). Patching only the one row we just decided leaves those
+      // siblings showing stale `locked: false` in local state until a full
+      // reload — so re-fetch the full list after every attempt (success or
+      // failure) to keep the client's view self-correcting. If the decide
+      // call itself fails, that error still propagates to the caller once
+      // the refetch below finishes, so ApprovalsPanel can show it against
+      // the row instead of leaving it in limbo.
       try {
-        const fresh = await fetchSwapRequests('seed-location');
-        setSwapRequests(fresh);
-      } catch {
-        // Load-error UI for this list is ApprovalsPanel's concern; leave the
-        // previous (possibly stale) list in place rather than clearing it.
+        await decideSwapRequest(session.token, requestId, decision);
+      } finally {
+        try {
+          const fresh = await fetchSwapRequests(session.token, session.user.locationId);
+          setSwapRequests(fresh);
+        } catch {
+          // Best-effort reconciliation only — leave the previous (possibly
+          // stale) list in place rather than clearing it. Not the error the
+          // caller needs to see; the decide call's own outcome above is.
+        }
       }
-    }
-  }, []);
+    },
+    [session],
+  );
 
   const handleCommitted = useCallback(
     (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => {
@@ -280,24 +449,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const createRotaShift = useCallback(
-    async (input: Omit<Parameters<typeof createShift>[0], 'locationId'>) => {
-      await createShift({ ...input, locationId: 'seed-location' });
+    async (input: Omit<Parameters<typeof createShift>[1], 'locationId'>) => {
+      // ScheduleEditor only ever renders inside a RequireSession-gated route
+      // (`/schedule`, since the 2026-08-31 kiosk-access fork resolution —
+      // see MEMORY.md), so this should never actually fire without a
+      // session — but if it somehow did, throwing here surfaces a clear
+      // error through the caller's existing try/catch instead of crashing
+      // on `session!.token` below or (worse) silently resolving to whatever
+      // anonymous kiosk venue happens to be bound.
+      if (!session) throw new Error('You must be signed in to do this.');
+      await createShift(session.token, { ...input, locationId: session.user.locationId });
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, session],
   );
 
   const updateRotaShift = useCallback(
-    async (id: string, patch: Parameters<typeof updateShift>[1]) => {
-      await updateShift(id, patch);
+    async (id: string, patch: Parameters<typeof updateShift>[2]) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await updateShift(session.token, id, patch);
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, session],
   );
 
   const deleteRotaShift = useCallback(
     async (id: string, actorId?: string) => {
-      await deleteShift(id, actorId);
+      if (!session) throw new Error('You must be signed in to do this.');
+      await deleteShift(session.token, id, actorId);
       // `buildCommitted` stamps the real persisted `Shift.id` onto a confirmed
       // upload row, so the row just deleted from the DB may also be sitting in
       // the never-refreshed `committed` snapshot. Refetching `weekShifts`
@@ -310,27 +489,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       );
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, session],
   );
 
   const bulkCreateRotaShifts = useCallback(
     // `createdById` is threaded through so bulk-created shifts get a real
     // actor in the AuditLog — the underlying client has always accepted it,
     // this wrapper just never passed it on.
-    async (shifts: Parameters<typeof bulkCreateShifts>[0]['shifts'], createdById?: string) => {
-      await bulkCreateShifts({ locationId: 'seed-location', createdById, shifts });
+    async (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await bulkCreateShifts(session.token, { locationId: session.user.locationId, createdById, shifts });
       await refetchWeekShifts();
     },
-    [refetchWeekShifts],
+    [refetchWeekShifts, session],
   );
 
   const publishCurrentWeek = useCallback(
     async (publishedById?: string) => {
-      const result = await publishWeek('seed-location', weekStart, publishedById);
+      if (!session) throw new Error('You must be signed in to do this.');
+      const result = await publishWeek(session.token, session.user.locationId, weekStart, publishedById);
       await refetchWeekShifts();
       return result;
     },
-    [weekStart, refetchWeekShifts],
+    [weekStart, refetchWeekShifts, session],
   );
 
   // Publish/lock state is shared, not RotaBuilder-local: the Shift Editor
@@ -339,10 +520,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // pattern as `refetchWeekShifts` above, and re-fetched by every editor
   // after a mutation (a create/update/delete flips `hasUnpublishedChanges`).
   const refreshPublishInfo = useCallback(() => {
-    fetchPublishStatus('seed-location', weekStart)
+    if (!locationId) {
+      setPublishInfo(null);
+      return;
+    }
+    fetchPublishStatus(locationId, weekStart)
       .then(setPublishInfo)
       .catch(() => setPublishInfo(null));
-  }, [weekStart]);
+  }, [weekStart, locationId]);
 
   useEffect(() => {
     refreshPublishInfo();
@@ -355,8 +540,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const value: AppStateValue = useMemo(
     () => ({
       config,
+      locationId,
+      venueName,
+      bindAnonymousVenue,
       mergedRoster,
+      initialScheduleLoading,
+      scheduleLoadFailed,
       swapRequests,
+      swapRequestsLoading,
+      swapRequestsLoadFailed,
       staffDirectory,
       staffDirectoryByName,
       sections,
@@ -381,8 +573,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       refreshPublishInfo,
     }),
     [
+      locationId,
+      venueName,
+      bindAnonymousVenue,
       mergedRoster,
+      initialScheduleLoading,
+      scheduleLoadFailed,
       swapRequests,
+      swapRequestsLoading,
+      swapRequestsLoadFailed,
       staffDirectory,
       staffDirectoryByName,
       sections,

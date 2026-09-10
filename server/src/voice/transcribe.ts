@@ -39,8 +39,12 @@ function getClient(): GoogleGenAI {
  *   before calling this function, or verify behavior empirically, since an
  *   unsupported mimetype will surface as a Gemini ApiError below.
  */
-export async function transcribeAudio(buffer: Buffer, mimeType: string): Promise<string> {
+export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabularyHint?: string): Promise<string> {
   const genai = getClient();
+
+  const instruction = vocabularyHint
+    ? `Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it. This is a hospitality-venue staff-scheduling command; it may reference these names/terms — bias your transcription toward them when the audio is ambiguous: ${vocabularyHint}`
+    : 'Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it.';
 
   try {
     const response = await genai.models.generateContent({
@@ -49,7 +53,7 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string): Promise
         {
           role: 'user',
           parts: [
-            { text: 'Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it.' },
+            { text: instruction },
             { inlineData: { mimeType, data: buffer.toString('base64') } },
           ],
         },

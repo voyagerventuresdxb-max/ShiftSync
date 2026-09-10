@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ApiError, requestJoinOtp, verifyJoinOtp } from '../api/join';
 import { requestLoginOtp, verifyLoginOtp } from '../api/identity';
 import { useIdentity } from '../state/IdentityContext';
@@ -17,9 +18,53 @@ type Phase = 'phone' | 'otp' | 'pending' | 'error';
  */
 type Mode = 'join' | 'login';
 
-export default function JoinFlow({ locationId }: { locationId: string }) {
+/**
+ * `returnTo` arrives via a URL query param (`RequireSession` in `router.tsx`
+ * sets it, `JoinRoute.tsx` passes it through) — that means it's untrusted,
+ * attacker-craftable input: anyone can send someone a link like
+ * `/join?mode=login&returnTo=https://evil.example` hoping the post-login
+ * redirect carries their target somewhere off this app.
+ *
+ * An earlier draft tried to reject unsafe values with a blocklist (no `//`,
+ * no backslash, no `://`) — a real-world review caught that this class of
+ * check is fundamentally fragile: the WHATWG URL parser strips ASCII
+ * tab/CR/LF from a URL before resolving it, so `/\t/evil.example` (no `//`,
+ * no backslash, no `://` — passes every blocklist check as a raw string)
+ * still normalizes to `//evil.example` — a protocol-relative redirect to
+ * another host — the instant it's assigned to `window.location.href`.
+ * Verified: `new URL('/\t/evil.example', 'https://x').host` really is
+ * `'evil.example'`. A blocklist can always miss the next normalization
+ * quirk; asking "what will the browser's own URL parser actually resolve
+ * this to" instead can't be bypassed by a parsing quirk, because it uses
+ * the exact same parser that will process the string at navigation time.
+ * `https://internal.invalid` is an arbitrary fixed base with no real
+ * meaning — it exists only so `new URL(path, base)` can resolve a relative
+ * path the same way the browser will, without depending on `window` (this
+ * stays a plain, Node-testable function). If resolving `path` against that
+ * base yields a DIFFERENT origin, `path` was never a same-origin relative
+ * path to begin with — no matter what tricks were used to write it.
+ */
+export function isSafeReturnTo(path: string | undefined | null): path is string {
+  if (!path) return false;
+  // Case-INSENSITIVE on purpose: react-router-dom's route matching defaults
+  // to caseSensitive: false (confirmed for this app's own `/join` route in
+  // router.tsx, which sets no override), so `/JOIN` really does route back
+  // into this same flow. A case-sensitive check here would let `/JOIN`
+  // through as "safe," and the loop this guard exists to prevent would
+  // still happen — landing on the "missing venue info" dead-end instead of
+  // anywhere useful, just via a differently-cased link.
+  if (path.toLowerCase().startsWith('/join')) return false;
+  const base = 'https://internal.invalid';
+  try {
+    return new URL(path, base).origin === base;
+  } catch {
+    return false;
+  }
+}
+
+export default function JoinFlow({ locationId, initialMode, returnTo }: { locationId?: string; initialMode?: Mode; returnTo?: string }) {
   const { login } = useIdentity();
-  const [mode, setMode] = useState<Mode>('join');
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'join');
   const [phase, setPhase] = useState<Phase>('phone');
   const [phone, setPhone] = useState('');
   const [fullName, setFullName] = useState('');
@@ -43,7 +88,14 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = isLogin ? await requestLoginOtp(locationId, phone) : await requestJoinOtp(phone);
+      // Login is global by phone — no locationId needed (see identity.ts) —
+      // which is exactly what lets this screen work when reached from
+      // RequireSession's redirect, which has no venue context to give it.
+      // Join still needs one; JoinRoute.tsx already refuses to render this
+      // component in join mode without a real location, so this is a
+      // type-narrowing guard, not a real code path in practice.
+      if (!isLogin && !locationId) throw new ApiError('This link is missing venue information.', 400);
+      const res = isLogin ? await requestLoginOtp(phone) : await requestJoinOtp(phone);
       setDevCode(res.devCode ?? null);
       setPhase('otp');
     } catch (err) {
@@ -58,11 +110,22 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
     setError(null);
     try {
       if (isLogin) {
-        const result = await verifyLoginOtp(locationId, phone, code);
+        // returnTo only ever makes sense here: it exists specifically to
+        // send a visitor back to the page RequireSession bounced them from
+        // for lacking a session, and that redirect only ever produces
+        // ?mode=login. A fresh self-registration (the branch below) was
+        // never "returning" from anywhere, so it always goes to /my-shifts
+        // regardless of returnTo — otherwise anyone editing a shared,
+        // unsigned invite link (?location=<id>, no signature over the query
+        // string) could append &returnTo=/floor-plan and redirect a brand
+        // new hire somewhere surprising the moment they're auto-approved.
+        const destination = isSafeReturnTo(returnTo) ? returnTo : '/my-shifts';
+        const result = await verifyLoginOtp(phone, code);
         login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
-        window.location.href = '/my-shifts';
+        window.location.href = destination;
         return;
       }
+      if (!locationId) throw new ApiError('This link is missing venue information.', 400);
       const result = await verifyJoinOtp({ locationId, phone, code, fullName: fullName.trim() || undefined });
       if (result.pending) {
         setPhase('pending');
@@ -137,7 +200,17 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
         </div>
       )}
 
-      {phase !== 'pending' && (
+      {/*
+       * Switching TO join mode needs a real `locationId` to join into — this
+       * screen only has one when a real invite link provided it. Reached
+       * with none (e.g. RequireSession's redirect for a signed-out visit,
+       * which has no venue context to give), offering "Join" here would
+       * lead straight into the dead end `handleRequestOtp`/`handleVerify`
+       * already guard against — so the toggle only offers switching TO join
+       * mode when there's actually a venue to join, and the /signup link
+       * below stands in as the real next step otherwise.
+       */}
+      {phase !== 'pending' && (isLogin ? Boolean(locationId) : true) && (
         <button
           type="button"
           className="mt-5 w-full text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
@@ -145,6 +218,24 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
         >
           {isLogin ? "Don't have an account yet? Join" : 'Already have an account? Log in'}
         </button>
+      )}
+
+      {/*
+       * This screen is for joining a venue's EXISTING roster — someone
+       * looking to stand up a brand-new venue for the first time (the exact
+       * confusion behind the home-base user report this was added for)
+       * belongs on /signup instead, not merged into this flow. Shown
+       * whenever join mode isn't actually reachable here (no locationId) —
+       * not just whenever the CURRENT mode happens to be join — since a
+       * locationId-less login screen has no working path to join at all.
+       */}
+      {phase !== 'pending' && (!isLogin || !locationId) && (
+        <p className="mt-2 text-center text-xs text-muted-foreground">
+          Setting up a brand-new venue?{' '}
+          <Link to="/signup" className="underline-offset-2 hover:text-foreground hover:underline">
+            Sign up your restaurant
+          </Link>
+        </p>
       )}
     </section>
   );

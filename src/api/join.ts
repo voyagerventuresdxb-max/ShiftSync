@@ -4,7 +4,7 @@
  * Approvals review queue it feeds when no existing User auto-matches.
  */
 import { ApiError } from './schedules';
-import type { SessionUser } from './identity';
+import { withAuth, type SessionUser } from './identity';
 export { ApiError };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -52,21 +52,28 @@ export interface JoinRequestDto {
   createdAt: string;
 }
 
-/** GET /api/join/:locationId/pending */
-export async function fetchPendingJoinRequests(locationId: string): Promise<JoinRequestDto[]> {
-  const data = await request<{ requests: JoinRequestDto[] }>(`/api/join/${locationId}/pending`);
+/** GET /api/join/:locationId/pending — manager-only; the caller's own location. */
+export async function fetchPendingJoinRequests(token: string, locationId: string): Promise<JoinRequestDto[]> {
+  const data = await request<{ requests: JoinRequestDto[] }>(`/api/join/${locationId}/pending`, {
+    headers: withAuth(token),
+  });
   return data.requests;
 }
 
-/** PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', reviewedById?, jobTitle? } */
+/**
+ * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle? }
+ * Manager-only; the reviewer is always the authenticated caller, resolved
+ * server-side from the Bearer token — never accepted from the body.
+ */
 export async function decideJoinRequest(
+  token: string,
   requestId: string,
   decision: 'approve' | 'decline',
-  input?: { reviewedById?: string; jobTitle?: string },
+  input?: { jobTitle?: string },
 ): Promise<{ status: string; userId?: string }> {
   return request(`/api/join/${requestId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ decision, ...input }),
   });
 }

@@ -313,6 +313,237 @@ test('four hyphen-chained numbers with no slash ("10:30-4:00-8:00-12") split int
   // certainly meant, not 10:30pm-4:00am).
 });
 
+test('legend-code shifts: a footer legend block (code | label | time-range) resolves coded cells to real shift times', () => {
+  // Mirrors the real stress-test reference fixture
+  // (server/test-fixtures/stress/2-legend-code-shifts.xlsx) exactly: a
+  // blank separator row, a "Shift Code Legend" caption, then one code per
+  // row as three cells (code, label, time range). "OFF" has no time range
+  // printed (it's a plain absence code) and is left to the existing
+  // LEAVE_CODES resolution rather than the legend.
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    ['Ahmed Ali', 'M', 'M', 'E', 'OFF', 'N', 'M', 'E'],
+    ['Noor Said', 'E', 'E', 'M', 'M', 'OFF', 'E', 'N'],
+    ['Reem Fakhoury', 'M', 'OFF', 'M', 'E', 'E', 'N', 'M'],
+    ['', '', '', '', '', '', '', ''],
+    ['Shift Code Legend', '', '', '', '', '', '', ''],
+    ['M', 'Morning', '07:00-15:00', '', '', '', '', ''],
+    ['E', 'Evening', '15:00-23:00', '', '', '', '', ''],
+    ['N', 'Night', '23:00-07:00', '', '', '', '', ''],
+    ['G', 'General', '09:00-18:00', '', '', '', '', ''],
+    ['OFF', 'Day Off', '', '', '', '', '', ''],
+  ];
+
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.anomalies.length, 0, 'every coded cell resolves via the legend or LEAVE_CODES, none unresolved');
+
+  // Legend surfaced for the manager, same shape as the vision path's.
+  // "G" is a real legend entry with no cell using it this week (harmless —
+  // still surfaced) and "OFF" is correctly excluded (no time range to give).
+  assert.deepEqual(
+    result.legend.map((l) => l.code).sort(),
+    ['E', 'G', 'M', 'N'].sort(),
+  );
+  assert.ok(result.legend.find((l) => l.code === 'M')!.meaning.includes('07:00-15:00'));
+
+  const ahmed = result.rows.filter((r) => r.employeeName === 'Ahmed Ali');
+  assert.deepEqual(
+    ahmed.map((r) => `${r.date} ${r.startTime}-${r.endTime}`).sort(),
+    [
+      '2026-08-17 07:00-15:00', // Mon: M
+      '2026-08-18 07:00-15:00', // Tue: M
+      '2026-08-19 15:00-23:00', // Wed: E
+      '2026-08-21 23:00-07:00', // Fri: N
+      '2026-08-22 07:00-15:00', // Sat: M
+      '2026-08-23 15:00-23:00', // Sun: E
+    ].sort(),
+  );
+  assert.ok(ahmed.find((r) => r.date === '2026-08-21')!.overnight, 'Night shift (23:00-07:00) correctly flagged overnight');
+
+  // Thu ("OFF") produced a leave record, not a shift row and not an anomaly.
+  assert.ok(result.leaveRecords.some((r) => r.employeeName === 'Ahmed Ali' && r.date === '2026-08-20' && r.category === 'day_off'));
+
+  const noor = result.rows.filter((r) => r.employeeName === 'Noor Said');
+  assert.equal(noor.length, 6); // 7 days - 1 OFF day
+  assert.ok(result.leaveRecords.some((r) => r.employeeName === 'Noor Said' && r.category === 'day_off'));
+});
+
+test('no legend block present: behavior is completely unchanged (regression) — unrecognized codes stay unresolved anomalies', () => {
+  // Identical shift-code letters to the test above, but with NO footer
+  // legend block at all. Without a detected legend, "M"/"E"/"N" have no
+  // meaning and must fall through to 'unresolved', exactly as before this
+  // feature existed — proves legend detection is additive, not a silent
+  // behavior change for every file that happens to use short codes.
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['Ahmed Ali', 'M', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 0);
+  assert.equal(result.anomalies.length, 1);
+  assert.equal(result.anomalies[0].rawText, 'M');
+  assert.equal(result.leaveRecords.length, 1);
+  assert.equal(result.leaveRecords[0].category, 'day_off');
+  assert.deepEqual(result.legend, []);
+});
+
+test('legend code overlapping a LEAVE_CODES name: the file\'s own legend wins (documented precedence)', () => {
+  // "AL" is a fixed LEAVE_CODES entry (Annual Leave) everywhere else, but
+  // this venue's own legend defines "AL" as a real shift code ("All Day",
+  // 09:00-21:00). Precedence rule: a file-specific legend is more specific
+  // than the generic hardcoded vocabulary, so it wins for cells in THIS
+  // file — the venue's own printed meaning is trusted over the generic one.
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['Priya', 'AL', 'SICK'], // SICK has no legend entry -> still resolves via LEAVE_CODES as before
+    ['', '', ''],
+    ['AL', 'All Day', '09:00-21:00'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.anomalies.length, 0);
+
+  const priya = result.rows.filter((r) => r.employeeName === 'Priya');
+  assert.equal(priya.length, 1);
+  assert.equal(priya[0].date, '2026-08-17');
+  assert.equal(priya[0].startTime, '09:00');
+  assert.equal(priya[0].endTime, '21:00');
+
+  // SICK is untouched by the legend (not defined in it) and still resolves
+  // the old way, via the fixed LEAVE_CODES table.
+  assert.equal(result.leaveRecords.length, 1);
+  assert.equal(result.leaveRecords[0].category, 'leave');
+  assert.equal(result.leaveRecords[0].leaveCode, 'SICK');
+});
+
+// 2026-09-05 — the final whole-branch review caught this: detectLegend's
+// scan used to permanently stop at the FIRST non-matching row once at least
+// one real entry had been found — so a timeless/caption line (e.g. "OFF =
+// Day Off", which never matches since it has no resolvable time range)
+// sitting BETWEEN two real codes, not just after all of them, silently
+// truncated the legend and dropped every real code listed after it. A real
+// venue's own legend has no guaranteed ordering (OFF could be listed
+// alphabetically in the middle, not always last, as it happens to be in
+// this file's own real reference fixture). Fixed with a consecutive-streak
+// tolerance: a single non-matching line is tolerated and resets on the next
+// real match, so order no longer matters — only two non-matching lines IN A
+// ROW aborts detection.
+test('legend detection is order-independent: a timeless code (OFF) sitting BETWEEN two real legend entries does not truncate the ones after it', () => {
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue', 'Wed'],
+    ['Ahmed Ali', 'M', 'OFF', 'N'],
+    ['', '', '', ''],
+    ['M', 'Morning', '07:00-15:00', ''],
+    ['OFF', 'Day Off', '', ''], // no resolvable time range -> never matches matchLegendRow, sits BETWEEN two real entries
+    ['N', 'Night', '23:00-07:00', ''],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+
+  assert.deepEqual(
+    result.legend.map((l) => l.code).sort(),
+    ['M', 'N'],
+    'N must still be captured even though a non-matching line (OFF) came before it',
+  );
+  const ahmed = result.rows.filter((r) => r.employeeName === 'Ahmed Ali');
+  assert.deepEqual(
+    ahmed.map((r) => `${r.date} ${r.startTime}-${r.endTime}`).sort(),
+    ['2026-08-17 07:00-15:00', '2026-08-19 23:00-07:00'].sort(),
+    'both M (Mon) and N (Wed) must resolve via the legend, not just M',
+  );
+  assert.ok(result.leaveRecords.some((r) => r.employeeName === 'Ahmed Ali' && r.category === 'day_off'), 'Tue (OFF) still resolves as a leave record via LEAVE_CODES, as before');
+});
+
+// 2026-09-05 — also caught by the final whole-branch review: matchLegendRow's
+// CODE_TOKEN previously allowed up to 6 characters, so an ordinary short
+// English word ("TOTAL") sitting alone in the footer, next to a cell that
+// happens to contain a real time range, still satisfied the multi-column
+// legend shape and got fabricated into a bogus legend entry — even with the
+// contiguity fix above, since this row is the very FIRST thing after the
+// separator (nothing before it to trip the non-match streak). Fixed by
+// capping CODE_TOKEN at 3 characters total, matching every real
+// shift-code convention found in research and the actual reference fixture
+// (all single-letter or short abbreviations — M/E/N/G, OFF, AL — never a
+// whole word).
+test('a lone footer line that only coincidentally looks like a legend entry (a "TOTAL" summary row) is not fabricated into a bogus legend', () => {
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['Ahmed Ali', '9-17', '9-17'],
+    ['', '', ''],
+    ['TOTAL', 'Hours', '09:00-17:00'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.deepEqual(result.legend, [], 'a 5-letter word must never be read as a real venue shift code');
+});
+
+test('legend detection ignores a bare short code/time-range pair inside the real staff grid (no false positive above the blank separator)', () => {
+  // "Al" (a plausible short staff name) sitting next to a real shift cell
+  // ("9-17") could, taken out of context, look like a legend line
+  // ("Al" + a resolvable time range). Requiring the footer block to start
+  // below a fully-blank row (never scanning the staff-data region itself)
+  // is what prevents this from ever being misread as a legend entry.
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['Al', '9-17', '9-17'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.deepEqual(result.legend, []);
+  const al = result.rows.filter((r) => r.employeeName === 'Al');
+  assert.equal(al.length, 2);
+  assert.ok(al.every((r) => r.startTime === '09:00' && r.endTime === '17:00'));
+});
+
+// 2026-09-05 — code review caught this: detectLegend used to treat the
+// FIRST fully-blank row anywhere below the header as the permanent start of
+// an excluded "footer" region, then scanned all the way to grid end looking
+// for a legend-shaped match — even through an unrelated, blank-row-separated
+// mid-sheet section (a role header + its own real staff rows). That could
+// (a) silently drop real staff rows between the first blank row and end of
+// file from result.rows, and (b) fabricate a bogus legend entry out of
+// unrelated footer text (e.g. a totals line) that only coincidentally has a
+// code-shaped first cell and a resolvable time range. Fixed by requiring the
+// legend block to be genuinely contiguous: once a real entry is found, the
+// scan stops at the next non-matching, non-blank row instead of skipping
+// past it, and more than one leading non-legend line before any entry is
+// ever found aborts detection entirely.
+test('legend detection does not treat an unrelated mid-sheet blank-separated section as the legend footer — real staff rows in between are never dropped', () => {
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['Ahmed Ali', '9-17', '9-17'],
+    ['', '', ''],
+    ['BACK OF HOUSE', '', ''],
+    ['Noor Said', '10-18', '10-18'],
+    ['', '', ''],
+    ['Reem Fakhoury', '11-19', '11-19'],
+    ['', '', ''],
+    ['TOTAL', 'Hours', '09:00-17:00'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+
+  assert.deepEqual(result.legend, [], 'unrelated footer text must never be fabricated into a legend entry');
+  assert.deepEqual(
+    result.rows.map((r) => r.employeeName).sort(),
+    ['Ahmed Ali', 'Noor Said', 'Noor Said', 'Reem Fakhoury', 'Reem Fakhoury', 'Ahmed Ali'].sort(),
+    'Noor Said and Reem Fakhoury must not be silently dropped as if they were footer/legend content',
+  );
+});
+
+// 2026-09-05 — code review caught this: `lower in fileLegend` (and the
+// pre-existing `lower in LEAVE_CODES` checks) use the `in` operator on a
+// plain object literal, which also matches inherited Object.prototype
+// property names. A day-cell reading exactly "constructor" would otherwise
+// silently "resolve" against the real Object constructor function (whose
+// .start/.end are undefined) instead of correctly falling through to
+// 'unresolved'. Fixed via a hasOwnProperty-based lookup.
+test('a cell reading a reserved Object.prototype property name ("constructor") is an unresolved anomaly, not a bogus resolved shift', () => {
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['Ahmed Ali', 'constructor', '9-17'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 1, 'only the real "9-17" Tue cell resolves; "constructor" must not fabricate a shift row with undefined start/end times');
+  assert.equal(result.anomalies.length, 1);
+  assert.equal(result.anomalies[0].rawText, 'constructor');
+});
+
 test('returns 0 rows with no throw when the grid has no recognizable day-header row', () => {
   const grid: unknown[][] = [
     ['Team Member', 'Job Title', 'Shift Date'],

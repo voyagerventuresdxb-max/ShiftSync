@@ -2,6 +2,24 @@ import { useEffect, useState } from 'react';
 import { Check, ChevronDown, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequestDto } from '../api/join';
+import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { StaleDataNotice, OfflineEmptyState, OfflineActionNotice } from './shiftsync/OfflineNotice';
+
+function PendingApprovalRowSkeleton() {
+  return (
+    <li className="flex items-center justify-between gap-3 p-4" aria-hidden>
+      <div className="min-w-0 flex-1">
+        <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-1.5 h-3 w-20 animate-pulse rounded bg-muted" />
+      </div>
+      <div className="flex shrink-0 gap-2">
+        <div className="h-7 w-20 animate-pulse rounded-lg bg-muted" />
+        <div className="h-7 w-20 animate-pulse rounded-lg bg-muted" />
+      </div>
+    </li>
+  );
+}
 
 /**
  * Pending Approvals — the review queue for JoinRequest rows raised by the
@@ -12,26 +30,59 @@ import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequest
  * there's nothing to render in a "decided" section.
  */
 export default function PendingApprovals({ locationId }: { locationId: string }) {
+  const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [requests, setRequests] = useState<JoinRequestDto[]>([]);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True when the most recent load attempt failed — distinguishes an
+  // offline cold-load empty state from a genuine "nothing pending" one.
+  // Reset on every successful load, unlike `error` below wasn't previously.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  // True until the first load (success or failure) settles, then false
+  // forever after — `load()` is also called to silently refresh the list
+  // after a decide succeeds, and that in-flight refresh must not re-trigger
+  // the skeleton (setLoading(false) when already false is a no-op).
+  const [loading, setLoading] = useState(true);
 
   const load = () => {
-    fetchPendingJoinRequests(locationId)
-      .then(setRequests)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.'));
+    // No session (or a staff session) means this can only ever 401/403 — the
+    // route is manager-only now. Skip the request rather than firing one that
+    // can't succeed; the list simply stays empty, same as the "nothing
+    // pending" state below.
+    if (!session) {
+      setLoading(false);
+      return;
+    }
+    fetchPendingJoinRequests(session.token, locationId)
+      .then((list) => {
+        setRequests(list);
+        setError(null);
+        setLoadFailed(false);
+      })
+      .catch((err) => {
+        // The list itself is left untouched (Phase 2 of the offline-support
+        // pass: a failed refresh must not blank out data already on screen).
+        setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.');
+        setLoadFailed(true);
+      })
+      .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId]);
+  }, [locationId, session]);
 
   const handleDecide = async (id: string, decision: 'approve' | 'decline') => {
+    if (!session) return;
+    // Blocked outright while offline — no auto-retry; the manager clicks
+    // again once back online (buttons re-enable automatically).
+    if (!online) return;
     setDecidingId(id);
     try {
-      await decideJoinRequest(id, decision);
+      await decideJoinRequest(session.token, id, decision);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not process that request.');
@@ -66,32 +117,46 @@ export default function PendingApprovals({ locationId }: { locationId: string })
               <p>{error}</p>
             </div>
           )}
-          {requests.length === 0 ? (
-            <p className="p-4 text-sm text-muted-foreground">No join requests waiting for review.</p>
+          {!online && requests.length > 0 && <StaleDataNotice />}
+
+          {loading ? (
+            <ul className="divide-y divide-border" aria-busy="true" aria-label="Loading pending approvals">
+              <PendingApprovalRowSkeleton />
+              <PendingApprovalRowSkeleton />
+            </ul>
+          ) : requests.length === 0 ? (
+            !online && loadFailed ? (
+              <OfflineEmptyState message="You're offline — pending approvals couldn't be loaded yet." />
+            ) : (
+              <p className="p-4 text-sm text-muted-foreground">No join requests waiting for review.</p>
+            )
           ) : (
             <ul className="divide-y divide-border">
               {requests.map((r) => (
-                <li key={r.id} className="flex items-center justify-between gap-3 p-4">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{r.fullName}</p>
-                    <p className="text-xs text-muted-foreground">{r.phone}</p>
+                <li key={r.id} className="p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{r.fullName}</p>
+                      <p className="text-xs text-muted-foreground">{r.phone}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        onClick={() => void handleDecide(r.id, 'approve')}
+                        disabled={decidingId === r.id || !online}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Check className="h-3.5 w-3.5" /> Approve
+                      </button>
+                      <button
+                        onClick={() => void handleDecide(r.id, 'decline')}
+                        disabled={decidingId === r.id || !online}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <X className="h-3.5 w-3.5" /> Decline
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <button
-                      onClick={() => void handleDecide(r.id, 'approve')}
-                      disabled={decidingId === r.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
-                    >
-                      <Check className="h-3.5 w-3.5" /> Approve
-                    </button>
-                    <button
-                      onClick={() => void handleDecide(r.id, 'decline')}
-                      disabled={decidingId === r.id}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium hover:border-destructive/40 hover:text-destructive"
-                    >
-                      <X className="h-3.5 w-3.5" /> Decline
-                    </button>
-                  </div>
+                  {!online && <OfflineActionNotice />}
                 </li>
               ))}
             </ul>

@@ -1,27 +1,106 @@
 import { Router } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const attendanceRouter = Router();
 
-/** POST /api/attendance/clock-in — body: { userId, shiftId? } */
-attendanceRouter.post('/clock-in', async (req, res) => {
-  try {
-    const userId = String(req.body?.userId ?? '').trim();
-    const shiftId = req.body?.shiftId ? String(req.body.shiftId).trim() : null;
-    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+/**
+ * Thrown inside the clock-in transaction when the re-checked "no open log"
+ * fast-path guard finds one anyway — the common, non-racing case. See the
+ * comment at its call site below: the real enforcement is now a DB-level
+ * partial unique index, and a genuine race lands in the P2002 catch instead
+ * of here.
+ */
+class AlreadyClockedInError extends Error {}
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+/**
+ * POST /api/attendance/clock-in — body: { userId?, shiftId? }
+ * Session-gated. `userId` in the body is only honored for a MANAGER/OWNER
+ * session naming a different staff member (same on-behalf-of rule as
+ * shifts.ts's POST /) — a STAFF session can only ever clock itself in. The
+ * effective target user must belong to the caller's own venue.
+ */
+attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
+  try {
+    const effectiveUserId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.userId ? String(req.body.userId).trim() : '') || req.user!.id;
+    const shiftId = req.body?.shiftId ? String(req.body.shiftId).trim() : null;
+
+    const user = await prisma.user.findUnique({ where: { id: effectiveUserId } });
+    if (!ownedOrNotFound(req, res, user, `Staff member "${effectiveUserId}" not found.`)) return;
 
     if (shiftId) {
       const shift = await prisma.shift.findUnique({ where: { id: shiftId } });
-      if (!shift) return res.status(404).json({ error: `Shift "${shiftId}" not found.` });
+      if (!ownedOrNotFound(req, res, shift, `Shift "${shiftId}" not found.`)) return;
     }
 
-    const open = await prisma.attendanceLog.findFirst({ where: { userId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
-    if (open) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
-
-    const log = await prisma.attendanceLog.create({ data: { userId, shiftId, clockInAt: new Date(), source: 'manual' } });
+    // RACE CLOSED. The real enforcement is a DB-level partial unique index
+    // (`attendance_logs_one_open_per_user`, prisma/migrations/
+    // 20260904152729_attendance_one_open_clock_in_per_user):
+    // `CREATE UNIQUE INDEX ... ON attendance_logs (user_id) WHERE
+    // clock_out_at IS NULL` — Postgres itself now refuses a second open log
+    // for the same user, full stop, regardless of transaction interleaving
+    // under READ COMMITTED. The `tx`-scoped `findFirst` below is kept as a
+    // fast, friendly PRE-CHECK for the common sequential case only: it gives
+    // a clean 409 without wasting a round trip attempting an insert that
+    // would fail anyway. It is NOT what makes this safe. The actual
+    // backstop for a genuine concurrent race is the `catch` below: if two
+    // requests both pass the pre-check (both see "no open log") and both
+    // attempt the `create`, Postgres's unique index lets exactly one commit
+    // and rejects the other with a unique-violation, which Prisma surfaces
+    // as `P2002` — caught and translated to the same 409 as the fast-path,
+    // so callers never see a raw 500 for this.
+    const log = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        const open = await tx.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
+        if (open) {
+          throw new AlreadyClockedInError();
+        }
+        const created = await tx.attendanceLog.create({ data: { userId: effectiveUserId, shiftId, clockInAt: new Date(), source: 'manual' } });
+        return created;
+      },
+      (created) => ({
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'CLOCKED_IN',
+        entityType: 'AttendanceLog',
+        entityId: created.id,
+        note: effectiveUserId === req.user!.id ? undefined : `Clocked in ${user.fullName} on their behalf`,
+      }),
+    )
+      .catch((err) => {
+        if (err instanceof AlreadyClockedInError) return null;
+        // Real backstop: the DB-level partial unique index rejected a
+        // genuine concurrent double-create. Checking `meta.target` (not just
+        // the P2002 code) matters — this transaction also writes an audit
+        // log row, and a future unique constraint added to either model
+        // would also throw P2002; without pinning down which one fired,
+        // that unrelated violation would get silently swallowed and
+        // misreported as "already clocked in" instead of surfacing as the
+        // real bug it'd be. Verified empirically against this exact raw
+        // index (Prisma doesn't expose the index's own name here, only the
+        // column(s) the DB reported): `meta.target` for this specific
+        // violation is `["user_id"]` — nothing else, since this partial
+        // index is keyed on that one column. An exact-match check (not a
+        // loose `.includes`) matters too: a future `@@unique([userId, x])`
+        // would also report a `target` containing `"user_id"`, and a loose
+        // check would wrongly treat that different constraint as this one.
+        const target = err instanceof Prisma.PrismaClientKnownRequestError ? (err.meta?.target as unknown) : undefined;
+        const isOpenClockInViolation =
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002' &&
+          Array.isArray(target) &&
+          target.length === 1 &&
+          target[0] === 'user_id';
+        if (isOpenClockInViolation) return null;
+        throw err;
+      });
+    if (!log) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
     return res.status(201).json({ id: log.id, clockInAt: log.clockInAt!.toISOString(), clockOutAt: null });
   } catch (err) {
     console.error('[attendance.clockIn] failed', err);
@@ -29,16 +108,35 @@ attendanceRouter.post('/clock-in', async (req, res) => {
   }
 });
 
-/** POST /api/attendance/clock-out — body: { userId } — closes the caller's own open log. */
-attendanceRouter.post('/clock-out', async (req, res) => {
+/**
+ * POST /api/attendance/clock-out — body: { userId? } — closes the effective
+ * target's own open log. Session-gated; same on-behalf-of rule as clock-in.
+ */
+attendanceRouter.post('/clock-out', requireSession, async (req, res) => {
   try {
-    const userId = String(req.body?.userId ?? '').trim();
-    if (!userId) return res.status(400).json({ error: 'userId is required.' });
+    const effectiveUserId =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.userId ? String(req.body.userId).trim() : '') || req.user!.id;
 
-    const open = await prisma.attendanceLog.findFirst({ where: { userId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
+    const user = await prisma.user.findUnique({ where: { id: effectiveUserId } });
+    if (!ownedOrNotFound(req, res, user, `Staff member "${effectiveUserId}" not found.`)) return;
+
+    const open = await prisma.attendanceLog.findFirst({ where: { userId: effectiveUserId, clockOutAt: null }, orderBy: { createdAt: 'desc' } });
     if (!open) return res.status(409).json({ error: 'Not currently clocked in.' });
 
-    const closed = await prisma.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } });
+    const closed = await withAuditedTransaction(
+      prisma,
+      (tx) => tx.attendanceLog.update({ where: { id: open.id }, data: { clockOutAt: new Date() } }),
+      (updated) => ({
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'CLOCKED_OUT',
+        entityType: 'AttendanceLog',
+        entityId: updated.id,
+        note: effectiveUserId === req.user!.id ? undefined : `Clocked out ${user.fullName} on their behalf`,
+      }),
+    );
     return res.status(200).json({ id: closed.id, clockInAt: closed.clockInAt!.toISOString(), clockOutAt: closed.clockOutAt!.toISOString() });
   } catch (err) {
     console.error('[attendance.clockOut] failed', err);
@@ -51,10 +149,16 @@ attendanceRouter.post('/clock-out', async (req, res) => {
  * Real worked hours per staff member for the week, computed from actual
  * clockIn/clockOut pairs — NOT from the scheduled rota. An open (not yet
  * clocked out) log counts up to "now" so the running total is live.
+ * Session-gated (2026-08-31 — see MEMORY.md): real per-person worked-hours
+ * totals and live clocked-in status are payroll-adjacent data, not
+ * structural metadata — the anonymous-read sweep found this had neither a
+ * session check nor a comment justifying one, unlike this codebase's other
+ * deliberately-anonymous GETs.
  */
-attendanceRouter.get('/:locationId/weekly-hours', async (req, res) => {
+attendanceRouter.get('/:locationId/weekly-hours', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const weekStart = String(req.query.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
 

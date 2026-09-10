@@ -1,5 +1,6 @@
 /** Client for the 86 List API (server/src/routes/eightySix.ts). */
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export { ApiError };
 
@@ -29,34 +30,37 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /** GET /api/eighty-six/:locationId — active items, or all if includeResolved. */
-export async function fetchEightySixList(locationId: string, includeResolved = false): Promise<EightySixItemDto[]> {
+export async function fetchEightySixList(token: string, locationId: string, includeResolved = false): Promise<EightySixItemDto[]> {
   const data = await request<{ items: EightySixItemDto[] }>(
     `/api/eighty-six/${locationId}${includeResolved ? '?includeResolved=1' : ''}`,
+    { headers: withAuth(token) },
   );
   return data.items;
 }
 
 /** POST /api/eighty-six — 86 a new item. */
-export async function eightySixItem(input: {
-  locationId: string;
-  itemName: string;
-  station: string;
-  note?: string;
-  createdById?: string;
-}): Promise<EightySixItemDto> {
+export async function eightySixItem(
+  token: string,
+  input: {
+    itemName: string;
+    station: string;
+    note?: string;
+    createdById?: string;
+  },
+): Promise<EightySixItemDto> {
   const { item } = await request<{ item: EightySixItemDto }>('/api/eighty-six', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(input),
   });
   return item;
 }
 
 /** PATCH /api/eighty-six/:id/back-on */
-export async function markBackOn(itemId: string, actorId?: string): Promise<EightySixItemDto> {
+export async function markBackOn(token: string, itemId: string, actorId?: string): Promise<EightySixItemDto> {
   const { item } = await request<{ item: EightySixItemDto }>(`/api/eighty-six/${itemId}/back-on`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ actorId: actorId ?? null }),
   });
   return item;

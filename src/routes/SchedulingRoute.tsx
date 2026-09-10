@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
@@ -10,7 +11,11 @@ import { RotaBuilder } from '../components/shiftsync/RotaBuilder';
 import ShiftUpload from '../components/ShiftUpload';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
+import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
+import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -26,10 +31,20 @@ function formatDayMonth(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
+const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export default function SchedulingContent() {
+  const { session } = useIdentity();
+  const { online } = useConnectivity();
   const {
+    locationId,
+    weekStart,
+    setWeekStart,
     mergedRoster,
+    initialScheduleLoading,
+    scheduleLoadFailed,
     config,
+    venueName,
     currentEmployeeId,
     setCurrentEmployeeId,
     handleRequestCover,
@@ -41,11 +56,71 @@ export default function SchedulingContent() {
     swapRequests,
   } = useAppState();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // `weekStart` lives in AppStateContext, which sits ABOVE the router
+  // (mounted in App.tsx wrapping <RouterProvider>), so it can't read the URL
+  // itself — this component, which IS inside the router, is what reconciles
+  // the two, in both directions, in one effect:
+  //  - an incoming `?week=` differing from the current state (a hard
+  //    refresh, a shared/bookmarked link, OR — the case a two-effect
+  //    version of this got wrong — remounting via in-app client-side
+  //    navigation away from and back to /scheduling with no `?week=` in the
+  //    URL) adopts INTO state, and returns without also writing the URL in
+  //    this same pass;
+  //  - otherwise, whatever `weekStart` actually is gets written back to the
+  //    URL if it doesn't already match (Prev/Next-week clicks, template
+  //    application, or simply the URL having gone stale/bare on remount).
+  // The `return` after `setWeekStart` is what avoids the race a two-effect
+  // version of this had: `setWeekStart` doesn't land in this closure until a
+  // later render, so writing the URL in the SAME pass would write the STALE
+  // pre-adopt week; returning defers that write to the next run, by which
+  // point `weekStart` and the URL already agree (a no-op) or the effect
+  // naturally re-syncs. `replace` so paging through weeks doesn't spam
+  // browser history with a back-button entry per week.
+  useEffect(() => {
+    const param = searchParams.get('week');
+    if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
+      setWeekStart(param);
+      return;
+    }
+    if (param !== weekStart) {
+      const next = new URLSearchParams(searchParams);
+      next.set('week', weekStart);
+      setSearchParams(next, { replace: true });
+    }
+  }, [weekStart, searchParams, setWeekStart, setSearchParams]);
+
   const [mode, setMode] = useState<Mode>('personal');
   const activeEmployee =
     mergedRoster.employees.find((e) => e.id === currentEmployeeId) ?? mergedRoster.employees[0];
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
+
+  // Floor Plan section assignments for the currently-viewed employee, across
+  // this week — feeds PersonalRota's "You're covering: [section]" line.
+  // PUBLISHED only (the endpoint itself never returns DRAFT rows).
+  const [myAssignments, setMyAssignments] = useState<MyAssignmentDto[]>([]);
+  useEffect(() => {
+    if (!session || !locationId || !activeEmployee) {
+      setMyAssignments([]);
+      return;
+    }
+    let cancelled = false;
+    fetchMyAssignments(session.token, locationId, activeEmployee.id, dates[0]!, dates[6]!)
+      .then((list) => {
+        if (!cancelled) setMyAssignments(list);
+      })
+      .catch(() => {
+        // Personal Rota has no error slot for this today — a failed load
+        // just means the "You're covering" line doesn't appear, same as
+        // "no assignment yet" (nothing is contradicted or lost either way).
+        if (!cancelled) setMyAssignments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, locationId, activeEmployee, dates]);
 
   // The rota builder's prev/next-week buttons move `weekStart`, which silently
   // retargets the hours panel too — so it has to say which week it is showing,
@@ -79,7 +154,7 @@ export default function SchedulingContent() {
         id: dayShifts[0].id,
         day: weekdayOf(date),
         date: formatDayMonth(date),
-        venue: config.name,
+        venue: venueName ?? '',
         role: dayShifts[0].requiredRole ?? activeEmployee.role,
         start: dayShifts.map((s) => s.start).join(' / '),
         end: dayShifts.map((s) => s.end).join(' / '),
@@ -90,9 +165,12 @@ export default function SchedulingContent() {
         status: isDraft ? 'draft' : isPendingSwap ? 'swap-pending' : 'confirmed',
         briefingNote: dayShifts[0].briefingNote,
         sidework: dayShifts[0].sidework,
+        sectionAssignments: myAssignments
+          .filter((a) => a.shiftDate === date)
+          .map((a) => `${a.sectionLabel} (${a.period})`),
       };
     });
-  }, [mergedRoster, activeEmployee, dates, config.name, swapRequests]);
+  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests, myAssignments]);
 
   const coverCandidates: CoverCandidate[] = activeEmployee
     ? mergedRoster.employees.filter((e) => e.id !== activeEmployee.id).map((e) => ({ id: e.id, name: e.name }))
@@ -125,10 +203,34 @@ export default function SchedulingContent() {
 
   const [hourStaff, setHourStaff] = useState<{ id: string; name: string; hours: number; contract: number }[]>([]);
   const [clockedIn, setClockedIn] = useState(false);
+  const [selfClockedIn, setSelfClockedIn] = useState(false);
   const [clockError, setClockError] = useState<string | null>(null);
 
+  // A STAFF session can only ever clock ITSELF in/out server-side (see
+  // attendance.ts's on-behalf-of rule) — but the "Viewing" dropdown
+  // (`activeEmployee`) defaults to the roster's first employee, not to the
+  // signed-in user, and exists for a different purpose (a manager checking a
+  // colleague's Personal Rota). Tying the clock buttons to `activeEmployee`
+  // for STAFF meant they silently clocked in whichever employee the dropdown
+  // happened to default to, not the STAFF user themselves — a real bug this
+  // decouples: the clock target for STAFF is always their own identity,
+  // independent of whatever's selected in "Viewing"; MANAGER/OWNER keeps the
+  // existing on-behalf-of capability against the Viewing selection.
+  const isStaffSession = session?.user.systemRole === 'STAFF';
+  const clockTargetId = isStaffSession ? session!.user.id : activeEmployee?.id;
+  const clockTargetName = isStaffSession ? session!.user.fullName : activeEmployee?.name;
+
   const refreshHours = useCallback(() => {
-    fetchWeeklyHours('seed-location', mergedRoster.weekStart)
+    // This route is behind RequireSession, so locationId/session are
+    // non-null in practice — guarded the same way as the other read-fetches
+    // in this sweep (AppStateContext.tsx's refetchWeekShifts) purely for
+    // TypeScript. weekly-hours became session-gated in the anonymous-read
+    // sweep (2026-08-31 — see MEMORY.md).
+    if (!locationId || !session) {
+      setHourStaff([]);
+      return;
+    }
+    fetchWeeklyHours(session.token, locationId, mergedRoster.weekStart)
       .then((entries) => {
         const byId = new Map(entries.map((e) => [e.id, e]));
         setHourStaff(
@@ -143,25 +245,37 @@ export default function SchedulingContent() {
         // or switching the "Viewing" employee always reflects whether that
         // person actually has an open attendance log right now.
         setClockedIn(activeEmployee ? (byId.get(activeEmployee.id)?.clockedIn ?? false) : false);
+        // `weekly-hours` returns every active user at the venue (queried by
+        // locationId, not by roster/shift membership), so this resolves
+        // correctly even for a STAFF session with no shift in the currently
+        // -viewed week — unlike `mergedRoster.employees`, which wouldn't
+        // contain them at all in that case.
+        setSelfClockedIn(session ? (byId.get(session.user.id)?.clockedIn ?? false) : false);
       })
       .catch(() => setHourStaff([]));
-  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee]);
+  }, [mergedRoster.weekStart, mergedRoster.employees, config.compliance.maxWeeklyHours, activeEmployee, locationId, session]);
 
   useEffect(() => {
     refreshHours();
   }, [refreshHours]);
 
   const handleClockIn = () => {
-    if (!activeEmployee) return;
+    if (!clockTargetId) return;
+    // Blocked outright while offline: a clock-in that actually lands minutes
+    // or hours later than the real moment it happened is a real compliance/
+    // payroll problem — no auto-retry, the button re-enables once back
+    // online and the person clocks in again manually.
+    if (!online) return;
     setClockError(null);
-    clockIn(activeEmployee.id)
+    clockIn(session!.token, clockTargetId)
       .then(() => refreshHours())
       .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock in.'));
   };
   const handleClockOut = () => {
-    if (!activeEmployee) return;
+    if (!clockTargetId) return;
+    if (!online) return;
     setClockError(null);
-    clockOut(activeEmployee.id)
+    clockOut(session!.token, clockTargetId)
       .then(() => refreshHours())
       .catch((err) => setClockError(err instanceof ApiError ? err.message : 'Could not clock out.'));
   };
@@ -206,15 +320,25 @@ export default function SchedulingContent() {
             </div>
           )}
 
+          {!initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />}
+
           <div key={mode} className="animate-rise">
-            {mergedRoster.employees.length === 0 ? (
+            {initialScheduleLoading ? (
+              mode === 'personal' ? (
+                <PersonalRota shifts={[]} loading />
+              ) : (
+                <TeamMatrix venueName={venueName ?? ''} days={matrixDays} members={[]} matrix={[]} loading />
+              )
+            ) : mergedRoster.employees.length === 0 ? (
               <p className="panel p-5 text-sm text-muted-foreground">
-                No staff parsed yet — upload a roster to see the personal and team views.
+                {!online && scheduleLoadFailed
+                  ? "You're offline — nothing has loaded yet for this week."
+                  : 'No staff parsed yet — upload a roster to see the personal and team views.'}
               </p>
             ) : mode === 'personal' ? (
               <PersonalRota shifts={rotaCards} coverCandidates={coverCandidates} onRequestCover={handleRequestCover} />
             ) : (
-              <TeamMatrix venueName={config.name} days={matrixDays} members={matrixMembers} matrix={matrixCells} />
+              <TeamMatrix venueName={venueName ?? ''} days={matrixDays} members={matrixMembers} matrix={matrixCells} />
             )}
           </div>
         </div>
@@ -228,10 +352,11 @@ export default function SchedulingContent() {
           <HourTracker
             staff={hourStaff}
             weekLabel={weekLabel}
-            currentEmployeeName={activeEmployee?.name}
-            clockedIn={clockedIn}
-            onClockIn={handleClockIn}
-            onClockOut={handleClockOut}
+            currentEmployeeName={clockTargetName}
+            clockedIn={isStaffSession ? selfClockedIn : clockedIn}
+            onClockIn={clockTargetId ? handleClockIn : undefined}
+            onClockOut={clockTargetId ? handleClockOut : undefined}
+            online={online}
           />
         </aside>
       </div>
@@ -241,7 +366,7 @@ export default function SchedulingContent() {
       </div>
 
       <div className="mt-5">
-        <ShiftUpload locationId="seed-location" onCommitted={handleCommitted} />
+        <ShiftUpload onCommitted={handleCommitted} />
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>

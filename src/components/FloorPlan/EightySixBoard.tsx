@@ -9,6 +9,7 @@ import {
   type EightySixItemDto,
 } from '../../api/eightySix';
 import { useAppState } from '../../state/AppStateContext';
+import { useIdentity } from '../../state/IdentityContext';
 
 interface Props {
   locationId: string;
@@ -25,6 +26,10 @@ export default function EightySixBoard({ locationId }: Props) {
   // components do — both 86 and back-on write AuditLog rows, and those
   // rows are only worth keeping if they name who did it.
   const { currentEmployeeId } = useAppState();
+  // EightySixBoard only ever renders inside /floor-plan, already behind
+  // RequireSession (see router.tsx) — session is guaranteed present here,
+  // same assumption ScheduleEditorRoute's mutation calls already make.
+  const { session } = useIdentity();
   const [items, setItems] = useState<EightySixItemDto[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -38,13 +43,17 @@ export default function EightySixBoard({ locationId }: Props) {
   const [backOnId, setBackOnId] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    // No session, nothing to fetch with — shouldn't happen given this only
+    // renders inside a RequireSession-gated route, but fail quiet rather
+    // than throw if it somehow did.
+    if (!session) return;
     setLoading(true);
     setError(null);
-    fetchEightySixList(locationId, showHistory)
+    fetchEightySixList(session.token, locationId, showHistory)
       .then(setItems)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load the 86 list.'))
       .finally(() => setLoading(false));
-  }, [locationId, showHistory]);
+  }, [session, locationId, showHistory]);
 
   useEffect(() => {
     load();
@@ -68,12 +77,11 @@ export default function EightySixBoard({ locationId }: Props) {
   const handleAdd = useCallback(async () => {
     const trimmedName = itemName.trim();
     const trimmedStation = station.trim();
-    if (!trimmedName || !trimmedStation) return;
+    if (!trimmedName || !trimmedStation || !session) return;
     setSubmitting(true);
     setError(null);
     try {
-      await eightySixItem({
-        locationId,
+      await eightySixItem(session.token, {
         itemName: trimmedName,
         station: trimmedStation,
         createdById: currentEmployeeId,
@@ -86,17 +94,17 @@ export default function EightySixBoard({ locationId }: Props) {
     } finally {
       setSubmitting(false);
     }
-  }, [locationId, itemName, station, load, currentEmployeeId]);
+  }, [session, itemName, station, load, currentEmployeeId]);
 
   const handleBackOn = useCallback(
     async (itemId: string) => {
       // Only this item's own request is guarded — a different item's "Back
       // on" stays clickable, exactly like SectionDetail's per-assignment
       // notify guard.
-      if (backOnId === itemId) return;
+      if (backOnId === itemId || !session) return;
       setBackOnId(itemId);
       try {
-        await markBackOn(itemId, currentEmployeeId);
+        await markBackOn(session.token, itemId, currentEmployeeId);
         load();
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Could not mark this item back on.');
@@ -104,7 +112,7 @@ export default function EightySixBoard({ locationId }: Props) {
         setBackOnId(null);
       }
     },
-    [load, currentEmployeeId, backOnId],
+    [session, load, currentEmployeeId, backOnId],
   );
 
   return (

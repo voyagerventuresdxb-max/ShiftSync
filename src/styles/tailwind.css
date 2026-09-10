@@ -46,6 +46,22 @@
   --color-ring-offset-background: var(--bg);
   --font-sans:
     "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /*
+   * Explicit type-scale tokens matching the Lovable reference's actual
+   * usage (voyagerventuresdxb-max/shiftsync-dubai-luxury) — it never
+   * overrides Tailwind's own text-* scale either, it just uses it
+   * consistently, so these mirror Tailwind's default rem values exactly.
+   * Declared explicitly (rather than left implicit) so the pre-Tailwind
+   * raw CSS in global.css can reference the same scale via var(...)
+   * instead of its own one-off rem literals.
+   */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --tracking-tight: -0.025em;
   --shadow-lux: 0 24px 60px -24px rgb(0 0 0 / 0.75);
   --shadow-glow: 0 0 0 1px var(--accent-dim), 0 12px 40px -20px var(--accent-dim);
   --animate-rise: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -108,7 +124,7 @@
 }
 
 @utility eyebrow {
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--color-muted-foreground);

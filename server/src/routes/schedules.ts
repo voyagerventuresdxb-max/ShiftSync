@@ -14,6 +14,10 @@ import { resolveRowsAgainstDatabase } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
 import { uploadCache } from '../store/uploadCache.js';
+import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
+import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
+import { notifySchedulePublished, mondayOfWeek } from '../lib/scheduleNotifications.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -71,26 +75,19 @@ export const schedulesRouter = Router();
 
 /**
  * POST /api/schedules/upload
- * multipart/form-data: file=<xlsx|xls|csv>, locationId=<string>
+ * multipart/form-data: file=<xlsx|xls|csv>
  *
  * Parses + validates the sheet against the 3 master templates, resolves
  * rows against existing Role/User records for the location, and returns a
  * sanity-check preview. Nothing is written to the database at this stage.
  * The response includes a `batchId` to pass to the confirm step below.
+ * Session-gated: locationId is derived from the caller's session.
  */
-schedulesRouter.post('/upload', upload.single('file'), async (req, res) => {
+schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.single('file'), async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
-    if (!locationId) {
-      return res.status(400).json({ error: 'locationId is required.' });
-    }
+    const locationId = req.user!.locationId;
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded. Attach it under the "file" field.' });
-    }
-
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) {
-      return res.status(404).json({ error: `Location "${locationId}" not found.` });
     }
 
     // Optional reference week for text/PDF rosters that use day names
@@ -346,18 +343,77 @@ schedulesRouter.post('/upload', upload.single('file'), async (req, res) => {
  * Commits a previously-previewed batch to the Shift table. Rows with an
  * unresolved role are skipped (cannot satisfy the required FK) and reported
  * back in `skippedCount` for the manager to fix and re-upload separately.
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
+ * gap the `withAuditedTransaction` review found: this was `requireSession`-
+ * only, so any authenticated STAFF session could confirm a batch — including
+ * one uploaded by someone else at the same venue, since `ownedOrNotFound`
+ * only checks venue, not uploader — bulk-creating real Shift rows for the
+ * whole venue). The batch must still belong to the caller's venue.
  */
-schedulesRouter.post('/upload/:batchId/confirm', async (req, res) => {
+schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager, async (req, res) => {
   try {
     const { batchId } = req.params;
     const batch = uploadCache.get(batchId);
-    if (!batch) {
-      return res.status(404).json({ error: 'This preview has expired or was already confirmed. Please re-upload the file.' });
+    if (!ownedOrNotFound(req, res, batch, 'This preview has expired or was already confirmed. Please re-upload the file.')) return;
+
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+
+    if (createdById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
     }
 
-    const createdById = req.body?.createdById ? String(req.body.createdById) : null;
-    const result = await persistShifts(prisma, batch.locationId, createdById, batch.rows);
+    const result = await withAuditedTransaction(
+      prisma,
+      (tx) => persistShifts(tx, batch.locationId, createdById, batch.rows),
+      // Only write a real audit row when at least one shift was actually
+      // created — a batch where every row was skipped for an unresolved
+      // role (persisted.createdCount === 0) would otherwise still produce a
+      // SHIFT_CREATED entry pointing at the batchId (not a real Shift id),
+      // a false compliance-audit record claiming a shift was created when
+      // none was. Same guard shape as floorPlan.ts's publish route.
+      (persisted) =>
+        persisted.createdCount > 0
+          ? {
+              locationId: batch.locationId,
+              actorId: req.user!.id,
+              action: 'SHIFT_CREATED',
+              entityType: 'Shift',
+              entityId: persisted.rows[0]!.shiftId,
+              shiftId: persisted.rows[0]!.shiftId,
+              note: `Imported ${persisted.createdCount} shift(s) from roster upload (${persisted.skippedCount} skipped)`,
+            }
+          : null,
+    );
+    // Deleted only after the transaction commits — deleting it before commit
+    // and then having the transaction roll back (e.g. the audit write fails)
+    // would permanently strand the batch as unretryable with nothing
+    // actually persisted. This does leave a narrow window where a duplicate
+    // concurrent confirm on the same batchId isn't caught (see MEMORY.md).
     uploadCache.delete(batchId);
+
+    // Real delivery on top of the write above (never inside the transaction
+    // — see shifts.ts's publish route for the same rationale). Uploaded
+    // shifts are written straight to PUBLISHED, bypassing the manual
+    // /publish endpoint entirely — without this, staff whose schedule
+    // arrives via roster upload would never be notified at all. Grouped by
+    // week (a single upload can span several) so one person with shifts in
+    // two different weeks gets two digests, each naming the right week, not
+    // one digest naming an ambiguous or arbitrary date.
+    const byWeek = new Map<string, Set<string>>();
+    for (const row of result.rows) {
+      if (!row.userId) continue;
+      const weekStart = mondayOfWeek(row.date);
+      const userIds = byWeek.get(weekStart) ?? new Set<string>();
+      userIds.add(row.userId);
+      byWeek.set(weekStart, userIds);
+    }
+    for (const [weekStart, userIds] of byWeek) {
+      void notifySchedulePublished([...userIds], weekStart);
+    }
 
     return res.status(201).json({
       message: `Imported ${result.createdCount} shift(s).`,

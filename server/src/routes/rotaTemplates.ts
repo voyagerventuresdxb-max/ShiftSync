@@ -2,6 +2,8 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 export const rotaTemplatesRouter = Router();
 
@@ -14,10 +16,18 @@ interface TemplateEntry {
   note?: string;
 }
 
-/** GET /api/rota-templates/:locationId */
-rotaTemplatesRouter.get('/:locationId', async (req, res) => {
+/**
+ * GET /api/rota-templates/:locationId
+ * Session-gated (2026-08-31 — see MEMORY.md): no comment on record ever
+ * justified this staying anonymous, and its only real consumer
+ * (`RotaBuilder.tsx`) has lived inside the session-gated `/schedule` route
+ * since the kiosk-access-fork phase — this reads as an overlooked gap, not
+ * a deliberate one, found by the anonymous-read sweep.
+ */
+rotaTemplatesRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const templates = await prisma.rotaTemplate.findMany({ where: { locationId }, orderBy: { createdAt: 'desc' } });
     return res.status(200).json({
       templates: templates.map((t) => ({
@@ -33,21 +43,51 @@ rotaTemplatesRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/rota-templates — body: { locationId, name, entries, createdById? } */
-rotaTemplatesRouter.post('/', async (req, res) => {
+/**
+ * POST /api/rota-templates — body: { name, entries, createdById? }
+ * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
+ * gap the `withAuditedTransaction` review found: this route, `DELETE /:id`,
+ * and `POST /:id/apply` below were all `requireSession`-only, so any
+ * authenticated STAFF session could create/delete templates or apply one to
+ * bulk-create a full week of real shifts — the same class of gap
+ * `shifts.ts`'s own `requireManager` fix closed earlier). `locationId` comes
+ * from the session, not the body. `createdById` is only honored for a
+ * MANAGER/OWNER session — the `STAFF ? self : ...` branch below is now
+ * unreachable and kept only as defense in depth, matching `shifts.ts`.
+ */
+rotaTemplatesRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const name = String(req.body?.name ?? '').trim();
     const entries = Array.isArray(req.body?.entries) ? (req.body.entries as TemplateEntry[]) : [];
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
 
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
+    if (createdById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
+    }
+
     if (!name) return res.status(400).json({ error: 'name is required.' });
     if (entries.length === 0) return res.status(400).json({ error: 'entries must be a non-empty array.' });
 
-    const created = await prisma.rotaTemplate.create({
-      data: { locationId, name, entries: entries as unknown as Prisma.InputJsonValue, createdById },
-    });
+    const created = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.rotaTemplate.create({
+          data: { locationId, name, entries: entries as unknown as Prisma.InputJsonValue, createdById },
+        }),
+      (template) => ({
+        locationId,
+        actorId: req.user!.id,
+        action: 'ROTA_TEMPLATE_CREATED',
+        entityType: 'RotaTemplate',
+        entityId: template.id,
+        note: `Created template "${name}" (${entries.length} entries)`,
+      }),
+    );
     return res.status(201).json({
       template: { id: created.id, name: created.name, entryCount: entries.length, createdAt: created.createdAt.toISOString() },
     });
@@ -57,13 +97,24 @@ rotaTemplatesRouter.post('/', async (req, res) => {
   }
 });
 
-/** DELETE /api/rota-templates/:id */
-rotaTemplatesRouter.delete('/:id', async (req, res) => {
+/** DELETE /api/rota-templates/:id — `requireManager`-gated (2026-09-05, same fix as POST /, above), own venue only. */
+rotaTemplatesRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.rotaTemplate.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Template "${id}" not found.` });
-    await prisma.rotaTemplate.delete({ where: { id } });
+    if (!ownedOrNotFound(req, res, existing, `Template "${id}" not found.`)) return;
+    await withAuditedTransaction(
+      prisma,
+      (tx) => tx.rotaTemplate.delete({ where: { id } }),
+      () => ({
+        locationId: existing.locationId,
+        actorId: req.user!.id,
+        action: 'ROTA_TEMPLATE_DELETED',
+        entityType: 'RotaTemplate',
+        entityId: id,
+        note: `Deleted template "${existing.name}"`,
+      }),
+    );
     return res.status(204).send();
   } catch (err) {
     console.error('[rotaTemplates.delete] failed', err);
@@ -71,16 +122,30 @@ rotaTemplatesRouter.delete('/:id', async (req, res) => {
   }
 });
 
-/** POST /api/rota-templates/:id/apply — body: { weekStart, createdById? } — creates real Shift rows for the target week. */
-rotaTemplatesRouter.post('/:id/apply', async (req, res) => {
+/**
+ * POST /api/rota-templates/:id/apply — body: { weekStart, createdById? } —
+ * bulk-creates real Shift rows for the target week. `requireManager`-gated
+ * (2026-09-05, same fix as POST /, above) — this was the most severe of the
+ * three gaps found: a STAFF session could otherwise bulk-create a full
+ * week of shifts for the whole venue with one call, no UI needed.
+ */
+rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const weekStart = String(req.body?.weekStart ?? '').trim();
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById =
+      req.user!.systemRole === 'STAFF'
+        ? req.user!.id
+        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
 
+    if (createdById !== req.user!.id) {
+      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
+      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
+    }
+
     const template = await prisma.rotaTemplate.findUnique({ where: { id } });
-    if (!template) return res.status(404).json({ error: `Template "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, template, `Template "${id}" not found.`)) return;
 
     const entries = template.entries as unknown as TemplateEntry[];
 
@@ -113,25 +178,43 @@ rotaTemplatesRouter.post('/:id/apply', async (req, res) => {
     const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
     const start = new Date(`${weekStart}T00:00:00.000Z`);
 
-    const created = await prisma.$transaction(
-      entries.map((e) => {
-        const date = new Date(start);
-        date.setUTCDate(date.getUTCDate() + e.dayOffset);
-        const dateStr = date.toISOString().slice(0, 10);
-        const overnight = e.end <= e.start;
-        return prisma.shift.create({
-          data: {
-            locationId: template.locationId,
-            roleId: e.roleId,
-            userId: e.userId,
-            createdById,
-            date,
-            startTime: combineDateAndTime(dateStr, e.start, timezone),
-            endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
-            managerNotes: e.note ?? null,
-            status: 'DRAFT',
-          },
-        });
+    const created = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        // Sequential, not Promise.all: `tx` is bound to a single reserved DB
+        // connection, so concurrent creates against it wouldn't parallelize
+        // anyway and risk tripping the transaction's own timeout.
+        const rows: { id: string }[] = [];
+        for (const e of entries) {
+          const date = new Date(start);
+          date.setUTCDate(date.getUTCDate() + e.dayOffset);
+          const dateStr = date.toISOString().slice(0, 10);
+          const overnight = e.end <= e.start;
+          rows.push(
+            await tx.shift.create({
+              data: {
+                locationId: template.locationId,
+                roleId: e.roleId,
+                userId: e.userId,
+                createdById,
+                date,
+                startTime: combineDateAndTime(dateStr, e.start, timezone),
+                endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
+                managerNotes: e.note ?? null,
+                status: 'DRAFT',
+              },
+            }),
+          );
+        }
+        return rows;
+      },
+      (rows) => ({
+        locationId: template.locationId,
+        actorId: req.user!.id,
+        action: 'SHIFT_CREATED',
+        entityType: 'Shift',
+        entityId: rows[0]?.id ?? id,
+        note: `Applied template "${template.name}" to week ${weekStart} — created ${rows.length} shift(s)`,
       }),
     );
     return res.status(201).json({ createdCount: created.length });

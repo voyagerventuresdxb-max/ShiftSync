@@ -20,12 +20,16 @@ import { withAuth } from './identity';
 export { ApiError };
 
 export type ParsedIntent =
-  | { intent: 'MARK_AVAILABILITY'; date: string; type: 'UNAVAILABLE' | 'PREFERRED_OFF'; summary: string }
-  | { intent: 'REQUEST_SWAP'; shiftId: string; targetUserId: string; targetUserName: string; reason: string | null; summary: string }
-  | { intent: 'APPROVE_SWAP'; swapRequestId: string; summary: string }
-  | { intent: 'DECLINE_SWAP'; swapRequestId: string; summary: string }
-  | { intent: 'APPROVE_JOIN'; joinRequestId: string; summary: string }
-  | { intent: 'DECLINE_JOIN'; joinRequestId: string; summary: string }
+  | { intent: 'MARK_AVAILABILITY'; date: string; type: 'UNAVAILABLE' | 'PREFERRED_OFF'; confidence: number; summary: string }
+  | { intent: 'REQUEST_SWAP'; shiftId: string; targetUserId: string; targetUserName: string; reason: string | null; confidence: number; summary: string }
+  | { intent: 'APPROVE_SWAP'; swapRequestId: string; confidence: number; summary: string }
+  | { intent: 'DECLINE_SWAP'; swapRequestId: string; confidence: number; summary: string }
+  | { intent: 'APPROVE_JOIN'; joinRequestId: string; confidence: number; summary: string }
+  | { intent: 'DECLINE_JOIN'; joinRequestId: string; confidence: number; summary: string }
+  | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; confidence: number; summary: string }
+  | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; confidence: number; summary: string }
+  | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
+  | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -68,7 +72,7 @@ export async function transcribeAudio(token: string, audioBlob: Blob): Promise<{
 }
 
 /** POST /api/voice/parse-intent — body: { transcript }. Never mutates anything — the "propose" half of confirm-before-execute. */
-export async function parseVoiceIntent(token: string, transcript: string): Promise<{ transcript: string; intent: ParsedIntent }> {
+export async function parseVoiceIntent(token: string, transcript: string): Promise<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null }> {
   return request('/api/voice/parse-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
@@ -77,19 +81,20 @@ export async function parseVoiceIntent(token: string, transcript: string): Promi
 }
 
 /**
- * POST /api/voice/execute — body: { transcript, intent }. The "execute" half
- * of confirm-before-execute. The real permission/shape re-validation lives
- * server-side (see server/src/routes/voice.ts) — this client call carries
- * whatever intent /parse-intent returned, unmodified.
+ * POST /api/voice/execute — body: { transcript, intent, voiceLogId }. The
+ * "execute" half of confirm-before-execute. The real permission/shape
+ * re-validation lives server-side (see server/src/routes/voice.ts) — this
+ * client call carries whatever intent /parse-intent returned, unmodified.
  */
 export async function executeVoiceIntent(
   token: string,
   transcript: string,
   intent: ParsedIntent,
+  voiceLogId: string | null,
 ): Promise<{ executed: boolean; result: unknown }> {
   return request('/api/voice/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
-    body: JSON.stringify({ transcript, intent }),
+    body: JSON.stringify({ transcript, intent, voiceLogId }),
   });
 }

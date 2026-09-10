@@ -116,3 +116,147 @@ test('fallback sample response maps to a valid result (no Gemini call)', () => {
   // Leave records (day off) are captured.
   assert.ok(result.leaveRecords.some((l) => l.employeeName === 'Tomas' && l.category === 'day_off'));
 });
+
+// --- Legend-code shift resolution -----------------------------------------
+//
+// Per vlmPrompt.ts's own design, legend-code resolution (detecting an
+// in-file legend like "A = 07:00-15:00" and resolving a coded cell's
+// startTime/endTime using it) happens ENTIRELY inside the model's own single
+// JSON response — the model is instructed to read the legend and emit the
+// already-resolved startTime/endTime directly on the cell. There was
+// previously no test coverage proving `mapVlmResponseToResult` (the only
+// server-side code touching this data) correctly surfaces the returned
+// legend as metadata and correctly carries through cells whose times were
+// already resolved this way, without re-deriving or discarding them. These
+// tests fix that gap by mocking exactly that response shape — no real model
+// call, following this file's existing fixture-JSON pattern.
+
+test('legend metadata is surfaced unchanged (code + meaning), category dropped', () => {
+  const parsed = {
+    venueTemplateNotes: 'Legend-code shift system: A/M/E backed by an in-file key',
+    legend: [
+      { code: 'A', meaning: '07:00-15:00', category: 'shift' },
+      { code: 'M', meaning: '15:00-23:00', category: 'shift' },
+      { code: 'OFF', meaning: 'Day Off', category: 'day_off' },
+    ],
+    employees: [],
+    documentAnomalies: [],
+  };
+
+  const result = mapVlmResponseToResult(parsed as never, '2026-08-17');
+  assert.deepEqual(result.legend, [
+    { code: 'A', meaning: '07:00-15:00' },
+    { code: 'M', meaning: '15:00-23:00' },
+    { code: 'OFF', meaning: 'Day Off' },
+  ]);
+});
+
+test('a legend-coded cell already resolved by the model (per vlmPrompt) carries through its exact startTime/endTime, not re-derived from rawText', () => {
+  const parsed = {
+    venueTemplateNotes: 'Legend-code shift system',
+    legend: [{ code: 'A', meaning: '07:00-15:00', category: 'shift' }],
+    employees: [
+      {
+        rawName: 'Ahmed Ali',
+        role: 'Waiter',
+        cells: [
+          {
+            // rawText is just the bare code as printed on the sheet — the
+            // model itself already resolved it against the legend and
+            // returned the real times, not "A" as a literal time string.
+            date: '2026-08-17',
+            rawText: 'A',
+            period: null,
+            interpretation: 'worked_shift',
+            startTime: '07:00',
+            endTime: '15:00',
+            leaveCode: null,
+            confidence: 0.9,
+            needsReview: false,
+            reviewReason: null,
+          },
+        ],
+      },
+    ],
+    documentAnomalies: [],
+  };
+
+  const result = mapVlmResponseToResult(parsed as never, '2026-08-17');
+  assert.equal(result.anomalies.length, 0, 'a legend-resolved cell is not an anomaly');
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].employeeName, 'Ahmed Ali');
+  assert.equal(result.rows[0].startTime, '07:00');
+  assert.equal(result.rows[0].endTime, '15:00');
+  assert.equal(result.rows[0].overnight, false);
+});
+
+test('multiple employees using different legend-resolved codes on the same day resolve independently, no cross-contamination', () => {
+  const parsed = {
+    venueTemplateNotes: 'Legend-code shift system: M/E/N backed by an in-file key',
+    legend: [
+      { code: 'M', meaning: 'Morning (07:00-15:00)', category: 'shift' },
+      { code: 'E', meaning: 'Evening (15:00-23:00)', category: 'shift' },
+      { code: 'N', meaning: 'Night (23:00-07:00)', category: 'shift' },
+    ],
+    employees: [
+      {
+        rawName: 'Ahmed Ali',
+        role: 'Waiter',
+        cells: [
+          { date: '2026-08-17', rawText: 'M', period: null, interpretation: 'worked_shift', startTime: '07:00', endTime: '15:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
+        ],
+      },
+      {
+        rawName: 'Noor Said',
+        role: 'Captain',
+        cells: [
+          { date: '2026-08-17', rawText: 'N', period: null, interpretation: 'worked_shift', startTime: '23:00', endTime: '07:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
+        ],
+      },
+    ],
+    documentAnomalies: [],
+  };
+
+  const result = mapVlmResponseToResult(parsed as never, '2026-08-17');
+  assert.equal(result.rows.length, 2);
+
+  const ahmed = result.rows.find((r) => r.employeeName === 'Ahmed Ali');
+  assert.equal(ahmed!.startTime, '07:00');
+  assert.equal(ahmed!.endTime, '15:00');
+  assert.equal(ahmed!.overnight, false);
+
+  const noor = result.rows.find((r) => r.employeeName === 'Noor Said');
+  assert.equal(noor!.startTime, '23:00');
+  assert.equal(noor!.endTime, '07:00');
+  assert.equal(noor!.overnight, true, 'Night legend code correctly resolves to an overnight shift');
+});
+
+test('a legend-coded cell resolved by the model as a leave/absence type (not a worked shift) still produces a leave record, not a shift row', () => {
+  // A file's legend can define a code that means an absence rather than a
+  // worked shift (e.g. "OFF" = Day Off) — the model resolves the
+  // INTERPRETATION too, not just times, so this must route to
+  // leaveRecords like any other leave cell, never a shift row with fake
+  // startTime/endTime.
+  const parsed = {
+    venueTemplateNotes: 'Legend-code shift system',
+    legend: [{ code: 'OFF', meaning: 'Day Off', category: 'day_off' }],
+    employees: [
+      {
+        rawName: 'Reem Fakhoury',
+        role: 'Runner',
+        cells: [
+          { date: '2026-08-17', rawText: 'OFF', period: null, interpretation: 'day_off', startTime: null, endTime: null, leaveCode: 'OFF', confidence: 0.9, needsReview: false, reviewReason: null },
+        ],
+      },
+    ],
+    documentAnomalies: [],
+  };
+
+  const result = mapVlmResponseToResult(parsed as never, '2026-08-17');
+  assert.equal(result.rows.length, 0);
+  assert.equal(result.anomalies.length, 0);
+  assert.equal(result.leaveRecords.length, 1);
+  assert.equal(result.leaveRecords[0].employeeName, 'Reem Fakhoury');
+  assert.equal(result.leaveRecords[0].category, 'day_off');
+  assert.equal(result.leaveRecords[0].leaveCode, 'OFF');
+});

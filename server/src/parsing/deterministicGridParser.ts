@@ -45,6 +45,19 @@ const LEAVE_CODES: Record<string, LeaveRecord['category']> = {
   request: 'day_off', closing: 'day_off',
 };
 
+/**
+ * `key in obj` also matches inherited Object.prototype property names
+ * ("constructor", "toString", "hasOwnProperty", ...) even when the plain
+ * object literal never defined them — so a day-cell whose exact text
+ * happens to be one of those reserved names would otherwise silently
+ * "resolve" against Object.prototype itself (e.g. `fileLegend['constructor']`
+ * is the real Object constructor function, whose .start/.end are
+ * undefined) instead of correctly falling through to 'unresolved'.
+ */
+function hasOwnKey<T extends object>(obj: T, key: string): key is Extract<keyof T, string> {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 function normalizeCell(value: unknown): string {
   return String(value ?? '').trim();
 }
@@ -124,6 +137,190 @@ interface ShiftInterval {
   end: string;
 }
 
+// --- Legend-code detection ----------------------------------------------
+//
+// Some venues print short shorthand codes in day cells ("M", "E", "N")
+// backed by an in-file legend/key ("M = Morning 07:00-15:00"), instead of
+// literal times. Unlike LEAVE_CODES (a fixed, hardcoded absence vocabulary),
+// these codes are venue-specific and represent an actual WORKED shift, not
+// an absence — so they can't be hardcoded and must be read from the file
+// itself, per-file.
+//
+// Detection is deliberately narrow: a legend block, when present, is
+// expected to sit in a FOOTER region below the main staff-data grid,
+// separated from it by at least one fully-blank row (confirmed against a
+// real reference fixture: a blank row, then a "Shift Code Legend" caption,
+// then one code per row). Requiring that separator is what keeps this from
+// ever misreading real staff/shift data as a legend line — a staff row's
+// own short name (e.g. "Ali") sitting next to a real shift cell ("9-17")
+// could otherwise coincidentally match the same "code + time-range" shape
+// this looks for, corrupting a real name into a bogus legend entry. Never
+// scanning above the separator rules that out entirely.
+//
+// Known limitations (not handled, by design — see report): a legend printed
+// ABOVE the day-header row, in a side column running alongside the staff
+// rows (not below a blank-row separator), or split across more cells than
+// the two shapes below expect (e.g. code/"="/time as three separate cells).
+
+// Capped at 3 characters total — every real shift-code convention found in
+// research and the actual reference fixture is single-letter or a short
+// abbreviation (M/E/N/G, OFF, AL), never a whole word. A wider cap (6 chars)
+// let an ordinary short English word in unrelated footer content (e.g. a
+// "TOTAL" summary line whose other cells happen to contain a resolvable time
+// range) get mistaken for a real legend code — caught by review with a
+// constructed real-shaped test case. This narrows the false-positive surface
+// without excluding any known real code.
+const CODE_TOKEN = '[A-Za-z][A-Za-z0-9]{0,2}';
+const TIME_TOKEN = '\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?';
+const RANGE_SEP = '(?:-|–|to)';
+
+/** A cell containing ONLY a short code, e.g. "M", "A1" — nothing else. */
+const CODE_ONLY_RE = new RegExp(`^${CODE_TOKEN}$`);
+/** A cell containing ONLY a time range, e.g. "07:00-15:00", "7am-3pm". */
+const RANGE_ONLY_RE = new RegExp(`^(${TIME_TOKEN})\\s*${RANGE_SEP}\\s*(${TIME_TOKEN})$`, 'i');
+/**
+ * A single cell spelling out the whole legend line, e.g. "M = Morning
+ * 07:00-15:00", "A: 7am-3pm", "A - 07:00-15:00". The optional label between
+ * the separator and the time range covers the common "code = name time"
+ * phrasing without requiring it.
+ */
+const SINGLE_CELL_LEGEND_RE = new RegExp(
+  `^(${CODE_TOKEN})\\s*[=:-]\\s*(?:[A-Za-z][A-Za-z\\s]{0,24}?\\s+)?(${TIME_TOKEN})\\s*${RANGE_SEP}\\s*(${TIME_TOKEN})$`,
+  'i',
+);
+
+interface LegendLineMatch {
+  code: string;
+  start: string;
+  end: string;
+  label: string | null;
+}
+
+/**
+ * Tries to read one legend line out of a single grid row, in either of two
+ * shapes:
+ *  - Multi-column: "M" | "Morning" | "07:00-15:00" (code, optional label,
+ *    time range each in their own cell — the shape of the real reference
+ *    fixture's own legend block).
+ *  - Single-cell: "M = Morning 07:00-15:00" all in one cell (the shape a
+ *    PDF-text extraction of the same content tends to produce).
+ * Returns null when the row doesn't confidently match either shape (a
+ * caption like "Shift Code Legend", a code with no resolvable time range
+ * such as "OFF = Day Off", or unrelated footer content) — callers skip
+ * rather than treat that as the end of the legend block, so a caption or a
+ * time-less entry in the middle of the block doesn't cut it short.
+ */
+function matchLegendRow(row: unknown[]): LegendLineMatch | null {
+  const cells = row.map(normalizeCell);
+  const firstNonBlankIdx = cells.findIndex((c) => c !== '' && c !== '-');
+  if (firstNonBlankIdx === -1) return null;
+
+  const first = cells[firstNonBlankIdx];
+  if (CODE_ONLY_RE.test(first)) {
+    for (let i = firstNonBlankIdx + 1; i < cells.length; i++) {
+      const rangeMatch = cells[i].match(RANGE_ONLY_RE);
+      if (!rangeMatch) continue;
+      const start = normalizeTimeToken(rangeMatch[1]);
+      const end = normalizeTimeToken(rangeMatch[2]);
+      if (!start || !end) continue;
+      const label = cells.slice(firstNonBlankIdx + 1, i).find((c) => c !== '') ?? null;
+      return { code: first, start, end, label };
+    }
+  }
+
+  for (const cell of cells) {
+    if (!cell) continue;
+    const m = cell.match(SINGLE_CELL_LEGEND_RE);
+    if (!m) continue;
+    const start = normalizeTimeToken(m[2]);
+    const end = normalizeTimeToken(m[3]);
+    if (start && end) return { code: m[1], start, end, label: null };
+  }
+
+  return null;
+}
+
+/**
+ * Scans for a legend block sitting in a footer region below the main
+ * staff-data grid (from `searchFromRow` — `header.dataStartIdx` — onward),
+ * separated from it by at least one fully-blank row. Returns an empty
+ * legend/map when no such block is found — the caller's existing
+ * LEAVE_CODES-only resolution is then completely unchanged, exactly as
+ * before this feature existed.
+ */
+function detectLegend(
+  grid: unknown[][],
+  searchFromRow: number,
+): { legend: { code: string; meaning: string }[]; map: Record<string, ShiftInterval>; footerStartRow: number | null } {
+  const empty = {
+    legend: [] as { code: string; meaning: string }[],
+    map: {} as Record<string, ShiftInterval>,
+    footerStartRow: null as number | null,
+  };
+  if (searchFromRow >= grid.length) return empty;
+
+  const isBlankRow = (row: unknown[]): boolean => row.every((c) => isBlank(c));
+
+  let separatorIdx = -1;
+  for (let r = searchFromRow; r < grid.length; r++) {
+    if (isBlankRow(grid[r] ?? [])) {
+      separatorIdx = r;
+      break;
+    }
+  }
+  if (separatorIdx === -1) return empty;
+
+  const legend: { code: string; meaning: string }[] = [];
+  const map: Record<string, ShiftInterval> = {};
+  const seenCodes = new Set<string>();
+  // Bounds how many CONSECUTIVE non-blank, non-legend-shaped lines (a
+  // caption like "Shift Code Legend", or a timeless entry like "OFF = Day
+  // Off" with no resolvable range) are tolerated in a row, anywhere in the
+  // block — not just before the first entry. A real legend entry resets the
+  // streak, so a timeless/caption line sitting BETWEEN two real entries
+  // (order isn't guaranteed — "OFF" could sit alphabetically in the middle
+  // of a venue's own list, not always last) doesn't truncate everything
+  // after it. Two consecutive non-matching lines, though, means this has
+  // stopped being a clean legend block — abort entirely rather than keep
+  // scanning past it for a stray later match, which could otherwise walk
+  // straight through an entirely different, unrelated section (e.g. a
+  // blank-row-separated role header followed by real staff rows) and either
+  // swallow those real rows into the excluded footer region, or fabricate a
+  // bogus entry out of unrelated footer text — both confirmed via
+  // real-world-shaped test cases during review.
+  let consecutiveNonMatchCount = 0;
+
+  for (let r = separatorIdx + 1; r < grid.length; r++) {
+    const row = grid[r] ?? [];
+    if (isBlankRow(row)) continue; // allow further blank gaps within the footer
+
+    const match = matchLegendRow(row);
+    if (!match) {
+      consecutiveNonMatchCount++;
+      if (consecutiveNonMatchCount > 1) return empty; // two non-legend lines in a row — this isn't actually a legend footer
+      continue; // tolerate exactly one non-matching line (a caption, or a timeless entry) before requiring the next real match
+    }
+    consecutiveNonMatchCount = 0; // a real entry resets the streak — a caption/timeless line elsewhere in the block gets its own fresh tolerance
+
+    const key = match.code.toLowerCase();
+    if (seenCodes.has(key)) continue; // first occurrence wins on an (unusual) repeated code
+    seenCodes.add(key);
+    map[key] = { start: match.start, end: match.end };
+    legend.push({
+      code: match.code,
+      meaning: match.label ? `${match.label} (${match.start}-${match.end})` : `${match.start}-${match.end}`,
+    });
+  }
+
+  // Only report the footer as a legend block (and have the caller exclude
+  // it from ordinary staff-row processing) once we've actually resolved at
+  // least one real entry from it — a blank-row separator followed by
+  // unrelated content that doesn't match the legend shape at all (e.g. a
+  // stray totals note) is left completely alone, same as before this
+  // feature existed.
+  return { legend, map, footerStartRow: legend.length > 0 ? separatorIdx : null };
+}
+
 type CellParseResult =
   | { kind: 'blank' }
   | { kind: 'leave'; category: LeaveRecord['category']; code: string }
@@ -155,12 +352,23 @@ type CellParseResult =
  * fully-flexible shorthand, confirmed with the Bar des Pres venue); and
  * leave/absence codes.
  */
-function parseCellValue(raw: unknown): CellParseResult {
+function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>): CellParseResult {
   if (isBlank(raw)) return { kind: 'blank' };
   const text = normalizeCell(raw);
   const lower = text.toLowerCase();
 
-  if (lower in LEAVE_CODES) return { kind: 'leave', category: LEAVE_CODES[lower], code: text };
+  // A code detected in THIS file's own legend takes precedence over the
+  // fixed LEAVE_CODES table when both would match the same short code —
+  // it's more specific (literally printed by this venue for this roster)
+  // than a generic hardcoded absence vocabulary, and represents a real
+  // worked shift rather than an absence, which is the more useful reading
+  // of an otherwise-ambiguous short code.
+  if (fileLegend && hasOwnKey(fileLegend, lower)) {
+    const interval = fileLegend[lower];
+    return { kind: 'shifts', intervals: [{ start: interval.start, end: interval.end }] };
+  }
+
+  if (hasOwnKey(LEAVE_CODES, lower)) return { kind: 'leave', category: LEAVE_CODES[lower], code: text };
 
   // Fully flexible / on-call: no fixed start or end at all.
   if (/^in$/i.test(text)) {
@@ -291,7 +499,7 @@ function parseCellValue(raw: unknown): CellParseResult {
  * recognized by the pattern signal — only the vocabulary one.
  */
 function isRoleHeaderLabel(candidate: string, hasSeenAnyStaffRow: boolean): boolean {
-  if (candidate.toLowerCase() in LEAVE_CODES) return false;
+  if (hasOwnKey(LEAVE_CODES, candidate.toLowerCase())) return false;
   if (canonicalRoleName(candidate) !== candidate) return true;
   if (!hasSeenAnyStaffRow) return false;
   const letters = candidate.replace(/[^A-Za-z]/g, '');
@@ -371,6 +579,18 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     return { templateLabel: 'Deterministic Grid Parser (no resolvable day columns)', rows, issues, anomalies, leaveRecords, legend: [] };
   }
 
+  // Legend detection is additive: when no legend block is found (the vast
+  // majority of files), `fileLegend` is an empty map and `parseCellValue`'s
+  // new lookup is always a no-op, leaving every existing code path
+  // (LEAVE_CODES-only resolution) completely unchanged from before.
+  const { legend, map: fileLegend, footerStartRow } = detectLegend(grid, header.dataStartIdx);
+  // A confirmed legend block is footer content, not staff data — excluded
+  // from the ordinary staff-row loop below entirely, so a legend row (e.g.
+  // "M | Morning | 07:00-15:00") is never itself misread as a staff name
+  // with shift cells (that time range would otherwise parse as a valid
+  // shift on its own).
+  const dataEndIdx = footerStartRow ?? grid.length;
+
   // Most rosters have exactly one leading column (the staff name). Some
   // print an explicit per-row title in its own column before the name
   // (e.g. "RM" | "Robert Orgovan" | ... — Bar des Pres FOH style), on top
@@ -406,7 +626,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     // a header's own column placement doesn't reliably indicate which
     // column means what, only a real paired data row does.
     const pairedRows: { col0: string; col1: string }[] = [];
-    for (let r = header.dataStartIdx; r < grid.length; r++) {
+    for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
       const v0 = normalizeCell(grid[r]?.[0]);
       const v1 = normalizeCell(grid[r]?.[1]);
       if (v0 && v1) pairedRows.push({ col0: v0, col1: v1 });
@@ -427,7 +647,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       const fullColumnShare = (colIndex: number): { hits: number; total: number } => {
         let hits = 0;
         let total = 0;
-        for (let r = header.dataStartIdx; r < grid.length; r++) {
+        for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
           const v = normalizeCell(grid[r]?.[colIndex]);
           if (!v) continue;
           total++;
@@ -485,7 +705,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   function processStaffRow(row: unknown[], employeeName: string, roleName: string, extraNoteExcludedCols: Set<number>): void {
     let hasShiftOrLeaveThisRow = false;
     for (const col of columns) {
-      const parsed = parseCellValue(row[col.colIndex]);
+      const parsed = parseCellValue(row[col.colIndex], fileLegend);
       if (parsed.kind === 'blank') continue;
 
       if (parsed.kind === 'leave') {
@@ -563,7 +783,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         const note = normalizeCell(row[c]);
         if (!note) continue;
         const lower = note.toLowerCase();
-        if (lower in LEAVE_CODES) {
+        if (hasOwnKey(LEAVE_CODES, lower)) {
           leaveRecords.push({ employeeName, date: weekStart, leaveCode: note, category: LEAVE_CODES[lower] });
           break; // one leave record is enough to surface "this person is out"
         }
@@ -571,7 +791,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     }
   }
 
-  for (let r = header.dataStartIdx; r < grid.length; r++) {
+  for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
 
     if (!hasTitleColumn) {
@@ -685,6 +905,6 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     issues,
     anomalies,
     leaveRecords,
-    legend: [],
+    legend,
   };
 }

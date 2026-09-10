@@ -58,6 +58,12 @@ export default function MyShiftsContent() {
         <Link to="/join" className="btn btn-primary inline-flex">
           Join or log in
         </Link>
+        <p className="text-xs text-muted-foreground">
+          Setting up a brand-new venue?{' '}
+          <Link to="/signup" className="underline-offset-2 hover:text-foreground hover:underline">
+            Sign up your restaurant
+          </Link>
+        </p>
       </div>
     );
   }
@@ -129,7 +135,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchAvailability(userId, weekStart)
+    fetchAvailability(token, userId, weekStart)
       .then((list) => {
         if (cancelled) return;
         setMarks(Object.fromEntries(list.map((m) => [m.date, m])));
@@ -144,7 +150,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
     return () => {
       cancelled = true;
     };
-  }, [userId, weekStart]);
+  }, [userId, weekStart, token]);
 
   const cycle = async (date: string) => {
     const current = marks[date];
@@ -207,7 +213,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
               >
                 <span className="uppercase tracking-wide">{weekdayOf(date)}</span>
                 <span>{date.slice(8)}</span>
-                <span className="text-[9px] normal-case">
+                <span className="text-[10px] normal-case">
                   {state === 'UNAVAILABLE' ? 'Unavailable' : state === 'PREFERRED_OFF' ? 'Prefer off' : '—'}
                 </span>
               </button>

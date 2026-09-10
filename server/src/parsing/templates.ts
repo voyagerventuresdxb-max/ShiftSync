@@ -1,10 +1,46 @@
 import type { TemplateDefinition, TemplateField } from './types.js';
 
-/** Lowercase, strip punctuation, collapse whitespace. Used to fuzzy-match headers. */
+/**
+ * Lowercase, strip punctuation, collapse whitespace. Used to fuzzy-match
+ * headers AND (via `nameKey` in resolveRows.ts) to key employee/role name
+ * lookups against the database.
+ *
+ * Uses Unicode property escapes (`\p{L}` = any letter in any script, `\p{N}`
+ * = any number) rather than an ASCII-only `[a-z0-9]` class. This is
+ * deliberate: an ASCII-only class strips every character of a non-Latin
+ * name (Arabic, etc.) to nothing, so two DIFFERENT people/roles with
+ * different Arabic names both normalize to the same empty/whitespace key —
+ * a real collision that silently matches one person's roster row to a
+ * DIFFERENT person's DB record. Preserving `\p{L}` keeps each script's
+ * actual letters in the key, so distinct non-Latin strings normalize to
+ * distinct, non-empty keys. `\p{L}`/`\p{N}` are supersets of `a-z`/`0-9`,
+ * so plain-ASCII/English/French-service header and role matching (e.g.
+ * "Employee Name", "Chef de Rang") is completely unaffected — this only
+ * widens what's KEPT, it never changes how already-ASCII input normalizes.
+ * `.toLowerCase()` is a case-mapping no-op on scripts without case (Arabic,
+ * CJK, etc.), so it doesn't need special-casing here either.
+ *
+ * DELIBERATELY DOES NOT fold/strip Unicode combining marks (accents,
+ * Arabic tashkeel, etc.) — an `.normalize('NFKD') + strip \p{M}` approach
+ * was tried and reverted after review: it does fold Arabic diacritics and
+ * Latin accents correctly, but it ALSO strips the tone marks that make two
+ * DIFFERENT Vietnamese names distinct ("Nguyễn" vs "Nguyên" both -> "nguyen",
+ * verified empirically) — reintroducing the exact silent-collision bug
+ * this function exists to prevent, just for a different script. Since a
+ * blanket mark-strip isn't provably safe across every script without a much
+ * more careful, script-aware pass, the safer, narrower fix was kept: two
+ * different Arabic names still never collide (they keep their own distinct
+ * base letters), but the SAME Arabic name spelled with vs. without
+ * diacritics currently produces two different keys, which fails safe (an
+ * unmatched/new_employee prompt for manual review) rather than failing
+ * dangerous (a silent wrong-person match). See MEMORY.md for the full
+ * investigation and the Devanagari dependent-vowel-sign collision risk
+ * this function was found to ALSO carry independent of this decision.
+ */
 export function normalizeHeader(raw: unknown): string {
   return String(raw ?? '')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .replace(/\s+/g, ' ');
 }

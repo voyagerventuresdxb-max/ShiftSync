@@ -1,5 +1,7 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -15,19 +17,47 @@ import { prisma } from '../lib/prisma.js';
  */
 export const staffDirectoryRouter = Router();
 
-/** Shape shared by GET/POST/PATCH responses below. */
-function toDto(u: {
-  id: string;
-  fullName: string;
-  jobTitle: string | null;
-  phone: string | null;
-  preferredLanguage: string | null;
-  hiredAt: Date | null;
-  isActive: boolean;
-  terminatedAt: Date | null;
-  role: { id: string; name: string } | null;
-  location: { name: string };
-}) {
+/**
+ * Thrown inside the PATCH transaction when the atomic `user.updateMany`
+ * guard finds `isActive` no longer matches the value `terminatedAt` was
+ * computed from — i.e. a concurrent PATCH on the same user already changed
+ * `isActive` between our initial read and this write. Thrown (rather than
+ * just returning a flag) so the transaction rolls back too, instead of
+ * writing a `terminatedAt` that no longer agrees with the row's real
+ * `isActive`. Mirrors `swapActions.ts`'s `ShiftAlreadyReassignedError`.
+ */
+class StaffRecordChangedConcurrentlyError extends Error {}
+
+/** The one place "does this caller get personal fields?" is decided — every route derives `redactPersonal` from this, never a literal. */
+function redactPersonalFor(req: Request): boolean {
+  return req.user!.systemRole === 'STAFF';
+}
+
+/**
+ * Shape shared by GET/POST/PATCH responses below.
+ * `redactPersonal` nulls phone/preferredLanguage/hiredAt/terminatedAt for STAFF
+ * callers (no STAFF-reachable consumer reads them) — required, not defaulted,
+ * so a new call site can't silently ship them unredacted. Always derive it
+ * via `redactPersonalFor(req)` below rather than a literal, even at the two
+ * `requireManager`-gated write routes where it's always `false` today — a
+ * hardcoded literal at those sites would silently start leaking these fields
+ * again if either route ever became STAFF-reachable.
+ */
+function toDto(
+  u: {
+    id: string;
+    fullName: string;
+    jobTitle: string | null;
+    phone: string | null;
+    preferredLanguage: string | null;
+    hiredAt: Date | null;
+    isActive: boolean;
+    terminatedAt: Date | null;
+    role: { id: string; name: string } | null;
+    location: { name: string };
+  },
+  redactPersonal: boolean,
+) {
   return {
     id: u.id,
     fullName: u.fullName,
@@ -38,14 +68,14 @@ function toDto(u: {
     // shifts yet — without it, a new week can't be built at all.
     roleId: u.role?.id ?? null,
     roleName: u.role?.name ?? null,
-    phone: u.phone,
-    preferredLanguage: u.preferredLanguage,
-    hiredAt: u.hiredAt ? u.hiredAt.toISOString().slice(0, 10) : null,
+    phone: redactPersonal ? null : u.phone,
+    preferredLanguage: redactPersonal ? null : u.preferredLanguage,
+    hiredAt: redactPersonal || !u.hiredAt ? null : u.hiredAt.toISOString().slice(0, 10),
     isActive: u.isActive,
     // Employment status is deliberately the isActive + terminatedAt PAIR (no
     // parallel status enum, which would be a second source of truth). Both
     // halves must therefore be exposed, and PATCH keeps them in lockstep.
-    terminatedAt: u.terminatedAt ? u.terminatedAt.toISOString().slice(0, 10) : null,
+    terminatedAt: redactPersonal || !u.terminatedAt ? null : u.terminatedAt.toISOString().slice(0, 10),
     venueName: u.location.name,
   };
 }
@@ -56,15 +86,17 @@ function toDto(u: {
  * a real, user-facing field, so a manager needs to see (and un-set) a
  * terminated staff member too, not have them silently vanish.
  */
-staffDirectoryRouter.get('/:locationId', async (req, res) => {
+staffDirectoryRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const users = await prisma.user.findMany({
       where: { locationId },
       orderBy: { fullName: 'asc' },
       include: { role: true, location: { select: { name: true } } },
     });
-    return res.status(200).json({ staff: users.map(toDto) });
+    const redactPersonal = redactPersonalFor(req);
+    return res.status(200).json({ staff: users.map((u) => toDto(u, redactPersonal)) });
   } catch (err) {
     console.error('[staffDirectory.list] failed', err);
     return res.status(500).json({ error: 'Unexpected error while loading the staff directory.' });
@@ -73,18 +105,18 @@ staffDirectoryRouter.get('/:locationId', async (req, res) => {
 
 /**
  * POST /api/staff-directory — add a new staff member.
- * body: { locationId, fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? }
+ * body: { fullName, jobTitle?, phone?, preferredLanguage?, hiredAt? }
+ * locationId is derived from the manager's own session, never from the body.
  * `isActive` is left at its schema default (`true`) for new hires.
  */
-staffDirectoryRouter.post('/', async (req, res) => {
+staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const fullName = String(req.body?.fullName ?? '').trim();
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
     const phone = req.body?.phone ? String(req.body.phone).trim() : null;
     const preferredLanguage = req.body?.preferredLanguage ? String(req.body.preferredLanguage).trim() : null;
     const hiredAtStr = req.body?.hiredAt ? String(req.body.hiredAt).trim() : null;
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
     if (hiredAtStr && !/^\d{4}-\d{2}-\d{2}$/.test(hiredAtStr)) {
       return res.status(400).json({ error: 'hiredAt must be formatted as YYYY-MM-DD.' });
@@ -94,11 +126,24 @@ staffDirectoryRouter.post('/', async (req, res) => {
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
-    const user = await prisma.user.create({
-      data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
-      include: { role: true, location: { select: { name: true } } },
-    });
-    return res.status(201).json(toDto(user));
+    const user = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        return tx.user.create({
+          data: { locationId, fullName, jobTitle, phone, preferredLanguage, hiredAt },
+          include: { role: true, location: { select: { name: true } } },
+        });
+      },
+      (created) => ({
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_CREATED',
+        entityType: 'User',
+        entityId: created.id,
+        note: `Added ${created.fullName} to the staff directory`,
+      }),
+    );
+    return res.status(201).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
     console.error('[staffDirectory.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while adding the staff member.' });
@@ -110,7 +155,7 @@ staffDirectoryRouter.post('/', async (req, res) => {
  * Accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, and
  * isActive (the employment-status toggle).
  */
-staffDirectoryRouter.patch('/:userId', async (req, res) => {
+staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (req, res) => {
   try {
     const { userId } = req.params;
     const data: {
@@ -161,7 +206,7 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
     }
 
     const existing = await prisma.user.findUnique({ where: { id: userId } });
-    if (!existing) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Staff member "${userId}" not found.`)) return;
 
     // Employment status is the isActive + terminatedAt pair, so the toggle has
     // to move both — otherwise terminatedAt stays permanently null and the two
@@ -171,12 +216,50 @@ staffDirectoryRouter.patch('/:userId', async (req, res) => {
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data,
-      include: { role: true, location: { select: { name: true } } },
+    const user = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        // Atomic guard: only when THIS request is itself toggling isActive
+        // (and therefore computed `data.terminatedAt` from `existing.isActive`
+        // above) do we re-assert that isActive hasn't moved since our read —
+        // two concurrent opposite-direction toggles can both pass the plain
+        // `existing.isActive` read above, but only one `updateMany` here can
+        // ever match and actually write. Scoping the guard to `data.isActive
+        // !== undefined` matters: a PATCH that only changes something else
+        // (fullName, phone, ...) must NOT spuriously conflict just because
+        // someone else toggled isActive in between — it never depended on
+        // that value, so it should be free to apply regardless.
+        const result = await tx.user.updateMany({
+          where: data.isActive !== undefined ? { id: userId, isActive: existing.isActive } : { id: userId },
+          data,
+        });
+        if (result.count === 0) {
+          throw new StaffRecordChangedConcurrentlyError();
+        }
+        // `updateMany` doesn't return the row, so re-fetch it (inside the
+        // same transaction) for the response's `toDto`.
+        const updated = await tx.user.findUnique({
+          where: { id: userId },
+          include: { role: true, location: { select: { name: true } } },
+        });
+        return updated!;
+      },
+      (updated) => ({
+        locationId: req.user!.locationId,
+        actorId: req.user!.id,
+        action: 'STAFF_UPDATED',
+        entityType: 'User',
+        entityId: userId,
+        note: `Updated ${updated.fullName}'s staff record`,
+      }),
+    ).catch((err) => {
+      if (err instanceof StaffRecordChangedConcurrentlyError) return null;
+      throw err;
     });
-    return res.status(200).json(toDto(user));
+    if (!user) {
+      return res.status(409).json({ error: 'This staff record was changed by someone else — please refresh and try again.' });
+    }
+    return res.status(200).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
     console.error('[staffDirectory.update] failed', err);
     return res.status(500).json({ error: 'Unexpected error while updating the staff member.' });

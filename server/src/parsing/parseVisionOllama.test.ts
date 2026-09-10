@@ -90,6 +90,56 @@ test('completeness check does not retry when nothing is missing', async (t) => {
   assert.equal(result.rows.length, 1);
 });
 
+// 2026-09-05 — normalizeNameForCompare used to be its own local ASCII-only
+// `[^a-z0-9]+` reimplementation, so two DIFFERENT Arabic names both
+// normalized to the same empty string here — the completeness check
+// couldn't tell "the extraction really has this Arabic employee" from
+// "it's missing them," silently defeating this exact safety net for a real
+// GCC/Dubai roster. Now shares the already-fixed `normalizeHeader`.
+test('completeness check correctly distinguishes two different Arabic names — retries when one is genuinely missing', async (t) => {
+  const namesOnlyResponse = { names: ['محمد أحمد', 'فاطمة علي'] };
+  const incompleteExtraction = {
+    venueTemplateNotes: 'test',
+    legend: [],
+    employees: [
+      { rawName: 'محمد أحمد', role: 'Waiter', cells: [{ date: '2026-08-17', rawText: '9-17', period: null, interpretation: 'worked_shift', startTime: '09:00', endTime: '17:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null }] },
+      // فاطمة علي missing entirely on this attempt.
+    ],
+    documentAnomalies: [],
+  };
+  const completeExtraction = {
+    venueTemplateNotes: 'test',
+    legend: [],
+    employees: [
+      { rawName: 'محمد أحمد', role: 'Waiter', cells: [{ date: '2026-08-17', rawText: '9-17', period: null, interpretation: 'worked_shift', startTime: '09:00', endTime: '17:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null }] },
+      { rawName: 'فاطمة علي', role: 'Host', cells: [{ date: '2026-08-17', rawText: '11-19', period: null, interpretation: 'worked_shift', startTime: '11:00', endTime: '19:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null }] },
+    ],
+    documentAnomalies: [],
+  };
+
+  const responses = [
+    fakeResponse(chatContent(namesOnlyResponse)),
+    fakeResponse(chatContent(incompleteExtraction)),
+    fakeResponse(chatContent(completeExtraction)),
+  ];
+  let callCount = 0;
+  t.mock.method(ollamaHttp, 'fetch', async () => {
+    callCount++;
+    const next = responses.shift();
+    if (!next) throw new Error('unexpected extra fetch call');
+    return next;
+  });
+
+  const result = await parseRosterImageOllama(Buffer.from('fake-image-bytes'), 'image/png', 'test.png', '2026-08-17');
+
+  assert.equal(callCount, 3, 'must detect the missing Arabic name and retry — with the old ASCII-only compare, both names collapsed to "" and the check would have missed this entirely');
+  assert.deepEqual(
+    result.rows.map((r) => r.employeeName).sort(),
+    ['فاطمة علي', 'محمد أحمد'],
+    'final result should reflect the retry, which has both distinct employees',
+  );
+});
+
 // Excluded from the default test run: measured live on this reference
 // machine (RTX 4050, 6GB VRAM — the model doesn't fully fit, so Ollama
 // splits inference ~50/50 CPU/GPU), the full structured extraction on this

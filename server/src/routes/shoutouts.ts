@@ -1,9 +1,15 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
+import { notifyUser } from '../lib/push.js';
 
 export const shoutoutsRouter = Router();
 
-/** GET /api/shoutouts/:locationId — newest first. */
+/**
+ * GET /api/shoutouts/:locationId — newest first.
+ * Deliberately NOT behind `requireSession` — same kiosk-access-fork decision
+ * as `announcements.ts`'s GET (Option 3, 2026-08-31 — see MEMORY.md).
+ * Confirmed still correct by the follow-up anonymous-read sweep.
+ */
 shoutoutsRouter.get('/:locationId', async (req, res) => {
   try {
     const { locationId } = req.params;
@@ -59,6 +65,18 @@ shoutoutsRouter.post('/', async (req, res) => {
       data: { locationId, employeeId, authorId, shiftSnapshot, note },
       include: { employee: { select: { fullName: true } }, author: { select: { fullName: true } } },
     });
+
+    // Real delivery on top of the write above (never blocking the
+    // response). Skipped for the rare self-tag case (employeeId === authorId)
+    // — nobody needs telling they recognized themselves.
+    if (created.employeeId !== created.authorId) {
+      void notifyUser(created.employeeId, {
+        title: 'You got a shoutout!',
+        body: `${created.author?.fullName ?? 'Someone'} recognized you: "${created.note}"`,
+        url: '/',
+      });
+    }
+
     return res.status(201).json({
       shoutout: {
         id: created.id,

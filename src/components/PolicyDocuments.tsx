@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileText, Trash2, Upload } from 'lucide-react';
-import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, ApiError, type PolicyDocumentDto } from '../api/policyDocuments';
+import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, fetchPolicyDocumentFile, ApiError, type PolicyDocumentDto } from '../api/policyDocuments';
+import { useIdentity } from '../state/IdentityContext';
 
 /**
  * Training & Policy document hub — venue-level PDF documents (handbooks,
@@ -8,7 +9,8 @@ import { fetchPolicyDocuments, uploadPolicyDocument, deletePolicyDocument, ApiEr
  * Follows the same free-text-category-grouping + <datalist> autocomplete
  * pattern established by EightySixBoard.tsx in the Floor Plan phase.
  */
-export default function PolicyDocuments({ locationId }: { locationId: string }) {
+export default function PolicyDocuments({ locationId, isManager }: { locationId: string; isManager: boolean }) {
+  const { session } = useIdentity();
   const [docs, setDocs] = useState<PolicyDocumentDto[]>([]);
   const [category, setCategory] = useState('');
   const [title, setTitle] = useState('');
@@ -17,10 +19,10 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
   const [uploading, setUploading] = useState(false);
 
   const load = useCallback(() => {
-    fetchPolicyDocuments(locationId)
+    fetchPolicyDocuments(session!.token, locationId)
       .then(setDocs)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load documents.'));
-  }, [locationId]);
+  }, [session, locationId]);
 
   useEffect(() => {
     load();
@@ -42,7 +44,7 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
     setUploading(true);
     setError(null);
     try {
-      await uploadPolicyDocument({ file, locationId, category: category.trim(), title: title.trim() });
+      await uploadPolicyDocument(session!.token, { file, category: category.trim(), title: title.trim() });
       setFile(null);
       setCategory('');
       setTitle('');
@@ -56,10 +58,29 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
 
   const handleDelete = async (id: string) => {
     try {
-      await deletePolicyDocument(id);
+      await deletePolicyDocument(session!.token, id);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not delete that document.');
+    }
+  };
+
+  // The document link used to be a plain <a href> — no longer possible now
+  // that the file itself is session-gated (this app authenticates via a
+  // Bearer header, not a cookie, so a browser's own navigation can't carry
+  // it). Fetch the bytes with the real session token, then hand the browser
+  // a same-origin blob: URL to open instead.
+  const handleOpen = async (d: PolicyDocumentDto) => {
+    setError(null);
+    try {
+      const blob = await fetchPolicyDocumentFile(session!.token, d.fileUrl);
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      // The new tab has already loaded the blob by the time it opens; revoking
+      // shortly after frees the memory without racing the open() call itself.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not open that document.');
     }
   };
 
@@ -73,34 +94,36 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <input
-          className="staff-directory-input"
-          list="policy-doc-categories"
-          placeholder="Category (e.g. Onboarding, Food Safety)"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        />
-        <datalist id="policy-doc-categories">
-          {knownCategories.map((c) => (
-            <option key={c} value={c} />
-          ))}
-        </datalist>
-        <input
-          className="staff-directory-input"
-          placeholder="Document title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        <button
-          className="btn btn-primary"
-          onClick={() => void handleUpload()}
-          disabled={uploading || !file || !category.trim() || !title.trim()}
-        >
-          <Upload className="h-4 w-4" /> Upload
-        </button>
-      </div>
+      {isManager && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <input
+            className="staff-directory-input"
+            list="policy-doc-categories"
+            placeholder="Category (e.g. Onboarding, Food Safety)"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          />
+          <datalist id="policy-doc-categories">
+            {knownCategories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+          <input
+            className="staff-directory-input"
+            placeholder="Document title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleUpload()}
+            disabled={uploading || !file || !category.trim() || !title.trim()}
+          >
+            <Upload className="h-4 w-4" /> Upload
+          </button>
+        </div>
+      )}
 
       {grouped.length === 0 ? (
         <p className="hint mt-4">No documents uploaded yet.</p>
@@ -112,12 +135,18 @@ export default function PolicyDocuments({ locationId }: { locationId: string }) 
               <ul className="mt-1.5 space-y-1.5">
                 {catDocs.map((d) => (
                   <li key={d.id} className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-                    <a href={d.fileUrl} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 hover:text-accent">
+                    <button
+                      type="button"
+                      onClick={() => void handleOpen(d)}
+                      className="flex min-w-0 items-center gap-2 text-left hover:text-accent"
+                    >
                       <FileText className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{d.title}</span>
-                    </a>
-                    <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="shrink-0 text-muted-foreground hover:text-destructive">
-                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
+                    {isManager && (
+                      <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="shrink-0 text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>

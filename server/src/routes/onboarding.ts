@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { generateQrDataUrl } from '../lib/qrCode.js';
+import { requireSession, requireManager, assertOwnsLocation } from '../middleware/requireSession.js';
 
 export const onboardingRouter = Router();
 
@@ -8,18 +9,26 @@ export const onboardingRouter = Router();
  * GET /api/onboarding/:locationId/invite
  * Mints the venue's Join-flow invite link and its QR code. The link itself
  * needs no token/expiry — Join's own phone+OTP verification is the real
- * gate; this is just a convenient, shareable pointer to /join.
+ * gate; this is just a convenient, shareable pointer to /join. The endpoint
+ * that MINTS it is a different matter: session-gated + manager-only
+ * (2026-08-31 — see MEMORY.md) so a random anonymous caller can't harvest a
+ * live QR/WhatsApp invite for any venue by guessing a locationId — the
+ * client (`OnboardingWizard.tsx`, already behind `/onboarding`'s
+ * `RequireSession managerOnly` gate) simply wasn't sending its own
+ * already-available token, an oversight this closes rather than a
+ * previously-deliberate choice (no comment on record justified it).
  */
-onboardingRouter.get('/:locationId/invite', async (req, res) => {
+onboardingRouter.get('/:locationId/invite', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
     const baseUrl = String(req.query.baseUrl ?? `${req.protocol}://${req.get('host')}`);
     const inviteUrl = `${baseUrl}/join?location=${locationId}`;
     const qrDataUrl = await generateQrDataUrl(inviteUrl);
-    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`Join ${location.name} on ShiftSync: ${inviteUrl}`)}`;
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`You've been added to ${location.name}'s team on ShiftSync. Join here: ${inviteUrl}`)}`;
 
     return res.status(200).json({ inviteUrl, qrDataUrl, whatsappUrl });
   } catch (err) {

@@ -1,4 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
+import { motion } from 'motion/react';
+import { CheckCircle2 } from 'lucide-react';
+import { useIdentity } from '../state/IdentityContext';
+import { useConnectivity } from '../state/ConnectivityContext';
+import { OfflineActionNotice } from './shiftsync/OfflineNotice';
 import {
   ApiError,
   confirmRoster,
@@ -12,8 +17,6 @@ const ACCEPTED = '.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp';
 type Phase = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done' | 'error';
 
 interface Props {
-  /** Location (venue) id the roster belongs to. */
-  locationId: string;
   /** Optional id of the manager committing the roster (audit trail). */
   createdById?: string;
   /**
@@ -28,9 +31,18 @@ interface Props {
    * can otherwise collide and silently drop a shift during the merge.
    */
   onCommitted?: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
+  /**
+   * Overrides the "Parsing {fileName}…" label shown while a file is
+   * mid-upload/parse. Lets a caller with different framing (e.g. the
+   * onboarding wizard) supply its own copy without changing the default
+   * everywhere else this component is embedded (e.g. Scheduling).
+   */
+  uploadingLabel?: string;
 }
 
-export default function ShiftUpload({ locationId, createdById, onCommitted }: Props) {
+export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }: Props) {
+  const { session } = useIdentity();
+  const { online } = useConnectivity();
   const [phase, setPhase] = useState<Phase>('idle');
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -51,7 +63,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       setFileName(file.name);
       setPhase('uploading');
       try {
-        const res = await uploadRoster(file, locationId);
+        const res = await uploadRoster(session!.token, file);
         setData(res);
         setPhase('preview');
       } catch (err) {
@@ -59,7 +71,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
         setPhase('error');
       }
     },
-    [locationId],
+    [session],
   );
 
   const onDrop = useCallback(
@@ -74,9 +86,15 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
 
   const onConfirm = useCallback(async () => {
     if (!data) return;
+    // Blocked outright while offline: committing a roster is a real,
+    // non-undoable staffing action — a commit that actually lands minutes or
+    // hours later than the manager thinks it did is worse than no commit at
+    // all. No auto-retry — the manager clicks again once back online (the
+    // button re-enables automatically via `online`, see PreviewReview).
+    if (!online) return;
     setPhase('confirming');
     try {
-      const res = await confirmRoster(data.batchId, createdById);
+      const res = await confirmRoster(session!.token, data.batchId, createdById);
       setConfirmResult({ createdCount: res.createdCount, skippedCount: res.skippedCount });
       setPhase('done');
       // Flush the reviewed rows into the parent's roster state so the grid
@@ -104,7 +122,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       }
       setPhase('error');
     }
-  }, [data, createdById, onCommitted]);
+  }, [data, createdById, onCommitted, session, online]);
 
   const reset = useCallback(() => {
     setPhase('idle');
@@ -166,7 +184,12 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       {phase === 'uploading' && (
         <div className="status-block">
           <span className="spinner" aria-hidden />
-          <p>Parsing <strong>{fileName}</strong>…</p>
+          <motion.p
+            animate={{ opacity: [1, 0.55, 1] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            {uploadingLabel ? uploadingLabel : <>Parsing <strong>{fileName}</strong>…</>}
+          </motion.p>
         </div>
       )}
 
@@ -195,7 +218,14 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
       )}
 
       {phase === 'done' && confirmResult && (
-        <div className="success-block" role="status">
+        <motion.div
+          className="success-block text-center"
+          role="status"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 160, damping: 26 }}
+        >
+          <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-success" aria-hidden />
           <p>
             <strong>{confirmResult.createdCount}</strong> shift
             {confirmResult.createdCount === 1 ? '' : 's'} committed.
@@ -209,7 +239,7 @@ export default function ShiftUpload({ locationId, createdById, onCommitted }: Pr
           <button className="btn btn-primary" onClick={reset}>
             Upload another roster
           </button>
-        </div>
+        </motion.div>
       )}
     </section>
   );
@@ -224,6 +254,7 @@ function PreviewReview({
   onConfirm: () => void;
   onReset: () => void;
 }) {
+  const { online } = useConnectivity();
   const { preview, summary, templateDetected, parseIssues, anomalies, leaveRecords, legend } = data;
   const [filter, setFilter] = useState<'all' | 'error' | 'new_employee' | 'unmatched_role'>('all');
   const [reviewed, setReviewed] = useState<Set<number>>(new Set());
@@ -434,10 +465,11 @@ function PreviewReview({
           <button className="btn btn-ghost" onClick={onReset}>
             Discard
           </button>
-          <button className="btn btn-primary" onClick={onConfirm} disabled={outstanding > 0}>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={outstanding > 0 || !online}>
             Confirm &amp; Commit {summary.matchedRows} shift{summary.matchedRows === 1 ? '' : 's'}
           </button>
         </div>
+        {!online && <OfflineActionNotice />}
       </div>
     </div>
   );

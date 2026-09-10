@@ -5,6 +5,10 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { prisma } from '../lib/prisma.js';
 import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasterize.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { notifyUser } from '../lib/push.js';
+import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 
 /**
  * Floor Plan — Sections & Duties.
@@ -22,6 +26,37 @@ import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasteriz
 export const floorPlanRouter = Router();
 
 const UPLOAD_DIR = join(import.meta.dirname, '..', '..', 'uploads', 'floor-plans');
+
+/**
+ * Serves the actual uploaded floor-plan image bytes — mounted directly at
+ * `/uploads/floor-plans` in `app.ts`, BEFORE the generic `/uploads` static
+ * fallback, so it intercepts this one subpath. Same pattern, same reasoning,
+ * as `policyDocumentFilesRouter` in `policyDocuments.ts` (see MEMORY.md):
+ * this app authenticates via a Bearer header, not a cookie, so the file
+ * itself has to be fetched with a real token and rendered from a `blob:`
+ * URL client-side — a plain `<img src>`/`useImage` can't attach one.
+ * `FloorPlanImage.fileUrl` values never change, so no data migration needed.
+ */
+export const floorPlanFilesRouter = Router();
+
+/** Matches the `${randomUUID()}${extFor(...)}` shape every upload is stored under (see `extFor`, below) — rejects anything else before it ever reaches the filesystem. */
+const SAFE_IMAGE_FILENAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpe?g|webp|gif)$/i;
+
+floorPlanFilesRouter.get('/:filename', requireSession, async (req, res) => {
+  try {
+    const { filename } = req.params;
+    if (!SAFE_IMAGE_FILENAME_RE.test(filename)) return res.status(404).json({ error: 'Image not found.' });
+
+    const fileUrl = `/uploads/floor-plans/${filename}`;
+    const image = await prisma.floorPlanImage.findFirst({ where: { fileUrl } });
+    if (!ownedOrNotFound(req, res, image, 'Image not found.')) return;
+
+    return res.sendFile(join(UPLOAD_DIR, filename));
+  } catch (err) {
+    console.error('[floorPlan.serveFile] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while serving the image.' });
+  }
+});
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -54,11 +89,12 @@ function extFor(mimeType: string, originalName: string): string {
  * Saves the venue floor-plan image server-side and records it as the
  * location's current plan. A PDF is rasterized to PNG first (page 1).
  */
-floorPlanRouter.post('/upload', upload.single('file'), async (req, res) => {
+floorPlanRouter.post('/upload', requireSession, requireManager, upload.single('file'), async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+    if (!assertOwnsLocation(req, res, locationId)) return;
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
@@ -107,7 +143,7 @@ floorPlanRouter.post('/upload', upload.single('file'), async (req, res) => {
  *
  * `polygon` points are fractions (0-1) of the image's width/height.
  */
-floorPlanRouter.post('/sections', async (req, res) => {
+floorPlanRouter.post('/sections', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     const floorPlanImageId = String(req.body?.floorPlanImageId ?? '').trim();
@@ -128,6 +164,7 @@ floorPlanRouter.post('/sections', async (req, res) => {
     if (!Number.isFinite(paxCapacity) || paxCapacity < 0) {
       return res.status(400).json({ error: 'paxCapacity must be a non-negative number.' });
     }
+    if (!assertOwnsLocation(req, res, locationId)) return;
 
     const image = await prisma.floorPlanImage.findUnique({ where: { id: floorPlanImageId } });
     if (!image || image.locationId !== locationId) {
@@ -146,11 +183,11 @@ floorPlanRouter.post('/sections', async (req, res) => {
 });
 
 /** PATCH /api/floor-plan/sections/:sectionId — edit label/polygon/paxCapacity/notes. */
-floorPlanRouter.patch('/sections/:sectionId', async (req, res) => {
+floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, async (req, res) => {
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!existing) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Section "${sectionId}" not found.`)) return;
 
     const data: { label?: string; polygon?: { x: number; y: number }[]; paxCapacity?: number; notes?: string | null } = {};
     if (req.body?.label !== undefined) {
@@ -189,11 +226,11 @@ floorPlanRouter.patch('/sections/:sectionId', async (req, res) => {
 });
 
 /** DELETE /api/floor-plan/sections/:sectionId — also removes its assignments (cascade). */
-floorPlanRouter.delete('/sections/:sectionId', async (req, res) => {
+floorPlanRouter.delete('/sections/:sectionId', requireSession, requireManager, async (req, res) => {
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!existing) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Section "${sectionId}" not found.`)) return;
     await prisma.floorSection.delete({ where: { id: sectionId } });
     return res.status(204).send();
   } catch (err) {
@@ -208,9 +245,10 @@ floorPlanRouter.delete('/sections/:sectionId', async (req, res) => {
  * Returns the location's current (most recently uploaded) floor plan image
  * and its sections, or `image: null` if nothing has been uploaded yet.
  */
-floorPlanRouter.get('/:locationId', async (req, res) => {
+floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const image = await prisma.floorPlanImage.findFirst({
       where: { locationId },
       orderBy: { createdAt: 'desc' },
@@ -234,9 +272,10 @@ floorPlanRouter.get('/:locationId', async (req, res) => {
  * Returns every section for the location's current floor plan, each with
  * its assignments for that date AND period embedded.
  */
-floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
+floorPlanRouter.get('/:locationId/assignments', requireSession, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const date = String(req.query.date ?? '').trim();
     const period = String(req.query.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -289,10 +328,63 @@ floorPlanRouter.get('/:locationId/assignments', async (req, res) => {
 });
 
 /**
- * POST /api/floor-plan/assignments
- * body: { sectionId, staffId, shiftDate, period, dutyLabel?, createdById? }
+ * GET /api/floor-plan/:locationId/my-assignments?staffId=&startDate=&endDate=
+ *
+ * A flat list of one staff member's PUBLISHED assignments across a date
+ * range (Personal Rota's week), for the "You're covering: [section]" line
+ * next to their shift cards — DRAFT assignments are deliberately excluded,
+ * since nothing has actually been decided/notified for those yet. No extra
+ * access check beyond the existing requireSession + assertOwnsLocation:
+ * this exposes nothing a session at this venue can't already see via the
+ * venue-wide `/assignments` endpoint above (unchanged by the Fix 1
+ * role-based-UI pass, which only hid client-side controls, not server
+ * reads), so a STAFF caller passing someone else's staffId is not a new
+ * data-scoping hole.
  */
-floorPlanRouter.post('/assignments', async (req, res) => {
+floorPlanRouter.get('/:locationId/my-assignments', requireSession, async (req, res) => {
+  try {
+    const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
+    const staffId = String(req.query.staffId ?? '').trim();
+    const startDateStr = String(req.query.startDate ?? '').trim();
+    const endDateStr = String(req.query.endDate ?? '').trim();
+    if (!staffId) return res.status(400).json({ error: 'staffId query param is required.' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateStr) || !/^\d{4}-\d{2}-\d{2}$/.test(endDateStr)) {
+      return res.status(400).json({ error: 'startDate and endDate query params are required, as YYYY-MM-DD.' });
+    }
+    const startDate = new Date(`${startDateStr}T00:00:00.000Z`);
+    const endDate = new Date(`${endDateStr}T00:00:00.000Z`);
+
+    const rows = await prisma.sectionAssignment.findMany({
+      where: {
+        staffId,
+        status: 'PUBLISHED',
+        shiftDate: { gte: startDate, lte: endDate },
+        section: { locationId },
+      },
+      include: { section: { select: { label: true } } },
+      orderBy: { shiftDate: 'asc' },
+    });
+
+    return res.status(200).json({
+      assignments: rows.map((a) => ({
+        shiftDate: a.shiftDate.toISOString().slice(0, 10),
+        period: a.period,
+        sectionLabel: a.section.label,
+      })),
+    });
+  } catch (err) {
+    console.error('[floorPlan.myAssignments] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while loading assignments.' });
+  }
+});
+
+/**
+ * POST /api/floor-plan/assignments
+ * body: { sectionId, staffId, shiftDate, period, dutyLabel? }
+ * createdById is derived from the manager's own session, never from the body.
+ */
+floorPlanRouter.post('/assignments', requireSession, requireManager, async (req, res) => {
   try {
     const sectionId = String(req.body?.sectionId ?? '').trim();
     const staffId = String(req.body?.staffId ?? '').trim();
@@ -306,7 +398,7 @@ floorPlanRouter.post('/assignments', async (req, res) => {
     // member silently wipes their label.
     const hasDutyLabelKey = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'dutyLabel');
     const dutyLabel = hasDutyLabelKey && req.body.dutyLabel ? String(req.body.dutyLabel).trim() : null;
-    const createdById = req.body?.createdById ? String(req.body.createdById).trim() : null;
+    const createdById = req.user!.id;
 
     if (!sectionId) return res.status(400).json({ error: 'sectionId is required.' });
     if (!staffId) return res.status(400).json({ error: 'staffId is required.' });
@@ -319,33 +411,29 @@ floorPlanRouter.post('/assignments', async (req, res) => {
     const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
 
     const section = await prisma.floorSection.findUnique({ where: { id: sectionId } });
-    if (!section) return res.status(404).json({ error: `Section "${sectionId}" not found.` });
+    if (!ownedOrNotFound(req, res, section, `Section "${sectionId}" not found.`)) return;
     const staff = await prisma.user.findUnique({ where: { id: staffId } });
     if (!staff || staff.locationId !== section.locationId) {
       return res.status(404).json({ error: `Staff member "${staffId}" not found.` });
     }
 
-    const assignment = await prisma.sectionAssignment.upsert({
-      where: { sectionId_staffId_shiftDate_period: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM' } },
-      create: { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById },
-      // Only touch dutyLabel on an existing row when the request actually
-      // sent the key — a plain re-assign (drag-drop, or tap-to-pick with no
-      // label typed) must not clobber a label set earlier via inline edit.
-      update: hasDutyLabelKey ? { dutyLabel } : {},
-      include: { staff: { select: { id: true, fullName: true } } },
-    });
-
-    await prisma.auditLog.create({
-      data: {
+    const assignment = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        upsertSectionAssignment(
+          { sectionId, staffId, shiftDate, period: period as 'AM' | 'PM', dutyLabel, createdById, touchDutyLabel: hasDutyLabelKey },
+          tx,
+        ),
+      (upserted) => ({
         locationId: section.locationId,
         actorId: createdById,
         shiftId: null,
         action: 'SHIFT_ASSIGNED',
         entityType: 'SectionAssignment',
-        entityId: assignment.id,
+        entityId: upserted.id,
         note: `${staff.fullName} assigned to ${section.label} (${period})${dutyLabel ? ` — ${dutyLabel}` : ''}`,
-      },
-    });
+      }),
+    );
 
     return res.status(201).json({
       assignment: {
@@ -364,8 +452,8 @@ floorPlanRouter.post('/assignments', async (req, res) => {
   }
 });
 
-/** DELETE /api/floor-plan/assignments/:assignmentId — unassign. body (optional): { actorId } */
-floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
+/** DELETE /api/floor-plan/assignments/:assignmentId — unassign. */
+floorPlanRouter.delete('/assignments/:assignmentId', requireSession, requireManager, async (req, res) => {
   try {
     const { assignmentId } = req.params;
     const existing = await prisma.sectionAssignment.findUnique({
@@ -373,21 +461,29 @@ floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
       include: { section: true, staff: { select: { fullName: true } } },
     });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+    if (!ownedOrNotFound(req, res, existing.section, `Assignment "${assignmentId}" not found.`)) return;
 
-    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
-    await prisma.auditLog.create({
-      data: {
-        locationId: existing.section.locationId,
-        actorId,
-        shiftId: null,
-        action: 'SHIFT_ASSIGNED',
-        entityType: 'SectionAssignment',
-        entityId: assignmentId,
-        note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
+    const actorId = req.user!.id;
+    await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        // Audit-before-delete: writeAuditLog runs directly inside mutate (in
+        // this original order), and buildEntry below returns null so the
+        // helper doesn't also write a second row after the delete.
+        await writeAuditLog(tx, {
+          locationId: existing.section.locationId,
+          actorId,
+          shiftId: null,
+          action: 'SHIFT_ASSIGNED',
+          entityType: 'SectionAssignment',
+          entityId: assignmentId,
+          note: `${existing.staff.fullName} unassigned from ${existing.section.label} (${existing.period})`,
+        });
+
+        await tx.sectionAssignment.delete({ where: { id: assignmentId } });
       },
-    });
-
-    await prisma.sectionAssignment.delete({ where: { id: assignmentId } });
+      () => null,
+    );
     return res.status(204).send();
   } catch (err) {
     console.error('[floorPlan.assignments.delete] failed', err);
@@ -397,12 +493,11 @@ floorPlanRouter.delete('/assignments/:assignmentId', async (req, res) => {
 
 /**
  * PATCH /api/floor-plan/assignments/:assignmentId/notify
- * body: { actorId? }
  *
  * Stamps `notifiedAt` for one assignment — a manager-initiated, honest
  * tracking event (no real push/SMS/WhatsApp send exists in this codebase).
  */
-floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
+floorPlanRouter.patch('/assignments/:assignmentId/notify', requireSession, requireManager, async (req, res) => {
   try {
     const { assignmentId } = req.params;
     const existing = await prisma.sectionAssignment.findUnique({
@@ -410,16 +505,18 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
       include: { section: true, staff: { select: { fullName: true } } },
     });
     if (!existing) return res.status(404).json({ error: `Assignment "${assignmentId}" not found.` });
+    if (!ownedOrNotFound(req, res, existing.section, `Assignment "${assignmentId}" not found.`)) return;
 
-    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const actorId = req.user!.id;
     const notifiedAt = new Date();
-    const updated = await prisma.sectionAssignment.update({
-      where: { id: assignmentId },
-      data: { notifiedAt },
-    });
-
-    await prisma.auditLog.create({
-      data: {
+    const updated = await withAuditedTransaction(
+      prisma,
+      (tx) =>
+        tx.sectionAssignment.update({
+          where: { id: assignmentId },
+          data: { notifiedAt },
+        }),
+      () => ({
         locationId: existing.section.locationId,
         actorId,
         shiftId: null,
@@ -427,7 +524,18 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
         entityType: 'SectionAssignment',
         entityId: assignmentId,
         note: `${existing.staff.fullName} marked notified for ${existing.section.label} (${existing.period})`,
-      },
+      }),
+    );
+
+    // Real delivery on top of the existing flag-stamp above — never inside
+    // the transaction (a push failure must not roll back notifiedAt, which
+    // is a manager-facing "I did this" record independent of whether the
+    // device-level send actually succeeds).
+    const dateStr = existing.shiftDate.toISOString().slice(0, 10);
+    void notifyUser(existing.staffId, {
+      title: 'New section assignment',
+      body: `You've been assigned to ${existing.section.label} for ${dateStr} (${existing.period}).`,
+      url: '/my-shifts',
     });
 
     return res.status(200).json({ notifiedAt: updated.notifiedAt!.toISOString() });
@@ -439,7 +547,7 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
 
 /**
  * POST /api/floor-plan/:locationId/publish
- * body: { shiftDate, period, actorId? }
+ * body: { shiftDate, period }
  *
  * Flips every DRAFT assignment for the location's sections on that date +
  * period to PUBLISHED, and stamps `notifiedAt` on each one at the same
@@ -447,9 +555,10 @@ floorPlanRouter.patch('/assignments/:assignmentId/notify', async (req, res) => {
  * assignment. A manager can still individually re-notify one person later
  * (e.g. after a reassignment) via the per-assignment notify endpoint.
  */
-floorPlanRouter.post('/:locationId/publish', async (req, res) => {
+floorPlanRouter.post('/:locationId/publish', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
+    if (!assertOwnsLocation(req, res, locationId)) return;
     const dateStr = String(req.body?.shiftDate ?? '').trim();
     const period = String(req.body?.period ?? '').trim().toUpperCase();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
@@ -459,25 +568,59 @@ floorPlanRouter.post('/:locationId/publish', async (req, res) => {
       return res.status(400).json({ error: 'period is required, as AM or PM.' });
     }
     const shiftDate = new Date(`${dateStr}T00:00:00.000Z`);
-    const actorId = req.body?.actorId ? String(req.body.actorId).trim() : null;
+    const actorId = req.user!.id;
     const now = new Date();
 
-    const result = await prisma.sectionAssignment.updateMany({
-      where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
-      data: { status: 'PUBLISHED', publishedAt: now, notifiedAt: now },
-    });
+    const result = await withAuditedTransaction(
+      prisma,
+      async (tx) => {
+        // Captured BEFORE the update, on the same where-clause, so the
+        // digest below knows exactly which staff/sections this call
+        // actually flipped to PUBLISHED — updateMany itself only returns a
+        // count, not the affected rows.
+        const affected = await tx.sectionAssignment.findMany({
+          where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
+          select: { staffId: true, section: { select: { label: true } } },
+        });
+        const updateResult = await tx.sectionAssignment.updateMany({
+          where: { shiftDate, period: period as 'AM' | 'PM', status: 'DRAFT', section: { locationId } },
+          data: { status: 'PUBLISHED', publishedAt: now, notifiedAt: now },
+        });
+        return { count: updateResult.count, affected };
+      },
+      (updateResult) =>
+        updateResult.count > 0
+          ? {
+              locationId,
+              actorId,
+              shiftId: null,
+              action: 'ASSIGNMENT_NOTIFIED',
+              entityType: 'SectionAssignment',
+              entityId: locationId,
+              note: `Published & notified ${updateResult.count} assignment${updateResult.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
+            }
+          : null,
+    );
 
-    if (result.count > 0) {
-      await prisma.auditLog.create({
-        data: {
-          locationId,
-          actorId,
-          shiftId: null,
-          action: 'ASSIGNMENT_NOTIFIED',
-          entityType: 'SectionAssignment',
-          entityId: locationId,
-          note: `Published & notified ${result.count} assignment${result.count === 1 ? '' : 's'} for ${dateStr} (${period})`,
-        },
+    // Real delivery on top of the existing flag-stamp above (never inside
+    // the transaction — see the per-assignment notify handler's comment).
+    // One digest notification per affected staff member, not one per
+    // assignment, so someone assigned to three sections in this batch gets
+    // a single push, not three.
+    const byStaff = new Map<string, string[]>();
+    for (const a of result.affected) {
+      const labels = byStaff.get(a.staffId) ?? [];
+      labels.push(a.section.label);
+      byStaff.set(a.staffId, labels);
+    }
+    for (const [staffId, labels] of byStaff) {
+      void notifyUser(staffId, {
+        title: 'New section assignment',
+        body:
+          labels.length === 1
+            ? `You've been assigned to ${labels[0]} for ${dateStr} (${period}).`
+            : `You've been assigned to ${labels.length} sections for ${dateStr} (${period}): ${labels.join(', ')}.`,
+        url: '/my-shifts',
       });
     }
 

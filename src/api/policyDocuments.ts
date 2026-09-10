@@ -4,6 +4,7 @@
  * grouped by category client-side; the server returns a flat list.
  */
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 export { ApiError };
 
 export interface PolicyDocumentDto {
@@ -32,24 +33,45 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /** GET /api/policy-documents/:locationId */
-export async function fetchPolicyDocuments(locationId: string): Promise<PolicyDocumentDto[]> {
-  const data = await request<{ documents: PolicyDocumentDto[] }>(`/api/policy-documents/${locationId}`);
+export async function fetchPolicyDocuments(token: string, locationId: string): Promise<PolicyDocumentDto[]> {
+  const data = await request<{ documents: PolicyDocumentDto[] }>(`/api/policy-documents/${locationId}`, { headers: withAuth(token) });
   return data.documents;
 }
 
-/** POST /api/policy-documents/upload — multipart: file, locationId, category, title, uploadedById? */
-export async function uploadPolicyDocument(input: { file: File; locationId: string; category: string; title: string; uploadedById?: string }): Promise<PolicyDocumentDto> {
+/** POST /api/policy-documents/upload — multipart: file, category, title, uploadedById? */
+export async function uploadPolicyDocument(token: string, input: { file: File; category: string; title: string; uploadedById?: string }): Promise<PolicyDocumentDto> {
   const form = new FormData();
   form.append('file', input.file);
-  form.append('locationId', input.locationId);
   form.append('category', input.category);
   form.append('title', input.title);
   if (input.uploadedById) form.append('uploadedById', input.uploadedById);
-  const data = await request<{ document: PolicyDocumentDto }>('/api/policy-documents/upload', { method: 'POST', body: form });
+  const data = await request<{ document: PolicyDocumentDto }>('/api/policy-documents/upload', { method: 'POST', headers: withAuth(token), body: form });
   return data.document;
 }
 
 /** DELETE /api/policy-documents/:id */
-export async function deletePolicyDocument(id: string): Promise<void> {
-  await request(`/api/policy-documents/${id}`, { method: 'DELETE' });
+export async function deletePolicyDocument(token: string, id: string): Promise<void> {
+  await request(`/api/policy-documents/${id}`, { method: 'DELETE', headers: withAuth(token) });
+}
+
+/**
+ * Fetches the actual PDF bytes behind `fileUrl` (now session-gated — see
+ * MEMORY.md). This app authenticates via a `Bearer` header, not a cookie, so
+ * a plain `<a href={fileUrl}>` can no longer reach it: a browser's own
+ * anchor-click navigation never attaches an `Authorization` header. Callers
+ * fetch the blob here and open/download it themselves instead.
+ */
+export async function fetchPolicyDocumentFile(token: string, fileUrl: string): Promise<Blob> {
+  const res = await fetch(fileUrl, { headers: withAuth(token) });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // non-JSON error body; keep the generic message
+    }
+    throw new ApiError(message, res.status);
+  }
+  return res.blob();
 }

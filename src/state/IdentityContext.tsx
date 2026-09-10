@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { loadSession, saveSession, clearSession, revokeSession, type StoredSession } from '../api/identity';
 
 interface IdentityValue {
@@ -12,10 +12,10 @@ const IdentityCtx = createContext<IdentityValue | null>(null);
 export function IdentityProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<StoredSession | null>(() => loadSession());
 
-  const login = (next: StoredSession) => {
+  const login = useCallback((next: StoredSession) => {
     saveSession(next);
     setSession(next);
-  };
+  }, []);
   /**
    * Ends the session server-side as well as locally. The revoke call is
    * best-effort and deliberately not awaited: if the network is down we still
@@ -23,18 +23,27 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
    * they asked to leave. The token they're discarding is the only thing that
    * could have used it anyway.
    */
-  const logout = () => {
-    const current = session;
-    clearSession();
-    setSession(null);
-    if (current) {
-      void revokeSession(current.token).catch(() => {
-        // Already signed out locally; a failed revoke is not worth surfacing.
-      });
-    }
-  };
+  const logout = useCallback(() => {
+    setSession((current) => {
+      clearSession();
+      if (current) {
+        void revokeSession(current.token).catch(() => {
+          // Already signed out locally; a failed revoke is not worth surfacing.
+        });
+      }
+      return null;
+    });
+  }, []);
 
-  return <IdentityCtx.Provider value={{ session, login, logout }}>{children}</IdentityCtx.Provider>;
+  // A dozen+ components across the app now call useIdentity() (the sign-in
+  // gate, every manager-dashboard screen, the onboarding wizard) — an
+  // unmemoized value object here would hand every one of them a new
+  // reference on every render of this provider, regardless of whether
+  // `session` actually changed. Matches the memoization AppStateContext.tsx
+  // already does for the same reason.
+  const value = useMemo(() => ({ session, login, logout }), [session, login, logout]);
+
+  return <IdentityCtx.Provider value={value}>{children}</IdentityCtx.Provider>;
 }
 
 export function useIdentity(): IdentityValue {

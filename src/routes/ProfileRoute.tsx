@@ -17,14 +17,6 @@ export default function ProfileContent() {
           Sign out
         </button>
       </section>
-
-      <section className="panel p-5">
-        <p className="eyebrow">Notification preferences</p>
-        <p className="hint mt-2">
-          No real push/SMS notification integration exists in this app yet (consistent with every other "notify"
-          feature here) — this section is a placeholder for when one is added.
-        </p>
-      </section>
     </div>
   );
 }

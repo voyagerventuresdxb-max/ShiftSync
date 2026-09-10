@@ -4,6 +4,7 @@
  * tap-to-pick writing through the same endpoints.
  */
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export { ApiError };
 
@@ -84,34 +85,39 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 /** GET /api/floor-plan/:locationId — current plan image + its sections. */
 export async function fetchFloorPlan(
+  token: string,
   locationId: string,
 ): Promise<{ image: FloorPlanImageDto | null; sections: FloorSectionDto[] }> {
-  return request(`/api/floor-plan/${locationId}`);
+  return request(`/api/floor-plan/${locationId}`, { headers: withAuth(token) });
 }
 
 /** POST /api/floor-plan/upload — upload the venue floor-plan image/PDF. */
 export async function uploadFloorPlanImage(
+  token: string,
   file: File,
   locationId: string,
 ): Promise<{ image: FloorPlanImageDto; sections: FloorSectionDto[] }> {
   const form = new FormData();
   form.append('file', file);
   form.append('locationId', locationId);
-  return request('/api/floor-plan/upload', { method: 'POST', body: form });
+  return request('/api/floor-plan/upload', { method: 'POST', headers: withAuth(token), body: form });
 }
 
 /** POST /api/floor-plan/sections — save a drawn polygon section. */
-export async function createFloorSection(input: {
-  locationId: string;
-  floorPlanImageId: string;
-  label: string;
-  polygon: Point[];
-  paxCapacity: number;
-  notes?: string | null;
-}): Promise<FloorSectionDto> {
+export async function createFloorSection(
+  token: string,
+  input: {
+    locationId: string;
+    floorPlanImageId: string;
+    label: string;
+    polygon: Point[];
+    paxCapacity: number;
+    notes?: string | null;
+  },
+): Promise<FloorSectionDto> {
   const { section } = await request<{ section: FloorSectionDto }>('/api/floor-plan/sections', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(input),
   });
   return section;
@@ -119,76 +125,105 @@ export async function createFloorSection(input: {
 
 /** PATCH /api/floor-plan/sections/:id */
 export async function updateFloorSection(
+  token: string,
   sectionId: string,
   updates: Partial<{ label: string; polygon: Point[]; paxCapacity: number; notes: string | null }>,
 ): Promise<FloorSectionDto> {
   const { section } = await request<{ section: FloorSectionDto }>(`/api/floor-plan/sections/${sectionId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(updates),
   });
   return section;
 }
 
 /** DELETE /api/floor-plan/sections/:id */
-export async function deleteFloorSection(sectionId: string): Promise<void> {
-  await request(`/api/floor-plan/sections/${sectionId}`, { method: 'DELETE' });
+export async function deleteFloorSection(token: string, sectionId: string): Promise<void> {
+  await request(`/api/floor-plan/sections/${sectionId}`, { method: 'DELETE', headers: withAuth(token) });
 }
 
 /** GET /api/floor-plan/:locationId/assignments?date=YYYY-MM-DD&period=AM|PM */
 export async function fetchAssignments(
+  token: string,
   locationId: string,
   date: string,
   period: 'AM' | 'PM',
 ): Promise<{ image: FloorPlanImageDto | null; sections: AssignmentSectionDto[] }> {
-  return request(`/api/floor-plan/${locationId}/assignments?date=${date}&period=${period}`);
+  return request(`/api/floor-plan/${locationId}/assignments?date=${date}&period=${period}`, { headers: withAuth(token) });
+}
+
+export interface MyAssignmentDto {
+  shiftDate: string;
+  period: 'AM' | 'PM';
+  sectionLabel: string;
+}
+
+/**
+ * GET /api/floor-plan/:locationId/my-assignments — one staff member's
+ * PUBLISHED assignments across a date range, for PersonalRota's
+ * "You're covering: [section]" line. DRAFT assignments never come back
+ * from this endpoint.
+ */
+export async function fetchMyAssignments(
+  token: string,
+  locationId: string,
+  staffId: string,
+  startDate: string,
+  endDate: string,
+): Promise<MyAssignmentDto[]> {
+  const params = new URLSearchParams({ staffId, startDate, endDate });
+  const data = await request<{ assignments: MyAssignmentDto[] }>(
+    `/api/floor-plan/${locationId}/my-assignments?${params.toString()}`,
+    { headers: withAuth(token) },
+  );
+  return data.assignments;
 }
 
 /** POST /api/floor-plan/assignments — assign staff to a section for a date+period (drag-drop or tap-to-pick). */
-export async function assignStaff(input: {
-  sectionId: string;
-  staffId: string;
-  shiftDate: string;
-  period: 'AM' | 'PM';
-  dutyLabel?: string | null;
-  createdById?: string;
-}): Promise<AssignmentDto> {
+export async function assignStaff(
+  token: string,
+  input: {
+    sectionId: string;
+    staffId: string;
+    shiftDate: string;
+    period: 'AM' | 'PM';
+    dutyLabel?: string | null;
+  },
+): Promise<AssignmentDto> {
   const { assignment } = await request<{ assignment: AssignmentDto }>('/api/floor-plan/assignments', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify(input),
   });
   return assignment;
 }
 
 /** DELETE /api/floor-plan/assignments/:id — unassign. */
-export async function removeAssignment(assignmentId: string, actorId?: string): Promise<void> {
+export async function removeAssignment(token: string, assignmentId: string): Promise<void> {
   await request(`/api/floor-plan/assignments/${assignmentId}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ actorId: actorId ?? null }),
+    headers: withAuth(token),
   });
 }
 
 /** PATCH /api/floor-plan/assignments/:id/notify — stamp notifiedAt for one assignment. */
-export async function notifyAssignment(assignmentId: string, actorId?: string): Promise<{ notifiedAt: string }> {
+export async function notifyAssignment(token: string, assignmentId: string): Promise<{ notifiedAt: string }> {
   return request(`/api/floor-plan/assignments/${assignmentId}/notify`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ actorId: actorId ?? null }),
+    headers: withAuth(token),
   });
 }
 
 /** POST /api/floor-plan/:locationId/publish — publishes AND stamps notifiedAt for the given date+period. */
 export async function publishAssignments(
+  token: string,
   locationId: string,
   shiftDate: string,
   period: 'AM' | 'PM',
-  actorId?: string,
 ): Promise<{ publishedCount: number }> {
   return request(`/api/floor-plan/${locationId}/publish`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ shiftDate, period, actorId: actorId ?? null }),
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
+    body: JSON.stringify({ shiftDate, period }),
   });
 }
