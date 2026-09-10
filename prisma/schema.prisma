@@ -329,16 +329,17 @@ enum VoiceInteractionOutcome {
 }
 
 model VoiceInteractionLog {
-  id             String                  @id @default(cuid())
-  locationId     String                  @map("location_id")
-  actorId        String                  @map("actor_id")
-  transcript     String                  @db.Text
-  resolvedIntent String                  @map("resolved_intent")
-  confidence     Float?
-  outcome        VoiceInteractionOutcome
-  declineReason  String?                 @map("decline_reason") @db.Text
-  createdAt      DateTime                @default(now()) @map("created_at")
-  updatedAt      DateTime                @updatedAt @map("updated_at")
+  id                   String                  @id @default(cuid())
+  locationId           String                  @map("location_id")
+  actorId              String                  @map("actor_id")
+  transcript           String                  @db.Text
+  resolvedIntent       String                  @map("resolved_intent")
+  confidence           Float?
+  hasAdditionalRequest Boolean                 @default(false) @map("has_additional_request")
+  outcome              VoiceInteractionOutcome
+  declineReason        String?                 @map("decline_reason") @db.Text
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
 
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
   actor    User     @relation(fields: [actorId], references: [id], onDelete: Cascade)

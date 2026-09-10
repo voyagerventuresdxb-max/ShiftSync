@@ -5,7 +5,7 @@ import { requireSession } from '../middleware/requireSession.js';
 import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
-import { logParsedInteraction } from '../voice/interactionLog.js';
+import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
@@ -198,7 +198,12 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
     } catch (logErr) {
       console.error('[voice.parseIntent] failed to write interaction log', logErr);
     }
-    return res.status(200).json({ transcript, intent: resolution.response, voiceLogId });
+    return res.status(200).json({
+      transcript,
+      intent: resolution.response,
+      voiceLogId,
+      hasAdditionalRequest: shouldPromptForAdditionalRequest(resolution),
+    });
   } catch (err) {
     if (err instanceof VoiceIntentError) {
       console.error('[voice.parseIntent] unavailable', err);

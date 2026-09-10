@@ -1377,3 +1377,142 @@ test('POST /api/voice/execute: QUERY_MY_SCHEDULE gets a real 400 (fail-closed â€
     await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
   }
 });
+
+test('POST /api/voice/parse-intent: a mutating+mutating compound transcript resolves only the primary intent and flags hasAdditionalRequest', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
+  // ASSIGN_SECTION needs a real FloorSection to resolve "the bar section" against, and
+  // FloorSection.floorPlanImageId/polygon/paxCapacity are all required, non-nullable
+  // columns (see the existing ASSIGN_SECTION fixture above at line ~1136) â€” so a valid
+  // fixture here also needs a seeded FloorPlanImage for this location.
+  const floorPlanImage = await prisma.floorPlanImage.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && role && floorPlanImage, 'seed data (location + role + a floor plan image) must exist to run this test');
+  if (!process.env.GEMINI_API_KEY) {
+    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
+    return;
+  }
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task9-test__ compound manager', systemRole: 'MANAGER' },
+  });
+  const ahmed = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task9-test__ Ahmed', systemRole: 'STAFF' },
+  });
+  const layla = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task9-test__ Layla', systemRole: 'STAFF' },
+  });
+  const section = await prisma.floorSection.create({
+    data: { locationId: location!.id, floorPlanImageId: floorPlanImage!.id, label: '__task9-test__ Bar', polygon: [], paxCapacity: 6 },
+  });
+
+  let voiceLogId = '';
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'Move Ahmed to the bar section this Friday afternoon, and also give Layla a Bartender shift Saturday at 6pm',
+        }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { intent: { intent: string }; voiceLogId: string; hasAdditionalRequest: boolean };
+      assert.ok(['ASSIGN_SECTION', 'CREATE_SHIFT'].includes(body.intent.intent), `expected one of the two spoken intents, got ${body.intent.intent}`);
+      assert.equal(body.hasAdditionalRequest, true, 'a genuinely compound utterance must set hasAdditionalRequest');
+      assert.ok(body.voiceLogId);
+      voiceLogId = body.voiceLogId;
+    });
+
+    const row = await prisma.voiceInteractionLog.findUnique({ where: { id: voiceLogId } });
+    assert.equal(row?.hasAdditionalRequest, true, 'the logged row must record the raw signal regardless of what was displayed');
+  } finally {
+    if (voiceLogId) await prisma.voiceInteractionLog.delete({ where: { id: voiceLogId } }).catch(() => {});
+    await prisma.floorSection.delete({ where: { id: section.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: ahmed.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: layla.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/parse-intent: a read-only+mutating compound transcript flags hasAdditionalRequest on the QUERY_MY_SCHEDULE answer-only path', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  const floorPlanImage = await prisma.floorPlanImage.findFirst({ where: { locationId: location!.id } });
+  assert.ok(location && floorPlanImage, 'seed data (location + a floor plan image) must exist to run this test');
+  if (!process.env.GEMINI_API_KEY) {
+    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
+    return;
+  }
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task9-test__ compound query manager', systemRole: 'MANAGER' },
+  });
+  const ahmed = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task9-test__ query Ahmed', systemRole: 'STAFF' },
+  });
+  const section = await prisma.floorSection.create({
+    data: { locationId: location!.id, floorPlanImageId: floorPlanImage!.id, label: '__task9-test__ query Bar', polygon: [], paxCapacity: 6 },
+  });
+
+  let voiceLogId = '';
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: "What's my schedule this week, and also move Ahmed to the bar Friday afternoon",
+        }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { intent: { intent: string }; voiceLogId: string; hasAdditionalRequest: boolean };
+      assert.ok(['QUERY_MY_SCHEDULE', 'ASSIGN_SECTION'].includes(body.intent.intent), `expected one of the two spoken intents, got ${body.intent.intent}`);
+      assert.equal(body.hasAdditionalRequest, true, 'a genuinely compound utterance must set hasAdditionalRequest even on the answer-only path');
+      voiceLogId = body.voiceLogId;
+    });
+
+    const row = await prisma.voiceInteractionLog.findUnique({ where: { id: voiceLogId } });
+    assert.equal(row?.hasAdditionalRequest, true);
+  } finally {
+    if (voiceLogId) await prisma.voiceInteractionLog.delete({ where: { id: voiceLogId } }).catch(() => {});
+    await prisma.floorSection.delete({ where: { id: section.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: ahmed.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/parse-intent: a plain single-request transcript never flags hasAdditionalRequest', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+  if (!process.env.GEMINI_API_KEY) {
+    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
+    return;
+  }
+
+  const staffer = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task9-test__ single-request staffer', systemRole: 'STAFF' },
+  });
+
+  let voiceLogId = '';
+  try {
+    const token = await sessionFor(staffer.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ transcript: 'Mark me unavailable this Friday' }),
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { hasAdditionalRequest: boolean; voiceLogId: string };
+      assert.equal(body.hasAdditionalRequest, false, 'an ordinary single-request command must not flag hasAdditionalRequest');
+      voiceLogId = body.voiceLogId;
+    });
+
+    const row = await prisma.voiceInteractionLog.findUnique({ where: { id: voiceLogId } });
+    assert.equal(row?.hasAdditionalRequest, false);
+  } finally {
+    if (voiceLogId) await prisma.voiceInteractionLog.delete({ where: { id: voiceLogId } }).catch(() => {});
+    await prisma.user.delete({ where: { id: staffer.id } }).catch(() => {});
+  }
+});

@@ -133,6 +133,8 @@ export interface VoiceIntentResolution {
   response: ParsedIntent;
   /** What the model actually returned, uncoerced — always logged as-is. */
   attempted: ParsedIntent;
+  /** What the model reported for hasAdditionalRequest, uncoerced — always logged as-is (see interactionLog.ts), regardless of what outcome/response the caller ends up seeing. */
+  hasAdditionalRequest: boolean;
 }
 
 export async function parseVoiceIntent(
@@ -160,12 +162,16 @@ export async function parseVoiceIntent(
     });
     const raw = JSON.parse(response.text ?? '{}');
     const attempted = normalizeParsedIntent(raw);
+    // Computed independently of confidence/the gate below — this line must
+    // never move inside either branch of that gate.
+    const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
     if (attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD) {
-      return { response: attempted, attempted };
+      return { response: attempted, attempted, hasAdditionalRequest };
     }
     return {
       response: { intent: 'UNRECOGNIZED', reason: `I understood this as "${attempted.summary}" but wasn't confident enough to act on it without you rephrasing.`, summary: 'Could not confidently resolve this command.' },
       attempted,
+      hasAdditionalRequest,
     };
   } catch (err) {
     if (err instanceof ApiError) {
@@ -174,6 +180,14 @@ export async function parseVoiceIntent(
     if (err instanceof VoiceIntentError) throw err;
     throw new VoiceIntentError('Unexpected error while parsing the voice command.', err);
   }
+}
+
+/**
+ * A missing/non-boolean value fails CLOSED to false — an absent flag must
+ * never fabricate a "there's more" prompt the model didn't actually make.
+ */
+export function normalizeHasAdditionalRequest(raw: Record<string, unknown>): boolean {
+  return typeof raw.hasAdditionalRequest === 'boolean' ? raw.hasAdditionalRequest : false;
 }
 
 /**

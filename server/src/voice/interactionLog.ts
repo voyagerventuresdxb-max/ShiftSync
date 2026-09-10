@@ -16,6 +16,21 @@ export function outcomeAtParseTime(resolution: VoiceIntentResolution): VoiceInte
 }
 
 /**
+ * Whether the client-facing response should carry the "there's more, go
+ * again" signal. False whenever the primary intent's own response ended up
+ * UNRECOGNIZED — whether the model genuinely didn't understand it, or the
+ * confidence gate coerced it there — since compounding a "didn't catch
+ * that" message with a "there's more" prompt in the same turn would read as
+ * two separate problems instead of one. The raw hasAdditionalRequest signal
+ * is still always logged via logParsedInteraction below, regardless of this
+ * function's result — this only gates what the CALLER sees, not what gets
+ * recorded.
+ */
+export function shouldPromptForAdditionalRequest(resolution: VoiceIntentResolution): boolean {
+  return resolution.hasAdditionalRequest && resolution.response.intent !== 'UNRECOGNIZED';
+}
+
+/**
  * Writes one row per /parse-intent call — every real attempt, regardless
  * of outcome. Called AFTER parseVoiceIntent resolves successfully (a
  * VoiceIntentError from the Gemini call itself is never logged here — see
@@ -37,6 +52,7 @@ export async function logParsedInteraction(
       transcript,
       resolvedIntent: attempted.intent,
       confidence,
+      hasAdditionalRequest: resolution.hasAdditionalRequest,
       outcome: outcomeAtParseTime(resolution),
     },
     select: { id: true },
