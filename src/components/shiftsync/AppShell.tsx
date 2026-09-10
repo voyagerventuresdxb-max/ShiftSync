@@ -134,7 +134,14 @@ export function AppShell() {
   // and a state value exist.
   const [voiceStarting, setVoiceStarting] = useState(false);
   const [voiceProcessing, setVoiceProcessing] = useState(false);
-  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null } | null>(null);
+  const [voiceResult, setVoiceResult] = useState<{
+    transcript: string;
+    intent: ParsedIntent;
+    voiceLogId: string | null;
+    hasAdditionalRequest: boolean;
+    /** True once the primary MUTATING intent has actually executed — the sheet stays open in its follow-up state instead of closing. Irrelevant for QUERY_MY_SCHEDULE, which has no execute step. */
+    executed?: boolean;
+  } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
@@ -185,8 +192,8 @@ export function AppShell() {
       setVoiceProcessing(true);
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
-        const { intent, voiceLogId } = await parseVoiceIntent(session.token, transcript);
-        setVoiceResult({ transcript, intent, voiceLogId });
+        const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
+        setVoiceResult({ transcript, intent, voiceLogId, hasAdditionalRequest });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
       } finally {
@@ -281,12 +288,21 @@ export function AppShell() {
     setVoiceExecuting(true);
     try {
       await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
-      setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
+      if (voiceResult.hasAdditionalRequest) {
+        // Keep the sheet open, transitioned into its follow-up state
+        // (VoiceCommandSheet's `executed` prop) — the sheet's own "Done: …"
+        // copy plus the follow-up prompt already communicate completion, so
+        // no separate success banner fires for this path.
+        setVoiceResult({ ...voiceResult, executed: true });
+      } else {
+        setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
+        setVoiceResult(null);
+      }
     } catch (err) {
       setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not execute the voice command.' });
+      setVoiceResult(null);
     } finally {
       setVoiceExecuting(false);
-      setVoiceResult(null);
     }
   }, [voiceResult, session]);
 
@@ -360,6 +376,8 @@ export function AppShell() {
       <VoiceCommandSheet
         intent={voiceResult?.intent ?? null}
         transcript={voiceResult?.transcript ?? ''}
+        hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
+        executed={voiceResult?.executed ?? false}
         onConfirm={handleVoiceConfirm}
         onCancel={handleVoiceCancel}
         executing={voiceExecuting}
