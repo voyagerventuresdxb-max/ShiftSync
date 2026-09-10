@@ -54,6 +54,12 @@ function schemaFor(intents: readonly string[]) {
       period: { type: Type.STRING, enum: ['AM', 'PM'], nullable: true, description: 'For ASSIGN_SECTION' },
       dutyLabel: { type: Type.STRING, nullable: true, description: 'For ASSIGN_SECTION — optional free-text duty note' },
       confidence: { type: Type.NUMBER, nullable: true, description: 'How certain you are (0 to 1) that every id/date/time above is correct and unambiguous. Required for every intent except UNRECOGNIZED.' },
+      hasAdditionalRequest: {
+        type: Type.BOOLEAN,
+        nullable: true,
+        description:
+          'True if the transcript contains more than one distinct actionable request beyond the one captured in `intent` — set this independently of how confident you are about `intent`/`confidence`. Examples of two requests in one utterance: "move Ahmed to bar and create a shift for Layla Saturday", "what is my schedule and also move Ahmed to the bar Friday PM". A single request with extra detail (a reason, a time range) is NOT two requests.',
+      },
       summary: { type: Type.STRING, description: "One plain-English sentence describing exactly what will happen, for the confirm step — except for QUERY_MY_SCHEDULE, where this is the direct answer to the caller's question instead." },
       unrecognizedReason: { type: Type.STRING, nullable: true, description: 'Only for intent=UNRECOGNIZED — why this could not be resolved' },
     },
