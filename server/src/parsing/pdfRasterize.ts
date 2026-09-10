@@ -1,17 +1,13 @@
 /**
- * PDF page rasterization — renders a PDF page to a real PNG image, for the
- * Ollama vision fallback path only.
+ * PDF page rasterization — renders a PDF page to a real PNG image.
  *
- * Root cause this fixes: `parseVisionOllama.ts` base64-encodes whatever
- * buffer it's handed and sends it to Ollama's vision API assuming it's
- * already an image. That's true for a direct image upload (isImage(req.file)
- * in schedules.ts), but false for a scanned/no-text-layer PDF that reaches
- * the Ollama fallback (e.g. after Docling also finds no table) — there the
- * buffer is still the original PDF file. Ollama's image loader can't decode
- * PDF container bytes as pixels and rejects them with "Failed to load image
- * or audio file" — confirmed by reproducing the exact failure directly
- * against Ollama's API outside this app, and by confirming a real rasterized
- * PNG of the same page is accepted instead.
+ * Used by floorPlan.ts (a PDF floor-plan upload is rasterized to a PNG for
+ * display). NOT used by the roster-upload vision-fallback path any more:
+ * that path now sends PDF bytes directly to the hosted Gemini/Vertex AI
+ * vision model (see parseVision.ts), which accepts PDF as a native input
+ * type — no rasterization step needed. It used to be required for the old
+ * local Ollama vision fallback (removed), whose image loader couldn't
+ * decode a raw PDF container and needed real rendered pixels instead.
  *
  * Implementation note (why this shells out to Python instead of staying
  * pure Node): the first attempt used pdfjs-dist (already a dependency) with
@@ -25,9 +21,9 @@
  * already-installed `pypdfium2` instead, invoked as a short-lived
  * subprocess per call (not routed through the sidecar's HTTP server —
  * rasterization has no model weights to keep warm, unlike Docling's table
- * extraction, so there's no benefit to that route, and it would make the
- * Ollama fallback depend on the sidecar's uptime, an unwanted new coupling
- * between two tiers that are supposed to be independent).
+ * extraction, so there's no benefit to that route, and it would make this
+ * depend on the sidecar's uptime, an unwanted new coupling between two
+ * tiers that are supposed to be independent).
  */
 import { spawn } from 'node:child_process';
 import { writeFile, unlink } from 'node:fs/promises';
