@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/engine/*.test.ts \"src/components/**/*.test.ts\"",
-    "test:server": "node scripts/with-branch-schema.mjs \"node --import tsx --test 'server/src/**/*.test.ts'\"",
+    "test:server": "node scripts/with-branch-schema.mjs --connection-limit=1 \"node --import tsx --test 'server/src/**/*.test.ts'\"",
     "test:e2e": "playwright test",
     "swarm": "cross-env NODE_OPTIONS=--max-old-space-size=8192 claude-flow swarm",
     "sparc": "cross-env NODE_OPTIONS=--max-old-space-size=8192 claude-flow sparc",

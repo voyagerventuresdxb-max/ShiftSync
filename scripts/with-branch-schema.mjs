@@ -58,9 +58,25 @@ export function schemaNameFor(branch) {
   return base.slice(0, 63 - 1 - hash.length) + '_' + hash;
 }
 
-export function withSchema(rawUrl, schema) {
+export function withSchema(rawUrl, schema, connectionLimit) {
   const u = new URL(rawUrl);
   u.searchParams.set('schema', schema);
+  // Supabase's session-mode pooler on this project caps at 15 real backend
+  // connections, and Prisma's per-client default pool defaults to
+  // `num_cpus * 2 + 1` — one test file's PrismaClient alone can exceed that
+  // on a many-core machine. This repo's test suite constructs 13+ separate
+  // PrismaClient instances (one per test file, none of them disconnect
+  // until the whole run ends), so left uncapped a full `test:server` run
+  // reliably exhausts the pool partway through with real connection errors,
+  // not assertion failures — this predates schema-per-branch and isn't
+  // caused by it, but capping it here is what makes "run the full suite to
+  // confirm nothing broke" actually reliable. A leading --connection-limit=N
+  // flag lets a specific npm script opt into a tight cap (test:server
+  // does); everything else (server:dev, prisma:migrate, ...) is left at
+  // Prisma's own default by simply not passing the flag.
+  if (connectionLimit) {
+    u.searchParams.set('connection_limit', connectionLimit);
+  }
   return u.toString();
 }
 
@@ -71,15 +87,21 @@ function main() {
     process.exit(1);
   }
 
+  const rest = process.argv.slice(2);
+  let connectionLimit;
+  if (rest[0]?.startsWith('--connection-limit=')) {
+    connectionLimit = rest.shift().split('=')[1];
+  }
+
   const branch = currentBranch();
   const schema = schemaNameFor(branch);
-  const scopedUrl = withSchema(baseUrl, schema);
+  const scopedUrl = withSchema(baseUrl, schema, connectionLimit);
 
-  console.error(`[with-branch-schema] branch "${branch}" -> schema "${schema}"`);
+  console.error(`[with-branch-schema] branch "${branch}" -> schema "${schema}"${connectionLimit ? ` (connection_limit=${connectionLimit})` : ''}`);
 
-  const command = process.argv.slice(2).join(' ');
+  const command = rest.join(' ');
   if (!command) {
-    console.error('[with-branch-schema] usage: node scripts/with-branch-schema.mjs <command...>');
+    console.error('[with-branch-schema] usage: node scripts/with-branch-schema.mjs [--connection-limit=N] <command...>');
     process.exit(1);
   }
 
