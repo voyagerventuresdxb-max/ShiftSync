@@ -72,7 +72,10 @@ export async function transcribeAudio(token: string, audioBlob: Blob): Promise<{
 }
 
 /** POST /api/voice/parse-intent — body: { transcript }. Never mutates anything — the "propose" half of confirm-before-execute. */
-export async function parseVoiceIntent(token: string, transcript: string): Promise<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null }> {
+export async function parseVoiceIntent(
+  token: string,
+  transcript: string,
+): Promise<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null; hasAdditionalRequest: boolean }> {
   return request('/api/voice/parse-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
