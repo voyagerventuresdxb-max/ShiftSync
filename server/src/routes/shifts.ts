@@ -1,10 +1,12 @@
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
+import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
 
 export const shiftsRouter = Router();
 
@@ -42,11 +44,6 @@ function shiftToDto(
     updatedAt: s.updatedAt.toISOString(),
   };
 }
-
-const SHIFT_INCLUDE = {
-  assignee: { select: { id: true, fullName: true } },
-  role: { select: { id: true, name: true } },
-} as const;
 
 async function venueTimezone(locationId: string): Promise<string> {
   const location = await prisma.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
@@ -140,10 +137,10 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     const created = await withAuditedTransaction(
       prisma,
       (tx) =>
-        tx.shift.create({
-          data: { locationId, roleId, userId, createdById, date: new Date(`${date}T00:00:00.000Z`), startTime, endTime, breakMinutes, managerNotes: briefingNote, sidework, status: 'DRAFT' },
-          include: SHIFT_INCLUDE,
-        }),
+        createShift(
+          { locationId, roleId, userId, createdById, date: new Date(`${date}T00:00:00.000Z`), startTime, endTime, breakMinutes, managerNotes: briefingNote, sidework, status: 'DRAFT' } as unknown as Parameters<typeof createShift>[0],
+          tx,
+        ),
       (shift) => ({ locationId, actorId: createdById, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id }),
     );
     return res.status(201).json({ shift: shiftToDto(created, timezone) });
@@ -206,7 +203,7 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
         : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
     const updated = await withAuditedTransaction(
       prisma,
-      (tx) => tx.shift.update({ where: { id }, data, include: SHIFT_INCLUDE }),
+      (tx) => updateShift(id, data as Prisma.ShiftUpdateInput, tx),
       () => ({ locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id }),
     );
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });

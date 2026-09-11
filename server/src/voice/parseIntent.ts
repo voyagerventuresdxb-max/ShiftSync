@@ -24,7 +24,17 @@ export class VoiceIntentError extends Error {
 
 let client: GoogleGenAI | null = null;
 
-async function buildContext(user: { id: string; systemRole: SystemRole; fullName: string; locationId: string }): Promise<PromptContext> {
+/**
+ * Below this, a real (non-UNRECOGNIZED) intent is coerced to an
+ * UNRECOGNIZED-shaped response before it reaches the client — the model
+ * attempted a match but wasn't confident enough to execute unattended.
+ * The ORIGINAL attempted intent/confidence is still what gets logged
+ * (see routes/voice.ts's /parse-intent handler + interactionLog.ts) —
+ * only the client-facing response is coerced.
+ */
+export const CONFIDENCE_THRESHOLD = 0.6;
+
+export async function buildContext(user: { id: string; systemRole: SystemRole; fullName: string; locationId: string }): Promise<PromptContext> {
   // Everything the model is told about "now" must be in the VENUE's local
   // zone, not UTC. A Dubai (UTC+4) venue's 00:00-04:00 — exactly when a
   // closing shift ends — is still the previous UTC day, so a UTC "today"
@@ -82,6 +92,29 @@ async function buildContext(user: { id: string; systemRole: SystemRole; fullName
       take: 20,
     });
     ctx.pendingJoinRequests = pendingJoins.map((r) => ({ id: r.id, fullName: r.fullName, phone: r.phone }));
+
+    const roles = await prisma.role.findMany({ where: { locationId: user.locationId }, select: { id: true, name: true } });
+    ctx.roles = roles;
+
+    const sections = await prisma.floorSection.findMany({ where: { locationId: user.locationId }, select: { id: true, label: true } });
+    ctx.floorSections = sections;
+
+    const weekEnd = new Date(startOfToday);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
+    const venueShifts = await prisma.shift.findMany({
+      where: { locationId: user.locationId, date: { gte: startOfToday, lt: weekEnd } },
+      include: { role: { select: { name: true } }, assignee: { select: { fullName: true } } },
+      orderBy: { date: 'asc' },
+      take: 200,
+    });
+    ctx.weekShifts = venueShifts.map((s) => ({
+      id: s.id,
+      roleName: s.role.name,
+      date: s.date.toISOString().slice(0, 10),
+      start: formatVenueTime(s.startTime, timezone),
+      end: formatVenueTime(s.endTime, timezone),
+      assigneeName: s.assignee?.fullName ?? null,
+    }));
   }
 
   return ctx;
@@ -95,10 +128,19 @@ async function buildContext(user: { id: string; systemRole: SystemRole; fullName
  * (defense-in-depth) — but /execute must still re-check role independently,
  * since this function's output is not itself a trust boundary.
  */
+export interface VoiceIntentResolution {
+  /** What the client should see/act on — coerced to UNRECOGNIZED if below CONFIDENCE_THRESHOLD. */
+  response: ParsedIntent;
+  /** What the model actually returned, uncoerced — always logged as-is. */
+  attempted: ParsedIntent;
+  /** What the model reported for hasAdditionalRequest, uncoerced — always logged as-is (see interactionLog.ts), regardless of what outcome/response the caller ends up seeing. */
+  hasAdditionalRequest: boolean;
+}
+
 export async function parseVoiceIntent(
   transcript: string,
   user: { id: string; systemRole: SystemRole; fullName: string; locationId: string },
-): Promise<ParsedIntent> {
+): Promise<VoiceIntentResolution> {
   if (!process.env.GEMINI_API_KEY) {
     throw new VoiceIntentError('GEMINI_API_KEY is not configured on the server — voice intent parsing is unavailable.');
   }
@@ -119,7 +161,18 @@ export async function parseVoiceIntent(
       },
     });
     const raw = JSON.parse(response.text ?? '{}');
-    return normalizeParsedIntent(raw);
+    const attempted = normalizeParsedIntent(raw);
+    // Computed independently of confidence/the gate below — this line must
+    // never move inside either branch of that gate.
+    const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
+    if (attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD) {
+      return { response: attempted, attempted, hasAdditionalRequest };
+    }
+    return {
+      response: { intent: 'UNRECOGNIZED', reason: `I understood this as "${attempted.summary}" but wasn't confident enough to act on it without you rephrasing.`, summary: 'Could not confidently resolve this command.' },
+      attempted,
+      hasAdditionalRequest,
+    };
   } catch (err) {
     if (err instanceof ApiError) {
       throw new VoiceIntentError(`Intent parsing failed (${err.status ?? 'unknown'}): ${err.message}`, err);
@@ -127,6 +180,14 @@ export async function parseVoiceIntent(
     if (err instanceof VoiceIntentError) throw err;
     throw new VoiceIntentError('Unexpected error while parsing the voice command.', err);
   }
+}
+
+/**
+ * A missing/non-boolean value fails CLOSED to false — an absent flag must
+ * never fabricate a "there's more" prompt the model didn't actually make.
+ */
+export function normalizeHasAdditionalRequest(raw: Record<string, unknown>): boolean {
+  return typeof raw.hasAdditionalRequest === 'boolean' ? raw.hasAdditionalRequest : false;
 }
 
 /**
@@ -139,11 +200,15 @@ export async function parseVoiceIntent(
 function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
   const intent = typeof raw.intent === 'string' ? raw.intent : 'UNRECOGNIZED';
   const summary = typeof raw.summary === 'string' ? raw.summary : 'Could not determine what to do.';
+  // A missing/non-numeric/out-of-range confidence fails CLOSED to 0 — an
+  // absent score must never be treated as "the model was certain."
+  const rawConfidence = raw.confidence;
+  const confidence = typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : 0;
 
   switch (intent) {
     case 'MARK_AVAILABILITY':
       if (typeof raw.date === 'string' && (raw.availabilityType === 'UNAVAILABLE' || raw.availabilityType === 'PREFERRED_OFF')) {
-        return { intent: 'MARK_AVAILABILITY', date: raw.date, type: raw.availabilityType, summary };
+        return { intent: 'MARK_AVAILABILITY', date: raw.date, type: raw.availabilityType, confidence, summary };
       }
       break;
     case 'REQUEST_SWAP':
@@ -154,6 +219,7 @@ function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
           targetUserId: raw.targetUserId,
           targetUserName: typeof raw.targetUserName === 'string' ? raw.targetUserName : '',
           reason: typeof raw.reason === 'string' ? raw.reason : null,
+          confidence,
           summary,
         };
       }
@@ -161,13 +227,58 @@ function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
     case 'APPROVE_SWAP':
     case 'DECLINE_SWAP':
       if (typeof raw.swapRequestId === 'string') {
-        return { intent, swapRequestId: raw.swapRequestId, summary };
+        return { intent, swapRequestId: raw.swapRequestId, confidence, summary };
       }
       break;
     case 'APPROVE_JOIN':
     case 'DECLINE_JOIN':
       if (typeof raw.joinRequestId === 'string') {
-        return { intent, joinRequestId: raw.joinRequestId, summary };
+        return { intent, joinRequestId: raw.joinRequestId, confidence, summary };
+      }
+      break;
+    case 'CREATE_SHIFT':
+      if (typeof raw.roleId === 'string' && typeof raw.date === 'string' && typeof raw.start === 'string' && typeof raw.end === 'string') {
+        return {
+          intent: 'CREATE_SHIFT',
+          roleId: raw.roleId,
+          date: raw.date,
+          start: raw.start,
+          end: raw.end,
+          userId: typeof raw.userId === 'string' ? raw.userId : null,
+          confidence,
+          summary,
+        };
+      }
+      break;
+    case 'EDIT_SHIFT':
+      if (typeof raw.shiftId === 'string') {
+        return {
+          intent: 'EDIT_SHIFT',
+          shiftId: raw.shiftId,
+          roleId: typeof raw.roleId === 'string' ? raw.roleId : undefined,
+          date: typeof raw.date === 'string' ? raw.date : undefined,
+          start: typeof raw.start === 'string' ? raw.start : undefined,
+          end: typeof raw.end === 'string' ? raw.end : undefined,
+          userId: typeof raw.userId === 'string' || raw.userId === null ? raw.userId : undefined,
+          confidence,
+          summary,
+        };
+      }
+      break;
+    case 'QUERY_MY_SCHEDULE':
+      return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
+    case 'ASSIGN_SECTION':
+      if (typeof raw.sectionId === 'string' && typeof raw.staffId === 'string' && typeof raw.shiftDate === 'string' && (raw.period === 'AM' || raw.period === 'PM')) {
+        return {
+          intent: 'ASSIGN_SECTION',
+          sectionId: raw.sectionId,
+          staffId: raw.staffId,
+          shiftDate: raw.shiftDate,
+          period: raw.period,
+          dutyLabel: typeof raw.dutyLabel === 'string' ? raw.dutyLabel : null,
+          confidence,
+          summary,
+        };
       }
       break;
   }

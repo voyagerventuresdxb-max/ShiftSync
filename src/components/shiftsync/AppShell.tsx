@@ -56,9 +56,13 @@ const RECORDER_MIME_CANDIDATES = [
  * MediaRecorder, so a tap-and-forget would otherwise record until the tab
  * closed — with the only backstop being multer's 10MB upload cap, which
  * surfaces as a confusing generic "File too large" AFTER the whole
- * recording is discarded. 45s is far beyond any real spoken command.
+ * recording is discarded.
+ *
+ * 10s hard cap — matches the product requirement that voice commands stay
+ * short and specific; MediaRecorder otherwise records until the tab is
+ * closed or stop() is called.
  */
-const MAX_RECORDING_MS = 45_000;
+const MAX_RECORDING_MS = 10_000;
 
 function pickRecorderMimeType(): string {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return '';
@@ -130,7 +134,14 @@ export function AppShell() {
   // and a state value exist.
   const [voiceStarting, setVoiceStarting] = useState(false);
   const [voiceProcessing, setVoiceProcessing] = useState(false);
-  const [voiceResult, setVoiceResult] = useState<{ transcript: string; intent: ParsedIntent } | null>(null);
+  const [voiceResult, setVoiceResult] = useState<{
+    transcript: string;
+    intent: ParsedIntent;
+    voiceLogId: string | null;
+    hasAdditionalRequest: boolean;
+    /** True once the primary MUTATING intent has actually executed — the sheet stays open in its follow-up state instead of closing. Irrelevant for QUERY_MY_SCHEDULE, which has no execute step. */
+    executed?: boolean;
+  } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
@@ -181,8 +192,8 @@ export function AppShell() {
       setVoiceProcessing(true);
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
-        const { intent } = await parseVoiceIntent(session.token, transcript);
-        setVoiceResult({ transcript, intent });
+        const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
+        setVoiceResult({ transcript, intent, voiceLogId, hasAdditionalRequest });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
       } finally {
@@ -216,7 +227,9 @@ export function AppShell() {
     voiceStartingRef.current = true;
     setVoiceStarting(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
+      });
       const mimeType = pickRecorderMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
@@ -274,13 +287,22 @@ export function AppShell() {
     }
     setVoiceExecuting(true);
     try {
-      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent);
-      setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
+      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
+      if (voiceResult.hasAdditionalRequest) {
+        // Keep the sheet open, transitioned into its follow-up state
+        // (VoiceCommandSheet's `executed` prop) — the sheet's own "Done: …"
+        // copy plus the follow-up prompt already communicate completion, so
+        // no separate success banner fires for this path.
+        setVoiceResult({ ...voiceResult, executed: true });
+      } else {
+        setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
+        setVoiceResult(null);
+      }
     } catch (err) {
       setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not execute the voice command.' });
+      setVoiceResult(null);
     } finally {
       setVoiceExecuting(false);
-      setVoiceResult(null);
     }
   }, [voiceResult, session]);
 
@@ -354,6 +376,8 @@ export function AppShell() {
       <VoiceCommandSheet
         intent={voiceResult?.intent ?? null}
         transcript={voiceResult?.transcript ?? ''}
+        hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
+        executed={voiceResult?.executed ?? false}
         onConfirm={handleVoiceConfirm}
         onCancel={handleVoiceCancel}
         executing={voiceExecuting}
