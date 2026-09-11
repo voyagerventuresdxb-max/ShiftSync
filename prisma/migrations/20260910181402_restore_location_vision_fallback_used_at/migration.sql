@@ -1,0 +1,12 @@
+-- Restores "locations"."last_vision_fallback_used_at", which was dropped
+-- out-of-band by an unrelated migration applied from a different branch's
+-- worktree against this same shared database (that branch's schema never
+-- declared this column, so `prisma migrate dev` there concluded it should
+-- not exist and dropped it here too, since all worktrees share DATABASE_URL).
+--
+-- This branch's schema.prisma has always declared this field
+-- (Location.lastVisionFallbackUsedAt) — this migration only re-syncs the
+-- live table to match it. Any timestamps that existed before the erroneous
+-- drop are not recoverable this way; the affected locations' vision-fallback
+-- rate-limit window simply resets to "never used" once this lands.
+ALTER TABLE "locations" ADD COLUMN IF NOT EXISTS "last_vision_fallback_used_at" TIMESTAMP(3);

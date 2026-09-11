@@ -477,6 +477,30 @@ body {
 .anomaly-block ul {
   margin: 0.4rem 0 0;
   padding-left: 1.25rem;
+  list-style: none;
+}
+
+.anomaly-block li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+}
+
+.anomaly-block li.anomaly-reviewed {
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.6;
+}
+
+.preview-summary-line {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.preview-summary-line strong {
+  color: var(--text);
 }
 
 .chip {

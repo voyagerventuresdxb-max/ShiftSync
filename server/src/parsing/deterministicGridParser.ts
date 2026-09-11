@@ -25,6 +25,24 @@ import { parseDateCell, resolveDayMonthDate, isOvernight } from './normalize.js'
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
+/**
+ * Thrown when a day-grid shape WAS recognized (header row + day columns
+ * found) but the row-count sanity check below determined real shift data
+ * was dropped during classification — e.g. a staff row misread as a
+ * section header. Deliberately distinct from returning a normal (possibly
+ * empty) ParsedVisionResult: an empty/low result for a shape that plainly
+ * doesn't match a day-grid roster at all is a legitimate "try another
+ * path" signal for callers, but this is a confirmed data-loss condition on
+ * a shape we DID recognize, and must surface as a loud, visible failure
+ * (see schedules.ts) rather than a silent 200-success with missing rows.
+ */
+export class RosterExtractionAnomalyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RosterExtractionAnomalyError';
+  }
+}
+
 const DAY_OFFSET: Record<string, number> = {
   sunday: 0, sun: 0,
   monday: 1, mon: 1,
@@ -44,6 +62,18 @@ const LEAVE_CODES: Record<string, LeaveRecord['category']> = {
   ph: 'public_holiday', 'public holiday': 'public_holiday', holiday: 'public_holiday',
   request: 'day_off', closing: 'day_off',
 };
+
+/**
+ * Small, closed vocabulary of tabular summary/footer captions ("Total
+ * hours: 09:00-17:00") that must never become a staff row even though a
+ * neighbouring cell can coincidentally look shift-shaped (e.g. a literal
+ * time range printed as the total). Unlike the open-ended, venue-specific
+ * section-header vocabulary problem, this set is small and universal
+ * across spreadsheet conventions — it can't collide with a real person's
+ * name or a real section header, so a fixed list here doesn't reintroduce
+ * the coverage gap the structural signal was built to avoid.
+ */
+const SUMMARY_ROW_LABELS = new Set(['total', 'totals', 'subtotal', 'sum', 'grand total', 'hours', 'total hours']);
 
 /**
  * `key in obj` also matches inherited Object.prototype property names
@@ -507,6 +537,89 @@ function isRoleHeaderLabel(candidate: string, hasSeenAnyStaffRow: boolean): bool
   return letters === letters.toUpperCase() && letters !== letters.toLowerCase();
 }
 
+/**
+ * Structural override for the case-based header signal above: true when
+ * ANY day-column cell on this row holds real shift-shaped content (a
+ * worked interval, a leave code, or a recognized-but-flagged shorthand
+ * like "10IN"). A genuine section-header row never carries that — it's a
+ * caption, its day cells are blank (or, on a merge-expanded grid, repeat
+ * the label itself, which parses as 'unresolved', not shift-shaped).
+ *
+ * This exists because the case/vocabulary signal in isRoleHeaderLabel is
+ * defeated by an ALL-CAPS venue: once `hasSeenAnyStaffRow` flips true,
+ * EVERY later ALL-CAPS row — including a real staff member's own ALL-CAPS
+ * name — satisfies the pattern signal and gets misread as a new header,
+ * silently dropping that employee's entire week (see the audit in
+ * server/test-fixtures/edge-case-audit/). A row with real shift-shaped
+ * data is unambiguous proof it's a staff row, regardless of casing or
+ * vocabulary — checked BEFORE the case-based signal at every call site
+ * below so it can never be overridden by it.
+ */
+function rowHasShiftShapedData(row: unknown[], columns: DayColumn[], fileLegend: Record<string, ShiftInterval>): boolean {
+  for (const col of columns) {
+    const parsed = parseCellValue(row[col.colIndex], fileLegend);
+    if (parsed.kind === 'shifts' || parsed.kind === 'leave' || parsed.kind === 'flagged') return true;
+  }
+  return false;
+}
+
+/**
+ * Independent re-derivation of "how many rows in this grid plainly carry
+ * real shift data", computed from scratch via parseCellValue alone — no
+ * shared state with the classification loop below (no currentRole, no
+ * hasSeenAnyStaffRow — the actual header-vs-staff heuristic this gate
+ * exists to catch mistakes in). Used as a post-hoc sanity check: if the
+ * classification loop's own count of successfully-processed staff rows
+ * comes in lower than this independent count, something dropped real data
+ * regardless of which code path caused it — see RosterExtractionAnomalyError.
+ *
+ * Mirrors the two row-level exclusions the main loop itself applies before
+ * a row can ever become a staff row — a blank label (no employee name) and
+ * a bare-number headcount/totals row — so this doesn't count rows the main
+ * loop was never going to treat as staff in the first place (e.g. a
+ * per-shift headcount summary row whose numbers coincidentally parse as a
+ * valid "start end" time pair, like "2 2"). Also counts a row whose day
+ * columns are blank but a trailing notes column carries a recognizable
+ * leave code, matching the same fallback processStaffRow applies (see
+ * `extraNoteExcludedCols`) — otherwise an employee whose only signal is a
+ * coincidental leave-code note (no real day-column data at all) would be
+ * counted as "expected" here but not by the main loop's day-column check,
+ * a false mismatch in the other direction.
+ */
+function countRowsWithRealShiftData(
+  grid: unknown[][],
+  dataStartIdx: number,
+  dataEndIdx: number,
+  columns: DayColumn[],
+  fileLegend: Record<string, ShiftInterval>,
+  labelColIndex: number,
+  excludedNoteCols: Set<number>,
+): number {
+  const dayColIndexSet = new Set(columns.map((c) => c.colIndex));
+  let count = 0;
+  for (let r = dataStartIdx; r < dataEndIdx; r++) {
+    const row = grid[r] ?? [];
+    const label = normalizeCell(row[labelColIndex]);
+    if (!label) continue; // no employee name in this row -> can never become a staff row
+    if (/^\d+(\.\d+)?$/.test(label)) continue; // headcount/totals row, same exclusion the main loop applies
+    if (SUMMARY_ROW_LABELS.has(label.toLowerCase())) continue; // footer/summary caption
+
+    if (rowHasShiftShapedData(row, columns, fileLegend)) {
+      count++;
+      continue;
+    }
+    for (let c = 0; c < row.length; c++) {
+      if (excludedNoteCols.has(c) || dayColIndexSet.has(c)) continue;
+      const note = normalizeCell(row[c]);
+      if (note && hasOwnKey(LEAVE_CODES, note.toLowerCase())) {
+        count++;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
 interface DayColumn {
   colIndex: number;
   date: string;
@@ -701,8 +814,12 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   let hasSeenAnyStaffRow = false;
   const dayColIndexes = new Set(columns.map((c) => c.colIndex));
 
-  /** Parses every day-column cell for one confirmed staff row (shared by both column shapes below). */
-  function processStaffRow(row: unknown[], employeeName: string, roleName: string, extraNoteExcludedCols: Set<number>): void {
+  /**
+   * Parses every day-column cell for one confirmed staff row (shared by
+   * both column shapes below). Returns whether real shift/leave data was
+   * found — feeds the post-loop sanity check (RosterExtractionAnomalyError).
+   */
+  function processStaffRow(row: unknown[], employeeName: string, roleName: string, extraNoteExcludedCols: Set<number>): boolean {
     let hasShiftOrLeaveThisRow = false;
     for (const col of columns) {
       const parsed = parseCellValue(row[col.colIndex], fileLegend);
@@ -785,11 +902,19 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         const lower = note.toLowerCase();
         if (hasOwnKey(LEAVE_CODES, lower)) {
           leaveRecords.push({ employeeName, date: weekStart, leaveCode: note, category: LEAVE_CODES[lower] });
+          hasShiftOrLeaveThisRow = true;
           break; // one leave record is enough to surface "this person is out"
         }
       }
     }
+    return hasShiftOrLeaveThisRow;
   }
+
+  // Independently re-derived (see countRowsWithRealShiftData) count of rows
+  // that plainly carry real shift data, versus how many the classification
+  // loop below actually routed into processStaffRow and found data for.
+  // Compared after the loop — see RosterExtractionAnomalyError.
+  let staffRowsWithRealDataProcessed = 0;
 
   for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
@@ -799,6 +924,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       // header also appears (e.g. Gattopardo's "SUPERVISORS"), so header
       // vs. real name is discriminated by content, not position.
       const firstCell = normalizeCell(row[0]);
+      if (SUMMARY_ROW_LABELS.has(firstCell.toLowerCase())) continue; // footer/summary caption, never a staff row or a real section header
 
       // Every distinct non-blank value in this row (name column + day
       // columns). A role/section header doesn't always sit in the name
@@ -821,7 +947,14 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       // reconstructed PDF row with "HEAD WAITERS" due to imprecise row
       // clustering) — if ANY value in this row is recognized as a header
       // label, that's the section header for the rows beneath it.
-      const roleMatch = nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
+      //
+      // Structural override checked first: a row with real shift-shaped
+      // data in its day columns is proof it's a staff row, regardless of
+      // what isRoleHeaderLabel's case/vocabulary signal would otherwise
+      // say — this is what stops an ALL-CAPS staff name from being
+      // misread as a new section header once hasSeenAnyStaffRow is true.
+      const rowHasData = rowHasShiftShapedData(row, columns, fileLegend);
+      const roleMatch = rowHasData ? undefined : nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
       if (roleMatch) {
         currentRole = roleMatch;
         continue;
@@ -833,7 +966,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
 
       const employeeName = firstCell;
       hasSeenAnyStaffRow = true;
-      processStaffRow(row, employeeName, currentRole, new Set([0]));
+      if (processStaffRow(row, employeeName, currentRole, new Set([0]))) staffRowsWithRealDataProcessed++;
       continue;
     }
 
@@ -852,7 +985,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       if (!col0Val || !col1Val) {
         const label = col0Val || col1Val;
         if (/^\d+(\.\d+)?$/.test(label)) continue; // headcount/totals row
-        if (isRoleHeaderLabel(label, hasSeenAnyStaffRow)) {
+        if (SUMMARY_ROW_LABELS.has(label.toLowerCase())) continue; // footer/summary caption
+        // Same structural override as the single-label-column shape above:
+        // real shift-shaped data on this row rules out a header match.
+        if (!rowHasShiftShapedData(row, columns, fileLegend) && isRoleHeaderLabel(label, hasSeenAnyStaffRow)) {
           currentRole = label;
           continue;
         }
@@ -896,7 +1032,38 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     // preceded it and always takes precedence; falls back to the
     // section-derived role when this row's own title cell is blank.
     const roleName = titleCell || currentRole;
-    processStaffRow(row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]));
+    if (processStaffRow(row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]))) staffRowsWithRealDataProcessed++;
+  }
+
+  // Hard sanity gate (item 1, independent of the structural heuristic fix
+  // above): re-derive "how many rows plainly carry real shift data" from
+  // scratch and compare against how many the loop actually processed. A
+  // shortfall means real data was dropped somewhere — silently returning a
+  // 200-shaped partial/empty result would hide that from the manager
+  // uploading the file, so this throws instead of returning.
+  //
+  // Skipped when columnOrderAmbiguous: that shape never routes a row into
+  // processStaffRow at all — by design, every row it can't confidently
+  // classify becomes an explicit anomaly instead of a guess (see above) —
+  // so it already surfaces its own "needs manual review" signal and this
+  // gate would trip on every such file for no new information.
+  if (!columnOrderAmbiguous) {
+    const labelColIndex = hasTitleColumn ? nameColIndex : 0;
+    const excludedNoteCols = hasTitleColumn ? new Set([nameColIndex, titleColIndex!]) : new Set([0]);
+    const minExpectedStaffRows = countRowsWithRealShiftData(
+      grid,
+      header.dataStartIdx,
+      dataEndIdx,
+      columns,
+      fileLegend,
+      labelColIndex,
+      excludedNoteCols,
+    );
+    if (staffRowsWithRealDataProcessed < minExpectedStaffRows) {
+      throw new RosterExtractionAnomalyError(
+        `Found real shift data on ${minExpectedStaffRows} row(s) of the uploaded file, but only ${staffRowsWithRealDataProcessed} could be matched to an employee. This usually means a staff name or section header was misread — please check the file and try again, or contact support.`,
+      );
+    }
   }
 
   return {

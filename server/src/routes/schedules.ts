@@ -3,13 +3,11 @@ import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
 import { parseWorkbookBuffer, buildMergeExpandedGrid, TemplateDetectionError } from '../parsing/parseWorkbook.js';
-import { parseExcelGrid } from '../parsing/deterministicGridParser.js';
+import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
 import { extractPdfGrid, hasPdfTextLayer } from '../parsing/pdfTableExtractor.js';
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
-import { parseRosterGrid, VisionIngestionError } from '../parsing/parseVision.js';
-import { parseRosterImageOllama } from '../parsing/parseVisionOllama.js';
+import { parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
-import { rasterizePdfPageToPng, PdfRasterizeError } from '../parsing/pdfRasterize.js';
 import { resolveRowsAgainstDatabase } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
@@ -20,6 +18,39 @@ import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished, mondayOfWeek } from '../lib/scheduleNotifications.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+// Guards on the paid vision-fallback path only (hosted Gemini/Vertex AI
+// call for image/scanned-PDF uploads) — the deterministic Excel/CSV/
+// text-layer-PDF path is unaffected by either limit.
+const VISION_FALLBACK_MAX_BYTES = 5 * 1024 * 1024;
+const VISION_FALLBACK_RATE_LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Returns a user-facing rejection message when the vision-fallback path
+ * shouldn't run for this upload (file too large, or this venue already
+ * used its one-per-week allowance) — null when it's allowed to proceed.
+ */
+async function checkVisionFallbackAllowed(fileSize: number, locationId: string): Promise<string | null> {
+  if (fileSize > VISION_FALLBACK_MAX_BYTES) {
+    return `This file is ${(fileSize / (1024 * 1024)).toFixed(1)}MB, over the ${VISION_FALLBACK_MAX_BYTES / (1024 * 1024)}MB limit for AI-assisted roster reading. Please upload a smaller image/PDF, or use an Excel/CSV export instead.`;
+  }
+  const location = await prisma.location.findUnique({ where: { id: locationId }, select: { lastVisionFallbackUsedAt: true } });
+  const lastUsed = location?.lastVisionFallbackUsedAt;
+  if (lastUsed && Date.now() - lastUsed.getTime() < VISION_FALLBACK_RATE_LIMIT_MS) {
+    const nextAvailable = new Date(lastUsed.getTime() + VISION_FALLBACK_RATE_LIMIT_MS);
+    return (
+      `AI-assisted roster reading for this venue was already used this week ` +
+      `(last used ${lastUsed.toISOString().slice(0, 10)}) — it's limited to once per venue per week. ` +
+      `It'll be available again on ${nextAvailable.toISOString().slice(0, 10)}. Try an Excel/CSV export in the meantime.`
+    );
+  }
+  return null;
+}
+
+/** Records that this venue's one-per-week vision-fallback allowance was just used. Call only after a successful parse. */
+async function markVisionFallbackUsed(locationId: string): Promise<void> {
+  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: new Date() } });
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -102,16 +133,19 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
 
     if (isImage(req.file)) {
       // Arbitrary layouts (screenshots, colour-coded grids, hand-made
-      // templates) — pass the raw image straight to the local Ollama
-      // vision model in a single call. No local OCR/geometry pre-pass, no
-      // external API call — the model reads the matrix (staff column x day
-      // header row) directly off the pixels, entirely on this machine.
+      // templates) — pass the raw image straight to the hosted Gemini
+      // vision model in a single call. No local OCR/geometry pre-pass — the
+      // model reads the matrix (staff column x day header row) directly off
+      // the pixels. See parseVision.ts for EU-region Vertex AI config.
+      const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
+      if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
       try {
-        const visionResult = await parseRosterImageOllama(req.file.buffer, req.file.mimetype, req.file.originalname, weekStart);
+        const visionResult = await parseRosterImage(req.file.buffer, req.file.mimetype, req.file.originalname, weekStart);
         parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
         anomalies = visionResult.anomalies;
         leaveRecords = visionResult.leaveRecords;
         legend = visionResult.legend;
+        await markVisionFallbackUsed(locationId);
       } catch (err) {
         if (err instanceof VisionIngestionError) {
           return res.status(422).json({ error: err.message });
@@ -143,21 +177,22 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
         legend = deterministicPdfResult.legend;
       } else if (!hasTextLayer) {
         // No text layer at all (scanned/photographed PDF) — try the local
-        // Docling sidecar before Ollama. Deliberately scoped to ONLY this
-        // branch: evaluated against both permanent fixtures, Docling's
-        // layout model failed to detect any table region at all on a
-        // text-layer/borderless-grid PDF (Gattopardo — strictly worse than
-        // the deterministic parser above), but correctly structured a
-        // scanned no-text-layer roster (Bar des Pres, 22x9, ~47s) that
-        // otherwise only reaches the much slower Ollama fallback. See
-        // doclingClient.ts and server/docling-sidecar/ for the evaluation.
+        // Docling sidecar before the hosted vision model (Docling is free
+        // and local; worth trying first when it might already produce a
+        // clean table). Deliberately scoped to ONLY this branch: evaluated
+        // against both permanent fixtures, Docling's layout model failed to
+        // detect any table region at all on a text-layer/borderless-grid
+        // PDF (Gattopardo — strictly worse than the deterministic parser
+        // above), but correctly structured a scanned no-text-layer roster
+        // (Bar des Pres, 22x9, ~47s). See doclingClient.ts and
+        // server/docling-sidecar/ for the evaluation.
         let doclingResult: ParsedVisionResult | null = null;
         try {
           doclingResult = await parseScannedPdfViaDocling(req.file.buffer, req.file.originalname, weekStart);
         } catch (err) {
           if (err instanceof DoclingUnavailableError) {
             // Sidecar not running/unreachable/timed out — not a hard
-            // failure, just fall through to Ollama below like today.
+            // failure, just fall through to the hosted vision model below.
             doclingResult = null;
           } else {
             throw err;
@@ -176,58 +211,49 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
           leaveRecords = doclingResult.leaveRecords;
           legend = doclingResult.legend;
         } else {
+          const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
+          if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
           try {
-            // Ollama's vision API needs real image pixels — req.file.buffer
-            // is still the original PDF at this point, which Ollama's image
-            // loader can't decode (confirmed root cause of the "Failed to
-            // load image or audio file" error: reproduced directly against
-            // Ollama with the raw PDF bytes, resolved by sending a real
-            // rasterized PNG instead). See pdfRasterize.ts.
-            const rasterized = await rasterizePdfPageToPng(req.file.buffer);
-            const visionResult = await parseRosterImageOllama(rasterized, 'image/png', req.file.originalname, weekStart);
+            // Gemini/Vertex accepts PDF bytes directly (unlike the old
+            // Ollama path, which needed a rasterized PNG because its image
+            // loader can't decode a PDF container) — send the original file
+            // straight through, no rasterization step needed.
+            const visionResult = await parseRosterImage(req.file.buffer, 'application/pdf', req.file.originalname, weekStart);
             parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
             anomalies = visionResult.anomalies;
             leaveRecords = visionResult.leaveRecords;
             legend = visionResult.legend;
+            await markVisionFallbackUsed(locationId);
           } catch (err) {
             if (err instanceof VisionIngestionError) {
               return res.status(422).json({ error: err.message });
-            }
-            if (err instanceof PdfRasterizeError) {
-              return res.status(422).json({ error: `Could not render this PDF as an image for AI reading: ${err.message}` });
             }
             throw err;
           }
         }
       } else {
         // Text layer present but the deterministic grid parser couldn't
-        // make sense of it — unchanged from before Docling: try the
-        // line-oriented text parser (cheap, no API call), then Ollama.
-        // Docling is NOT tried here — it has no demonstrated value on
-        // text-layer PDFs (see the branch above) and one clear negative
-        // data point, so this path goes straight to Ollama as it did
-        // before this change.
+        // make sense of it — try the line-oriented text parser (cheap, no
+        // API call), then the hosted vision model. Docling is NOT tried
+        // here — it has no demonstrated value on text-layer PDFs (see the
+        // branch above) and one clear negative data point.
         const text = await extractPdfText(req.file.buffer);
         const textResult = text ? parseRosterText(text, weekStart) : null;
         if (textResult && textResult.rows.length > 0) {
           parsed = { rows: textResult.rows, issues: textResult.issues, templateLabel: 'PDF Text Roster' };
         } else {
+          const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
+          if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
           try {
-            // Same rasterization step as the branch above — still a PDF
-            // buffer here, not an image, regardless of which path led to
-            // the Ollama fallback.
-            const rasterized = await rasterizePdfPageToPng(req.file.buffer);
-            const visionResult = await parseRosterImageOllama(rasterized, 'image/png', req.file.originalname, weekStart);
+            const visionResult = await parseRosterImage(req.file.buffer, 'application/pdf', req.file.originalname, weekStart);
             parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
             anomalies = visionResult.anomalies;
             leaveRecords = visionResult.leaveRecords;
             legend = visionResult.legend;
+            await markVisionFallbackUsed(locationId);
           } catch (err) {
             if (err instanceof VisionIngestionError) {
               return res.status(422).json({ error: err.message });
-            }
-            if (err instanceof PdfRasterizeError) {
-              return res.status(422).json({ error: `Could not render this PDF as an image for AI reading: ${err.message}` });
             }
             throw err;
           }
@@ -328,6 +354,13 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
       })),
     });
   } catch (err) {
+    if (err instanceof RosterExtractionAnomalyError) {
+      // A day-grid shape WAS recognized but real shift data was dropped
+      // during classification (e.g. an ALL-CAPS staff row misread as a
+      // section header) — a loud, visible failure for the manager to see
+      // and retry/escalate, not a silent 200-success with missing rows.
+      return res.status(422).json({ error: err.message, errorCode: 'roster_extraction_anomaly' });
+    }
     console.error('[schedules.upload] failed', err);
     if (err instanceof Error) {
       console.error('[schedules.upload] stack:', err.stack);

@@ -39,6 +39,11 @@ model Location {
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
+  // Rate-limits the paid vision-fallback roster parse (hosted Gemini/Vertex
+  // AI call, image/scanned-PDF uploads only) to once per location per week.
+  // Deterministic-path parsing (Excel/CSV/text-layer PDF) is unaffected —
+  // this field is only read/written on the vision-fallback branch.
+  lastVisionFallbackUsedAt DateTime? @map("last_vision_fallback_used_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 

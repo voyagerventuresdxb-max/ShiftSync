@@ -178,6 +178,9 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
             Drag &amp; drop your roster here, or <span>browse</span>
           </p>
           <p className="dropzone-sub">.xlsx · .xls · .csv · .pdf · .png · .jpg · .webp — up to 10MB</p>
+          <p className="dropzone-sub">
+            Image and scanned-PDF rosters are read by a third-party AI vision service outside the UAE (max 5MB, once per venue per week) — Excel/CSV/text-PDF rosters are never sent anywhere.
+          </p>
         </div>
       ) : null}
 
@@ -258,12 +261,20 @@ function PreviewReview({
   const { preview, summary, templateDetected, parseIssues, anomalies, leaveRecords, legend } = data;
   const [filter, setFilter] = useState<'all' | 'error' | 'new_employee' | 'unmatched_role'>('all');
   const [reviewed, setReviewed] = useState<Set<number>>(new Set());
+  // Anomalies (unresolved cells from the AI vision-fallback path — never
+  // populated by the Excel/CSV/text-PDF paths) don't carry a rowNumber and
+  // aren't PreviewRows, so they need their own review-tracking set. Keyed
+  // by array index, stable for the lifetime of one loaded `data` batch.
+  const [reviewedAnomalies, setReviewedAnomalies] = useState<Set<number>>(new Set());
 
   const needsReview = preview.filter((r) => r.status !== 'matched');
   const matched = preview.filter((r) => r.status === 'matched');
   const visibleNeedsReview = needsReview.filter((r) => filter === 'all' || r.status === filter);
+  const employeeCount = new Set(preview.map((r) => r.employeeName)).size;
 
-  const outstanding = needsReview.filter((r) => !reviewed.has(r.rowNumber)).length;
+  const rowsOutstanding = needsReview.filter((r) => !reviewed.has(r.rowNumber)).length;
+  const anomaliesOutstanding = anomalies.length - reviewedAnomalies.size;
+  const outstanding = rowsOutstanding + anomaliesOutstanding;
 
   const toggleReviewed = (rowNumber: number) => {
     setReviewed((prev) => {
@@ -274,12 +285,26 @@ function PreviewReview({
     });
   };
 
+  const toggleAnomalyReviewed = (idx: number) => {
+    setReviewedAnomalies((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
   const markAllReviewed = () => {
     setReviewed(new Set(needsReview.map((r) => r.rowNumber)));
+    setReviewedAnomalies(new Set(anomalies.map((_, idx) => idx)));
   };
 
   return (
     <div className="preview">
+      <p className="preview-summary-line">
+        We found <strong>{employeeCount}</strong> employee{employeeCount === 1 ? '' : 's'}, <strong>{summary.totalRows}</strong> shift{summary.totalRows === 1 ? '' : 's'},
+        {' '}<strong>{needsReview.length + anomalies.length}</strong> row{needsReview.length + anomalies.length === 1 ? '' : 's'} that need review.
+      </p>
       <div className="preview-meta">
         <span className="badge">
           {templateDetected ? `Template: ${templateDetected}` : 'Template: auto'}
@@ -313,17 +338,33 @@ function PreviewReview({
 
       {anomalies.length > 0 && (
         <div className="anomaly-block" role="alert">
-          <strong>⚠ Needs manager review — {anomalies.length} unresolved item{anomalies.length === 1 ? '' : 's'}</strong>
-          <p className="hint">
-            The AI reader could not confidently place these cells (unrecognized codes,
-            illegible text, or unresolved dates). They were left out of the shift list below —
-            confirm or correct them manually before this roster is complete.
-          </p>
+          <div className="preview-section-header">
+            <div>
+              <strong>⚠ Needs manager review — {anomalies.length} unresolved item{anomalies.length === 1 ? '' : 's'}</strong>
+              <p className="hint">
+                The AI reader could not confidently place these cells (unrecognized codes,
+                illegible text, or unresolved dates). They were left out of the shift list below —
+                mark each one reviewed (or correct the source and re-upload) before this roster can be committed.
+              </p>
+            </div>
+            <button className="btn btn-ghost" onClick={markAllReviewed} disabled={anomaliesOutstanding === 0}>
+              Mark all reviewed
+            </button>
+          </div>
           <ul>
             {anomalies.map((a, idx) => (
-              <li key={idx}>
-                {a.employeeName ? <strong>{a.employeeName}</strong> : <em>Unassigned</em>}
-                {a.date ? ` · ${a.date}` : ''} — "{a.rawText}": {a.reason}
+              <li key={idx} className={reviewedAnomalies.has(idx) ? 'anomaly-reviewed' : undefined}>
+                <span>
+                  {a.employeeName ? <strong>{a.employeeName}</strong> : <em>Unassigned</em>}
+                  {a.date ? ` · ${a.date}` : ''} — "{a.rawText}": {a.reason}
+                </span>
+                <button
+                  className={`chip${reviewedAnomalies.has(idx) ? ' chip-active' : ''}`}
+                  onClick={() => toggleAnomalyReviewed(idx)}
+                  aria-pressed={reviewedAnomalies.has(idx)}
+                >
+                  {reviewedAnomalies.has(idx) ? 'Reviewed' : 'Mark reviewed'}
+                </button>
               </li>
             ))}
           </ul>

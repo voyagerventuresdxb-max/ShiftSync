@@ -169,12 +169,55 @@ function normalizeInterpretation(value: unknown): VlmCell['interpretation'] {
   }
 }
 
+// Hosted vision API timeout — a normal cloud API call, not the local Ollama
+// path's 600s+ budget (a partial-GPU-offload local model could take 18+
+// minutes; a hosted API call that hasn't responded in well under a minute
+// is a genuine failure, not "still thinking"). Overridable for slow
+// networks, but the default reflects a real hosted-API request, not a
+// local-inference one.
+const GEMINI_HTTP_TIMEOUT_MS = Number(process.env.GEMINI_HTTP_TIMEOUT_MS) || 30_000;
+
+/**
+ * True once either Vertex AI (GEMINI_VERTEX_PROJECT) or the Gemini
+ * Developer API (GEMINI_API_KEY) is configured — callers use this instead
+ * of checking GEMINI_API_KEY directly so a Vertex-only deployment isn't
+ * mistaken for "not configured" and routed to the local/sample fallback.
+ */
+function isGeminiConfigured(): boolean {
+  return !!(process.env.GEMINI_VERTEX_PROJECT || process.env.GEMINI_API_KEY);
+}
+
 let client: GoogleGenAI | null = null;
 function getClient(): GoogleGenAI {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new VisionIngestionError('GEMINI_API_KEY is not configured on the server — image/scanned roster ingestion is unavailable.');
+  if (client) return client;
+
+  // Vertex AI (preferred for production — EU-region-pinned, billed to a
+  // GCP project, authenticated via Application Default Credentials rather
+  // than a bearer API key) when GEMINI_VERTEX_PROJECT is set. Location
+  // defaults to europe-west4 (the project's chosen EU region — see
+  // docs/gcp-vertex-setup.md) so a deployment only needs to set the
+  // project id; override GEMINI_VERTEX_LOCATION explicitly for a
+  // different EU region.
+  const project = process.env.GEMINI_VERTEX_PROJECT;
+  if (project) {
+    const location = process.env.GEMINI_VERTEX_LOCATION || 'europe-west4';
+    // Auth is handled by google-auth-library's Application Default
+    // Credentials (a service account key file via GOOGLE_APPLICATION_CREDENTIALS,
+    // or workload identity in a GCP-hosted deployment) — no key material
+    // passed here by design; see GoogleGenAIOptions.googleAuthOptions if a
+    // non-default credential source is ever needed.
+    client = new GoogleGenAI({ vertexai: true, project, location, httpOptions: { timeout: GEMINI_HTTP_TIMEOUT_MS } });
+    return client;
   }
-  if (!client) client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+  // Gemini Developer API (AI Studio) fallback — dev/test convenience, not
+  // the EU-data-residency-pinned production path.
+  if (!process.env.GEMINI_API_KEY) {
+    throw new VisionIngestionError(
+      'Neither GEMINI_VERTEX_PROJECT (Vertex AI) nor GEMINI_API_KEY (Gemini Developer API) is configured on the server — image/scanned roster ingestion is unavailable.',
+    );
+  }
+  client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { timeout: GEMINI_HTTP_TIMEOUT_MS } });
   return client;
 }
 
@@ -326,14 +369,14 @@ export async function parseRosterGrid(
     return buildFallbackResult(weekStart, startTime, 'VLM_FALLBACK_MODE=sample');
   }
 
-  if (!process.env.GEMINI_API_KEY) {
+  if (!isGeminiConfigured()) {
     if (mode === 'off') {
-      throw new VisionIngestionError('GEMINI_API_KEY is not configured on the server — grid-format roster ingestion is unavailable.');
+      throw new VisionIngestionError('Vision API is not configured on the server (set GEMINI_VERTEX_PROJECT+GEMINI_VERTEX_LOCATION or GEMINI_API_KEY) — grid-format roster ingestion is unavailable.');
     }
-    console.warn('[parseVision] GEMINI_API_KEY not configured — using deterministic local fallback for grid-format roster.');
+    console.warn('[parseVision] Vision API not configured — using deterministic local fallback for grid-format roster.');
     const result = processRowsIntoRoster(grid, weekStart);
     console.log(
-      `[parseVision] Deterministic local parser used in ${Date.now() - startTime}ms (GEMINI_API_KEY not configured) — ` +
+      `[parseVision] Deterministic local parser used in ${Date.now() - startTime}ms (vision API not configured) — ` +
         `${result.rows.length} shifts, ${result.anomalies.length} anomalies.`,
     );
     return { ...result, templateLabel: 'Deterministic local parser (GEMINI_API_KEY not configured)' };
@@ -431,12 +474,12 @@ export async function parseRosterImage(
   // No API key configured. In "auto" mode, fall back to the deterministic
   // local parser (for PDFs) or the cached sample (for images) so the upload
   // flow still works for UI development; in "off" mode, surface the error.
-  if (!process.env.GEMINI_API_KEY) {
+  if (!isGeminiConfigured()) {
     if (mode === 'off') {
-      throw new VisionIngestionError('GEMINI_API_KEY is not configured on the server — image/scanned roster ingestion is unavailable.');
+      throw new VisionIngestionError('Vision API is not configured on the server (set GEMINI_VERTEX_PROJECT+GEMINI_VERTEX_LOCATION or GEMINI_API_KEY) — image/scanned roster ingestion is unavailable.');
     }
-    console.warn('[parseVision] GEMINI_API_KEY not configured — using deterministic local fallback.');
-    return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'GEMINI_API_KEY not configured');
+    console.warn('[parseVision] Vision API not configured — using deterministic local fallback.');
+    return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision API not configured');
   }
 
   const genai = getClient();
