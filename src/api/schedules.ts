@@ -46,6 +46,16 @@ export interface AnomalyRecord {
   confidence: number;
   /** Links this anomaly to a `PreviewRow.rowNumber`, if it also produced a row. `null` when it has no corresponding row. */
   rowNumber: number | null;
+  /**
+   * Set only for the deterministic grid parser's unrecognized-section-
+   * header anomaly (one raw header label applied to many rows at once —
+   * see `affectedRowNumbers`). Undefined for every other anomaly source
+   * (a single unresolved vision-model cell), which the existing generic
+   * anomaly UI already renders/gates correctly without branching on this.
+   */
+  kind?: 'unrecognized_section_header';
+  /** Every row number this one anomaly applies to, for a `kind` that doesn't map 1:1 onto `rowNumber` above. */
+  affectedRowNumbers?: number[];
 }
 
 export interface LeaveRecord {
