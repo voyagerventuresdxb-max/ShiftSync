@@ -163,6 +163,29 @@ test('Maitre D / Maitre D\'Hotel and Chef de Salle (senior FOH authority) resolv
   assert.equal(canonicalRoleName('Chef de Salle'), 'Management');
 });
 
+test('"Sup" and "Run" abbreviations resolve to Supervisor/Runner (confirmed real per-row titles, server/scripts/make-skewed-scan-fixture.ts)', () => {
+  assert.equal(canonicalRoleName('Sup'), 'Supervisor');
+  assert.equal(canonicalRoleName('sup'), 'Supervisor');
+  assert.equal(canonicalRoleName('Run'), 'Runner');
+  assert.equal(canonicalRoleName('run'), 'Runner');
+});
+
+test('"Mgr"/"Mgrs", "Asst Mgr"/"Asst Manager" abbreviations resolve to Management', () => {
+  assert.equal(canonicalRoleName('Mgr'), 'Management');
+  assert.equal(canonicalRoleName('Mgrs'), 'Management');
+  assert.equal(canonicalRoleName('Asst Mgr'), 'Management');
+  assert.equal(canonicalRoleName('Asst Manager'), 'Management');
+});
+
+test('"RM" (confirmed real per-row title, barDesPresReference.test.ts) resolves to Management, parallel to the existing "GM" entry', () => {
+  assert.equal(canonicalRoleName('RM'), 'Management');
+});
+
+test('"AM" and "JAM" (also real per-row titles in the same Bar des Pres fixture) are deliberately NOT recognized — "AM" collides with the AM/PM shift-period marker elsewhere in this app, "JAM" has no confirmed expansion anywhere in this codebase', () => {
+  assert.equal(isRecognizedRoleAlias('AM'), false);
+  assert.equal(isRecognizedRoleAlias('JAM'), false);
+});
+
 // 2026-09-05 — a review caught a real gap in the Unicode widening above:
 // `\p{L}` alone doesn't cover combining marks, so Arabic diacritics
 // (tashkeel) get replaced with a SPACE by the letter/number filter,

@@ -58,10 +58,18 @@ const ROLE_ALIASES: Record<string, string> = {
   'shift supervisor': 'Supervisor',
   'team leader': 'Supervisor',
   'team lead': 'Supervisor',
+  // "Sup" — real abbreviated per-row title, confirmed in this app's own
+  // audit fixture (server/scripts/make-skewed-scan-fixture.ts), not
+  // invented. Short enough that a bare match risks false positives on
+  // unrelated short tokens elsewhere (e.g. a stray "sup" in free text),
+  // but this column only ever holds a role/title label, never prose.
+  sup: 'Supervisor',
   runner: 'Runner',
   runners: 'Runner',
   'food runner': 'Runner',
   'bar runner': 'Runner',
+  // "Run" — same fixture as "Sup" above, same reasoning.
+  run: 'Runner',
   bartender: 'Bartender',
   bartenders: 'Bartender',
   barista: 'Bartender',
@@ -102,14 +110,39 @@ const ROLE_ALIASES: Record<string, string> = {
   'management / floor': 'Management',
   manager: 'Management',
   managers: 'Management',
+  // "Mgr"/"Mgrs" — the universal English shorthand for manager/managers.
+  mgr: 'Management',
+  mgrs: 'Management',
   gm: 'Management',
   'general manager': 'Management',
   'restaurant manager': 'Management',
+  // "RM" — real per-row title abbreviation, confirmed in the Bar des Pres
+  // reference fixture (barDesPresReference.test.ts, transcribed from an
+  // actual venue roster) — the same abbreviation pattern as the existing
+  // "gm" entry above for "General Manager", here for the already-mapped
+  // "restaurant manager" one line up.
+  rm: 'Management',
+  // Deliberately NOT added, despite also appearing as real per-row titles
+  // in the same Bar des Pres reference fixture: "AM" and "JAM". "AM" is
+  // already a heavily overloaded token elsewhere in this app's own domain
+  // (the AM/PM shift-period marker — see DayColumn.period in
+  // deterministicGridParser.ts) — even though it isn't read through this
+  // same map today, a bare "am" alias here is a real future collision risk
+  // for no confirmed gain. "JAM" has no confirmed expansion anywhere in
+  // this codebase or its source material (plausibly "Junior Assistant
+  // Manager" by hospitality convention, but that's a guess, not a
+  // confirmed fact) — same "don't guess" principle already applied to bare
+  // "commis" below. Both stay unresolved (flagged "Unmatched role" for
+  // manual assignment) until a real venue confirms what they mean.
   'floor manager': 'Management',
   'duty manager': 'Management',
   'shift manager': 'Management',
   'operations manager': 'Management',
   'assistant manager': 'Management',
+  // "Asst Mgr"/"Asst Manager" — common shorthand for the "assistant
+  // manager" entry above.
+  'asst mgr': 'Management',
+  'asst manager': 'Management',
   'assistant gm': 'Management',
   'head of floor': 'Management',
   'floor management': 'Management',
