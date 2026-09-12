@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { buildMergeExpandedGrid } from './parseWorkbook.js';
@@ -552,4 +553,66 @@ test('returns 0 rows with no throw when the grid has no recognizable day-header 
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
   assert.equal(result.anomalies.length, 0);
+});
+
+// Audit finding #3 (server/test-fixtures/edge-case-audit/, MEMORY.md): a
+// novel Title-Case section header not in ROLE_ALIASES ("Poolside Detail")
+// previously parsed correctly (times, names preserved) but left every
+// affected row's roleName blank, with only a warning buried in `issues`.
+test('unrecognized-section-header audit fixture: rows stay correctly grouped under the header\'s own raw text (never blank), each unique header surfaces as exactly one blocking anomaly', () => {
+  const buffer = readFileSync('server/test-fixtures/edge-case-audit/2-novel-header-vocab.xlsx');
+  const grid = buildMergeExpandedGrid(buffer, '2-novel-header-vocab.xlsx');
+  const result = parseExcelGrid(grid, '2026-08-24'); // Monday
+
+  assert.equal(result.templateLabel, 'Deterministic Grid Parser');
+  assert.equal(result.rows.length, 20, 'no data lost — every shift under every novel header still parses');
+  // No more silent "No role/section header precedes X" warnings for this
+  // case — replaced by the explicit blocking anomaly below, not
+  // double-flagged via both mechanisms at once.
+  assert.equal(result.issues.length, 0);
+
+  const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
+  assert.deepEqual(roleOf('Amira Saleh'), ['Poolside Detail']);
+  assert.deepEqual(roleOf('Bilal Rahman'), ['Poolside Detail']);
+  assert.deepEqual(roleOf('Nadia Farouk'), ['Shisha Terrace']);
+  assert.deepEqual(roleOf('Hamza Idris'), ['Valet & Door']);
+
+  assert.equal(result.anomalies.length, 3, 'one anomaly per unique unrecognized header, not one per row');
+  const byText = new Map(result.anomalies.map((a) => [a.rawText, a]));
+  assert.equal(byText.get('Poolside Detail')?.kind, 'unrecognized_section_header');
+  assert.deepEqual(byText.get('Poolside Detail')?.affectedRowNumbers, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(byText.get('Shisha Terrace')?.affectedRowNumbers, [11, 12, 13, 14, 15]);
+  assert.deepEqual(byText.get('Valet & Door')?.affectedRowNumbers, [16, 17, 18, 19, 20]);
+  // Never auto-guessed/fuzzy-matched to an existing role — confidence 0,
+  // no employeeName (it isn't any one person's anomaly), reason names the
+  // header and the real blast radius so a manager knows what's at stake.
+  for (const a of result.anomalies) {
+    assert.equal(a.confidence, 0);
+    assert.equal(a.employeeName, null);
+    assert.match(a.reason, /is not a known role/);
+  }
+});
+
+test('unrecognized-section-header promotion never overwrites an already-REAL recognized header (regression case: a blank-week employee sitting inside an existing section)', () => {
+  // Mirrors the real Gattopardo reference fixture's Irma/Rafael/Robert
+  // shape (see pdfTableExtractor.test.ts) in miniature: a blank-week
+  // employee with no leave-code note either, sitting between two other
+  // real HEAD WAITERS rows. The first version of this fix (no provisional/
+  // real distinction) silently overwrote HEAD WAITERS with "Zara" here,
+  // corrupting the employee listed after her — caught by re-running the
+  // full suite against the real fixture before this test existed.
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['HEAD WAITERS', '', ''],
+    ['Rafael', '9-17', '9-17'],
+    ['Zara', '', ''], // blank week, no leave note — structurally identical to a novel header
+    ['Robert', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+
+  const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
+  assert.deepEqual(roleOf('Rafael'), ['HEAD WAITERS']);
+  assert.deepEqual(roleOf('Robert'), ['HEAD WAITERS'], 'must NOT have been silently reassigned to "Zara"');
+  assert.equal(result.rows.some((r) => r.employeeName === 'Zara'), false, 'Zara herself produces zero rows, same as before this feature existed');
+  assert.equal(result.anomalies.length, 0, 'Zara is never promoted to a header at all — currentRole was already REAL when her blank row was seen');
 });

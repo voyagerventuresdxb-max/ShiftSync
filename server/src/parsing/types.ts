@@ -91,6 +91,25 @@ export interface AnomalyRecord {
    * couldn't be placed as a row — no employee, no date, no resolvable time).
    */
   rowNumber: number | null;
+  /**
+   * Distinguishes an anomaly kind that needs different manager-review
+   * handling than a single unresolved cell. Undefined for every
+   * pre-existing anomaly source (one unresolved vision-model cell, tied to
+   * exactly one row via `rowNumber`) — only the deterministic grid
+   * parser's unrecognized-section-header detection sets this, since one
+   * such anomaly can span every row grouped under that header at once
+   * (see `affectedRowNumbers`). Only 'unrecognized_section_header' today;
+   * kept as a string union (not a boolean flag) so a future distinct kind
+   * doesn't need a parallel field.
+   */
+  kind?: 'unrecognized_section_header';
+  /**
+   * Every row number this one anomaly applies to, for a `kind` that
+   * doesn't map 1:1 onto the singular `rowNumber` field above (a section
+   * header can apply to many staff rows at once). Undefined for anomaly
+   * kinds that already use `rowNumber` alone.
+   */
+  affectedRowNumbers?: number[];
 }
 
 /** Non-working-day record (leave/day-off/public holiday) — not persisted as a Shift, shown for manager awareness. */

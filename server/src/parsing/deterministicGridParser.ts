@@ -810,6 +810,20 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   }
 
   let currentRole = '';
+  // True whenever `currentRole` was set by the unrecognized-section-header
+  // promotion below (or hasn't been set to anything real yet), false once
+  // it's been set by a REAL, recognized header (vocabulary or ALL-CAPS
+  // match). A provisional role is safe to freely replace with the next
+  // provisional candidate — that's what lets a run of several unrecognized
+  // headers (e.g. fixture 2's "Poolside Detail" -> "Shisha Terrace" ->
+  // "Valet & Door") each correctly take over from the last. A REAL role
+  // must never be silently overwritten by an ambiguous blank row, though
+  // — see the promotion site below for why (a blank-week employee sitting
+  // INSIDE an already-correct section, e.g. Gattopardo's Irma between
+  // Rafael and Robert under HEAD WAITERS, is structurally indistinguishable
+  // from a genuine new header at that one row; only refusing to touch an
+  // already-real currentRole prevents that from corrupting Robert's role).
+  let currentRoleIsProvisional = true;
   let rowNumber = 1;
   let hasSeenAnyStaffRow = false;
   const dayColIndexes = new Set(columns.map((c) => c.colIndex));
@@ -916,6 +930,14 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // Compared after the loop — see RosterExtractionAnomalyError.
   let staffRowsWithRealDataProcessed = 0;
 
+  // Raw label text of every row promoted to a provisional section header
+  // (see the `!hasTitleColumn` branch below) — one AnomalyRecord is
+  // emitted per unique text after the loop, listing every row it ended up
+  // grouping, rather than one per occurrence (a header can legitimately
+  // repeat if merge-expansion or a reconstructed-PDF grid ever splits one
+  // section across more than one raw row).
+  const unrecognizedHeaderTexts = new Set<string>();
+
   for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
 
@@ -957,6 +979,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       const roleMatch = rowHasData ? undefined : nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
       if (roleMatch) {
         currentRole = roleMatch;
+        currentRoleIsProvisional = false;
         continue;
       }
 
@@ -964,9 +987,53 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       if (/^\d+(\.\d+)?$/.test(firstCell)) continue;
       if (!firstCell) continue; // no employee name in this row — can't emit a staff row
 
+      // Try the normal staff-row path first, completely unchanged — this
+      // is what still lets a blank-day-columns employee with a note-column
+      // leave code (e.g. Gattopardo's Sintia/Tomas — see the "leave
+      // detection" fallback inside processStaffRow) produce their real
+      // LeaveRecord exactly as before. Only when this produces genuinely
+      // NOTHING do we consider the row for header promotion below.
       const employeeName = firstCell;
       hasSeenAnyStaffRow = true;
-      if (processStaffRow(row, employeeName, currentRole, new Set([0]))) staffRowsWithRealDataProcessed++;
+      const hadRealData = processStaffRow(row, employeeName, currentRole, new Set([0]));
+      if (hadRealData) {
+        staffRowsWithRealDataProcessed++;
+        continue;
+      }
+
+      // Produced nothing at all AND every day-column cell is truly blank
+      // (a stronger bar than "no shift-shaped data", which an unresolved-
+      // but-present cell like the COVERS caption's "Sofia - 20pax" also
+      // satisfies): structurally header-shaped, but not recognized via
+      // vocabulary or the ALL-CAPS pattern — a genuinely novel
+      // section-header label ("Poolside Detail"), or an ALL-CAPS header
+      // that happens to be the very first one in the sheet
+      // (isRoleHeaderLabel's pattern signal requires hasSeenAnyStaffRow,
+      // see its own doc comment). Adopt the raw label as a PROVISIONAL
+      // role for whoever follows (so they stay correctly grouped together
+      // instead of every one of them independently landing on roleName
+      // ""), and flag it as an explicit, blocking anomaly for the manager
+      // to resolve — never auto-guessed/fuzzy-matched to an existing role
+      // (see report for why a wrong guess here is worse than surfacing it).
+      //
+      // Known, accepted ambiguity, NEUTRALIZED rather than just documented:
+      // a genuinely blank-week employee with no note-column code either (a
+      // real pattern — see the Gattopardo reference fixture's Irma, who
+      // sits between Rafael and Robert inside the already-correct HEAD
+      // WAITERS section) is structurally indistinguishable from a genuine
+      // new header at this one row alone. The `currentRoleIsProvisional`
+      // guard is what makes this safe either way: if a REAL header already
+      // applies here (Irma's case), this block never touches it, so Robert
+      // still correctly inherits HEAD WAITERS unchanged — confirmed against
+      // both real reference fixtures (Gattopardo, Bar des Pres), not just
+      // reasoned about; the first version of this fix (no provisional
+      // guard) was caught doing exactly this corruption by that same test
+      // suite before it shipped. Only ever replaces a role that was ITSELF
+      // already provisional (or empty) — see the field's own doc comment.
+      if (currentRoleIsProvisional && columns.every((col) => isBlank(row[col.colIndex]))) {
+        currentRole = firstCell;
+        unrecognizedHeaderTexts.add(firstCell);
+      }
       continue;
     }
 
@@ -1033,6 +1100,32 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     // section-derived role when this row's own title cell is blank.
     const roleName = titleCell || currentRole;
     if (processStaffRow(row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]))) staffRowsWithRealDataProcessed++;
+  }
+
+  // One blocking anomaly per unique unrecognized section header, listing
+  // every row it ended up grouping — surfaced to the manager exactly like
+  // a vision-fallback anomaly (same `anomalies` array, same review-gate),
+  // requiring an explicit acknowledge/dismiss before Confirm rather than a
+  // warning buried in `issues`. Skipped entirely if the header ended up
+  // with zero affected rows (nothing after it before the next real header
+  // or end of sheet — nothing for a manager to act on).
+  for (const headerText of unrecognizedHeaderTexts) {
+    const affectedRowNumbers = rows.filter((r) => r.roleName === headerText).map((r) => r.rowNumber);
+    if (affectedRowNumbers.length === 0) continue;
+    const affectedEmployees = [...new Set(rows.filter((r) => r.roleName === headerText).map((r) => r.employeeName))];
+    anomalies.push({
+      employeeName: null,
+      date: null,
+      rawText: headerText,
+      reason:
+        `Section header "${headerText}" is not a known role — ${affectedRowNumbers.length} shift(s) across ` +
+        `${affectedEmployees.length} employee(s) (${affectedEmployees.join(', ')}) are grouped under it and ` +
+        `need a role confirmed before this roster is complete.`,
+      confidence: 0,
+      rowNumber: affectedRowNumbers[0],
+      kind: 'unrecognized_section_header',
+      affectedRowNumbers,
+    });
   }
 
   // Hard sanity gate (item 1, independent of the structural heuristic fix
