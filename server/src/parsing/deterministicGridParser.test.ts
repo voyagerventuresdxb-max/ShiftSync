@@ -616,3 +616,61 @@ test('unrecognized-section-header promotion never overwrites an already-REAL rec
   assert.equal(result.rows.some((r) => r.employeeName === 'Zara'), false, 'Zara herself produces zero rows, same as before this feature existed');
   assert.equal(result.anomalies.length, 0, 'Zara is never promoted to a header at all — currentRole was already REAL when her blank row was seen');
 });
+
+// Round-2 audit finding: a staff-name cell vertically merged across
+// multiple rows (a real Excel authoring pattern — merging for visual
+// grouping, each row still carrying its own real, different shift data)
+// was silently attributing every merged row's shifts to whoever the
+// merge's top-left name happened to be, with zero anomaly. Two levels of
+// coverage: the synthetic case below pins the exact mechanism
+// (expandMergedCells must never propagate a VERTICAL merge's value down),
+// and the fixture-based test after it proves the full pipeline on the
+// audit's own real file.
+test('a staff-name cell vertically merged across rows (!merges with e.r > s.r) is NOT auto-expanded — each row keeps its own real, different shift data, surfaced as an anomaly instead of silently merged into one identity', () => {
+  const aoa: (string | number | null)[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['Karim El-Sayed', '10-18', '10-18'],
+    [null, '14-22', '14-22'], // vertically merged with the row above — a DIFFERENT real shift pattern underneath
+    ['Reem Fakhoury', '9-17', 'OFF'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!merges'] = [{ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } }]; // vertical: e.r (2) > s.r (1)
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Roster');
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+
+  const grid = buildMergeExpandedGrid(buffer, 'test.xlsx');
+  // The mechanism itself: row 2's name cell must still read blank/null —
+  // never silently filled in with "Karim El-Sayed" the way a horizontal
+  // merge (see the test above) IS correctly expected to expand.
+  assert.equal(grid[2][0], null);
+
+  const result = parseExcelGrid(grid, WEEK_START);
+  const byEmployee = (name: string) => result.rows.filter((r) => r.employeeName === name);
+  assert.equal(byEmployee('Karim El-Sayed').length, 2, 'only his OWN row\'s 2 shifts — not also the merged row\'s 2');
+  assert.equal(byEmployee('Reem Fakhoury').length, 1);
+  assert.equal(result.rows.length, 3, 'the merged row\'s 2 real shifts are surfaced as an anomaly, not silently dropped nor misattributed');
+
+  assert.equal(result.anomalies.length, 1);
+  assert.equal(result.anomalies[0].kind, 'unrecognized_merged_name_cell');
+  assert.equal(result.anomalies[0].employeeName, null, 'never guessed/attributed to Karim, Reem, or anyone else');
+  assert.match(result.anomalies[0].rawText, /14-22/);
+});
+
+test('unrecognized-merged-name-cell audit fixture: real employees keep only their own shifts, the 2 orphaned merged rows surface as distinct anomalies (before this fix: 20 rows, all attributed to 2 names, 0 anomalies)', () => {
+  const buffer = readFileSync('server/test-fixtures/edge-case-audit-round2/2b-merged-staff-rows.xlsx');
+  const grid = buildMergeExpandedGrid(buffer, '2b-merged-staff-rows.xlsx');
+  const result = parseExcelGrid(grid, '2026-08-24'); // Monday
+
+  const byEmployee = (name: string) => result.rows.filter((r) => r.employeeName === name);
+  assert.equal(byEmployee('Karim El-Sayed').length, 5, 'his own row only — was 15 (3 merged rows worth) before this fix');
+  assert.equal(byEmployee('Reem Fakhoury').length, 5);
+  assert.equal(result.rows.length, 10, 'was 20 before this fix');
+
+  assert.equal(result.anomalies.length, 2, 'one per orphaned merged row — was 0 before this fix');
+  for (const a of result.anomalies) {
+    assert.equal(a.kind, 'unrecognized_merged_name_cell');
+    assert.equal(a.employeeName, null);
+    assert.equal(a.confidence, 0);
+  }
+});

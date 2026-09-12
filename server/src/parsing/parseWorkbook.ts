@@ -13,16 +13,33 @@ export class TemplateDetectionError extends Error {
 const MAX_ROWS = 5000;
 
 /**
- * Expands every merged range in a worksheet by copying the top-left cell's
- * value into every cell it covers, mutating the sheet in place. Must run
- * before sheet_to_json, which otherwise leaves every covered cell but the
- * top-left blank — undercounting or misaligning rows whenever a source file
- * merges the employee-name/role cell down several rows, or a header cell
- * across several columns.
+ * Expands every HORIZONTAL merged range in a worksheet (spanning multiple
+ * COLUMNS within one row) by copying the top-left cell's value into every
+ * cell it covers, mutating the sheet in place. Must run before
+ * sheet_to_json, which otherwise leaves every covered cell but the top-left
+ * blank — undercounting or misaligning rows whenever a source file merges a
+ * day-header cell across several columns, or a role-section banner across
+ * the full staff-block width.
+ *
+ * Deliberately does NOT expand a VERTICAL merge (spanning multiple ROWS in
+ * one column, `range.e.r > range.s.r`) — every genuine merge shape this app
+ * has ever seen in a real reference fixture is horizontal; a vertical merge
+ * has no legitimate case here (see the round-2 audit) and is a real,
+ * observed authoring pattern instead: a manager vertically merges a
+ * staff-name cell across several rows purely for visual grouping, each row
+ * still carrying that OWN row's real, DIFFERENT shift data underneath.
+ * Auto-expanding it the same way a horizontal merge is expanded would
+ * silently attribute every one of those rows' shifts to whoever's name
+ * happens to be the merge's top-left cell — the other real employees those
+ * rows may represent would vanish with zero anomaly, zero warning. Leaving
+ * it un-expanded instead means those rows keep their real (blank) name
+ * cell, which deterministicGridParser.ts's 'unrecognized_merged_name_cell'
+ * handling then surfaces explicitly instead of silently dropping.
  */
 function expandMergedCells(sheet: XLSX.WorkSheet): void {
   const merges = sheet['!merges'] ?? [];
   for (const range of merges) {
+    if (range.e.r > range.s.r) continue; // vertical merge — never auto-expanded, see above
     const topLeftAddr = XLSX.utils.encode_cell({ r: range.s.r, c: range.s.c });
     const topLeftCell = sheet[topLeftAddr];
     if (!topLeftCell) continue;

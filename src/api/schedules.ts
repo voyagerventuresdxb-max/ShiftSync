@@ -47,13 +47,13 @@ export interface AnomalyRecord {
   /** Links this anomaly to a `PreviewRow.rowNumber`, if it also produced a row. `null` when it has no corresponding row. */
   rowNumber: number | null;
   /**
-   * Set only for the deterministic grid parser's unrecognized-section-
-   * header anomaly (one raw header label applied to many rows at once —
-   * see `affectedRowNumbers`). Undefined for every other anomaly source
-   * (a single unresolved vision-model cell), which the existing generic
-   * anomaly UI already renders/gates correctly without branching on this.
+   * Distinguishes an anomaly kind from a single unresolved vision-model
+   * cell (the default, undefined case) — the existing generic anomaly UI
+   * already renders/gates any of these correctly without branching on
+   * this field. See server/src/parsing/types.ts's AnomalyRecord for what
+   * each kind means.
    */
-  kind?: 'unrecognized_section_header';
+  kind?: 'unrecognized_section_header' | 'unrecognized_merged_name_cell' | 'ignored_workbook_sheets';
   /** Every row number this one anomaly applies to, for a `kind` that doesn't map 1:1 onto `rowNumber` above. */
   affectedRowNumbers?: number[];
 }

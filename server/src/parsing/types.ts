@@ -98,11 +98,27 @@ export interface AnomalyRecord {
    * exactly one row via `rowNumber`) — only the deterministic grid
    * parser's unrecognized-section-header detection sets this, since one
    * such anomaly can span every row grouped under that header at once
-   * (see `affectedRowNumbers`). Only 'unrecognized_section_header' today;
-   * kept as a string union (not a boolean flag) so a future distinct kind
-   * doesn't need a parallel field.
+   * (see `affectedRowNumbers`). Kept as a string union (not a boolean
+   * flag) so each distinct kind doesn't need its own parallel field.
+   *
+   * - 'unrecognized_section_header': a grid row-group header not in the
+   *   known role vocabulary (see deterministicGridParser.ts).
+   * - 'unrecognized_merged_name_cell': a staff-name-column cell was
+   *   vertically merged across multiple rows in the source file — see
+   *   parseWorkbook.ts's expandMergedCells and deterministicGridParser.ts.
+   *   Every real merge use case in this app spans multiple COLUMNS in one
+   *   row (a day-header over AM/PM sub-columns, a role-section banner
+   *   over the full staff-block width); a merge spanning multiple ROWS in
+   *   one column has no legitimate case here and is never auto-expanded,
+   *   to avoid silently attributing several people's shifts to whoever's
+   *   name happens to be the merge's top-left cell.
+   * - 'ignored_workbook_sheets': the uploaded file has more than one
+   *   sheet/tab; only the first is ever read (see
+   *   parseWorkbook.ts:listOtherSheetNames) — surfaced so a manager whose
+   *   real roster sits on a later tab isn't silently handed the wrong
+   *   tab's data (or nothing) with no indication other tabs exist.
    */
-  kind?: 'unrecognized_section_header';
+  kind?: 'unrecognized_section_header' | 'unrecognized_merged_name_cell' | 'ignored_workbook_sheets';
   /**
    * Every row number this one anomaly applies to, for a `kind` that
    * doesn't map 1:1 onto the singular `rowNumber` field above (a section

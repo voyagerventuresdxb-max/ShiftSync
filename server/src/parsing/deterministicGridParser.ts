@@ -985,7 +985,42 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
 
       // A bare number in the name column (and no role keyword found above) is a headcount/totals row.
       if (/^\d+(\.\d+)?$/.test(firstCell)) continue;
-      if (!firstCell) continue; // no employee name in this row — can't emit a staff row
+      if (!firstCell) {
+        // Blank name column but real shift-shaped data sits in this row's
+        // day columns — a real, observed cause (see the round-2 audit): a
+        // staff-name cell vertically merged across several rows in the
+        // source file (parseWorkbook.ts's expandMergedCells deliberately
+        // never auto-expands a vertical merge — see its own doc comment)
+        // leaves every row but the merge's own top-left with a genuinely
+        // blank name cell, each still carrying its OWN real, different
+        // shift pattern underneath. Silently dropping this data, or —
+        // worse — ever attributing it to whoever the last real employee
+        // happened to be, is exactly the failure shape this feature
+        // exists to avoid; surface it as its own explicit anomaly instead.
+        if (rowHasData) {
+          const dayCellSummary = columns
+            .map((col) => {
+              const v = normalizeCell(row[col.colIndex]);
+              return v ? `${col.date}: ${v}` : null;
+            })
+            .filter((v): v is string => v !== null)
+            .join(', ');
+          anomalies.push({
+            employeeName: null,
+            date: null,
+            rawText: dayCellSummary,
+            reason:
+              `This row has real shift data (${dayCellSummary}) but no staff name — likely a name ` +
+              `cell merged across several rows in the source file, each with its own real, different ` +
+              `shift pattern. Never auto-attributed to another employee — please check the source ` +
+              `file (a vertically merged name cell is the most common cause) and re-upload.`,
+            confidence: 0,
+            rowNumber: null,
+            kind: 'unrecognized_merged_name_cell',
+          });
+        }
+        continue; // no employee name in this row — can't emit a staff row either way
+      }
 
       // Try the normal staff-row path first, completely unchanged — this
       // is what still lets a blank-day-columns employee with a note-column
