@@ -83,6 +83,30 @@ export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string)
   });
 }
 
+/**
+ * Every OTHER sheet/tab name in the workbook besides the one actually read
+ * (always `SheetNames[0]`, both here and in `parseWorkbookBuffer` below) —
+ * empty for a normal single-sheet file. This app's parsers never read past
+ * the first sheet at all (see the round-2 audit); this exists purely so a
+ * caller can flag "this file has N other sheet(s) that were never looked
+ * at" rather than silently importing whatever the first tab happens to
+ * contain — a multi-outlet/multi-week workbook (notes-tab-first, an
+ * archive tab, a per-outlet tab) is a realistic real-world shape for this
+ * app's own target venues, and the wrong tab landing first can otherwise
+ * look exactly like a normal successful import.
+ */
+export function listOtherSheetNames(buffer: Buffer, originalFilename: string): string[] {
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
+  } catch (err) {
+    throw new TemplateDetectionError(
+      `Could not read "${originalFilename}" as an Excel or CSV file: ${(err as Error).message}`,
+    );
+  }
+  return workbook.SheetNames.slice(1);
+}
+
 /** Serializes a 2D grid into a tab-separated text block for the VLM text-ingestion path. */
 export function gridToTsvText(grid: unknown[][]): string {
   return grid
