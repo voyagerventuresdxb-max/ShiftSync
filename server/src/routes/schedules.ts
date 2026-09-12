@@ -294,8 +294,9 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
                   rawText: otherSheetNames.join(', '),
                   reason:
                     `This file has ${otherSheetNames.length} other sheet(s) that were not read (${otherSheetNames.join(', ')}) — ` +
-                    `only the first sheet was parsed. If your roster data is on a different tab, move or copy it to the ` +
-                    `first tab and re-upload.`,
+                    `only the first sheet was parsed, and no rows were extracted from the other sheet(s) listed above ` +
+                    `(this is a diagnostic, not an automatic recovery). If your roster data is on a different tab, move ` +
+                    `or copy it to the first tab and re-upload.`,
                   confidence: 0,
                   rowNumber: null,
                   kind: 'ignored_workbook_sheets',

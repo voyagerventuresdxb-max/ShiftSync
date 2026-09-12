@@ -116,7 +116,11 @@ export interface AnomalyRecord {
    *   sheet/tab; only the first is ever read (see
    *   parseWorkbook.ts:listOtherSheetNames) — surfaced so a manager whose
    *   real roster sits on a later tab isn't silently handed the wrong
-   *   tab's data (or nothing) with no indication other tabs exist.
+   *   tab's data (or nothing) with no indication other tabs exist. This is
+   *   diagnostic only — it does NOT attempt to locate or extract data from
+   *   the named sheets; `parsed` still reflects only whatever the first
+   *   sheet produced, which may be zero rows. The manager must move the
+   *   real data to the first tab and re-upload to recover it.
    */
   kind?: 'unrecognized_section_header' | 'unrecognized_merged_name_cell' | 'ignored_workbook_sheets';
   /**
