@@ -46,6 +46,16 @@ export interface AnomalyRecord {
   confidence: number;
   /** Links this anomaly to a `PreviewRow.rowNumber`, if it also produced a row. `null` when it has no corresponding row. */
   rowNumber: number | null;
+  /**
+   * Distinguishes an anomaly kind from a single unresolved vision-model
+   * cell (the default, undefined case) — the existing generic anomaly UI
+   * already renders/gates any of these correctly without branching on
+   * this field. See server/src/parsing/types.ts's AnomalyRecord for what
+   * each kind means.
+   */
+  kind?: 'unrecognized_section_header' | 'unrecognized_merged_name_cell' | 'ignored_workbook_sheets';
+  /** Every row number this one anomaly applies to, for a `kind` that doesn't map 1:1 onto `rowNumber` above. */
+  affectedRowNumbers?: number[];
 }
 
 export interface LeaveRecord {

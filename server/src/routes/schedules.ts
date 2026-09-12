@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
-import { parseWorkbookBuffer, buildMergeExpandedGrid, TemplateDetectionError } from '../parsing/parseWorkbook.js';
+import { parseWorkbookBuffer, buildMergeExpandedGrid, listOtherSheetNames, TemplateDetectionError } from '../parsing/parseWorkbook.js';
 import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
 import { extractPdfGrid, hasPdfTextLayer } from '../parsing/pdfTableExtractor.js';
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
@@ -276,19 +276,45 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
           // the format coverage already validated for those shapes
           // instead of hard-rejecting the upload.
           const grid = buildMergeExpandedGrid(req.file.buffer, req.file.originalname);
+          // Every parser in this app only ever reads the workbook's first
+          // sheet (see listOtherSheetNames' own doc comment) — a
+          // multi-tab file (per-outlet, per-week archive, a notes tab
+          // first) can have its real roster sitting on a tab that's never
+          // looked at, with no indication of that in an otherwise
+          // confidently-successful result. Surfaced unconditionally
+          // whenever more than one sheet exists, regardless of whether
+          // the first sheet's own parse succeeds — the manager, not the
+          // app, is the one who can tell whether the other tabs matter.
+          const otherSheetNames = listOtherSheetNames(req.file.buffer, req.file.originalname);
+          const ignoredSheetsAnomaly: AnomalyRecord | null =
+            otherSheetNames.length > 0
+              ? {
+                  employeeName: null,
+                  date: null,
+                  rawText: otherSheetNames.join(', '),
+                  reason:
+                    `This file has ${otherSheetNames.length} other sheet(s) that were not read (${otherSheetNames.join(', ')}) — ` +
+                    `only the first sheet was parsed, and no rows were extracted from the other sheet(s) listed above ` +
+                    `(this is a diagnostic, not an automatic recovery). If your roster data is on a different tab, move ` +
+                    `or copy it to the first tab and re-upload.`,
+                  confidence: 0,
+                  rowNumber: null,
+                  kind: 'ignored_workbook_sheets',
+                }
+              : null;
           const deterministicResult = parseExcelGrid(grid, weekStart);
           const deterministicRecognizedShape = deterministicResult.templateLabel === 'Deterministic Grid Parser';
 
           if (deterministicRecognizedShape) {
             parsed = { rows: deterministicResult.rows, issues: deterministicResult.issues, templateLabel: deterministicResult.templateLabel };
-            anomalies = deterministicResult.anomalies;
+            anomalies = ignoredSheetsAnomaly ? [ignoredSheetsAnomaly, ...deterministicResult.anomalies] : deterministicResult.anomalies;
             leaveRecords = deterministicResult.leaveRecords;
             legend = deterministicResult.legend;
           } else {
             try {
               const gridResult = await parseRosterGrid(grid, req.file.originalname, weekStart);
               parsed = { rows: gridResult.rows, issues: gridResult.issues, templateLabel: gridResult.templateLabel };
-              anomalies = gridResult.anomalies;
+              anomalies = ignoredSheetsAnomaly ? [ignoredSheetsAnomaly, ...gridResult.anomalies] : gridResult.anomalies;
               leaveRecords = gridResult.leaveRecords;
               legend = gridResult.legend;
             } catch (gridErr) {

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { buildMergeExpandedGrid } from './parseWorkbook.js';
@@ -552,4 +553,124 @@ test('returns 0 rows with no throw when the grid has no recognizable day-header 
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
   assert.equal(result.anomalies.length, 0);
+});
+
+// Audit finding #3 (server/test-fixtures/edge-case-audit/, MEMORY.md): a
+// novel Title-Case section header not in ROLE_ALIASES ("Poolside Detail")
+// previously parsed correctly (times, names preserved) but left every
+// affected row's roleName blank, with only a warning buried in `issues`.
+test('unrecognized-section-header audit fixture: rows stay correctly grouped under the header\'s own raw text (never blank), each unique header surfaces as exactly one blocking anomaly', () => {
+  const buffer = readFileSync('server/test-fixtures/edge-case-audit/2-novel-header-vocab.xlsx');
+  const grid = buildMergeExpandedGrid(buffer, '2-novel-header-vocab.xlsx');
+  const result = parseExcelGrid(grid, '2026-08-24'); // Monday
+
+  assert.equal(result.templateLabel, 'Deterministic Grid Parser');
+  assert.equal(result.rows.length, 20, 'no data lost — every shift under every novel header still parses');
+  // No more silent "No role/section header precedes X" warnings for this
+  // case — replaced by the explicit blocking anomaly below, not
+  // double-flagged via both mechanisms at once.
+  assert.equal(result.issues.length, 0);
+
+  const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
+  assert.deepEqual(roleOf('Amira Saleh'), ['Poolside Detail']);
+  assert.deepEqual(roleOf('Bilal Rahman'), ['Poolside Detail']);
+  assert.deepEqual(roleOf('Nadia Farouk'), ['Shisha Terrace']);
+  assert.deepEqual(roleOf('Hamza Idris'), ['Valet & Door']);
+
+  assert.equal(result.anomalies.length, 3, 'one anomaly per unique unrecognized header, not one per row');
+  const byText = new Map(result.anomalies.map((a) => [a.rawText, a]));
+  assert.equal(byText.get('Poolside Detail')?.kind, 'unrecognized_section_header');
+  assert.deepEqual(byText.get('Poolside Detail')?.affectedRowNumbers, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(byText.get('Shisha Terrace')?.affectedRowNumbers, [11, 12, 13, 14, 15]);
+  assert.deepEqual(byText.get('Valet & Door')?.affectedRowNumbers, [16, 17, 18, 19, 20]);
+  // Never auto-guessed/fuzzy-matched to an existing role — confidence 0,
+  // no employeeName (it isn't any one person's anomaly), reason names the
+  // header and the real blast radius so a manager knows what's at stake.
+  for (const a of result.anomalies) {
+    assert.equal(a.confidence, 0);
+    assert.equal(a.employeeName, null);
+    assert.match(a.reason, /is not a known role/);
+  }
+});
+
+test('unrecognized-section-header promotion never overwrites an already-REAL recognized header (regression case: a blank-week employee sitting inside an existing section)', () => {
+  // Mirrors the real Gattopardo reference fixture's Irma/Rafael/Robert
+  // shape (see pdfTableExtractor.test.ts) in miniature: a blank-week
+  // employee with no leave-code note either, sitting between two other
+  // real HEAD WAITERS rows. The first version of this fix (no provisional/
+  // real distinction) silently overwrote HEAD WAITERS with "Zara" here,
+  // corrupting the employee listed after her — caught by re-running the
+  // full suite against the real fixture before this test existed.
+  const grid: unknown[][] = [
+    ['', 'Mon', 'Tue'],
+    ['HEAD WAITERS', '', ''],
+    ['Rafael', '9-17', '9-17'],
+    ['Zara', '', ''], // blank week, no leave note — structurally identical to a novel header
+    ['Robert', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+
+  const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
+  assert.deepEqual(roleOf('Rafael'), ['HEAD WAITERS']);
+  assert.deepEqual(roleOf('Robert'), ['HEAD WAITERS'], 'must NOT have been silently reassigned to "Zara"');
+  assert.equal(result.rows.some((r) => r.employeeName === 'Zara'), false, 'Zara herself produces zero rows, same as before this feature existed');
+  assert.equal(result.anomalies.length, 0, 'Zara is never promoted to a header at all — currentRole was already REAL when her blank row was seen');
+});
+
+// Round-2 audit finding: a staff-name cell vertically merged across
+// multiple rows (a real Excel authoring pattern — merging for visual
+// grouping, each row still carrying its own real, different shift data)
+// was silently attributing every merged row's shifts to whoever the
+// merge's top-left name happened to be, with zero anomaly. Two levels of
+// coverage: the synthetic case below pins the exact mechanism
+// (expandMergedCells must never propagate a VERTICAL merge's value down),
+// and the fixture-based test after it proves the full pipeline on the
+// audit's own real file.
+test('a staff-name cell vertically merged across rows (!merges with e.r > s.r) is NOT auto-expanded — each row keeps its own real, different shift data, surfaced as an anomaly instead of silently merged into one identity', () => {
+  const aoa: (string | number | null)[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['Karim El-Sayed', '10-18', '10-18'],
+    [null, '14-22', '14-22'], // vertically merged with the row above — a DIFFERENT real shift pattern underneath
+    ['Reem Fakhoury', '9-17', 'OFF'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!merges'] = [{ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } }]; // vertical: e.r (2) > s.r (1)
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Roster');
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+
+  const grid = buildMergeExpandedGrid(buffer, 'test.xlsx');
+  // The mechanism itself: row 2's name cell must still read blank/null —
+  // never silently filled in with "Karim El-Sayed" the way a horizontal
+  // merge (see the test above) IS correctly expected to expand.
+  assert.equal(grid[2][0], null);
+
+  const result = parseExcelGrid(grid, WEEK_START);
+  const byEmployee = (name: string) => result.rows.filter((r) => r.employeeName === name);
+  assert.equal(byEmployee('Karim El-Sayed').length, 2, 'only his OWN row\'s 2 shifts — not also the merged row\'s 2');
+  assert.equal(byEmployee('Reem Fakhoury').length, 1);
+  assert.equal(result.rows.length, 3, 'the merged row\'s 2 real shifts are surfaced as an anomaly, not silently dropped nor misattributed');
+
+  assert.equal(result.anomalies.length, 1);
+  assert.equal(result.anomalies[0].kind, 'unrecognized_merged_name_cell');
+  assert.equal(result.anomalies[0].employeeName, null, 'never guessed/attributed to Karim, Reem, or anyone else');
+  assert.match(result.anomalies[0].rawText, /14-22/);
+});
+
+test('unrecognized-merged-name-cell audit fixture: real employees keep only their own shifts, the 2 orphaned merged rows surface as distinct anomalies (before this fix: 20 rows, all attributed to 2 names, 0 anomalies)', () => {
+  const buffer = readFileSync('server/test-fixtures/edge-case-audit-round2/2b-merged-staff-rows.xlsx');
+  const grid = buildMergeExpandedGrid(buffer, '2b-merged-staff-rows.xlsx');
+  const result = parseExcelGrid(grid, '2026-08-24'); // Monday
+
+  const byEmployee = (name: string) => result.rows.filter((r) => r.employeeName === name);
+  assert.equal(byEmployee('Karim El-Sayed').length, 5, 'his own row only — was 15 (3 merged rows worth) before this fix');
+  assert.equal(byEmployee('Reem Fakhoury').length, 5);
+  assert.equal(result.rows.length, 10, 'was 20 before this fix');
+
+  assert.equal(result.anomalies.length, 2, 'one per orphaned merged row — was 0 before this fix');
+  for (const a of result.anomalies) {
+    assert.equal(a.kind, 'unrecognized_merged_name_cell');
+    assert.equal(a.employeeName, null);
+    assert.equal(a.confidence, 0);
+  }
 });
