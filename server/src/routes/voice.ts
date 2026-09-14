@@ -13,6 +13,8 @@ import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { createShift, updateShift } from '../lib/actions/shiftActions.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
+import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
+import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
@@ -115,6 +117,23 @@ function validateIntentShape(intent: ParsedIntent): string | null {
       if (!isNonEmptyString(intent.staffId)) return 'staffId is required.';
       if (!DATE_RE.test(intent.shiftDate)) return 'shiftDate must be YYYY-MM-DD.';
       if (intent.period !== 'AM' && intent.period !== 'PM') return 'period must be "AM" or "PM".';
+      return null;
+    }
+    case 'PUBLISH_ROTA': {
+      if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
+      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
+      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
+        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      }
+      return null;
+    }
+    case 'APPLY_ROTA_TEMPLATE': {
+      if (!isNonEmptyString(intent.templateId)) return 'templateId is required.';
+      if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
+      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
+      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
+        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      }
       return null;
     }
     case 'UNRECOGNIZED':
@@ -547,6 +566,52 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           }),
         );
         return respond(201, { executed: true, result: assignment }, 'EXECUTED');
+      }
+      case 'PUBLISH_ROTA': {
+        const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
+        const result = await publishRota({ locationId, weekStart, publishedById: actorId });
+        if (result.result === 'not_found') {
+          return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
+        if (result.result === 'empty') {
+          return respond(400, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
+        // Same notification path as the REST route (routes/shifts.ts's
+        // publish endpoint) — never inside publishRota's own transaction.
+        void notifySchedulePublished(result.affectedUserIds, intent.weekStart);
+        return respond(
+          200,
+          { executed: true, result: { publishedAt: result.publishedAt.toISOString(), notifiedCount: result.notifiedCount } },
+          'EXECUTED',
+        );
+      }
+      case 'APPLY_ROTA_TEMPLATE': {
+        // intent.templateId is required non-empty by validateIntentShape
+        // above — a null templateId here means /parse-intent's fuzzy-match
+        // refinement never confidently resolved one (see parseIntent.ts's
+        // refineApplyRotaTemplateResponse), so a hand-crafted request that
+        // skips that refinement is rejected the same way, not silently
+        // allowed through with no template.
+        //
+        // Re-validated fresh here, same as every other case above (CREATE_
+        // SHIFT's role/staff, EDIT_SHIFT's shift, ASSIGN_SECTION's section) —
+        // /parse-intent's own template candidate list is scoped to the
+        // caller's locationId, but that's enforcement by the model, not a
+        // structural guarantee (see this route's own doc comment above).
+        // Without this check a hand-crafted request naming another venue's
+        // templateId would have applyRotaTemplate create real Shift rows in
+        // that other venue, under this caller's own actorId.
+        const templateForOwnershipCheck = await prisma.rotaTemplate.findUnique({ where: { id: intent.templateId as string } });
+        if (!templateForOwnershipCheck || templateForOwnershipCheck.locationId !== locationId) {
+          const msg = `Template "${intent.templateId}" not found.`;
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
+        const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
+        if (result.result !== 'ok') {
+          return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
+        return respond(201, { executed: true, result: { createdCount: result.createdCount, templateName: result.templateName } }, 'EXECUTED');
       }
       case 'UNRECOGNIZED': {
         const msg = 'This command was not recognized — nothing was executed.';

@@ -17,6 +17,8 @@ export interface PromptContext {
   weekShifts?: { id: string; roleName: string; date: string; start: string; end: string; assigneeName: string | null }[];
   /** Manager-tier only — every floor section at this venue, for ASSIGN_SECTION. */
   floorSections?: { id: string; label: string }[];
+  /** Manager-tier only — every saved rota template at this venue, for APPLY_ROTA_TEMPLATE. */
+  rotaTemplates?: { id: string; name: string }[];
 }
 
 /**
@@ -67,6 +69,21 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
   if (ctx.floorSections?.length) {
     lines.push(``, `Floor sections at this venue (name → id, for ASSIGN_SECTION — use these ids, never invent one):`);
     lines.push(...ctx.floorSections.map((s) => `- ${s.label} → ${s.id}`));
+  }
+
+  if (ctx.rotaTemplates?.length) {
+    lines.push(``, `Saved rota templates at this venue (name → id, for APPLY_ROTA_TEMPLATE):`);
+    lines.push(...ctx.rotaTemplates.map((t) => `- ${t.name} → ${t.id}`));
+    lines.push(
+      `For APPLY_ROTA_TEMPLATE: always fill in "templateName" with the template as referenced in the transcript, even if unsure. Only fill in "templateId" if you are genuinely confident which saved template above it matches — leave it null rather than picking the nearest-sounding name if there is real ambiguity (e.g. two similarly-named templates). The server independently re-checks this match, so guessing here does not help — it only risks a wrong or ambiguous apply.`,
+    );
+  }
+
+  if (allowed.includes('PUBLISH_ROTA')) {
+    lines.push(
+      ``,
+      `For PUBLISH_ROTA: resolve "weekStart" (the Monday of the target week) from phrases like "this week"/"next week"/a specific date, relative to today. Do not attempt to state how many shifts or staff will be affected in "summary" — the server computes and fills in the exact affected count itself before this is shown to the caller.`,
+    );
   }
 
   if (allowed.includes('QUERY_MY_SCHEDULE')) {

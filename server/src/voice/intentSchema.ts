@@ -12,6 +12,8 @@ export const MANAGER_INTENTS = [
   'CREATE_SHIFT',
   'EDIT_SHIFT',
   'ASSIGN_SECTION',
+  'PUBLISH_ROTA',
+  'APPLY_ROTA_TEMPLATE',
 ] as const;
 
 export type StaffIntentType = (typeof STAFF_INTENTS)[number];
@@ -28,6 +30,8 @@ export type ParsedIntent =
   | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; confidence: number; summary: string }
   | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; confidence: number; summary: string }
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
+  | { intent: 'PUBLISH_ROTA'; weekStart: string; confidence: number; summary: string }
+  | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
   | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
@@ -53,6 +57,9 @@ function schemaFor(intents: readonly string[]) {
       shiftDate: { type: Type.STRING, nullable: true, description: 'YYYY-MM-DD, for ASSIGN_SECTION' },
       period: { type: Type.STRING, enum: ['AM', 'PM'], nullable: true, description: 'For ASSIGN_SECTION' },
       dutyLabel: { type: Type.STRING, nullable: true, description: 'For ASSIGN_SECTION — optional free-text duty note' },
+      weekStart: { type: Type.STRING, nullable: true, description: 'YYYY-MM-DD, the Monday of the target week, for PUBLISH_ROTA/APPLY_ROTA_TEMPLATE — resolve relative phrases like "this week"/"next week" against today.' },
+      templateId: { type: Type.STRING, nullable: true, description: 'For APPLY_ROTA_TEMPLATE — one of the ids in the provided rota-templates list, if you can confidently match the spoken template name to one. Leave null rather than guessing the nearest name if you are not confident.' },
+      templateName: { type: Type.STRING, nullable: true, description: 'For APPLY_ROTA_TEMPLATE — the template name as referenced in the transcript, even if you are not fully certain which saved template it maps to.' },
       confidence: { type: Type.NUMBER, nullable: true, description: 'How certain you are (0 to 1) that every id/date/time above is correct and unambiguous. Required for every intent except UNRECOGNIZED.' },
       hasAdditionalRequest: {
         type: Type.BOOLEAN,

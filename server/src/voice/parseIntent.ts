@@ -5,6 +5,8 @@ import { intentSchemaFor, type ParsedIntent } from './intentSchema.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 import { voiceModel } from './model.js';
+import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
+import { bestMatch } from '../lib/textSimilarity.js';
 
 export class VoiceIntentError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -99,6 +101,12 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
     const sections = await prisma.floorSection.findMany({ where: { locationId: user.locationId }, select: { id: true, label: true } });
     ctx.floorSections = sections;
 
+    // For APPLY_ROTA_TEMPLATE — a per-location list of saved templates, not
+    // a growing-over-time collection like shifts, so no bounded-window
+    // concern here (see spec 2026-09-11-voice-publish-rota-apply-template-design.md §7.2).
+    const templates = await prisma.rotaTemplate.findMany({ where: { locationId: user.locationId }, select: { id: true, name: true } });
+    ctx.rotaTemplates = templates;
+
     const weekEnd = new Date(startOfToday);
     weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
     const venueShifts = await prisma.shift.findMany({
@@ -165,14 +173,27 @@ export async function parseVoiceIntent(
     // Computed independently of confidence/the gate below — this line must
     // never move inside either branch of that gate.
     const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
-    if (attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD) {
-      return { response: attempted, attempted, hasAdditionalRequest };
+    let clientResponse: ParsedIntent =
+      attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD
+        ? attempted
+        : {
+            intent: 'UNRECOGNIZED',
+            reason: `I understood this as "${attempted.summary}" but wasn't confident enough to act on it without you rephrasing.`,
+            summary: 'Could not confidently resolve this command.',
+          };
+
+    // PUBLISH_ROTA/APPLY_ROTA_TEMPLATE get a further, deterministic
+    // refinement pass on top of the confidence gate above — see spec
+    // 2026-09-11-voice-publish-rota-apply-template-design.md §2.1/§2.2.
+    // `attempted` (used for logging) is untouched by this; only the
+    // client-facing `clientResponse` is refined further.
+    if (clientResponse.intent === 'PUBLISH_ROTA') {
+      clientResponse = await refinePublishRotaResponse(clientResponse, user.locationId);
+    } else if (clientResponse.intent === 'APPLY_ROTA_TEMPLATE') {
+      clientResponse = await refineApplyRotaTemplateResponse(clientResponse, context.rotaTemplates ?? []);
     }
-    return {
-      response: { intent: 'UNRECOGNIZED', reason: `I understood this as "${attempted.summary}" but wasn't confident enough to act on it without you rephrasing.`, summary: 'Could not confidently resolve this command.' },
-      attempted,
-      hasAdditionalRequest,
-    };
+
+    return { response: clientResponse, attempted, hasAdditionalRequest };
   } catch (err) {
     if (err instanceof ApiError) {
       throw new VoiceIntentError(`Intent parsing failed (${err.status ?? 'unknown'}): ${err.message}`, err);
@@ -188,6 +209,83 @@ export async function parseVoiceIntent(
  */
 export function normalizeHasAdditionalRequest(raw: Record<string, unknown>): boolean {
   return typeof raw.hasAdditionalRequest === 'boolean' ? raw.hasAdditionalRequest : false;
+}
+
+/**
+ * PUBLISH_ROTA's confirm-preview must state the exact affected shift/staff
+ * count (spec 2026-09-11-voice-publish-rota-apply-template-design.md §2.1) —
+ * the model is never trusted to both look up and arithmetic-check that
+ * number from context, so this recomputes it directly via the same groupBy
+ * `publishRota` itself uses, and overwrites `summary` with a deterministic
+ * string. An empty target week short-circuits to a rejection instead of a
+ * "publish 0 shifts — confirm?" preview.
+ */
+export async function refinePublishRotaResponse(
+  response: Extract<ParsedIntent, { intent: 'PUBLISH_ROTA' }>,
+  locationId: string,
+): Promise<ParsedIntent> {
+  const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
+  if (Number.isNaN(weekStart.getTime())) {
+    return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to publish.' };
+  }
+  const { shiftCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
+  if (shiftCount === 0) {
+    return {
+      intent: 'UNRECOGNIZED',
+      reason: `No shifts exist for the week of ${response.weekStart} yet.`,
+      summary: `There are no shifts scheduled for the week of ${response.weekStart} yet — nothing to publish.`,
+    };
+  }
+  const summary = `This will publish ${shiftCount} shift${shiftCount === 1 ? '' : 's'} across ${staffCount} staff member${staffCount === 1 ? '' : 's'} for the week of ${response.weekStart} — confirm?`;
+  return { ...response, summary };
+}
+
+const TEMPLATE_MATCH_THRESHOLD = 0.6;
+const TEMPLATE_MATCH_MARGIN = 0.1;
+
+/**
+ * APPLY_ROTA_TEMPLATE's ambiguity backstop (spec §2.2) — independently
+ * re-scores the model's own templateId/templateName against the caller's
+ * real saved templates instead of trusting the model's stated confidence
+ * alone for a same-shape judgment (the failure mode the task explicitly
+ * warns against: an opaque decision executed silently). Resolves only when
+ * the model's own pick agrees with the best-scoring match AND that match
+ * clears both an absolute floor and a margin over the runner-up; otherwise
+ * responds with a clarifying question rather than applying the closest guess.
+ */
+export async function refineApplyRotaTemplateResponse(
+  response: Extract<ParsedIntent, { intent: 'APPLY_ROTA_TEMPLATE' }>,
+  templates: { id: string; name: string }[],
+): Promise<ParsedIntent> {
+  const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
+  if (Number.isNaN(weekStart.getTime())) {
+    return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to apply the template to.' };
+  }
+  const { best, runnerUp } = bestMatch(response.templateName, templates);
+  const confidentMatch =
+    best !== null &&
+    best.score >= TEMPLATE_MATCH_THRESHOLD &&
+    (!runnerUp || best.score - runnerUp.score >= TEMPLATE_MATCH_MARGIN) &&
+    response.templateId === best.id;
+
+  if (!confidentMatch || !best) {
+    const candidates = [best, runnerUp].filter((c): c is NonNullable<typeof c> => c !== null).map((c) => `"${c.name}"`);
+    const reason =
+      candidates.length > 0
+        ? `Not confident which saved template "${response.templateName}" refers to — closest matches: ${candidates.join(', ')}.`
+        : `No saved template resembling "${response.templateName}" was found.`;
+    return {
+      intent: 'UNRECOGNIZED',
+      reason,
+      summary:
+        candidates.length > 0
+          ? `I'm not sure which saved template you meant — did you mean ${candidates.join(' or ')}? Please say the template name again.`
+          : `I couldn't find a saved template matching "${response.templateName}". Please say the template name again.`,
+    };
+  }
+
+  const summary = `Apply template "${best.name}" to the week of ${response.weekStart} — confirm?`;
+  return { ...response, templateId: best.id, summary };
 }
 
 /**
@@ -260,6 +358,23 @@ function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
           start: typeof raw.start === 'string' ? raw.start : undefined,
           end: typeof raw.end === 'string' ? raw.end : undefined,
           userId: typeof raw.userId === 'string' || raw.userId === null ? raw.userId : undefined,
+          confidence,
+          summary,
+        };
+      }
+      break;
+    case 'PUBLISH_ROTA':
+      if (typeof raw.weekStart === 'string') {
+        return { intent: 'PUBLISH_ROTA', weekStart: raw.weekStart, confidence, summary };
+      }
+      break;
+    case 'APPLY_ROTA_TEMPLATE':
+      if (typeof raw.weekStart === 'string' && typeof raw.templateName === 'string') {
+        return {
+          intent: 'APPLY_ROTA_TEMPLATE',
+          templateId: typeof raw.templateId === 'string' ? raw.templateId : null,
+          templateName: raw.templateName,
+          weekStart: raw.weekStart,
           confidence,
           summary,
         };
