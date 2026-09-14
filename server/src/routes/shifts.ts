@@ -7,6 +7,7 @@ import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } f
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { publishRota } from '../lib/actions/rotaActions.js';
 
 export const shiftsRouter = Router();
 
@@ -328,55 +329,17 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
         ? req.user!.id
         : (req.body?.publishedById ? String(req.body.publishedById).trim() : '') || req.user!.id;
 
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
-
     const start = new Date(`${weekStart}T00:00:00.000Z`);
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 7);
+    const result = await publishRota({ locationId, weekStart: start, publishedById });
+    if (result.result === 'not_found') return res.status(404).json({ error: result.message });
+    if (result.result === 'empty') return res.status(400).json({ error: result.message });
 
-    // Was `findMany` over every column of every shift this week, just to
-    // check non-emptiness and count distinct assigned users — one groupBy
-    // returns both numbers in a single round-trip without pulling a full row
-    // (managerNotes, sidework, timestamps, ...) per shift over the wire
-    // (found by the 2026-09-05 performance audit; a first attempt used two
-    // separate count/findMany calls — a follow-up review pass caught that a
-    // single groupBy does the same job in one query instead of two).
-    const shiftGroups = await prisma.shift.groupBy({
-      by: ['userId'],
-      where: { locationId, date: { gte: start, lt: end } },
-      _count: true,
-    });
-    const weekShiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
-    if (weekShiftCount === 0) return res.status(400).json({ error: 'No shifts exist for this week yet.' });
+    // Real delivery on top of the flag-stamp above (never inside
+    // publishRota's own transaction — a push failure must not roll back the
+    // publish). Same call voice's /execute PUBLISH_ROTA case makes.
+    void notifySchedulePublished(result.affectedUserIds, weekStart);
 
-    const notifiedCount = shiftGroups.filter((g) => g.userId !== null).length;
-    // Capture one shared instant for both writes. Without this, RotaPublish's
-    // auto-generated `publishedAt` (set here) and Shift's auto-generated
-    // `@updatedAt` (set by Prisma at the updateMany's own execution time, a
-    // few ms later) never line up — every shift would look "changed since
-    // publish" the instant it was published, which is exactly backwards.
-    const publishedAt = new Date();
-    const [publish] = await prisma.$transaction([
-      prisma.rotaPublish.upsert({
-        where: { locationId_weekStart: { locationId, weekStart: start } },
-        create: { locationId, weekStart: start, publishedAt, publishedById, notifiedCount },
-        update: { publishedAt, publishedById, notifiedCount },
-      }),
-      prisma.shift.updateMany({
-        where: { locationId, date: { gte: start, lt: end } },
-        data: { status: 'PUBLISHED', updatedAt: publishedAt },
-      }),
-    ]);
-
-    // Real delivery on top of the flag-stamp above (never inside the
-    // transaction — a push failure must not roll back the publish). Was
-    // purely cosmetic before: `notifiedCount` counted distinct assigned
-    // staff but nothing was ever actually sent to them.
-    const affectedUserIds = shiftGroups.filter((g): g is typeof g & { userId: string } => g.userId !== null).map((g) => g.userId);
-    void notifySchedulePublished(affectedUserIds, weekStart);
-
-    return res.status(200).json({ publishedAt: publish.publishedAt.toISOString(), notifiedCount: publish.notifiedCount });
+    return res.status(200).json({ publishedAt: result.publishedAt.toISOString(), notifiedCount: result.notifiedCount });
   } catch (err) {
     console.error('[shifts.publish] failed', err);
     return res.status(500).json({ error: 'Unexpected error while publishing the week.' });

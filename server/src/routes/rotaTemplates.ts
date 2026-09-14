@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { applyRotaTemplate } from '../lib/actions/rotaActions.js';
 
 export const rotaTemplatesRouter = Router();
 
@@ -144,80 +144,19 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (re
       if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
     }
 
-    const template = await prisma.rotaTemplate.findUnique({ where: { id } });
-    if (!ownedOrNotFound(req, res, template, `Template "${id}" not found.`)) return;
+    // Ownership check stays here (the route knows the caller's own venue via
+    // the session; the extracted action doesn't take a callerLocationId to
+    // scope against) — applyRotaTemplate itself still separately confirms
+    // the template exists at all.
+    const templateForOwnershipCheck = await prisma.rotaTemplate.findUnique({ where: { id } });
+    if (!ownedOrNotFound(req, res, templateForOwnershipCheck, `Template "${id}" not found.`)) return;
 
-    const entries = template.entries as unknown as TemplateEntry[];
-
-    // Validate every entry's roleId (and userId, if set) exists and belongs
-    // to the template's own locationId before creating anything — same
-    // existence + same-location checks POST /api/shifts and /api/shifts/bulk
-    // apply, so a stale/foreign id rejects the whole apply with a clean 404
-    // instead of a raw FK-violation 500 thrown mid-transaction after some
-    // shifts may already have committed.
-    const roleIds = [...new Set(entries.map((e) => String(e.roleId)))];
-    const userIds = [...new Set(entries.map((e) => (e.userId ? String(e.userId) : null)).filter((v): v is string => v !== null))];
-
-    const roles = await prisma.role.findMany({ where: { id: { in: roleIds } } });
-    const rolesById = new Map(roles.map((r) => [r.id, r]));
-    for (const roleId of roleIds) {
-      const role = rolesById.get(roleId);
-      if (!role || role.locationId !== template.locationId) return res.status(404).json({ error: `Role "${roleId}" not found.` });
-    }
-
-    if (userIds.length > 0) {
-      const users = await prisma.user.findMany({ where: { id: { in: userIds } } });
-      const usersById = new Map(users.map((u) => [u.id, u]));
-      for (const userId of userIds) {
-        const user = usersById.get(userId);
-        if (!user || user.locationId !== template.locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
-      }
-    }
-
-    const location = await prisma.location.findUnique({ where: { id: template.locationId }, select: { timezone: true } });
-    const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
     const start = new Date(`${weekStart}T00:00:00.000Z`);
-
-    const created = await withAuditedTransaction(
-      prisma,
-      async (tx) => {
-        // Sequential, not Promise.all: `tx` is bound to a single reserved DB
-        // connection, so concurrent creates against it wouldn't parallelize
-        // anyway and risk tripping the transaction's own timeout.
-        const rows: { id: string }[] = [];
-        for (const e of entries) {
-          const date = new Date(start);
-          date.setUTCDate(date.getUTCDate() + e.dayOffset);
-          const dateStr = date.toISOString().slice(0, 10);
-          const overnight = e.end <= e.start;
-          rows.push(
-            await tx.shift.create({
-              data: {
-                locationId: template.locationId,
-                roleId: e.roleId,
-                userId: e.userId,
-                createdById,
-                date,
-                startTime: combineDateAndTime(dateStr, e.start, timezone),
-                endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
-                managerNotes: e.note ?? null,
-                status: 'DRAFT',
-              },
-            }),
-          );
-        }
-        return rows;
-      },
-      (rows) => ({
-        locationId: template.locationId,
-        actorId: req.user!.id,
-        action: 'SHIFT_CREATED',
-        entityType: 'Shift',
-        entityId: rows[0]?.id ?? id,
-        note: `Applied template "${template.name}" to week ${weekStart} — created ${rows.length} shift(s)`,
-      }),
-    );
-    return res.status(201).json({ createdCount: created.length });
+    const result = await applyRotaTemplate({ templateId: id, weekStart: start, createdById, actorId: req.user!.id });
+    if (result.result !== 'ok') {
+      return res.status(404).json({ error: result.message });
+    }
+    return res.status(201).json({ createdCount: result.createdCount });
   } catch (err) {
     console.error('[rotaTemplates.apply] failed', err);
     return res.status(500).json({ error: 'Unexpected error while applying the template.' });
