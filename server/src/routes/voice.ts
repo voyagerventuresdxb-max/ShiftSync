@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
-import { requireSession } from '../middleware/requireSession.js';
+import { requireSession, requireManager } from '../middleware/requireSession.js';
 import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
@@ -667,5 +667,50 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
   } catch (err) {
     console.error('[voice.execute] failed', err);
     return respond(500, { error: 'Unexpected error while executing the voice command.' }, 'ERROR');
+  }
+});
+
+/**
+ * GET /api/voice/interactions — read model for VoiceInteractionLog, scoped
+ * to the caller's own location. Manager-only: this is an audit trail over
+ * everyone's voice commands at the venue, not a per-user history. Cursor-
+ * paginated newest-first since the table is write-only/unbounded (every
+ * /parse-intent call logs a row regardless of outcome).
+ */
+voiceRouter.get('/interactions', requireSession, requireManager, async (req, res) => {
+  try {
+    const locationId = req.user!.locationId;
+    const limitParam = Number(req.query.limit);
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : 50;
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+
+    const rows = await prisma.voiceInteractionLog.findMany({
+      where: { locationId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: { actor: { select: { id: true, fullName: true } } },
+    });
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    return res.status(200).json({
+      interactions: page.map((row) => ({
+        id: row.id,
+        actor: row.actor,
+        transcript: row.transcript,
+        resolvedIntent: row.resolvedIntent,
+        confidence: row.confidence,
+        hasAdditionalRequest: row.hasAdditionalRequest,
+        outcome: row.outcome,
+        declineReason: row.declineReason,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    });
+  } catch (err) {
+    console.error('[voice.interactions] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while loading voice interactions.' });
   }
 });
