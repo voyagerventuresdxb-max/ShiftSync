@@ -295,7 +295,7 @@ export async function refineApplyRotaTemplateResponse(
  * makes most of these mismatches structurally impossible, but this is the
  * defense-in-depth layer that never trusts the raw JSON at face value.
  */
-function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
+export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
   const intent = typeof raw.intent === 'string' ? raw.intent : 'UNRECOGNIZED';
   const summary = typeof raw.summary === 'string' ? raw.summary : 'Could not determine what to do.';
   // A missing/non-numeric/out-of-range confidence fails CLOSED to 0 — an
@@ -375,6 +375,23 @@ function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
           templateId: typeof raw.templateId === 'string' ? raw.templateId : null,
           templateName: raw.templateName,
           weekStart: raw.weekStart,
+          confidence,
+          summary,
+        };
+      }
+      break;
+    case 'POST_ANNOUNCEMENT':
+      if (typeof raw.content === 'string') {
+        return { intent: 'POST_ANNOUNCEMENT', content: raw.content, confidence, summary };
+      }
+      break;
+    case 'POST_SHOUTOUT':
+      if (typeof raw.targetUserId === 'string' && typeof raw.content === 'string') {
+        return {
+          intent: 'POST_SHOUTOUT',
+          targetUserId: raw.targetUserId,
+          targetUserName: typeof raw.targetUserName === 'string' ? raw.targetUserName : '',
+          content: raw.content,
           confidence,
           summary,
         };

@@ -52,6 +52,17 @@ export function VoiceCommandSheet({
   // WHY it couldn't resolve the command, and is the only part that teaches
   // the user how to rephrase.
   const reason = isUnrecognized && intent.reason.trim() ? intent.reason : null;
+  // POST_ANNOUNCEMENT/POST_SHOUTOUT: the model's "content" is the literal
+  // text that will be posted verbatim — nothing regenerates or reformats it
+  // between here and the DB write (see parseIntent.ts's normalizeParsedIntent
+  // and voice.ts's /execute case for these two intents). `summary` for these
+  // two is deliberately a short framing line only (see prompts.ts), never a
+  // paraphrase of the actual content, so the confirm-preview MUST render
+  // `content` in its own distinct block rather than folding it into
+  // `summary` — otherwise the one thing this intent absolutely cannot do
+  // (show the caller something other than what will actually post) becomes
+  // possible again.
+  const postContent = intent.intent === 'POST_ANNOUNCEMENT' || intent.intent === 'POST_SHOUTOUT' ? intent.content : null;
 
   const eyebrow = isUnrecognized
     ? "Didn't catch that"
@@ -75,6 +86,11 @@ export function VoiceCommandSheet({
           <p className="eyebrow">{eyebrow}</p>
           {transcript.trim() && <p className="mt-2 text-xs text-foreground/60">You said: “{transcript.trim()}”</p>}
           <p className="mt-2 text-sm">{executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary}</p>
+          {postContent && (
+            <div className="mt-3 rounded-lg border border-input bg-background/60 p-3">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">“{postContent}”</p>
+            </div>
+          )}
           {reason && <p className="mt-2 text-xs text-foreground/60">{reason}</p>}
           {showFollowUp && (
             // Reuses global.css's .error-block-toast recipe (border/background/

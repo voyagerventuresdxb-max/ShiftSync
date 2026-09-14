@@ -86,6 +86,13 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
     );
   }
 
+  if (allowed.includes('POST_ANNOUNCEMENT') || allowed.includes('POST_SHOUTOUT')) {
+    lines.push(
+      ``,
+      `For POST_ANNOUNCEMENT and POST_SHOUTOUT: put the exact text to post in "content" — clean up filler words and false starts, but never paraphrase, shorten, or add anything beyond what the caller actually said. "content" is what gets posted verbatim; do not describe it in "summary" instead — keep "summary" to a short framing sentence only (e.g. "Post this announcement to the venue", "Give {name} a shoutout with this note"), since the caller will see the full "content" text separately before confirming.`,
+    );
+  }
+
   if (allowed.includes('QUERY_MY_SCHEDULE')) {
     lines.push(
       ``,

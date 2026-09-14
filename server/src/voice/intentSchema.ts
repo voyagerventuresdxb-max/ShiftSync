@@ -14,6 +14,8 @@ export const MANAGER_INTENTS = [
   'ASSIGN_SECTION',
   'PUBLISH_ROTA',
   'APPLY_ROTA_TEMPLATE',
+  'POST_ANNOUNCEMENT',
+  'POST_SHOUTOUT',
 ] as const;
 
 export type StaffIntentType = (typeof STAFF_INTENTS)[number];
@@ -32,6 +34,8 @@ export type ParsedIntent =
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
   | { intent: 'PUBLISH_ROTA'; weekStart: string; confidence: number; summary: string }
   | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
+  | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
+  | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
   | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
@@ -60,6 +64,12 @@ function schemaFor(intents: readonly string[]) {
       weekStart: { type: Type.STRING, nullable: true, description: 'YYYY-MM-DD, the Monday of the target week, for PUBLISH_ROTA/APPLY_ROTA_TEMPLATE — resolve relative phrases like "this week"/"next week" against today.' },
       templateId: { type: Type.STRING, nullable: true, description: 'For APPLY_ROTA_TEMPLATE — one of the ids in the provided rota-templates list, if you can confidently match the spoken template name to one. Leave null rather than guessing the nearest name if you are not confident.' },
       templateName: { type: Type.STRING, nullable: true, description: 'For APPLY_ROTA_TEMPLATE — the template name as referenced in the transcript, even if you are not fully certain which saved template it maps to.' },
+      content: {
+        type: Type.STRING,
+        nullable: true,
+        description:
+          'For POST_ANNOUNCEMENT — the exact announcement text to post, exactly as it will be shown to staff. For POST_SHOUTOUT — the exact recognition note text. In both cases: lightly clean filler words ("um", "uh"), false starts, and obvious punctuation/capitalization from the transcript, but never paraphrase, shorten, summarize, or add content beyond what was actually said. This is the literal text that will be posted, verbatim, with no further editing.',
+      },
       confidence: { type: Type.NUMBER, nullable: true, description: 'How certain you are (0 to 1) that every id/date/time above is correct and unambiguous. Required for every intent except UNRECOGNIZED.' },
       hasAdditionalRequest: {
         type: Type.BOOLEAN,

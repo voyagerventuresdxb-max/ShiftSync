@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
-import { buildContext, normalizeHasAdditionalRequest, refinePublishRotaResponse, refineApplyRotaTemplateResponse } from './parseIntent.js';
+import {
+  buildContext,
+  normalizeHasAdditionalRequest,
+  normalizeParsedIntent,
+  refinePublishRotaResponse,
+  refineApplyRotaTemplateResponse,
+} from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
 
 const prisma = new PrismaClient();
@@ -362,5 +368,69 @@ test('refineApplyRotaTemplateResponse: an empty templates list is rejected with 
   if (result.intent === 'UNRECOGNIZED') {
     assert.doesNotMatch(result.reason, /closest matches/i);
     assert.match(result.reason, /no saved template/i);
+  }
+});
+
+// POST_ANNOUNCEMENT / POST_SHOUTOUT (Slice 4) have no refinement pass —
+// unlike PUBLISH_ROTA/APPLY_ROTA_TEMPLATE, there is no structured reference
+// id to independently re-score against a candidate list (spec
+// 2026-09-11-voice-post-announcement-shoutout-design.md §8.1): "content" is
+// free text, and the whole point of this slice's design (§2.1) is that it is
+// captured once, verbatim, and never regenerated. So the "refinement" test
+// for this slice is the deliberate ABSENCE of transformation — this is the
+// half of that guarantee that happens inside normalizeParsedIntent, i.e.
+// between Gemini's raw JSON and /parse-intent's response; the other half
+// (that /execute posts that exact string with no further transformation) is
+// covered in routes/voice.test.ts's POST_ANNOUNCEMENT/POST_SHOUTOUT
+// byte-identical tests. Together the two prove the pipeline has no second
+// cleanup pass anywhere (spec §10's regression test), split across the two
+// files the same way this codebase already splits parse-time vs
+// execute-time coverage for every other intent.
+
+test('normalizeParsedIntent: POST_ANNOUNCEMENT carries "content" through byte-identical, no cleanup applied a second time here', () => {
+  const raw = { intent: 'POST_ANNOUNCEMENT', content: '  uh, so the walk-in is down, verbatim as cleaned by the model  ', confidence: 0.9, summary: 'Post this announcement to the venue.' };
+  const result = normalizeParsedIntent(raw);
+  assert.equal(result.intent, 'POST_ANNOUNCEMENT');
+  if (result.intent === 'POST_ANNOUNCEMENT') {
+    // Deliberately NOT trimmed/reformatted here — normalizeParsedIntent must
+    // preserve exactly what the model returned in "content", whitespace and
+    // all, since the model (not this function) owns all cleanup per §2.1.
+    assert.equal(result.content, raw.content);
+  }
+});
+
+test('normalizeParsedIntent: POST_ANNOUNCEMENT with a missing content field falls to UNRECOGNIZED, not a silently-empty announcement', () => {
+  const result = normalizeParsedIntent({ intent: 'POST_ANNOUNCEMENT', confidence: 0.9, summary: 'x' });
+  assert.equal(result.intent, 'UNRECOGNIZED');
+});
+
+test('normalizeParsedIntent: POST_SHOUTOUT carries "content" and "targetUserId" through byte-identical', () => {
+  const raw = {
+    intent: 'POST_SHOUTOUT',
+    targetUserId: 'user-123',
+    targetUserName: 'Sarah',
+    content: 'covered a last-minute call-out, exact wording preserved',
+    confidence: 0.9,
+    summary: 'Give Sarah a shoutout with this note.',
+  };
+  const result = normalizeParsedIntent(raw);
+  assert.equal(result.intent, 'POST_SHOUTOUT');
+  if (result.intent === 'POST_SHOUTOUT') {
+    assert.equal(result.content, raw.content);
+    assert.equal(result.targetUserId, raw.targetUserId);
+    assert.equal(result.targetUserName, raw.targetUserName);
+  }
+});
+
+test('normalizeParsedIntent: POST_SHOUTOUT with a missing targetUserId falls to UNRECOGNIZED', () => {
+  const result = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', content: 'nice work', confidence: 0.9, summary: 'x' });
+  assert.equal(result.intent, 'UNRECOGNIZED');
+});
+
+test('normalizeParsedIntent: POST_SHOUTOUT with a missing targetUserName defaults to empty string, same fail-open convention as REQUEST_SWAP', () => {
+  const result = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', targetUserId: 'user-123', content: 'nice work', confidence: 0.9, summary: 'x' });
+  assert.equal(result.intent, 'POST_SHOUTOUT');
+  if (result.intent === 'POST_SHOUTOUT') {
+    assert.equal(result.targetUserName, '');
   }
 });

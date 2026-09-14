@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { notifyUsersBatched } from '../lib/push.js';
+import { requireSession } from '../middleware/requireSession.js';
+import { createAnnouncement } from '../lib/actions/communicationActions.js';
 
 export const announcementsRouter = Router();
 
@@ -37,8 +38,16 @@ announcementsRouter.get('/:locationId', async (req, res) => {
   }
 });
 
-/** POST /api/announcements — body: { locationId, authorId?, body } */
-announcementsRouter.post('/', async (req, res) => {
+/**
+ * POST /api/announcements — body: { locationId, authorId?, body }.
+ * `requireSession`-gated (spec 2026-09-11-voice-post-announcement-shoutout-design.md
+ * §2.3a) — this route previously required no authentication at all, so
+ * anyone could broadcast an announcement to a venue attributed to an
+ * arbitrary authorId. This is an authentication fix only, not a role
+ * restriction: any signed-in user, same audience as before this fix, can
+ * still post — only anonymous access is closed.
+ */
+announcementsRouter.post('/', requireSession, async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     const authorId = req.body?.authorId ? String(req.body.authorId).trim() : null;
@@ -46,47 +55,18 @@ announcementsRouter.post('/', async (req, res) => {
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!body) return res.status(400).json({ error: 'body is required.' });
 
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
-
-    // authorId is optional, but when supplied it carries an FK constraint —
-    // validate it here so a non-User id (e.g. the client's synthetic
-    // `upload-emp-<name>` fallback) gets a clear 404 rather than an opaque 500
-    // from the raw FK violation.
-    if (authorId) {
-      const author = await prisma.user.findUnique({ where: { id: authorId } });
-      if (!author) return res.status(404).json({ error: `Author "${authorId}" not found.` });
+    const result = await createAnnouncement({ locationId, authorId, body });
+    if (result.result !== 'ok') {
+      const status = result.result === 'rate_limited' ? 429 : result.result === 'too_long' ? 400 : 404;
+      return res.status(status).json({ error: result.message });
     }
-
-    const created = await prisma.announcement.create({
-      data: { locationId, authorId, body },
-      include: { author: { select: { fullName: true } } },
-    });
-
-    // Real delivery on top of the write above (never blocking the
-    // response). Every active staff member at the location, immediate, one
-    // per post — not digested, unlike the affected-set notifications
-    // elsewhere, since each announcement is its own deliberate broadcast.
-    // The poster themselves is excluded — they don't need telling about
-    // their own post. Batched (notifyUsersBatched, not one big Promise.all)
-    // since this is the one full-roster fan-out in the app, not a small
-    // known-affected set.
-    const recipients = await prisma.user.findMany({
-      where: { locationId, isActive: true, id: { not: authorId ?? undefined } },
-      select: { id: true },
-    });
-    void notifyUsersBatched(
-      recipients.map((r) => r.id),
-      { title: 'New announcement', body, url: '/' },
-    );
-
     return res.status(201).json({
       announcement: {
-        id: created.id,
-        body: created.body,
-        authorId: created.authorId,
-        authorName: created.author?.fullName ?? null,
-        createdAt: created.createdAt.toISOString(),
+        id: result.announcement.id,
+        body: result.announcement.body,
+        authorId: result.announcement.authorId,
+        authorName: result.announcement.authorName,
+        createdAt: result.announcement.createdAt.toISOString(),
         editedAt: null,
       },
     });
