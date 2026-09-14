@@ -31,6 +31,8 @@ export type ParsedIntent =
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
   | { intent: 'PUBLISH_ROTA'; weekStart: string; confidence: number; summary: string }
   | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
+  | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
+  | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
   | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 

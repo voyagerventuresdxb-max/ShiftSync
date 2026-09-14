@@ -14,6 +14,7 @@ import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { createShift, updateShift } from '../lib/actions/shiftActions.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
+import { createAnnouncement, createShoutout } from '../lib/actions/communicationActions.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
@@ -136,6 +137,13 @@ function validateIntentShape(intent: ParsedIntent): string | null {
       }
       return null;
     }
+    case 'POST_ANNOUNCEMENT':
+      if (!isNonEmptyString(intent.content)) return 'content is required.';
+      return null;
+    case 'POST_SHOUTOUT':
+      if (!isNonEmptyString(intent.targetUserId)) return 'targetUserId is required.';
+      if (!isNonEmptyString(intent.content)) return 'content is required.';
+      return null;
     case 'UNRECOGNIZED':
       return null;
     default:
@@ -612,6 +620,40 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }
         return respond(201, { executed: true, result: { createdCount: result.createdCount, templateName: result.templateName } }, 'EXECUTED');
+      }
+      case 'POST_ANNOUNCEMENT': {
+        const result = await createAnnouncement({ locationId, authorId: actorId, body: intent.content });
+        if (result.result !== 'ok') {
+          const status = result.result === 'rate_limited' ? 429 : result.result === 'too_long' ? 400 : 404;
+          return respond(status, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
+        return respond(201, { executed: true, result: result.announcement }, 'EXECUTED');
+      }
+      case 'POST_SHOUTOUT': {
+        // Location-scoped existence check on the resolved targetUserId,
+        // re-validated fresh here before calling createShoutout — same
+        // defense-in-depth pattern REQUEST_SWAP's targetUserId check and
+        // Slice 3's APPLY_ROTA_TEMPLATE templateId check already use in this
+        // same file, built in from the start rather than retrofitted (that
+        // review finding is exactly why this check exists here instead of
+        // being assumed safe because createShoutout below also checks it).
+        // /parse-intent's own staffDirectory candidate list is scoped to the
+        // caller's locationId, but that's enforcement by the model, not a
+        // structural guarantee — a hand-crafted request naming a staff
+        // member from another venue must still be rejected here, not just
+        // inside createShoutout (which duplicates this check for its OWN
+        // callers, e.g. the REST route, not as a substitute for this one).
+        const target = await prisma.user.findFirst({ where: { id: intent.targetUserId, locationId, isActive: true }, select: { id: true } });
+        if (!target) {
+          const msg = 'That staff member could not be found at your location.';
+          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        const result = await createShoutout({ locationId, employeeId: intent.targetUserId, authorId: actorId, shiftSnapshot: null, note: intent.content });
+        if (result.result !== 'ok') {
+          const status = result.result === 'rate_limited' ? 429 : result.result === 'too_long' ? 400 : 404;
+          return respond(status, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
+        return respond(201, { executed: true, result: result.shoutout }, 'EXECUTED');
       }
       case 'UNRECOGNIZED': {
         const msg = 'This command was not recognized — nothing was executed.';

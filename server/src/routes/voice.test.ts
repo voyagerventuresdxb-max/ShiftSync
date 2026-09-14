@@ -1516,3 +1516,223 @@ test('POST /api/voice/parse-intent: a plain single-request transcript never flag
     await prisma.user.delete({ where: { id: staffer.id } }).catch(() => {});
   }
 });
+
+// POST_ANNOUNCEMENT / POST_SHOUTOUT (Slice 4) — spec
+// 2026-09-11-voice-post-announcement-shoutout-design.md. Both manager-only,
+// following the same confirm-before-execute pattern as every prior slice.
+
+test('POST /api/voice/execute: a STAFF session cannot POST_ANNOUNCEMENT even with a hand-crafted intent — 403, nothing created', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ post-announcement staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'tell everyone the bar closes early',
+          intent: { intent: 'POST_ANNOUNCEMENT', content: 'The bar closes early tonight.', confidence: 0.9, summary: 'Post this announcement to the venue.' },
+        }),
+      });
+      assert.equal(res.status, 403);
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /does not permit/i);
+    });
+
+    const leaked = await prisma.announcement.findMany({ where: { locationId: location!.id, body: 'The bar closes early tonight.' } });
+    assert.equal(leaked.length, 0, 'no Announcement may be created from a STAFF-session POST_ANNOUNCEMENT attempt');
+  } finally {
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: a STAFF session cannot POST_SHOUTOUT even with a hand-crafted intent — 403, nothing created', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staffCaller = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ post-shoutout staff caller', systemRole: 'STAFF' },
+  });
+  const target = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ post-shoutout staff target', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staffCaller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'give them a shoutout',
+          intent: {
+            intent: 'POST_SHOUTOUT',
+            targetUserId: target.id,
+            targetUserName: target.fullName,
+            content: 'Great work today.',
+            confidence: 0.9,
+            summary: 'Give a shoutout.',
+          },
+        }),
+      });
+      assert.equal(res.status, 403);
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /does not permit/i);
+    });
+
+    const leaked = await prisma.shoutout.findMany({ where: { employeeId: target.id } });
+    assert.equal(leaked.length, 0, 'no Shoutout may be created from a STAFF-session POST_SHOUTOUT attempt');
+  } finally {
+    await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: target.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: POST_SHOUTOUT rejects a targetUserId that belongs to a different location — 404, nothing created', async () => {
+  // Mirrors rotaActions.test.ts's APPLY_ROTA_TEMPLATE cross-location test
+  // and REQUEST_SWAP's cross-location test above — the location-ownership
+  // check built into this case from the start (not retrofitted), per the
+  // review that caught Slice 3's APPLY_ROTA_TEMPLATE gap: a hand-crafted
+  // /execute request naming a real staff member from a DIFFERENT venue must
+  // never let that venue's user receive a shoutout attributed to this
+  // caller.
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const otherLocation = await prisma.location.create({
+    data: { organizationId: location!.organizationId, name: '__task-slice4-test__ other venue (cross-loc shoutout target)', timezone: 'Asia/Dubai' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ cross-loc-shoutout manager', systemRole: 'MANAGER' },
+  });
+  const outOfLocationTarget = await prisma.user.create({
+    data: { locationId: otherLocation.id, fullName: '__task-slice4-test__ cross-loc-shoutout target (other location)', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'shoutout to someone from another venue',
+          intent: {
+            intent: 'POST_SHOUTOUT',
+            targetUserId: outOfLocationTarget.id,
+            targetUserName: outOfLocationTarget.fullName,
+            content: 'Nice work.',
+            confidence: 0.9,
+            summary: 'Give a shoutout.',
+          },
+        }),
+      });
+      assert.equal(res.status, 404, 'a targetUserId from a different location must be rejected');
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /could not be found/i);
+    });
+
+    const leaked = await prisma.shoutout.findMany({ where: { employeeId: outOfLocationTarget.id } });
+    assert.equal(leaked.length, 0, 'no Shoutout may be created against a cross-location targetUserId');
+  } finally {
+    await prisma.shoutout.deleteMany({ where: { employeeId: outOfLocationTarget.id } });
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: outOfLocationTarget.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: POST_ANNOUNCEMENT from a MANAGER session posts content byte-identical to what was sent — no second cleanup pass', async () => {
+  // The core verbatim guarantee (spec §2.1/§10): whatever string sits in
+  // intent.content when a caller sends it to /execute is exactly what gets
+  // written to Announcement.body — nothing regenerates or reformats it a
+  // second time here.
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ announcement-verbatim manager', systemRole: 'MANAGER' },
+  });
+  const exactContent = 'uh, so, the walk-in is down today — cleaned up, but this exact string, verbatim.';
+
+  let createdId = '';
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'tell everyone the walk-in is down',
+          intent: { intent: 'POST_ANNOUNCEMENT', content: exactContent, confidence: 0.9, summary: 'Post this announcement to the venue.' },
+        }),
+      });
+      assert.equal(res.status, 201);
+      const body = (await res.json()) as { executed: boolean; result: { id: string; body: string } };
+      assert.equal(body.executed, true);
+      assert.equal(body.result.body, exactContent, 'the posted body must be byte-identical to intent.content, not paraphrased or altered');
+      createdId = body.result.id;
+    });
+
+    const row = await prisma.announcement.findUnique({ where: { id: createdId } });
+    assert.equal(row?.body, exactContent, 'the persisted row must also be byte-identical');
+  } finally {
+    if (createdId) await prisma.announcement.delete({ where: { id: createdId } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: POST_SHOUTOUT from a MANAGER session posts a note byte-identical to what was sent, with shiftSnapshot always null', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ shoutout-verbatim manager', systemRole: 'MANAGER' },
+  });
+  const employee = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__task-slice4-test__ shoutout-verbatim employee', systemRole: 'STAFF' },
+  });
+  const exactContent = 'covered a last-minute call-out without being asked, exact wording preserved';
+
+  let createdId = '';
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          transcript: 'give them a shoutout for covering',
+          intent: {
+            intent: 'POST_SHOUTOUT',
+            targetUserId: employee.id,
+            targetUserName: employee.fullName,
+            content: exactContent,
+            confidence: 0.9,
+            summary: 'Give a shoutout.',
+          },
+        }),
+      });
+      assert.equal(res.status, 201);
+      const body = (await res.json()) as { executed: boolean; result: { id: string; note: string; employeeId: string } };
+      assert.equal(body.executed, true);
+      assert.equal(body.result.note, exactContent, 'the posted note must be byte-identical to intent.content, not paraphrased or altered');
+      assert.equal(body.result.employeeId, employee.id);
+      createdId = body.result.id;
+    });
+
+    const row = await prisma.shoutout.findUnique({ where: { id: createdId } });
+    assert.equal(row?.note, exactContent, 'the persisted row must also be byte-identical');
+    assert.equal(row?.shiftSnapshot, null, 'the voice path must always post shiftSnapshot: null (spec §2.4)');
+  } finally {
+    if (createdId) await prisma.shoutout.delete({ where: { id: createdId } }).catch(() => {});
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: employee.id } }).catch(() => {});
+  }
+});
