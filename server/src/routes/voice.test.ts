@@ -1736,3 +1736,155 @@ test('POST /api/voice/execute: POST_SHOUTOUT from a MANAGER session posts a note
     await prisma.user.delete({ where: { id: employee.id } }).catch(() => {});
   }
 });
+
+test('GET /api/voice/interactions: a STAFF session gets 403', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const staff = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__interactions-test__ staff', systemRole: 'STAFF' },
+  });
+
+  try {
+    const token = await sessionFor(staff.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/interactions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 403, 'STAFF must not be able to read the interaction log');
+    });
+  } finally {
+    await prisma.user.delete({ where: { id: staff.id } }).catch(() => {});
+  }
+});
+
+test('GET /api/voice/interactions: a MANAGER sees only their own location\'s rows, newest first', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+  const otherLocation = await prisma.location.create({
+    data: { organizationId: location!.organizationId, name: '__interactions-test__ other location', timezone: 'Asia/Dubai' },
+  });
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__interactions-test__ manager', systemRole: 'MANAGER' },
+  });
+  const otherActor = await prisma.user.create({
+    data: { locationId: otherLocation.id, fullName: '__interactions-test__ other-location actor', systemRole: 'MANAGER' },
+  });
+
+  const older = await prisma.voiceInteractionLog.create({
+    data: {
+      locationId: location!.id,
+      actorId: manager.id,
+      transcript: '__interactions-test__ older transcript',
+      resolvedIntent: 'MARK_AVAILABILITY',
+      confidence: 0.9,
+      outcome: 'PENDING_CONFIRMATION',
+      createdAt: new Date('2026-09-01T00:00:00.000Z'),
+    },
+  });
+  const newer = await prisma.voiceInteractionLog.create({
+    data: {
+      locationId: location!.id,
+      actorId: manager.id,
+      transcript: '__interactions-test__ newer transcript',
+      resolvedIntent: 'UNRECOGNIZED',
+      confidence: null,
+      outcome: 'LOW_CONFIDENCE',
+      createdAt: new Date('2026-09-02T00:00:00.000Z'),
+    },
+  });
+  const otherLocationRow = await prisma.voiceInteractionLog.create({
+    data: {
+      locationId: otherLocation.id,
+      actorId: otherActor.id,
+      transcript: '__interactions-test__ other location transcript',
+      resolvedIntent: 'MARK_AVAILABILITY',
+      confidence: 0.9,
+      outcome: 'PENDING_CONFIRMATION',
+      createdAt: new Date('2026-09-03T00:00:00.000Z'),
+    },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/interactions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { interactions: { id: string; transcript: string }[]; nextCursor: string | null };
+      const ids = body.interactions.map((i) => i.id);
+      assert.ok(ids.includes(older.id), 'must include this location\'s older row');
+      assert.ok(ids.includes(newer.id), 'must include this location\'s newer row');
+      assert.ok(!ids.includes(otherLocationRow.id), 'must not leak another location\'s row');
+      assert.ok(ids.indexOf(newer.id) < ids.indexOf(older.id), 'newest first');
+    });
+  } finally {
+    await prisma.voiceInteractionLog.deleteMany({
+      where: { id: { in: [older.id, newer.id, otherLocationRow.id] } },
+    });
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: otherActor.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: otherLocation.id } }).catch(() => {});
+  }
+});
+
+test('GET /api/voice/interactions: cursor pagination returns disjoint pages with no gaps or overlap', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+
+  const manager = await prisma.user.create({
+    data: { locationId: location!.id, fullName: '__interactions-page-test__ manager', systemRole: 'MANAGER' },
+  });
+
+  const rows: { id: string }[] = [];
+  for (let i = 0; i < 5; i++) {
+    rows.push(
+      await prisma.voiceInteractionLog.create({
+        data: {
+          locationId: location!.id,
+          actorId: manager.id,
+          transcript: `__interactions-page-test__ row ${i}`,
+          resolvedIntent: 'MARK_AVAILABILITY',
+          confidence: 0.9,
+          outcome: 'PENDING_CONFIRMATION',
+          createdAt: new Date(2026, 8, 10, 0, 0, i), // strictly increasing, i=4 is newest
+        },
+      }),
+    );
+  }
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const page1Res = await fetch(`${baseUrl}/api/voice/interactions?limit=3`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(page1Res.status, 200);
+      const page1 = (await page1Res.json()) as { interactions: { id: string }[]; nextCursor: string | null };
+      assert.equal(page1.interactions.length, 3);
+      assert.ok(page1.nextCursor, 'must report a cursor when more rows exist');
+      assert.deepEqual(
+        page1.interactions.map((r) => r.id),
+        [rows[4].id, rows[3].id, rows[2].id],
+        'page 1 must be the 3 newest rows, newest first',
+      );
+
+      const page2Res = await fetch(`${baseUrl}/api/voice/interactions?limit=3&cursor=${page1.nextCursor}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(page2Res.status, 200);
+      const page2 = (await page2Res.json()) as { interactions: { id: string }[]; nextCursor: string | null };
+      assert.deepEqual(
+        page2.interactions.map((r) => r.id),
+        [rows[1].id, rows[0].id],
+        'page 2 must continue exactly where page 1 left off, with no overlap',
+      );
+      assert.equal(page2.nextCursor, null, 'no further pages remain');
+    });
+  } finally {
+    await prisma.voiceInteractionLog.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+  }
+});
