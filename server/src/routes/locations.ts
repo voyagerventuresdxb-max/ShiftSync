@@ -12,7 +12,7 @@ locationsRouter.get('/:id', requireSession, async (req, res) => {
     if (!assertOwnsLocation(req, res, id)) return;
     const location = await prisma.location.findUnique({
       where: { id },
-      select: { id: true, name: true, venueType: true },
+      select: { id: true, name: true, venueType: true, emirate: true },
     });
     if (!location) return res.status(404).json({ error: `Location "${id}" not found.` });
     return res.status(200).json({ location });
@@ -23,10 +23,13 @@ locationsRouter.get('/:id', requireSession, async (req, res) => {
 });
 
 /**
- * PATCH /api/locations/:id — body: { name?, venueType? }
- * Used by the onboarding wizard's venue-setup step; either field may be
- * sent alone so a later edit doesn't clobber the other. Manager/owner-only,
- * own venue only.
+ * PATCH /api/locations/:id — body: { name?, venueType?, emirate? }
+ * Used by the onboarding wizard's venue-setup step; any field may be sent
+ * alone so a later edit doesn't clobber the others. Manager/owner-only,
+ * own venue only. `emirate` is free-text (the Prisma column has no enum —
+ * see its schema comment), same trim-only treatment as `name`; the onboarding
+ * UI's city chips (Dubai/Abu Dhabi/Sharjah/Other) are a client-side
+ * convenience, not a server-enforced list.
  */
 locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
@@ -35,7 +38,7 @@ locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) =
     const existing = await prisma.location.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: `Location "${id}" not found.` });
 
-    const data: { name?: string; venueType?: string | null } = {};
+    const data: { name?: string; venueType?: string | null; emirate?: string | null } = {};
     if (req.body?.name !== undefined) {
       const name = String(req.body.name).trim();
       if (!name) return res.status(400).json({ error: 'name cannot be empty.' });
@@ -48,6 +51,10 @@ locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) =
       }
       data.venueType = venueType || null;
     }
+    if (req.body?.emirate !== undefined) {
+      const emirate = req.body.emirate === null ? null : String(req.body.emirate).trim();
+      data.emirate = emirate || null;
+    }
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ error: 'Nothing to update.' });
     }
@@ -55,7 +62,7 @@ locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) =
     const location = await prisma.location.update({
       where: { id },
       data,
-      select: { id: true, name: true, venueType: true },
+      select: { id: true, name: true, venueType: true, emirate: true },
     });
     return res.status(200).json({ location });
   } catch (err) {

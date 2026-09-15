@@ -255,6 +255,21 @@ export const router = createBrowserRouter([
         ),
         handle: handles.onboarding,
       },
+      {
+        // `:step` mirrors the wizard's current screen into the URL (see
+        // OnboardingStateContext) so a hard reload mid-onboarding resumes
+        // where the manager left off instead of bouncing back to Welcome —
+        // two static+dynamic route objects (not a `:step?` optional
+        // segment) since that syntax isn't supported across all v6 minor
+        // versions; both point at the exact same element.
+        path: '/onboarding/:step',
+        element: (
+          <RequireSession managerOnly>
+            <OnboardingContent />
+          </RequireSession>
+        ),
+        handle: handles.onboarding,
+      },
     ],
   },
 ]);

@@ -9,6 +9,7 @@ export interface LocationSummary {
   id: string;
   name: string;
   venueType: string | null;
+  emirate: string | null;
 }
 
 export class ApiError extends Error {
@@ -44,11 +45,11 @@ export async function fetchLocation(token: string, locationId: string): Promise<
   return location;
 }
 
-/** PATCH /api/locations/:id — either field may be omitted. */
+/** PATCH /api/locations/:id — any field may be omitted. */
 export async function updateLocation(
   token: string,
   locationId: string,
-  patch: { name?: string; venueType?: string | null },
+  patch: { name?: string; venueType?: string | null; emirate?: string | null },
 ): Promise<LocationSummary> {
   const { location } = await request<{ location: LocationSummary }>(`/api/locations/${locationId}`, {
     method: 'PATCH',

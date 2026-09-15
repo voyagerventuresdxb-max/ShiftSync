@@ -22,6 +22,7 @@ import { availabilityRouter } from './routes/availability.js';
 import { policyDocumentsRouter, policyDocumentFilesRouter } from './routes/policyDocuments.js';
 import { onboardingRouter } from './routes/onboarding.js';
 import { locationsRouter } from './routes/locations.js';
+import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
 
 export function createApp() {
@@ -70,6 +71,7 @@ export function createApp() {
   app.use('/api/policy-documents', policyDocumentsRouter);
   app.use('/api/onboarding', onboardingRouter);
   app.use('/api/locations', locationsRouter);
+  app.use('/api/roles', rolesRouter);
   app.use('/api/voice', voiceRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.

@@ -200,3 +200,59 @@ test('PATCH /api/staff-directory/:userId: a PATCH that never touches isActive is
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+test('PATCH /api/staff-directory/:userId: PATCHing a phone already taken by another staff member returns a proper 409, not a generic 500', async () => {
+  // Regression test: the P2002 unique-constraint violation on User.phone
+  // used to fall through uncaught to Express's default error handler (a
+  // bare 500), the way it still does for any *unexpected* constraint hit.
+  // This one is expected and common (two staff records converging on the
+  // same real mobile number) and deserves its own real status + message,
+  // mirroring attendance.ts's identical exact-target P2002 backstop pattern.
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: {
+      organizationId: seedLocation!.organizationId,
+      name: '__staffdirectory-test__ phone conflict',
+      timezone: 'Asia/Dubai',
+    },
+  });
+  const takenPhone = `+9715${Date.now().toString().slice(-8)}`;
+  await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Phone Owner', systemRole: 'STAFF', phone: takenPhone },
+  });
+  const other = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Phone Conflicter', systemRole: 'STAFF' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager4', systemRole: 'MANAGER' },
+  });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const conflictRes = await fetch(`${baseUrl}/api/staff-directory/${other.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ phone: takenPhone }),
+      });
+      assert.equal(conflictRes.status, 409, 'a duplicate phone must return 409, not 500');
+      const conflictBody = (await conflictRes.json()) as { error: string };
+      assert.equal(conflictBody.error, 'This phone number is already registered to another staff member.');
+
+      // Sanity: a PATCH to a genuinely free number still succeeds normally.
+      const freePhone = `+9715${(Date.now() + 1).toString().slice(-8)}`;
+      const okRes = await fetch(`${baseUrl}/api/staff-directory/${other.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ phone: freePhone }),
+      });
+      assert.equal(okRes.status, 200);
+      const okBody = (await okRes.json()) as { phone: string | null };
+      assert.equal(okBody.phone, freePhone);
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
