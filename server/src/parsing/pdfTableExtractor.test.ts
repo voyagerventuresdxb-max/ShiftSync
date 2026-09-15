@@ -119,6 +119,43 @@ test('multi-line cell: a role header wrapped across two lines is reconstructed a
   assert.equal(fatima[0].roleName, '');
 });
 
+// Regression: a text-layer PDF with NO day-header row (a long-format
+// "one row per shift" export, or free text) produced zero column anchors,
+// and buildRawGrid then did `cells[0].push(...)` on an empty array —
+// TypeError, 500 on POST /api/schedules/upload for the whole file, instead
+// of the text-parser/vision fallback the upload route already has for
+// exactly this shape. The route only takes that fallback when
+// parseExcelGrid does NOT label the result 'Deterministic Grid Parser', so
+// both halves are asserted here.
+test('a text-layer PDF with no day-header row (long-format export) resolves to an empty grid instead of throwing', async () => {
+  const buffer = await buildPdf([
+    { text: 'Employee', x: 20, y: 380 },
+    { text: 'Role', x: 140, y: 380 },
+    { text: 'Date', x: 240, y: 380 },
+    { text: 'Start', x: 340, y: 380 },
+    { text: 'End', x: 420, y: 380 },
+    { text: 'Fatima', x: 20, y: 360 },
+    { text: 'Waiter', x: 140, y: 360 },
+    { text: '2026-08-17', x: 240, y: 360 },
+    { text: '09:00', x: 340, y: 360 },
+    { text: '17:00', x: 420, y: 360 },
+  ]);
+
+  assert.equal(await hasPdfTextLayer(buffer), true);
+  const grid = await extractPdfGrid(buffer);
+  assert.deepEqual(grid, []);
+  assert.notEqual(parseExcelGrid(grid, WEEK_START).templateLabel, 'Deterministic Grid Parser');
+});
+
+test('sample-roster.pdf (the long-format fixture that 500ed the upload route) no longer throws in extractPdfGrid', async () => {
+  const buffer = readFileSync('server/test-fixtures/sample-roster.pdf');
+
+  assert.equal(await hasPdfTextLayer(buffer), true);
+  await assert.doesNotReject(() => extractPdfGrid(buffer));
+  const grid = await extractPdfGrid(buffer);
+  assert.notEqual(parseExcelGrid(grid, WEEK_START).templateLabel, 'Deterministic Grid Parser');
+});
+
 test('inconsistent row spacing: irregular gaps between data rows still split into distinct rows, not merged', async () => {
   const buffer = await buildPdf([
     { text: '17-Aug', x: 100, y: 380 },
