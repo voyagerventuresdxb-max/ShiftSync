@@ -162,3 +162,63 @@ test('schedules.ts POST /upload/:batchId/confirm does not write a false audit-lo
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+// Regression: the edit-resolution loop used to run each row's role
+// lookup-then-maybe-create inside `Promise.all(rows.map(async ...))`.
+// `Array.prototype.map` invokes every callback synchronously up to its
+// first `await`, so two rows editing to the SAME brand-new role name both
+// read the in-memory roleByName map as a miss before either
+// `prisma.role.create` resolved — both issued a create, the second threw an
+// unhandled P2002 (Role has `@@unique([locationId, name])`), and the whole
+// confirm 500'd, discarding every row's edits in the batch, not just the
+// colliding two. Fixed by resolving/creating every distinct new role name
+// SEQUENTIALLY, before the (now synchronous) row-mapping loop runs at all.
+test('schedules.ts POST /upload/:batchId/confirm: two edited rows picking the same brand-new role name both succeed, creating exactly one Role (not a 500)', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__authgap-test__ schedules role race', timezone: 'Asia/Dubai' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__authgap-test__ role-race manager', systemRole: 'MANAGER' },
+  });
+  const batchId = uploadCache.put(location.id, null, [
+    fakeRow({ rowNumber: 1, employeeName: '__authgap-test__ employee one', resolvedRoleId: null }),
+    fakeRow({ rowNumber: 2, employeeName: '__authgap-test__ employee two', resolvedRoleId: null }),
+  ]);
+  const newRoleName = '__authgap-test__ Sommelier';
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const confirm = await fetch(`${baseUrl}/api/schedules/upload/${batchId}/confirm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          edits: [
+            { rowNumber: 1, role: newRoleName },
+            { rowNumber: 2, role: newRoleName },
+          ],
+        }),
+      });
+      assert.equal(confirm.status, 201, 'two rows racing to create the same brand-new role must not 500 the whole confirm');
+      const body = (await confirm.json()) as { createdCount: number; skippedCount: number };
+      assert.equal(body.createdCount, 2, 'both rows must have resolved and been created, not just one');
+      assert.equal(body.skippedCount, 0);
+    });
+
+    const shifts = await prisma.shift.findMany({ where: { locationId: location.id } });
+    assert.equal(shifts.length, 2, 'both edited rows must have persisted as real shifts');
+
+    const roles = await prisma.role.findMany({ where: { locationId: location.id, name: newRoleName } });
+    assert.equal(roles.length, 1, 'exactly one Role must exist for the shared new name — no duplicate/orphaned row from the race');
+    assert.ok(shifts.every((s) => s.roleId === roles[0]!.id), 'both shifts must reference the same, single created Role');
+  } finally {
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.role.deleteMany({ where: { locationId: location.id, name: newRoleName } });
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});

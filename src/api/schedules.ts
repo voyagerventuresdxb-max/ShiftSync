@@ -15,6 +15,13 @@ export type RowMatchStatus =
 
 export interface PreviewRow {
   rowNumber: number;
+  /**
+   * Identifies which single physical source-file row/block this shift came
+   * from — shared by every shift belonging to the same staff member, unlike
+   * `rowNumber` (one per shift). Only set for grid/vision-parsed uploads;
+   * absent for free-text uploads, whose input has no such structure.
+   */
+  sourceRowIndex?: number;
   employeeName: string;
   role: string;
   /** ISO date, YYYY-MM-DD. */

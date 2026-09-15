@@ -4,6 +4,7 @@ import { fetchLocation } from '../../api/locations';
 import { fetchStaffDirectory, updateStaffMember, type StaffDirectoryEntry } from '../../api/staffDirectory';
 import { useIdentity } from '../../state/IdentityContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
+import { stripUaeCountryCode } from './phoneFormat';
 
 /**
  * Onboarding · 05 · Invite — ported from `ShiftSync Invite.dc.html` (the
@@ -41,6 +42,7 @@ function decodeWhatsAppMessage(whatsappUrl: string): string {
     return '';
   }
 }
+
 
 export default function InviteScreen({ locationId, onBack, onFinish }: { locationId: string; onBack: () => void; onFinish: () => void }) {
   const { session } = useIdentity();
@@ -110,7 +112,15 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
     setQrSaved(true);
   };
 
-  const phoneFor = (s: StaffDirectoryEntry) => phoneDrafts.get(s.id) ?? (s.phone ?? '').replace(/^\+?971/, '').trim();
+  // Strips a leading country code from EITHER source — the persisted
+  // `s.phone` AND a manager's own in-progress draft — not just the former.
+  // The input shows a static "+971" label beside it, but nothing stopped a
+  // manager from typing a full number including the country code out of
+  // habit (e.g. pasted from Contacts); previously that only got stripped
+  // when falling back to the stored value, so a freshly-typed
+  // "+971501234567" passed straight through into commitPhone below and got
+  // a SECOND "+971" prepended onto it.
+  const phoneFor = (s: StaffDirectoryEntry) => stripUaeCountryCode(phoneDrafts.get(s.id) ?? s.phone ?? '');
 
   const commitPhone = async (s: StaffDirectoryEntry) => {
     if (!session) return;

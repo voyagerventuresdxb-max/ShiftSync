@@ -826,6 +826,13 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   let currentRoleIsProvisional = true;
   let rowNumber = 1;
   let hasSeenAnyStaffRow = false;
+  // One value per physical sheet row treated as a staff row (unlike
+  // `rowNumber` above, a per-SHIFT counter — one busy employee's several
+  // shifts share one `sourceRowIndex` but get different `rowNumber`s), so a
+  // consumer can group shifts by the actual employee record instead of by
+  // name alone (two different real staff sharing a name land on different
+  // physical rows, hence different indices).
+  let sourceRowCounter = 0;
   const dayColIndexes = new Set(columns.map((c) => c.colIndex));
 
   /**
@@ -833,7 +840,13 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
    * both column shapes below). Returns whether real shift/leave data was
    * found — feeds the post-loop sanity check (RosterExtractionAnomalyError).
    */
-  function processStaffRow(row: unknown[], employeeName: string, roleName: string, extraNoteExcludedCols: Set<number>): boolean {
+  function processStaffRow(
+    row: unknown[],
+    employeeName: string,
+    roleName: string,
+    extraNoteExcludedCols: Set<number>,
+    sourceRowIndex: number,
+  ): boolean {
     let hasShiftOrLeaveThisRow = false;
     for (const col of columns) {
       const parsed = parseCellValue(row[col.colIndex], fileLegend);
@@ -888,6 +901,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         }
         rows.push({
           rowNumber: rowNumber++,
+          sourceRowIndex,
           employeeName,
           roleName,
           date: col.date,
@@ -1030,7 +1044,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       // NOTHING do we consider the row for header promotion below.
       const employeeName = firstCell;
       hasSeenAnyStaffRow = true;
-      const hadRealData = processStaffRow(row, employeeName, currentRole, new Set([0]));
+      const hadRealData = processStaffRow(row, employeeName, currentRole, new Set([0]), sourceRowCounter++);
       if (hadRealData) {
         staffRowsWithRealDataProcessed++;
         continue;
@@ -1134,7 +1148,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     // preceded it and always takes precedence; falls back to the
     // section-derived role when this row's own title cell is blank.
     const roleName = titleCell || currentRole;
-    if (processStaffRow(row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]))) staffRowsWithRealDataProcessed++;
+    if (processStaffRow(row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]), sourceRowCounter++)) staffRowsWithRealDataProcessed++;
   }
 
   // One blocking anomaly per unique unrecognized section header, listing

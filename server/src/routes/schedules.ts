@@ -465,37 +465,57 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
       const roleByName = new Map(roles.map((r) => [nameKey(r.name), r.id]));
       const userByName = new Map(users.map((u) => [nameKey(u.fullName), u.id]));
 
-      rows = await Promise.all(
-        rows.map(async (row) => {
-          const edit = editsByRow.get(row.rowNumber);
-          if (!edit) return row;
-          const next = { ...row };
+      // Resolve every distinct brand-new role name SEQUENTIALLY, before the
+      // row loop below runs at all — not inside it. The row loop used to
+      // `await prisma.role.create` per-row inside a `Promise.all`, which
+      // does not actually serialize anything: `Array.prototype.map` invokes
+      // every callback synchronously up to its first `await`, so two rows
+      // editing to the same not-yet-existing role name both read this map
+      // as a miss before either create resolves, both call
+      // `prisma.role.create`, and the second throws an unhandled P2002
+      // (`Role` has `@@unique([locationId, name])`) that 500s the WHOLE
+      // confirm — silently discarding every other row's edits too, not just
+      // the colliding pair. Creating up front, one at a time, means the
+      // second lookup for a repeated name always hits the map instead of
+      // racing a second create.
+      const neededRoleNames = new Set<string>();
+      for (const edit of editsByRow.values()) {
+        if (edit.role === undefined) continue;
+        const trimmed = edit.role.trim();
+        if (!trimmed) continue;
+        if (roleByName.has(nameKey(trimmed)) || roleByName.has(nameKey(canonicalRoleName(trimmed)))) continue;
+        neededRoleNames.add(trimmed);
+      }
+      for (const name of neededRoleNames) {
+        const key = nameKey(name);
+        if (roleByName.has(key)) continue; // an earlier name in this same loop already created an equivalent role
+        const created = await prisma.role.create({ data: { locationId: batch.locationId, name } });
+        roleByName.set(key, created.id);
+      }
 
-          if (edit.employeeName !== undefined) {
-            const trimmed = edit.employeeName.trim();
-            if (trimmed) {
-              next.employeeName = trimmed;
-              next.resolvedUserId = userByName.get(nameKey(trimmed)) ?? null;
-            }
+      rows = rows.map((row) => {
+        const edit = editsByRow.get(row.rowNumber);
+        if (!edit) return row;
+        const next = { ...row };
+
+        if (edit.employeeName !== undefined) {
+          const trimmed = edit.employeeName.trim();
+          if (trimmed) {
+            next.employeeName = trimmed;
+            next.resolvedUserId = userByName.get(nameKey(trimmed)) ?? null;
           }
+        }
 
-          if (edit.role !== undefined) {
-            const trimmed = edit.role.trim();
-            if (trimmed) {
-              next.roleName = trimmed;
-              let roleId = roleByName.get(nameKey(trimmed)) ?? roleByName.get(nameKey(canonicalRoleName(trimmed)));
-              if (!roleId) {
-                const created = await prisma.role.create({ data: { locationId: batch.locationId, name: trimmed } });
-                roleId = created.id;
-                roleByName.set(nameKey(trimmed), roleId); // covers two edited rows picking the same brand-new role in one confirm
-              }
-              next.resolvedRoleId = roleId;
-            }
+        if (edit.role !== undefined) {
+          const trimmed = edit.role.trim();
+          if (trimmed) {
+            next.roleName = trimmed;
+            next.resolvedRoleId = roleByName.get(nameKey(trimmed)) ?? roleByName.get(nameKey(canonicalRoleName(trimmed))) ?? null;
           }
+        }
 
-          return next;
-        }),
-      );
+        return next;
+      });
     }
 
     const result = await withAuditedTransaction(

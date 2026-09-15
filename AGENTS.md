@@ -23,8 +23,6 @@
   `npm run swarm -- "<task instructions>"`
 - **SPARC Workflows:** When asked to write tests, create architecture specs, or run TDD cycles, automatically run:
   `npm run sparc -- run code "<task instructions>"`
-- **Research Requests:** When asked to lookup external documentation, Github repos, or API references, automatically run:
-  `npm run reach -- "<query>"`
 - **Local Ollama Offloading:** When asked to generate unit tests, docstrings/JSDoc, boilerplate types, or single-file refactors, automatically run local Ollama via:
   `npm run local -- <tests|docs|refactor> "<file path>" [instructions]`
 

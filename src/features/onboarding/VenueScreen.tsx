@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { fetchLocation, updateLocation, VENUE_TYPES } from '../../api/locations';
 import { useIdentity } from '../../state/IdentityContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
+import { computeCanContinue } from './venueValidation';
 
 /**
  * Onboarding · 02 · Venue — ported from `ShiftSync Venue.dc.html`.
@@ -27,6 +28,7 @@ function chipStyle(on: boolean) {
     transition: 'all .22s var(--ob-ease-out)',
   } as const;
 }
+
 
 export default function VenueScreen({
   locationId,
@@ -79,7 +81,7 @@ export default function VenueScreen({
     };
   }, [locationId, session]);
 
-  const canContinue = name.trim().length > 0 && !!venueType;
+  const canContinue = computeCanContinue({ name, venueType, cityTouched });
 
   const handleContinue = async () => {
     if (!canContinue || saving) return;
@@ -178,7 +180,7 @@ export default function VenueScreen({
                 setCityTouched(true);
                 setCity(label);
               }}
-              style={chipStyle((cityTouched ? city : 'Dubai') === label)}
+              style={chipStyle(cityTouched && city === label)}
             >
               {label}
             </button>

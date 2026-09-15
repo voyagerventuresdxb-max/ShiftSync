@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import dayjs from 'dayjs';
-import { confirmRoster, ApiError, type PreviewRow, type RosterRowEdit } from '../../api/schedules';
+import { confirmRoster, ApiError, type RosterRowEdit } from '../../api/schedules';
 import { fetchRoles } from '../../api/roles';
 import { useIdentity } from '../../state/IdentityContext';
 import { useOnboardingState } from '../../state/OnboardingStateContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
+import { groupByPerson, shouldAdvanceAfterConfirm } from './reviewGrouping';
 
 /**
  * Onboarding · 04 · Review — ported from `ShiftSync Review.dc.html`.
@@ -27,53 +27,6 @@ import OnboardingScreenShell from './OnboardingScreenShell';
  */
 
 const CANONICAL_ROLES = ['Head Waiter', 'Waiter', 'Commis Waiter', 'Host', 'Server', 'Bartender', 'Head Bartender', 'Supervisor', 'Manager'];
-
-interface PersonRow {
-  id: string;
-  rowNumbers: number[];
-  originalName: string;
-  originalRole: string;
-  shiftSummary: string;
-  /** true when any underlying row didn't cleanly match (status !== 'matched'). */
-  parserFlagged: boolean;
-  note: string | null;
-}
-
-function summarizeShifts(rows: PreviewRow[]): string {
-  if (rows.length === 1) {
-    const r = rows[0]!;
-    return `${dayjs(r.date).format('ddd')} · ${r.startTime}${r.overnight ? ' (+1)' : ''}`;
-  }
-  const days = [...new Set(rows.map((r) => dayjs(r.date).format('ddd')))];
-  const daysLabel = days.length <= 2 ? days.join('–') : `${days[0]}–${days[days.length - 1]}`;
-  const hours = rows.map((r) => Number(r.startTime.split(':')[0] ?? 0));
-  const avgHour = hours.reduce((a, b) => a + b, 0) / hours.length;
-  const period = avgHour < 15 ? 'AM' : 'PM';
-  return `${daysLabel} · ${period}`;
-}
-
-function groupByPerson(preview: PreviewRow[]): PersonRow[] {
-  const map = new Map<string, PreviewRow[]>();
-  for (const row of preview) {
-    const key = row.employeeName.trim() || `(unnamed row ${row.rowNumber})`;
-    const list = map.get(key) ?? [];
-    list.push(row);
-    map.set(key, list);
-  }
-  return [...map.entries()].map(([name, rows]) => {
-    const parserFlagged = rows.some((r) => r.status !== 'matched');
-    const notes = [...new Set(rows.flatMap((r) => r.issues.filter((i) => i.severity !== 'info').map((i) => i.message)))];
-    return {
-      id: name,
-      rowNumbers: rows.map((r) => r.rowNumber),
-      originalName: name,
-      originalRole: rows[0]!.role || '',
-      shiftSummary: summarizeShifts(rows),
-      parserFlagged,
-      note: notes[0] ?? null,
-    };
-  });
-}
 
 /**
  * In-progress edit state (renames, role picks, cleared flags, removed rows,
@@ -153,6 +106,17 @@ export default function ReviewScreen({
   const [filterFlagged, setFilterFlagged] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set only when confirmRoster reports skippedCount > 0 — an unresolved
+  // role means that shift's `resolvedRoleId` never resolved server-side
+  // (schedules.ts:484's `if (trimmed)` no-ops on an empty edited role, e.g.
+  // clicking "Looks right" on a row flagged for a name mismatch whose role
+  // was already blank), so persistShifts silently skipped creating it. When
+  // this is set, `onContinue()` is deliberately NOT called from
+  // handleConfirm — see the dedicated render block below, which blocks
+  // auto-advancing to Invite until the manager has actually seen the count
+  // and explicitly continues, instead of silently proceeding as if every
+  // row imported (the exact bug this fixes).
+  const [confirmResult, setConfirmResult] = useState<{ createdCount: number; skippedCount: number } | null>(null);
 
   // Mirror every edit into sessionStorage as it happens — a reload mid-Review
   // restores these via the lazy initializers above, same mechanism
@@ -276,8 +240,12 @@ export default function ReviewScreen({
         });
       const removedRowNumbers = baseRows.filter((r) => removed.has(r.id)).flatMap((r) => r.rowNumbers);
 
-      await confirmRoster(session.token, uploadResult.batchId, session.user.id, edits, removedRowNumbers);
-      onContinue();
+      const result = await confirmRoster(session.token, uploadResult.batchId, session.user.id, edits, removedRowNumbers);
+      if (shouldAdvanceAfterConfirm(result)) {
+        onContinue();
+      } else {
+        setConfirmResult(result);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Could not confirm this roster.');
     } finally {
@@ -290,6 +258,42 @@ export default function ReviewScreen({
       <OnboardingScreenShell stepIndex={3} eyebrow="Step 4 of 5 · Review" title="Nothing to review yet." onBack={onBack} footer={null}>
         <div style={{ font: "400 14px/1.55 'Manrope'", color: 'var(--ob-stone)' }}>
           Go back to Roster and upload a file or photo first.
+        </div>
+      </OnboardingScreenShell>
+    );
+  }
+
+  if (confirmResult) {
+    return (
+      <OnboardingScreenShell
+        stepIndex={3}
+        eyebrow="Step 4 of 5 · Review"
+        title="Some shifts couldn't be imported."
+        onBack={onBack}
+        footer={
+          <button
+            onClick={onContinue}
+            style={{
+              width: '100%',
+              padding: '16px 20px',
+              borderRadius: 14,
+              background: 'var(--ob-bone)',
+              color: '#100D0A',
+              font: "600 14px/1 'Manrope'",
+              letterSpacing: '.005em',
+              transition: 'all .52s var(--ob-ease-out)',
+              cursor: 'pointer',
+            }}
+          >
+            Continue to Invite
+          </button>
+        }
+      >
+        <div style={{ font: "400 14px/1.55 'Manrope'", color: 'var(--ob-stone)' }}>
+          <strong style={{ color: 'var(--ob-bone)' }}>{confirmResult.createdCount}</strong> shift{confirmResult.createdCount === 1 ? '' : 's'} imported.{' '}
+          <strong style={{ color: 'var(--ob-champagne)' }}>{confirmResult.skippedCount}</strong> shift{confirmResult.skippedCount === 1 ? '' : 's'} could not be
+          imported because a role couldn&apos;t be resolved for {confirmResult.skippedCount === 1 ? 'it' : 'them'}. You can add {confirmResult.skippedCount === 1 ? 'it' : 'these'}{' '}
+          manually later from Scheduling.
         </div>
       </OnboardingScreenShell>
     );

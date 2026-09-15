@@ -637,10 +637,16 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
   const leaveRecords: LeaveRecord[] = [];
 
   let rowNumber = 1;
+  // One value per detected employee block, shared by every shift pushed for
+  // that employee — unlike `rowNumber` (a per-SHIFT counter) — so a
+  // consumer can group shifts by the actual employee record instead of by
+  // name alone. See ParsedShiftRow.sourceRowIndex's own doc comment.
+  let sourceRowIndex = 0;
 
   for (const employee of parsed.employees ?? []) {
     const employeeName = (employee.rawName ?? '').trim();
     const roleName = (employee.role ?? '').trim();
+    const currentSourceRowIndex = sourceRowIndex++;
 
     for (const cell of employee.cells ?? []) {
       const confidence = clampConfidence(cell.confidence ?? 0);
@@ -738,6 +744,7 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
 
       rows.push({
         rowNumber: rowNumber++,
+        sourceRowIndex: currentSourceRowIndex,
         employeeName,
         roleName,
         date: isoDate!,
