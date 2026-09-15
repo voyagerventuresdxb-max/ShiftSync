@@ -458,11 +458,18 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
     let rows = batch.rows.filter((r) => !removedRowNumbers.has(r.rowNumber));
 
     if (editsByRow.size > 0) {
-      const [roles, users] = await Promise.all([
+      const [allRoles, users] = await Promise.all([
         prisma.role.findMany({ where: { locationId: batch.locationId } }),
         prisma.user.findMany({ where: { locationId: batch.locationId, isActive: true } }),
       ]);
-      const roleByName = new Map(roles.map((r) => [nameKey(r.name), r.id]));
+      const roleByName = new Map(allRoles.filter((r) => r.isActive).map((r) => [nameKey(r.name), r.id]));
+      // Deactivated roles are excluded from `roleByName` above (a deactivated
+      // Role can never be a selectable chip — see GET /api/roles's identical
+      // isActive: true filter) so a same-named one is never silently matched
+      // and reused. Kept separately only so the create step below can
+      // reactivate it instead of colliding with `@@unique([locationId,
+      // name])` on a blind create.
+      const inactiveRoleIdByName = new Map(allRoles.filter((r) => !r.isActive).map((r) => [nameKey(r.name), r.id]));
       const userByName = new Map(users.map((u) => [nameKey(u.fullName), u.id]));
 
       // Resolve every distinct brand-new role name SEQUENTIALLY, before the
@@ -483,12 +490,23 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
         if (edit.role === undefined) continue;
         const trimmed = edit.role.trim();
         if (!trimmed) continue;
-        if (roleByName.has(nameKey(trimmed)) || roleByName.has(nameKey(canonicalRoleName(trimmed)))) continue;
-        neededRoleNames.add(trimmed);
+        const canonical = canonicalRoleName(trimmed);
+        if (roleByName.has(nameKey(trimmed)) || roleByName.has(nameKey(canonical))) continue;
+        neededRoleNames.add(canonical);
       }
       for (const name of neededRoleNames) {
         const key = nameKey(name);
         if (roleByName.has(key)) continue; // an earlier name in this same loop already created an equivalent role
+        const inactiveId = inactiveRoleIdByName.get(key);
+        if (inactiveId) {
+          // A deactivated Role already owns this exact name — create would
+          // 500 on the @@unique([locationId, name]) index. Reactivate it
+          // instead of reusing it as-is, so it starts showing up as a
+          // selectable chip again like any other active role.
+          const reactivated = await prisma.role.update({ where: { id: inactiveId }, data: { isActive: true } });
+          roleByName.set(key, reactivated.id);
+          continue;
+        }
         const created = await prisma.role.create({ data: { locationId: batch.locationId, name } });
         roleByName.set(key, created.id);
       }

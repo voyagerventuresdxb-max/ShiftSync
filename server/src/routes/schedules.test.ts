@@ -6,6 +6,7 @@ import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 import { uploadCache } from '../store/uploadCache.js';
 import type { PreviewRow } from '../parsing/types.js';
+import { canonicalRoleName } from '../parsing/resolveRows.js';
 
 const prisma = new PrismaClient();
 
@@ -218,6 +219,118 @@ test('schedules.ts POST /upload/:batchId/confirm: two edited rows picking the sa
   } finally {
     await prisma.shift.deleteMany({ where: { locationId: location.id } });
     await prisma.role.deleteMany({ where: { locationId: location.id, name: newRoleName } });
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+// Issue #12 (PR #11 follow-up review): the brand-new-role auto-create above
+// used to `prisma.role.create({ data: { name: trimmed } })` — the RAW chip
+// label a manager typed/picked, not its canonicalized form. Picking a chip
+// literally labeled "Manager" created a Role literally named "Manager"
+// instead of the canonical "Management" that resolveRows.ts's own
+// alias-lookup (canonicalRoleName) already produces for every other path.
+// Fixed by canonicalizing before the create, matching resolveRows.ts.
+test('schedules.ts POST /upload/:batchId/confirm: a brand-new role picked via an alias chip ("Manager") is created under its canonical name ("Management")', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  assert.equal(canonicalRoleName('Manager'), 'Management', 'test assumes the ROLE_ALIASES table maps bare "Manager" to "Management"');
+
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__authgap-test__ schedules role canonicalize', timezone: 'Asia/Dubai' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__authgap-test__ canon manager', systemRole: 'MANAGER' },
+  });
+  const batchId = uploadCache.put(location.id, null, [
+    fakeRow({ rowNumber: 1, employeeName: '__authgap-test__ canon employee', resolvedRoleId: null }),
+  ]);
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const confirm = await fetch(`${baseUrl}/api/schedules/upload/${batchId}/confirm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ edits: [{ rowNumber: 1, role: 'Manager' }] }),
+      });
+      assert.equal(confirm.status, 201);
+      const body = (await confirm.json()) as { createdCount: number };
+      assert.equal(body.createdCount, 1);
+    });
+
+    const literalRole = await prisma.role.findFirst({ where: { locationId: location.id, name: 'Manager' } });
+    assert.equal(literalRole, null, 'must not have created a Role literally named "Manager"');
+
+    const canonicalRole = await prisma.role.findFirst({ where: { locationId: location.id, name: 'Management' } });
+    assert.ok(canonicalRole, 'must have created the Role under its canonical name "Management"');
+
+    const shifts = await prisma.shift.findMany({ where: { locationId: location.id } });
+    assert.equal(shifts.length, 1);
+    assert.equal(shifts[0]!.roleId, canonicalRole!.id, 'the created shift must reference the canonically-named Role');
+  } finally {
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.role.deleteMany({ where: { locationId: location.id } });
+    await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+// Issue #13 (PR #11 follow-up review): the edit-resolution role lookup used
+// to `prisma.role.findMany({ where: { locationId } })` with no `isActive`
+// filter — unlike GET /api/roles, which correctly scopes to `isActive: true`
+// (the set a manager can actually pick a chip from). A deactivated Role
+// could silently be matched and reused here (with status: matched and no
+// warning) even though it could never have been selected as a chip. Fixed by
+// adding the same isActive: true filter — and since a deactivated Role still
+// occupies its name under `@@unique([locationId, name])`, a create for that
+// same name would otherwise 500; the fix reactivates the existing row
+// instead (same Role id, isActive flipped back to true) rather than
+// silently matching it as-is or crashing the whole confirm.
+test('schedules.ts POST /upload/:batchId/confirm: an edit naming a deactivated role reactivates it instead of silently matching it, or creating a colliding duplicate', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__authgap-test__ schedules role isActive', timezone: 'Asia/Dubai' },
+  });
+  const inactiveRoleName = '__authgap-test__ Retired Role';
+  const inactiveRole = await prisma.role.create({
+    data: { locationId: location.id, name: inactiveRoleName, isActive: false },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__authgap-test__ isActive manager', systemRole: 'MANAGER' },
+  });
+  const batchId = uploadCache.put(location.id, null, [
+    fakeRow({ rowNumber: 1, employeeName: '__authgap-test__ isActive employee', resolvedRoleId: null }),
+  ]);
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const confirm = await fetch(`${baseUrl}/api/schedules/upload/${batchId}/confirm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ edits: [{ rowNumber: 1, role: inactiveRoleName }] }),
+      });
+      assert.equal(confirm.status, 201);
+      const body = (await confirm.json()) as { createdCount: number };
+      assert.equal(body.createdCount, 1);
+    });
+
+    const shifts = await prisma.shift.findMany({ where: { locationId: location.id } });
+    assert.equal(shifts.length, 1);
+
+    const rolesByName = await prisma.role.findMany({ where: { locationId: location.id, name: inactiveRoleName } });
+    assert.equal(rolesByName.length, 1, 'must not have created a second, colliding Role row for the same name');
+    assert.equal(rolesByName[0]!.id, inactiveRole.id, 'the existing Role row must have been reactivated, not replaced');
+    assert.equal(rolesByName[0]!.isActive, true, 'the previously-deactivated Role must now be active again');
+    assert.equal(shifts[0]!.roleId, inactiveRole.id, 'the created shift must reference the (now-reactivated) Role');
+  } finally {
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.role.deleteMany({ where: { locationId: location.id } });
     await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }

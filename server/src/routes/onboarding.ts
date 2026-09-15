@@ -5,6 +5,39 @@ import { requireSession, requireManager, assertOwnsLocation } from '../middlewar
 
 export const onboardingRouter = Router();
 
+const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:5173';
+
+/**
+ * Origins the server will ever mint an invite link against. `FRONTEND_ORIGIN`
+ * (comma-separated for multiple environments, e.g. staging + prod) configures
+ * the allowlist; unset, only the local dev origin is allowed. Read fresh on
+ * every call (not memoized at module load) so it can be reconfigured — e.g.
+ * per-test — without restarting the process.
+ */
+function getAllowedFrontendOrigins(): string[] {
+  const configured = process.env.FRONTEND_ORIGIN?.trim();
+  if (!configured) return [DEFAULT_FRONTEND_ORIGIN];
+  return configured
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+/**
+ * The client-supplied `baseUrl` is only ever used as a display convenience
+ * (so invite links point at the app the manager is actually using, not this
+ * API's own host — see the 2026-09-xx fix below). It must never be trusted
+ * verbatim: a compromised or forged client could otherwise mint a QR/WhatsApp
+ * invite pointing at an attacker-controlled domain. Only an origin present in
+ * the server-side allowlist is honored; anything else (including no value at
+ * all) falls back to the first configured/default origin.
+ */
+function resolveInviteBaseUrl(requestedBaseUrl: unknown): string {
+  const allowed = getAllowedFrontendOrigins();
+  const requested = typeof requestedBaseUrl === 'string' ? requestedBaseUrl.replace(/\/+$/, '') : undefined;
+  return requested && allowed.includes(requested) ? requested : allowed[0];
+}
+
 /**
  * GET /api/onboarding/:locationId/invite
  * Mints the venue's Join-flow invite link and its QR code. The link itself
@@ -25,7 +58,7 @@ onboardingRouter.get('/:locationId/invite', requireSession, requireManager, asyn
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
 
-    const baseUrl = String(req.query.baseUrl ?? `${req.protocol}://${req.get('host')}`);
+    const baseUrl = resolveInviteBaseUrl(req.query.baseUrl);
     const inviteUrl = `${baseUrl}/join?location=${locationId}`;
     const qrDataUrl = await generateQrDataUrl(inviteUrl);
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`You've been added to ${location.name}'s team on ShiftSync. Join here: ${inviteUrl}`)}`;
