@@ -34,7 +34,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** GET /api/onboarding/:locationId/invite — mints (or re-mints) the venue's join-link + QR. */
+/**
+ * GET /api/onboarding/:locationId/invite — mints (or re-mints) the venue's
+ * join-link + QR. Passes this app's own origin as `baseUrl` — the server
+ * defaults to its own (API) host when it's omitted, which put the backend's
+ * port in every generated invite link/QR/WhatsApp text instead of the
+ * frontend's.
+ */
 export async function mintInvite(token: string, locationId: string): Promise<MintedInvite> {
-  return request<MintedInvite>(`/api/onboarding/${locationId}/invite`, { headers: withAuth(token) });
+  const baseUrl = encodeURIComponent(window.location.origin);
+  return request<MintedInvite>(`/api/onboarding/${locationId}/invite?baseUrl=${baseUrl}`, { headers: withAuth(token) });
 }
