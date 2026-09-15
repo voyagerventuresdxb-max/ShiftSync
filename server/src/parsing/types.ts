@@ -51,6 +51,20 @@ export interface RowIssue {
 /** A cleanly-parsed shift, ready for role/user resolution against the DB. */
 export interface ParsedShiftRow {
   rowNumber: number;
+  /**
+   * Identifies which single physical source-file row (one grid row / one
+   * vision-detected employee block) this shift came from — shared by every
+   * shift belonging to the same staff member, unlike `rowNumber` (a
+   * monotonic per-SHIFT counter, so one busy employee's own multiple shifts
+   * get several different `rowNumber`s). Only set by parsers that have a
+   * real one-row/block-per-employee source shape (the deterministic grid
+   * parser and the vision parser); left `undefined` by the free-text parser,
+   * whose input has no such structure (each line is independently one
+   * shift, not grouped per employee) — a consumer grouping rows by person
+   * must fall back to `employeeName` when this is absent, not assume it's
+   * always populated.
+   */
+  sourceRowIndex?: number;
   employeeName: string;
   roleName: string;
   /** ISO date, YYYY-MM-DD. */

@@ -1,0 +1,191 @@
+/*
+ * Onboarding wizard — dedicated "Champagne/Gold" palette from the locked
+ * design prototype (ShiftSync Welcome/Venue/Roster/Review/Invite .dc.html).
+ * Deliberately scoped under `.ob-root` rather than folded into the app-wide
+ * `--accent` (#e5a93c) in styles/tailwind.css — this is a distinct, more
+ * saturated onboarding-only palette the prototype calls its own anchor
+ * ("oklch · sat ≤ 0.06"), not a replacement for the rest of the app's chrome.
+ */
+.ob-root {
+  --ob-void: #050403;
+  --ob-obsidian: #0a0908;
+  --ob-ink: #0d0b09;
+  --ob-ink-2: #14110d;
+  --ob-ink-hi: #1e1913;
+  --ob-champagne: #c9a66b;
+  --ob-champagne-hi: #efd9a8;
+  --ob-bronze: #8b7550;
+  --ob-bone: #efeae0;
+  --ob-stone: #9a9184;
+  --ob-dim: #6f675b;
+  --ob-dim-2: #55514a;
+  --ob-ease-settle: cubic-bezier(0.32, 0.72, 0, 1);
+  --ob-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  background: var(--ob-void);
+  color: var(--ob-bone);
+}
+
+.ob-serif {
+  font-family: 'Instrument Serif', ui-serif, Georgia, serif;
+}
+
+/*
+ * Reuses the app-wide press-feedback convention from styles/global.css
+ * (`button{transition:transform 0.1s ease} button:active{transform:scale(0.97)}`)
+ * for the one onboarding element that isn't a <button> and so doesn't get it
+ * automatically — the Invite screen's "Share to WhatsApp" <a> tag. Same
+ * values, not a bespoke one, so onboarding doesn't drift from the rest of
+ * the app's press feel.
+ */
+.ob-press {
+  transition: transform 0.1s ease;
+}
+.ob-press:active {
+  transform: scale(0.97);
+}
+
+@keyframes ob-breathe {
+  0%,
+  100% {
+    transform: translate3d(-50%, -50%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-50%, -50%, 0) scale(1.022);
+  }
+}
+
+@keyframes ob-chevron {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  30% {
+    opacity: 0.9;
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -14px);
+  }
+}
+
+@keyframes ob-ambient {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+@keyframes ob-fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ob-fade-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes ob-hint-pulse {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes ob-rim {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Idle floating for orbiting feature icons — slight, weightless bob/drift. */
+@keyframes ob-float-a {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(1.5px, -3px);
+  }
+  50% {
+    transform: translate(3px, 1px);
+  }
+  75% {
+    transform: translate(-1px, 2.5px);
+  }
+}
+@keyframes ob-float-b {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  33% {
+    transform: translate(-2.5px, 2px);
+  }
+  66% {
+    transform: translate(2px, -1.5px);
+  }
+}
+@keyframes ob-float-c {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-2px, -2.5px);
+  }
+  55% {
+    transform: translate(2.5px, 1.5px);
+  }
+  80% {
+    transform: translate(-1.5px, -1px);
+  }
+}
+@keyframes ob-float-d {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  40% {
+    transform: translate(2.5px, 2.5px);
+  }
+  70% {
+    transform: translate(-2px, -1.5px);
+  }
+}
+@keyframes ob-float-e {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  30% {
+    transform: translate(-1.5px, 3px);
+  }
+  60% {
+    transform: translate(2.5px, -2px);
+  }
+}

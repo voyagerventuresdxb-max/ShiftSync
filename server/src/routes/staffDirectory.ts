@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
@@ -216,46 +217,71 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
-    const user = await withAuditedTransaction(
-      prisma,
-      async (tx) => {
-        // Atomic guard: only when THIS request is itself toggling isActive
-        // (and therefore computed `data.terminatedAt` from `existing.isActive`
-        // above) do we re-assert that isActive hasn't moved since our read —
-        // two concurrent opposite-direction toggles can both pass the plain
-        // `existing.isActive` read above, but only one `updateMany` here can
-        // ever match and actually write. Scoping the guard to `data.isActive
-        // !== undefined` matters: a PATCH that only changes something else
-        // (fullName, phone, ...) must NOT spuriously conflict just because
-        // someone else toggled isActive in between — it never depended on
-        // that value, so it should be free to apply regardless.
-        const result = await tx.user.updateMany({
-          where: data.isActive !== undefined ? { id: userId, isActive: existing.isActive } : { id: userId },
-          data,
-        });
-        if (result.count === 0) {
-          throw new StaffRecordChangedConcurrentlyError();
-        }
-        // `updateMany` doesn't return the row, so re-fetch it (inside the
-        // same transaction) for the response's `toDto`.
-        const updated = await tx.user.findUnique({
-          where: { id: userId },
-          include: { role: true, location: { select: { name: true } } },
-        });
-        return updated!;
-      },
-      (updated) => ({
-        locationId: req.user!.locationId,
-        actorId: req.user!.id,
-        action: 'STAFF_UPDATED',
-        entityType: 'User',
-        entityId: userId,
-        note: `Updated ${updated.fullName}'s staff record`,
-      }),
-    ).catch((err) => {
-      if (err instanceof StaffRecordChangedConcurrentlyError) return null;
+    let user;
+    try {
+      user = await withAuditedTransaction(
+        prisma,
+        async (tx) => {
+          // Atomic guard: only when THIS request is itself toggling isActive
+          // (and therefore computed `data.terminatedAt` from `existing.isActive`
+          // above) do we re-assert that isActive hasn't moved since our read —
+          // two concurrent opposite-direction toggles can both pass the plain
+          // `existing.isActive` read above, but only one `updateMany` here can
+          // ever match and actually write. Scoping the guard to `data.isActive
+          // !== undefined` matters: a PATCH that only changes something else
+          // (fullName, phone, ...) must NOT spuriously conflict just because
+          // someone else toggled isActive in between — it never depended on
+          // that value, so it should be free to apply regardless.
+          const result = await tx.user.updateMany({
+            where: data.isActive !== undefined ? { id: userId, isActive: existing.isActive } : { id: userId },
+            data,
+          });
+          if (result.count === 0) {
+            throw new StaffRecordChangedConcurrentlyError();
+          }
+          // `updateMany` doesn't return the row, so re-fetch it (inside the
+          // same transaction) for the response's `toDto`.
+          const updated = await tx.user.findUnique({
+            where: { id: userId },
+            include: { role: true, location: { select: { name: true } } },
+          });
+          return updated!;
+        },
+        (updated) => ({
+          locationId: req.user!.locationId,
+          actorId: req.user!.id,
+          action: 'STAFF_UPDATED',
+          entityType: 'User',
+          entityId: userId,
+          note: `Updated ${updated.fullName}'s staff record`,
+        }),
+      ).catch((err) => {
+        if (err instanceof StaffRecordChangedConcurrentlyError) return null;
+        throw err;
+      });
+    } catch (err) {
+      // `User.phone` is globally unique (it doubles as the login credential —
+      // see the schema's own comment on that column). Setting it to a number
+      // already claimed by a different user hits Prisma's P2002 here; this
+      // used to fall through to the generic 500 handler below with an
+      // "Unexpected error" message, which is both the wrong status (this is
+      // a real, anticipatable conflict, not a server fault) and unhelpful to
+      // whoever's looking at it. Exact `meta.target` match (not just the
+      // P2002 code), mirroring attendance.ts's identical reasoning: a loose
+      // check would also swallow a P2002 from some unrelated future unique
+      // constraint on this table and misreport it as a phone conflict.
+      const target = err instanceof Prisma.PrismaClientKnownRequestError ? (err.meta?.target as unknown) : undefined;
+      const isPhoneConflict =
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002' &&
+        Array.isArray(target) &&
+        target.length === 1 &&
+        target[0] === 'phone';
+      if (isPhoneConflict) {
+        return res.status(409).json({ error: 'This phone number is already registered to another staff member.' });
+      }
       throw err;
-    });
+    }
     if (!user) {
       return res.status(409).json({ error: 'This staff record was changed by someone else — please refresh and try again.' });
     }

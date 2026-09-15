@@ -15,6 +15,13 @@ export type RowMatchStatus =
 
 export interface PreviewRow {
   rowNumber: number;
+  /**
+   * Identifies which single physical source-file row/block this shift came
+   * from — shared by every shift belonging to the same staff member, unlike
+   * `rowNumber` (one per shift). Only set for grid/vision-parsed uploads;
+   * absent for free-text uploads, whose input has no such structure.
+   */
+  sourceRowIndex?: number;
   employeeName: string;
   role: string;
   /** ISO date, YYYY-MM-DD. */
@@ -27,7 +34,7 @@ export interface PreviewRow {
   breakMinutes: number;
   managerNotes: string | null;
   status: RowMatchStatus;
-  issues: { rowNumber: number; field?: string; severity: 'error' | 'warning'; message: string }[];
+  issues: { rowNumber: number; field?: string; severity: 'error' | 'warning' | 'info'; message: string }[];
 }
 
 export interface UploadPreviewSummary {
@@ -122,15 +129,31 @@ export async function uploadRoster(token: string, file: File): Promise<UploadRes
   });
 }
 
-/** POST /api/schedules/upload/:batchId/confirm — commit a reviewed batch. */
+/** A manager's Review-screen correction, applied server-side before persisting — see confirmRoster. */
+export interface RosterRowEdit {
+  rowNumber: number;
+  employeeName?: string;
+  role?: string;
+}
+
+/**
+ * POST /api/schedules/upload/:batchId/confirm — commit a reviewed batch.
+ * `edits`/`removedRowNumbers` carry the onboarding Review screen's inline
+ * name/role corrections and row removals; both are re-resolved against
+ * Role/User records server-side (a `role` with no existing match is created
+ * as a new, reusable Role for the venue) rather than trusting the client's
+ * display strings as-is.
+ */
 export async function confirmRoster(
   token: string,
   batchId: string,
   createdById?: string,
+  edits?: RosterRowEdit[],
+  removedRowNumbers?: number[],
 ): Promise<ConfirmResponse> {
   return request<ConfirmResponse>(`/api/schedules/upload/${batchId}/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
-    body: JSON.stringify({ createdById: createdById ?? null }),
+    body: JSON.stringify({ createdById: createdById ?? null, edits: edits ?? undefined, removedRowNumbers: removedRowNumbers ?? undefined }),
   });
 }

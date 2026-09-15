@@ -8,7 +8,7 @@ import { extractPdfGrid, hasPdfTextLayer } from '../parsing/pdfTableExtractor.js
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
 import { parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
-import { resolveRowsAgainstDatabase } from '../parsing/resolveRows.js';
+import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
 import { uploadCache } from '../store/uploadCache.js';
@@ -397,7 +397,11 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
 
 /**
  * POST /api/schedules/upload/:batchId/confirm
- * body: { createdById?: string }
+ * body: {
+ *   createdById?: string,
+ *   edits?: { rowNumber: number; employeeName?: string; role?: string }[],
+ *   removedRowNumbers?: number[],
+ * }
  *
  * Commits a previously-previewed batch to the Shift table. Rows with an
  * unresolved role are skipped (cannot satisfy the required FK) and reported
@@ -408,6 +412,18 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
  * one uploaded by someone else at the same venue, since `ownedOrNotFound`
  * only checks venue, not uploader — bulk-creating real Shift rows for the
  * whole venue). The batch must still belong to the caller's venue.
+ *
+ * `edits`/`removedRowNumbers` back the onboarding Review screen's inline
+ * name/role corrections (added alongside that screen — see
+ * `src/features/onboarding/ReviewScreen.tsx`): the cached preview rows only
+ * carry whatever `resolvedRoleId`/`resolvedUserId` upload-time matching
+ * found, so an edited `role`/`employeeName` has to be RE-resolved here
+ * before persisting, not just spliced into the display string. A `role` that
+ * doesn't match any existing Role for this location is created on the fly
+ * (this is also how a Review "+ Custom" role becomes a real, reusable chip
+ * for the venue going forward, per product spec — a brand-new venue starts
+ * with zero seeded Role rows, so even picking one of the 9 canonical chip
+ * labels routinely hits this path, not just genuine custom terms).
  */
 schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager, async (req, res) => {
   try {
@@ -425,9 +441,86 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
       if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
     }
 
+    const removedRowNumbers = new Set<number>(
+      Array.isArray(req.body?.removedRowNumbers) ? req.body.removedRowNumbers.filter((n: unknown) => typeof n === 'number') : [],
+    );
+    const editsByRow = new Map<number, { employeeName?: string; role?: string }>();
+    if (Array.isArray(req.body?.edits)) {
+      for (const raw of req.body.edits) {
+        if (!raw || typeof raw.rowNumber !== 'number') continue;
+        editsByRow.set(raw.rowNumber, {
+          employeeName: typeof raw.employeeName === 'string' ? raw.employeeName : undefined,
+          role: typeof raw.role === 'string' ? raw.role : undefined,
+        });
+      }
+    }
+
+    let rows = batch.rows.filter((r) => !removedRowNumbers.has(r.rowNumber));
+
+    if (editsByRow.size > 0) {
+      const [roles, users] = await Promise.all([
+        prisma.role.findMany({ where: { locationId: batch.locationId } }),
+        prisma.user.findMany({ where: { locationId: batch.locationId, isActive: true } }),
+      ]);
+      const roleByName = new Map(roles.map((r) => [nameKey(r.name), r.id]));
+      const userByName = new Map(users.map((u) => [nameKey(u.fullName), u.id]));
+
+      // Resolve every distinct brand-new role name SEQUENTIALLY, before the
+      // row loop below runs at all — not inside it. The row loop used to
+      // `await prisma.role.create` per-row inside a `Promise.all`, which
+      // does not actually serialize anything: `Array.prototype.map` invokes
+      // every callback synchronously up to its first `await`, so two rows
+      // editing to the same not-yet-existing role name both read this map
+      // as a miss before either create resolves, both call
+      // `prisma.role.create`, and the second throws an unhandled P2002
+      // (`Role` has `@@unique([locationId, name])`) that 500s the WHOLE
+      // confirm — silently discarding every other row's edits too, not just
+      // the colliding pair. Creating up front, one at a time, means the
+      // second lookup for a repeated name always hits the map instead of
+      // racing a second create.
+      const neededRoleNames = new Set<string>();
+      for (const edit of editsByRow.values()) {
+        if (edit.role === undefined) continue;
+        const trimmed = edit.role.trim();
+        if (!trimmed) continue;
+        if (roleByName.has(nameKey(trimmed)) || roleByName.has(nameKey(canonicalRoleName(trimmed)))) continue;
+        neededRoleNames.add(trimmed);
+      }
+      for (const name of neededRoleNames) {
+        const key = nameKey(name);
+        if (roleByName.has(key)) continue; // an earlier name in this same loop already created an equivalent role
+        const created = await prisma.role.create({ data: { locationId: batch.locationId, name } });
+        roleByName.set(key, created.id);
+      }
+
+      rows = rows.map((row) => {
+        const edit = editsByRow.get(row.rowNumber);
+        if (!edit) return row;
+        const next = { ...row };
+
+        if (edit.employeeName !== undefined) {
+          const trimmed = edit.employeeName.trim();
+          if (trimmed) {
+            next.employeeName = trimmed;
+            next.resolvedUserId = userByName.get(nameKey(trimmed)) ?? null;
+          }
+        }
+
+        if (edit.role !== undefined) {
+          const trimmed = edit.role.trim();
+          if (trimmed) {
+            next.roleName = trimmed;
+            next.resolvedRoleId = roleByName.get(nameKey(trimmed)) ?? roleByName.get(nameKey(canonicalRoleName(trimmed))) ?? null;
+          }
+        }
+
+        return next;
+      });
+    }
+
     const result = await withAuditedTransaction(
       prisma,
-      (tx) => persistShifts(tx, batch.locationId, createdById, batch.rows),
+      (tx) => persistShifts(tx, batch.locationId, createdById, rows),
       // Only write a real audit row when at least one shift was actually
       // created — a batch where every row was skipped for an unresolved
       // role (persisted.createdCount === 0) would otherwise still produce a
