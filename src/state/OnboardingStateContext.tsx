@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { UploadResponse } from '../api/schedules';
 
@@ -33,8 +33,33 @@ export type OnboardingStep = 'welcome' | 'venue' | 'roster' | 'review' | 'invite
 
 const STEPS: readonly OnboardingStep[] = ['welcome', 'venue', 'roster', 'review', 'invite'];
 
-function isOnboardingStep(value: string | undefined): value is OnboardingStep {
+export function isOnboardingStep(value: string | undefined): value is OnboardingStep {
   return !!value && (STEPS as readonly string[]).includes(value);
+}
+
+/**
+ * Issue #14 (PR #11 follow-up review): `step` used to come from the URL with
+ * no gating at all — a manager could reach Invite via a stale bookmark or a
+ * typed URL without Venue/Roster ever having run. `unlockedSteps` is the set
+ * of steps a REAL `setStep` call (i.e. an onContinue/onBack/onSkip a screen
+ * actually fired) has ever reached this session; a step reachable only by
+ * editing the URL isn't in it. `resolveEffectiveStep` is what enforces that:
+ * the requested (URL) step is honored only when unlocked, otherwise the
+ * furthest step the manager has legitimately reached is used instead. This
+ * is additive to (not a replacement for) the 2026-09-08 step-in-URL
+ * reload/resume decision above — a reload still resumes exactly where the
+ * manager left off, since the step they were on is always itself unlocked.
+ */
+export function furthestUnlockedStep(unlocked: ReadonlySet<OnboardingStep>): OnboardingStep {
+  let furthest: OnboardingStep = 'welcome';
+  for (const candidate of STEPS) {
+    if (unlocked.has(candidate)) furthest = candidate;
+  }
+  return furthest;
+}
+
+export function resolveEffectiveStep(requestedStep: OnboardingStep, unlocked: ReadonlySet<OnboardingStep>): OnboardingStep {
+  return unlocked.has(requestedStep) ? requestedStep : furthestUnlockedStep(unlocked);
 }
 
 interface OnboardingStateValue {
@@ -51,10 +76,39 @@ function uploadResultStorageKey(locationId: string): string {
   return `shiftsync.onboarding.uploadResult.${locationId}`;
 }
 
+function unlockedStepsStorageKey(locationId: string): string {
+  return `shiftsync.onboarding.unlockedSteps.${locationId}`;
+}
+
+function loadUnlockedSteps(locationId: string): Set<OnboardingStep> {
+  try {
+    const raw = sessionStorage.getItem(unlockedStepsStorageKey(locationId));
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(parsed)) {
+      const valid = parsed.filter((value): value is OnboardingStep => isOnboardingStep(value));
+      if (valid.length > 0) return new Set(valid);
+    }
+  } catch {
+    // fall through to the fresh-session default below
+  }
+  return new Set<OnboardingStep>(['welcome']);
+}
+
 export function OnboardingStateProvider({ locationId, children }: { locationId: string; children: ReactNode }) {
   const navigate = useNavigate();
   const { step: stepParam } = useParams<{ step?: string }>();
-  const step: OnboardingStep = isOnboardingStep(stepParam) ? stepParam : 'welcome';
+  const requestedStep: OnboardingStep = isOnboardingStep(stepParam) ? stepParam : 'welcome';
+
+  const [unlockedSteps, setUnlockedSteps] = useState<Set<OnboardingStep>>(() => loadUnlockedSteps(locationId));
+  const step = resolveEffectiveStep(requestedStep, unlockedSteps);
+
+  // The requested (URL) step was gated back to `step` — replace the URL so
+  // the address bar reflects what's actually rendered, instead of leaving it
+  // pointed at a step the manager never reached.
+  useEffect(() => {
+    if (requestedStep === step) return;
+    navigate(step === 'welcome' ? '/onboarding' : `/onboarding/${step}`, { replace: true });
+  }, [requestedStep, step, navigate]);
 
   const [uploadResult, setUploadResultState] = useState<UploadResponse | null>(() => {
     try {
@@ -66,6 +120,16 @@ export function OnboardingStateProvider({ locationId, children }: { locationId: 
   });
 
   const setStep = (next: OnboardingStep) => {
+    setUnlockedSteps((prev) => {
+      if (prev.has(next)) return prev;
+      const updated = new Set(prev).add(next);
+      try {
+        sessionStorage.setItem(unlockedStepsStorageKey(locationId), JSON.stringify([...updated]));
+      } catch {
+        // sessionStorage unavailable — the step still unlocks for the rest of this tab's in-memory session, it just won't survive a reload.
+      }
+      return updated;
+    });
     navigate(next === 'welcome' ? '/onboarding' : `/onboarding/${next}`, { replace: true });
   };
 
