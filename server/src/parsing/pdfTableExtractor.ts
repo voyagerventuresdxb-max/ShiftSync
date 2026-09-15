@@ -227,6 +227,13 @@ export async function extractPdfGrid(buffer: Buffer): Promise<string[][]> {
     if (pageItems.length === 0) continue;
     const rows = clusterRows(pageItems);
     const anchors = deriveColumnAnchors(rows);
+    // No day-header row on this page means no column anchors at all — a
+    // long-format (one row per shift) or free-text PDF, not a day grid.
+    // Skip it rather than let buildRawGrid index into an empty anchor list
+    // (`cells[0].push` on `[]` threw and 500'd the whole upload); an empty
+    // grid is exactly the "not this shape" signal the caller already routes
+    // to the text-parser/vision fallback.
+    if (anchors.length === 0) continue;
     const { grid, rowYs } = buildRawGrid(rows, anchors);
     const mergedGrid = mergeContinuationLines(grid, rowYs);
     combined.push(...mergedGrid);
