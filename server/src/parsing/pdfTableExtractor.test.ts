@@ -17,6 +17,18 @@ async function buildPdf(items: { text: string; x: number; y: number }[], size = 
   return Buffer.from(await doc.save());
 }
 
+async function buildMultiPagePdf(pages: { text: string; x: number; y: number }[][], size = 10): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const items of pages) {
+    const page = doc.addPage([700, 400]);
+    for (const item of items) {
+      page.drawText(item.text, { x: item.x, y: item.y, size, font });
+    }
+  }
+  return Buffer.from(await doc.save());
+}
+
 test('real reference-venue PDF: full pipeline (extractPdfGrid -> parseExcelGrid) reproduces the known-correct structure', async () => {
   const buffer = readFileSync('server/test-fixtures/real-roster.pdf');
 
@@ -91,6 +103,7 @@ test('multi-line cell: a role header wrapped across two lines is reconstructed a
   const buffer = await buildPdf([
     { text: '17-Aug', x: 100, y: 380 },
     { text: '18-Aug', x: 200, y: 380 },
+    { text: '19-Aug', x: 300, y: 380 },
     { text: 'Fatima', x: 20, y: 360 },
     { text: '9-17', x: 100, y: 360 },
     // "HEAD WAITERS" printed as two wrapped lines in the name column, the
@@ -156,10 +169,83 @@ test('sample-roster.pdf (the long-format fixture that 500ed the upload route) no
   assert.notEqual(parseExcelGrid(grid, WEEK_START).templateLabel, 'Deterministic Grid Parser');
 });
 
+// Regression (PR #17 review): DAY_HEADER_RE's `\d{1,2}[-/]\d{1,2}` date
+// branch (meant for "17-08") also matches an ordinary shift-time-range cell
+// like "10-18". A single data row with two SCATTERED matches (not sitting
+// next to each other) used to be enough to make `findAnchorRow` mistake it
+// for a real day-header row, deriving garbage column anchors from a row
+// that was never a header at all — worse than the crash this file's other
+// regression tests cover, because it doesn't throw and doesn't fall
+// through to the fallback: `parseExcelGrid` still labels the corrupted
+// result 'Deterministic Grid Parser' (looks like a successful parse) while
+// silently returning 0 rows.
+test('a data row with two scattered time-range cells is not mistaken for a day-header row', async () => {
+  const buffer = await buildPdf([
+    { text: 'Youssef', x: 20, y: 380 },
+    { text: '10-18', x: 140, y: 380 },
+    { text: 'OFF', x: 240, y: 380 },
+    { text: '10-18', x: 340, y: 380 },
+  ]);
+
+  assert.equal(await hasPdfTextLayer(buffer), true);
+  const grid = await extractPdfGrid(buffer);
+  assert.deepEqual(grid, []);
+  assert.notEqual(parseExcelGrid(grid, WEEK_START).templateLabel, 'Deterministic Grid Parser');
+});
+
+// Regression (PR #17 review): a real multi-page roster export where only
+// page 1 repeats the day-header row — page 2 is a continuation with more
+// staff and no header of its own. Before this fix, page 2 either crashed
+// (pre-52f8c0f) or, worse, got silently dropped/corrupted (the anchors.length
+// === 0 fix alone, or a false-positive anchor row derived from page 2's own
+// shift-time cells). This proves page 2's staff now survive by reusing
+// page 1's confidently-derived column anchors.
+test('multi-page PDF: a continuation page with no repeated day-header still parses using page 1\'s anchors', async () => {
+  const buffer = await buildMultiPagePdf([
+    [
+      { text: 'Monday', x: 140, y: 380 },
+      { text: 'Tuesday', x: 240, y: 380 },
+      { text: 'Wednesday', x: 340, y: 380 },
+      { text: 'Fatima', x: 20, y: 360 },
+      { text: '9-17', x: 140, y: 360 },
+      { text: '9-17', x: 240, y: 360 },
+      { text: 'OFF', x: 340, y: 360 },
+    ],
+    [
+      // No header row on this page at all — and neither data row has 3
+      // consecutive date-shaped cells, so this also isn't a case the
+      // header-detection tightening alone would rescue; only the carried-
+      // forward anchors do.
+      { text: 'Youssef', x: 20, y: 380 },
+      { text: '10-18', x: 140, y: 380 },
+      { text: 'OFF', x: 240, y: 380 },
+      { text: '10-18', x: 340, y: 380 },
+      { text: 'Layla', x: 20, y: 360 },
+      { text: '9-17', x: 140, y: 360 },
+      { text: '9-17', x: 240, y: 360 },
+      { text: 'OFF', x: 340, y: 360 },
+    ],
+  ]);
+
+  assert.equal(await hasPdfTextLayer(buffer), true);
+  const grid = await extractPdfGrid(buffer);
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.templateLabel, 'Deterministic Grid Parser');
+
+  const names = result.rows.map((r) => r.employeeName);
+  assert.ok(names.includes('Fatima'), `expected Fatima (page 1) in parsed rows: ${JSON.stringify(names)}`);
+  assert.ok(names.includes('Youssef'), `expected Youssef (page 2) in parsed rows, not silently dropped: ${JSON.stringify(names)}`);
+  assert.ok(names.includes('Layla'), `expected Layla (page 2) in parsed rows, not silently dropped: ${JSON.stringify(names)}`);
+
+  const youssef = result.rows.filter((r) => r.employeeName === 'Youssef');
+  assert.ok(youssef.some((r) => r.startTime === '10:00' && r.endTime === '18:00'));
+});
+
 test('inconsistent row spacing: irregular gaps between data rows still split into distinct rows, not merged', async () => {
   const buffer = await buildPdf([
     { text: '17-Aug', x: 100, y: 380 },
     { text: '18-Aug', x: 200, y: 380 },
+    { text: '19-Aug', x: 300, y: 380 },
     { text: 'Fatima', x: 20, y: 360 }, // normal 20pt gap from header
     { text: '9-17', x: 100, y: 360 },
     { text: 'Yusuf', x: 20, y: 325 }, // wide 35pt gap (an extra visual blank line)
