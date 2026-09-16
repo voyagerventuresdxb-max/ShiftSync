@@ -22,16 +22,44 @@ export function bearerToken(req: Request): string | null {
   return header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
 }
 
-/** Resolves the `Authorization: Bearer <token>` header to a real User, or 401s. */
+// Deterministically exercises the catch branch below for regression tests.
+// The actual failure this guards against (an unexpected thrown error inside
+// session-auth middleware — a DB hiccup, a stale session row racing a
+// concurrent delete) is real but not reliably forceable from outside the
+// process, so this is a narrow, off-by-default trigger for it — same
+// dev-only-env-flag shape as ALLOW_DEV_OTP_ECHO elsewhere in this codebase,
+// never armed unless explicitly opted into, and inert for every real token
+// (a real session token is 64 hex chars; this sentinel isn't a valid shape).
+const ALLOW_DEV_ERROR_INJECTION = process.env.ALLOW_DEV_ERROR_INJECTION === 'true';
+const DEV_ERROR_INJECTION_TOKEN = '__test-inject-requiresession-error__';
+
+/**
+ * Resolves the `Authorization: Bearer <token>` header to a real User, or
+ * 401s. Wrapped in try/catch and forwarded via `next(err)` rather than left
+ * to reject bare — Express 4 does not auto-catch a rejected promise from
+ * middleware, so an unexpected error here (a DB hiccup, a stale session row
+ * racing a concurrent delete) would otherwise become an unhandled rejection
+ * that crashes the whole process for every connected user, not just fail
+ * this one request. `next(err)` routes it to app.ts's existing error
+ * handler instead, matching how Multer's errors already surface.
+ */
 export async function requireSession(req: Request, res: Response, next: NextFunction) {
-  const token = bearerToken(req);
-  if (!token) return res.status(401).json({ error: 'Missing or malformed Authorization header.' });
+  try {
+    const token = bearerToken(req);
+    if (!token) return res.status(401).json({ error: 'Missing or malformed Authorization header.' });
 
-  const user = await resolveSession(token);
-  if (!user) return res.status(401).json({ error: 'Session is invalid or has expired.' });
+    if (ALLOW_DEV_ERROR_INJECTION && token === DEV_ERROR_INJECTION_TOKEN) {
+      throw new Error('Deliberate test-injected error (ALLOW_DEV_ERROR_INJECTION).');
+    }
 
-  req.user = user;
-  next();
+    const user = await resolveSession(token);
+    if (!user) return res.status(401).json({ error: 'Session is invalid or has expired.' });
+
+    req.user = user;
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 /**

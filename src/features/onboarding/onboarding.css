@@ -21,6 +21,17 @@
   --ob-dim-2: #55514a;
   --ob-ease-settle: cubic-bezier(0.32, 0.72, 0, 1);
   --ob-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /*
+   * One state-change transition for the whole wizard (2026-09-16, QA round
+   * 1 item 7). Every chip/CTA/zone used to carry its own inline
+   * `transition: all .22s` or `all .52s` — `all` animates properties that
+   * should snap (layout, transform-on-press) and .52s on a CTA's
+   * enabled/disabled colour swap reads as lag. Per the apple-design and
+   * emil-design-eng guidance: name the exact properties, keep UI state
+   * changes under ~250ms, ease-out. Screens reference this token so the
+   * value lives in one place.
+   */
+  --ob-t: 0.2s var(--ob-ease-out);
   font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   background: var(--ob-void);
   color: var(--ob-bone);
@@ -187,5 +198,53 @@
   }
   60% {
     transform: translate(2.5px, -2px);
+  }
+}
+
+/*
+ * Phone-frame stage (2026-09-16, QA round 1 item 4). The locked prototypes
+ * are designed inside a 402×844 phone (380×822 screen) — every inset,
+ * card and column below was tuned for that box. On a phone the stage is
+ * simply the viewport. On anything wider it used to stretch to
+ * `maxWidth: 460` × the full viewport height, so the carousel card ran
+ * ~24% wide and its space-between column either stretched or crammed. Now
+ * the stage is letterboxed to the design's own screen size (380×822,
+ * clamped to the viewport) inside the full-bleed ambient background, with
+ * the prototype's bezel treatment so it reads as intentional rather than
+ * as a narrow page.
+ */
+.ob-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ob-stage--scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Scrolls like a phone screen: no visible track inside the frame. */
+  scrollbar-width: none;
+}
+.ob-stage--scroll::-webkit-scrollbar {
+  display: none;
+}
+@media (min-width: 501px) {
+  .ob-stage {
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    width: 380px;
+    height: min(822px, 100vh - 48px);
+    transform: translate(-50%, -50%);
+    border-radius: 46px;
+    /* No background of its own — the screens' full-bleed ambient layers
+       show through inside the frame exactly as on a phone. The last shadow
+       is a viewport-sized spread that dims everything OUTSIDE the frame,
+       so the letterbox reads as the room the phone sits in. */
+    box-shadow:
+      0 0 0 11px #12100d,
+      0 0 0 12px rgba(255, 255, 255, 0.04),
+      0 40px 120px -30px rgba(0, 0, 0, 0.9),
+      0 0 0 200vmax rgba(5, 4, 3, 0.62);
   }
 }

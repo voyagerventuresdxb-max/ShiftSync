@@ -143,7 +143,7 @@ export default function PolicyDocuments({ locationId, isManager }: { locationId:
                       <FileText className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{d.title}</span>
                     </button>
                     {isManager && (
-                      <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="shrink-0 text-muted-foreground hover:text-destructive">
+                      <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive">
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}

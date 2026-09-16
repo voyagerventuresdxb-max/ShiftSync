@@ -25,7 +25,7 @@ function chipStyle(on: boolean) {
     color: on ? 'var(--ob-champagne)' : 'var(--ob-stone)',
     font: "500 12.5px/1 'Manrope'",
     letterSpacing: '.005em',
-    transition: 'all .22s var(--ob-ease-out)',
+    transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
   } as const;
 }
 
@@ -122,7 +122,7 @@ export default function VenueScreen({
               color: canContinue && !disabled ? '#100D0A' : 'var(--ob-dim-2)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
-              transition: 'all .52s var(--ob-ease-out)',
+              transition: 'background-color var(--ob-t), color var(--ob-t)',
               cursor: canContinue && !disabled ? 'pointer' : 'default',
             }}
           >
@@ -145,7 +145,7 @@ export default function VenueScreen({
           style={{
             marginTop: 6,
             borderBottom: `1px solid ${name ? 'rgba(201,166,107,.55)' : 'rgba(239,234,224,.12)'}`,
-            transition: 'border-color .22s var(--ob-ease-out)',
+            transition: 'border-color var(--ob-t)',
           }}
         >
           <input
@@ -221,7 +221,7 @@ export default function VenueScreen({
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span
               className="ob-serif"
-              style={{ fontSize: 26, lineHeight: 1, color: later ? 'var(--ob-bronze)' : 'var(--ob-champagne)', minWidth: 26, transition: 'color .22s var(--ob-ease-out)' }}
+              style={{ fontSize: 26, lineHeight: 1, color: later ? 'var(--ob-bronze)' : 'var(--ob-champagne)', minWidth: 26, transition: 'color var(--ob-t)' }}
             >
               {later ? 'Later' : sections}
             </span>
@@ -249,7 +249,7 @@ export default function VenueScreen({
                 justifyContent: 'center',
                 color: later ? 'var(--ob-dim-2)' : 'var(--ob-champagne)',
                 background: 'rgba(239,234,224,.03)',
-                transition: 'all .22s var(--ob-ease-out)',
+                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
               }}
             >
               <svg width={14} height={14} viewBox="0 0 14 14" stroke="currentColor" strokeWidth={1.1} strokeLinecap="round">
@@ -273,7 +273,7 @@ export default function VenueScreen({
                 justifyContent: 'center',
                 color: later ? 'var(--ob-dim-2)' : 'var(--ob-champagne)',
                 background: 'rgba(239,234,224,.03)',
-                transition: 'all .22s var(--ob-ease-out)',
+                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
               }}
             >
               <svg width={14} height={14} viewBox="0 0 14 14" stroke="currentColor" strokeWidth={1.1} strokeLinecap="round">
@@ -294,7 +294,7 @@ export default function VenueScreen({
                 font: "500 11px/1 'Manrope'",
                 letterSpacing: '.04em',
                 background: 'transparent',
-                transition: 'all .22s var(--ob-ease-out)',
+                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
               }}
             >
               Set up later

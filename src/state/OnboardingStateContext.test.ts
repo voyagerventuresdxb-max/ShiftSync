@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isOnboardingStep, furthestUnlockedStep, resolveEffectiveStep, type OnboardingStep } from './OnboardingStateContext';
+import { isOnboardingStep, furthestUnlockedStep, resolveEffectiveStep, stepRequiresSession, stepPath, type OnboardingStep } from './OnboardingStateContext';
 
-test('isOnboardingStep accepts only the five known step names', () => {
+test('isOnboardingStep accepts only the six known step names', () => {
   assert.equal(isOnboardingStep('welcome'), true);
+  assert.equal(isOnboardingStep('account'), true);
   assert.equal(isOnboardingStep('invite'), true);
   assert.equal(isOnboardingStep('bogus'), false);
   assert.equal(isOnboardingStep(undefined), false);
@@ -48,4 +49,28 @@ test('resolveEffectiveStep honors Invite when reached via the Roster "Skip" shor
 test('resolveEffectiveStep gates a URL request for Review back to Invite when Review was skipped', () => {
   const unlockedViaSkip = new Set<OnboardingStep>(['welcome', 'venue', 'roster', 'invite']);
   assert.equal(resolveEffectiveStep('review', unlockedViaSkip), 'invite');
+});
+
+// Account creation is the wizard's own first step (2026-09-16) and the only
+// one that must work with no session at all; everything from Venue onward
+// touches a real Location and needs one.
+test('stepRequiresSession is false only for the pre-session steps (welcome, account)', () => {
+  assert.equal(stepRequiresSession('welcome'), false);
+  assert.equal(stepRequiresSession('account'), false);
+  for (const step of ['venue', 'roster', 'review', 'invite'] as const) {
+    assert.equal(stepRequiresSession(step), true, `${step} must require a session`);
+  }
+});
+
+test('resolveEffectiveStep places account between welcome and venue in wizard order', () => {
+  const preSession = new Set<OnboardingStep>(['welcome', 'account']);
+  assert.equal(furthestUnlockedStep(preSession), 'account');
+  assert.equal(resolveEffectiveStep('venue', preSession), 'account', 'a typed /onboarding/venue with no account yet lands on Account, not past it');
+  assert.equal(resolveEffectiveStep('welcome', preSession), 'welcome', 'the intro stays revisitable');
+});
+
+test('stepPath maps welcome to the bare /onboarding and every other step to /onboarding/:step', () => {
+  assert.equal(stepPath('welcome'), '/onboarding');
+  assert.equal(stepPath('account'), '/onboarding/account');
+  assert.equal(stepPath('invite'), '/onboarding/invite');
 });

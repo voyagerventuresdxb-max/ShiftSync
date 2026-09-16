@@ -123,7 +123,7 @@ export default function RosterScreen({
               color: ready ? '#100D0A' : 'var(--ob-dim-2)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
-              transition: 'all .52s var(--ob-ease-out)',
+              transition: 'background-color var(--ob-t), color var(--ob-t)',
               cursor: ready ? 'pointer' : 'default',
             }}
           >
@@ -182,7 +182,7 @@ export default function RosterScreen({
           borderRadius: 16,
           border: `1px ${fileZoneFilled ? 'solid rgba(201,166,107,.6)' : 'dashed rgba(201,166,107,.28)'}`,
           background: fileZoneFilled ? 'rgba(201,166,107,.07)' : 'rgba(239,234,224,.02)',
-          transition: 'all .22s var(--ob-ease-out)',
+          transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
           textAlign: 'left',
           justifyContent: fileZoneFilled ? 'flex-start' : 'center',
           cursor: fileZoneFilled ? 'default' : 'pointer',
@@ -298,7 +298,7 @@ export default function RosterScreen({
           borderRadius: 16,
           border: `1px ${photoZoneFilled ? 'solid rgba(201,166,107,.6)' : 'dashed rgba(201,166,107,.28)'}`,
           background: photoZoneFilled ? 'rgba(201,166,107,.07)' : 'rgba(239,234,224,.02)',
-          transition: 'all .22s var(--ob-ease-out)',
+          transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
           textAlign: 'left',
           cursor: photoZoneFilled ? 'default' : 'pointer',
         }}
