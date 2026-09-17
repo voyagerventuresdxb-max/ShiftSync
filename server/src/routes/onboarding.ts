@@ -26,7 +26,7 @@ function getAllowedFrontendOrigins(): string[] {
 /**
  * The client-supplied `baseUrl` is only ever used as a display convenience
  * (so invite links point at the app the manager is actually using, not this
- * API's own host — see the 2026-09-xx fix below). It must never be trusted
+ * API's own host — see the 2026-09-15 fix below). It must never be trusted
  * verbatim: a compromised or forged client could otherwise mint a QR/WhatsApp
  * invite pointing at an attacker-controlled domain. Only an origin present in
  * the server-side allowlist is honored; anything else (including no value at
