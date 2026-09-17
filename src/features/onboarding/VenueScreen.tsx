@@ -42,6 +42,13 @@ export default function VenueScreen({
   const { session } = useIdentity();
 
   const [name, setName] = useState('');
+  // Account already collected this exact value (it's how the Location got
+  // created in the first place) — showing a fresh full-input prompt here
+  // reads as "answer this again" rather than "confirm/edit what you told
+  // us". Starts collapsed to a summary line; picking "Rename" reveals the
+  // same input as before. Purely presentational — `name`'s own state, the
+  // `updateLocation` PATCH on Continue, and the backend are all unchanged.
+  const [editingName, setEditingName] = useState(false);
   const [city, setCity] = useState<string>('Dubai');
   const [cityTouched, setCityTouched] = useState(false);
   const [venueType, setVenueType] = useState<string | null>(null);
@@ -138,34 +145,63 @@ export default function VenueScreen({
         <div style={{ color: '#e5484d', font: "400 13px/1.5 'Manrope'" }}>{error}</div>
       )}
 
-      {/* Venue name */}
+      {/* Venue name — Account already asked this; show what it collected as
+          a confirmed summary rather than re-prompting for it, with an
+          explicit "Rename" to edit if it's wrong. Falls back to the open
+          input if name somehow arrived empty, so there's always a way in. */}
       <div>
         <div style={{ font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Venue name</div>
-        <div
-          style={{
-            marginTop: 6,
-            borderBottom: `1px solid ${name ? 'rgba(201,166,107,.55)' : 'rgba(239,234,224,.12)'}`,
-            transition: 'border-color var(--ob-t)',
-          }}
-        >
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Sefarina, DIFC"
-            disabled={disabled}
-            autoComplete="off"
-            spellCheck={false}
+        {!editingName && name.trim() ? (
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, paddingBottom: 12, borderBottom: '1px solid rgba(201,166,107,.55)' }}>
+            <span style={{ font: "400 20px/1.2 'Instrument Serif'", color: 'var(--ob-bone)' }}>{name}</span>
+            <button
+              type="button"
+              onClick={() => setEditingName(true)}
+              disabled={disabled}
+              style={{
+                flexShrink: 0,
+                background: 'transparent',
+                border: 0,
+                padding: 0,
+                color: 'var(--ob-champagne)',
+                borderBottom: '1px solid rgba(201,166,107,.35)',
+                font: "500 11px/1 'Manrope'",
+                letterSpacing: '.04em',
+                cursor: 'pointer',
+              }}
+            >
+              Rename
+            </button>
+          </div>
+        ) : (
+          <div
             style={{
-              font: "400 20px/1.2 'Instrument Serif'",
-              color: 'var(--ob-bone)',
-              padding: '12px 0 12px',
-              width: '100%',
-              background: 'transparent',
-              border: 0,
-              outline: 'none',
+              marginTop: 6,
+              borderBottom: `1px solid ${name ? 'rgba(201,166,107,.55)' : 'rgba(239,234,224,.12)'}`,
+              transition: 'border-color var(--ob-t)',
             }}
-          />
-        </div>
+          >
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => setEditingName(false)}
+              placeholder="e.g. Sefarina, DIFC"
+              disabled={disabled}
+              autoComplete="off"
+              spellCheck={false}
+              autoFocus={editingName}
+              style={{
+                font: "400 20px/1.2 'Instrument Serif'",
+                color: 'var(--ob-bone)',
+                padding: '12px 0 12px',
+                width: '100%',
+                background: 'transparent',
+                border: 0,
+                outline: 'none',
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Location */}

@@ -89,9 +89,13 @@ test.describe('onboarding — full real gate', () => {
     const venueName = testVenueName('onboarding-full');
     await signupNewVenue(page, venueName);
 
-    // Venue's name is prefilled from the Account step — editing it here
-    // proves the two steps hand the same Location to each other.
+    // Venue shows the name Account already collected as a confirmed summary
+    // (not a fresh re-prompt) — "Rename" reveals the same input as before.
+    // Editing it here proves the two steps still hand the same Location to
+    // each other.
     await page.waitForSelector('text=Tell us about the room.');
+    await expect(page.getByText(venueName, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Rename' }).click();
     await expect(page.getByPlaceholder('e.g. Sefarina, DIFC')).toHaveValue(venueName);
     await page.getByPlaceholder('e.g. Sefarina, DIFC').fill('E2E Test Restaurant');
     await continueThroughVenue(page);
