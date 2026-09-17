@@ -102,7 +102,18 @@ function clusterRows(items: PositionedItem[]): RowCluster[] {
   return rows;
 }
 
-const DAY_HEADER_RE = /^(sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|\d{1,2}[-/][A-Za-z]{3,9}|\d{1,2}[-/]\d{1,2})$/i;
+// Deliberately does NOT include a bare-numeric `\d{1,2}[-/]\d{1,2}` branch
+// (e.g. "17-08") — every real date-header fixture/test in this file uses
+// either a weekday name or a digit+month-abbreviation ("17-Aug"), and a
+// bare-numeric pair is indistinguishable in shape from an ordinary
+// shift-time range ("9-17", "10-18"). That branch used to exist and was the
+// root cause of a real bug (PR #17 follow-up): a data row for an employee
+// working the identical shift on 3+ consecutive tracked days has exactly
+// the same "3 adjacent digit-hyphen-digit cells" shape as a real header row,
+// so no amount of run-length tightening alone can tell them apart — see
+// `extractPdfGrid`'s "never re-derive once established" comment for the
+// other half of the actual fix.
+const DAY_HEADER_RE = /^(sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|\d{1,2}[-/][A-Za-z]{3,9})$/i;
 
 /**
  * Derives column anchors from a single "anchor row" instead of every item on
@@ -153,7 +164,18 @@ function findAnchorRow(rows: RowCluster[]): RowCluster | null {
 
 function deriveColumnAnchors(rows: RowCluster[]): number[] {
   const anchorRow = findAnchorRow(rows);
-  const dayXs = anchorRow ? anchorRow.items.map((i) => i.x).sort((a, b) => a - b) : [];
+  // Filtered to items that actually match DAY_HEADER_RE, not every item on
+  // the row — a header row that labels its own name column (e.g. "Name |
+  // Monday | Tuesday | Wednesday", an ordinary real-world export shape) used
+  // to have that leading "Name" cell's x-position treated as its own phantom
+  // day-column anchor, shifting every other column and silently zeroing out
+  // the whole page's parsed rows.
+  const dayXs = anchorRow
+    ? anchorRow.items
+        .filter((i) => DAY_HEADER_RE.test(i.text.trim()))
+        .map((i) => i.x)
+        .sort((a, b) => a - b)
+    : [];
   if (dayXs.length === 0) return [];
 
   // Name-column anchor: the absolute left edge (x=0), not an offset from
@@ -260,25 +282,35 @@ export async function extractPdfGrid(buffer: Buffer): Promise<string[][]> {
   // member on page 2+ of exactly this common export shape. Pages before
   // any confident anchor row has been seen still fall through to the
   // "not this shape" empty-grid signal below.
+  //
+  // Once a confident header has been found anywhere in the document, it is
+  // NEVER re-derived for a later page — only reused. Re-deriving per page
+  // (the original design) meant a later page's own DATA could still win the
+  // "looks like a header" test and silently overwrite good anchors: an
+  // employee working the identical shift on 3+ consecutive tracked days
+  // with no day off between them (e.g. "9-17, 9-17, 9-17") has exactly the
+  // same shape — 3 adjacent day-shaped cells — as a real header row, so no
+  // amount of pattern-matching on that ROW ALONE can tell the two apart.
+  // The reliable signal is structural, not textual: a header row is
+  // whichever row first established the table's columns: once the document
+  // has one, no later row gets to contest it, no matter what it contains.
   let lastConfidentAnchors: number[] = [];
   for (const pageItems of pages) {
     if (pageItems.length === 0) continue;
     const rows = clusterRows(pageItems);
-    let anchors = deriveColumnAnchors(rows);
-    if (anchors.length > 0) {
-      lastConfidentAnchors = anchors;
-    } else {
-      // No day-header row on this page means no column anchors of its
-      // own — either a genuine continuation page (handled by the carried
-      // anchors above) or, if nothing has qualified yet, a long-format
-      // (one row per shift) or free-text PDF, not a day grid at all. Skip
-      // rather than let buildRawGrid index into an empty anchor list
-      // (`cells[0].push` on `[]` threw and 500'd the whole upload); an
-      // empty grid is exactly the "not this shape" signal the caller
-      // already routes to the text-parser/vision fallback.
-      if (lastConfidentAnchors.length === 0) continue;
-      anchors = lastConfidentAnchors;
+    const anchors = lastConfidentAnchors.length > 0 ? lastConfidentAnchors : deriveColumnAnchors(rows);
+    if (anchors.length === 0) {
+      // Nothing has qualified as a header yet, and this page doesn't have
+      // one either — either a genuine continuation page before any header
+      // was found (rare — headers are expected on page 1) or, if nothing
+      // ever qualifies, a long-format (one row per shift) or free-text PDF,
+      // not a day grid at all. Skip rather than let buildRawGrid index into
+      // an empty anchor list (`cells[0].push` on `[]` threw and 500'd the
+      // whole upload); an empty grid is exactly the "not this shape" signal
+      // the caller already routes to the text-parser/vision fallback.
+      continue;
     }
+    if (lastConfidentAnchors.length === 0) lastConfidentAnchors = anchors;
     const { grid, rowYs } = buildRawGrid(rows, anchors);
     const mergedGrid = mergeContinuationLines(grid, rowYs);
     combined.push(...mergedGrid);
