@@ -159,12 +159,40 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
   if (done) {
     const finished = done === 'finished';
     return (
-      <div className="ob-root" style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '0 40px' }}>
+      // Same phone-frame stage + ambient treatment as Welcome's done phase
+      // (QA round 1, items 4/5) — this closing screen was the other bare
+      // full-bleed black one.
+      <div className="ob-root" style={{ position: 'fixed', inset: 0, zIndex: 50, overflow: 'hidden' }}>
+        <div
+          style={{
+            position: 'absolute',
+            inset: '-8%',
+            background:
+              'radial-gradient(60% 50% at 30% 22%,rgba(201,166,107,.08),transparent 55%),radial-gradient(80% 60% at 78% 78%,rgba(60,40,20,.35),transparent 60%),linear-gradient(180deg,#0A0908 0%,#070605 60%,#050403 100%)',
+            animation: 'ob-ambient 14s ease-in-out infinite',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          className="ob-stage"
+          style={{
+            zIndex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            padding: '0 40px',
+            animation: 'ob-fade-in .6s cubic-bezier(.32,.72,0,1) both',
+            background:
+              'radial-gradient(38% 22% at 50% 34%,rgba(201,166,107,.14),transparent 70%),radial-gradient(45% 40% at 24% 18%,rgba(201,166,107,.10),transparent 60%),radial-gradient(60% 55% at 78% 78%,rgba(60,40,20,.42),transparent 65%),linear-gradient(180deg,#0A0908,#050403)',
+          }}
+        >
         <img src="/shiftsync-mark.svg" alt="ShiftSync" style={{ width: 88, height: 44, display: 'block', marginBottom: 28 }} />
-        <div className="ob-serif" style={{ fontSize: 34, lineHeight: 1.15, color: 'var(--ob-champagne)', letterSpacing: '-.005em' }}>
+        <div className="ob-serif" style={{ fontSize: 34, lineHeight: 1.15, color: 'var(--ob-champagne)', letterSpacing: '-.005em', textWrap: 'pretty' }}>
           {finished ? "You're set up." : 'Your room, your pace.'}
         </div>
-        <div style={{ font: "500 13.5px/1.55 'Manrope'", color: 'var(--ob-bronze)', marginTop: 14, maxWidth: 270 }}>
+        <div style={{ font: "500 13.5px/1.55 'Manrope'", color: 'var(--ob-bronze)', marginTop: 14, maxWidth: 270, textWrap: 'pretty' }}>
           {finished
             ? shared || directSentCount > 0
               ? 'Your team can join the moment they tap. Taking you to your dashboard.'
@@ -177,6 +205,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
         >
           Continue to Dashboard
         </button>
+        </div>
       </div>
     );
   }
@@ -210,7 +239,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
               border: ctaEngaged ? '1px solid transparent' : '1px solid rgba(239,234,224,.14)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
-              transition: 'all .52s var(--ob-ease-out)',
+              transition: 'background-color var(--ob-t), color var(--ob-t)',
               cursor: loading ? 'default' : 'pointer',
             }}
           >
@@ -255,7 +284,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                   letterSpacing: '.06em',
                   textTransform: 'uppercase',
                   background: 'transparent',
-                  transition: 'all .22s var(--ob-ease-out)',
+                  transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                 }}
               >
                 {copied ? 'Copied' : 'Copy'}
@@ -346,7 +375,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                         border: `1px solid ${on ? 'rgba(201,166,107,.32)' : 'rgba(239,234,224,.06)'}`,
                         background: on ? 'rgba(201,166,107,.045)' : 'rgba(239,234,224,.015)',
                         opacity: has ? 1 : 0.72,
-                        transition: 'all .22s var(--ob-ease-out)',
+                        transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                       }}
                     >
                       <button
@@ -371,7 +400,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                           border: `1px solid ${on ? 'rgba(201,166,107,.7)' : 'rgba(239,234,224,.14)'}`,
                           color: 'var(--ob-champagne)',
                           background: on ? 'rgba(201,166,107,.14)' : 'transparent',
-                          transition: 'all .22s var(--ob-ease-out)',
+                          transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                         }}
                       >
                         {on && (
@@ -406,7 +435,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                               border: 0,
                               borderBottom: `1px solid ${has ? 'transparent' : 'rgba(201,166,107,.28)'}`,
                               outline: 'none',
-                              transition: 'all .22s var(--ob-ease-out)',
+                              transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                             }}
                           />
                         </div>

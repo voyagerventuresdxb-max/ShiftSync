@@ -71,7 +71,7 @@ function chipStyle(on: boolean, dashed = false) {
     background: on ? 'rgba(201,166,107,.10)' : 'rgba(239,234,224,.02)',
     color: on ? 'var(--ob-champagne)' : 'var(--ob-stone)',
     font: "500 10.5px/1 'Manrope'",
-    transition: 'all .22s var(--ob-ease-out)',
+    transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
   } as const;
 }
 
@@ -281,7 +281,7 @@ export default function ReviewScreen({
               color: '#100D0A',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
-              transition: 'all .52s var(--ob-ease-out)',
+              transition: 'background-color var(--ob-t), color var(--ob-t)',
               cursor: 'pointer',
             }}
           >
@@ -326,7 +326,7 @@ export default function ReviewScreen({
               color: ready && !confirming ? '#100D0A' : 'var(--ob-dim-2)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
-              transition: 'all .52s var(--ob-ease-out)',
+              transition: 'background-color var(--ob-t), color var(--ob-t)',
               cursor: ready && !confirming ? 'pointer' : 'default',
             }}
           >
@@ -344,7 +344,7 @@ export default function ReviewScreen({
             <span style={{ color: 'var(--ob-bone)' }}>{rows.length}</span> staff found
           </span>
           <span style={{ width: 3, height: 3, borderRadius: 2, background: 'var(--ob-dim-2)' }} />
-          <span style={{ color: flaggedCount === 0 ? 'var(--ob-stone)' : 'var(--ob-champagne)', transition: 'color .22s var(--ob-ease-out)' }}>
+          <span style={{ color: flaggedCount === 0 ? 'var(--ob-stone)' : 'var(--ob-champagne)', transition: 'color var(--ob-t)' }}>
             {flaggedCount === 0 ? 'all confirmed' : `${flaggedCount} need${flaggedCount === 1 ? 's' : ''} your review`}
           </span>
         </div>
@@ -361,7 +361,7 @@ export default function ReviewScreen({
             opacity: flaggedCount === 0 && !filterFlagged ? 0.35 : 1,
             background: 'transparent',
             border: 0,
-            transition: 'all .22s var(--ob-ease-out)',
+            transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
           }}
         >
           {filterFlagged ? 'Show all' : 'Flagged only'}
@@ -385,7 +385,7 @@ export default function ReviewScreen({
                 borderRadius: 14,
                 border: `1px solid ${r.flagged ? 'rgba(201,166,107,.32)' : open ? 'rgba(239,234,224,.14)' : 'rgba(239,234,224,.07)'}`,
                 background: r.flagged ? 'rgba(201,166,107,.045)' : 'rgba(239,234,224,.02)',
-                transition: 'all .22s var(--ob-ease-out)',
+                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
               }}
             >
               <div

@@ -114,10 +114,39 @@ const DAY_HEADER_RE = /^(sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursda
  * much more reliable source of true column boundaries; a name-column anchor
  * is prepended so the leftmost (staff name) column is captured too.
  */
+// A real day-header row is made up ALMOST ENTIRELY of day cells sitting
+// side by side (a week is 5-7 of them, with at most a leading name-column
+// label breaking the run) — scattered, non-adjacent matches are the
+// signature of a DATA row that merely happens to contain a couple of
+// date-shaped cells, not a header. This matters because DAY_HEADER_RE's
+// `\d{1,2}[-/]\d{1,2}` date branch (meant for "17-08") also matches an
+// ordinary shift-time-range cell like "10-18" or "9-17" — a multi-page PDF
+// where only page 1 repeats the day-header row previously had page 2's
+// plain data rows false-positively picked as that page's OWN anchor row
+// (two unrelated time cells, e.g. "10-18" and "10-18", counted as 2 "day
+// hits" anywhere in the row), silently corrupting or dropping that page's
+// staff instead of falling through to the text/vision fallback.
+const MIN_CONSECUTIVE_DAY_HEADERS = 3;
+
+/** Longest run of adjacent (x-sorted) items that match DAY_HEADER_RE, with no non-matching item breaking the run. */
+function longestConsecutiveDayRun(row: RowCluster): number {
+  const sorted = [...row.items].sort((a, b) => a.x - b.x);
+  let longest = 0;
+  let current = 0;
+  for (const item of sorted) {
+    if (DAY_HEADER_RE.test(item.text.trim())) {
+      current += 1;
+      longest = Math.max(longest, current);
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
 function findAnchorRow(rows: RowCluster[]): RowCluster | null {
   for (const row of rows.slice(0, 10)) {
-    const dayHits = row.items.filter((i) => DAY_HEADER_RE.test(i.text.trim())).length;
-    if (dayHits >= 2) return row;
+    if (longestConsecutiveDayRun(row) >= MIN_CONSECUTIVE_DAY_HEADERS) return row;
   }
   return null;
 }
@@ -223,10 +252,33 @@ function mergeContinuationLines(grid: string[][], rowYs: number[]): string[][] {
 export async function extractPdfGrid(buffer: Buffer): Promise<string[][]> {
   const pages = await extractPositionedItems(buffer);
   const combined: string[][] = [];
+  // Carried across pages: some real multi-page rota exports only print the
+  // day-header row on page 1, not on every continuation page. A page with
+  // no qualifying header row of its own reuses the last page that HAD one,
+  // instead of being dropped outright — the alternative (treating every
+  // headerless page as "not a grid") would silently lose every staff
+  // member on page 2+ of exactly this common export shape. Pages before
+  // any confident anchor row has been seen still fall through to the
+  // "not this shape" empty-grid signal below.
+  let lastConfidentAnchors: number[] = [];
   for (const pageItems of pages) {
     if (pageItems.length === 0) continue;
     const rows = clusterRows(pageItems);
-    const anchors = deriveColumnAnchors(rows);
+    let anchors = deriveColumnAnchors(rows);
+    if (anchors.length > 0) {
+      lastConfidentAnchors = anchors;
+    } else {
+      // No day-header row on this page means no column anchors of its
+      // own — either a genuine continuation page (handled by the carried
+      // anchors above) or, if nothing has qualified yet, a long-format
+      // (one row per shift) or free-text PDF, not a day grid at all. Skip
+      // rather than let buildRawGrid index into an empty anchor list
+      // (`cells[0].push` on `[]` threw and 500'd the whole upload); an
+      // empty grid is exactly the "not this shape" signal the caller
+      // already routes to the text-parser/vision fallback.
+      if (lastConfidentAnchors.length === 0) continue;
+      anchors = lastConfidentAnchors;
+    }
     const { grid, rowYs } = buildRawGrid(rows, anchors);
     const mergedGrid = mergeContinuationLines(grid, rowYs);
     combined.push(...mergedGrid);

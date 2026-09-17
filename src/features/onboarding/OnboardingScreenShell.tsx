@@ -10,7 +10,11 @@ import './onboarding.css';
  * phone-bezel/iOS-status-bar/home-indicator chrome is presentation-only and
  * dropped here, same reasoning as WelcomeScreen.
  */
-const STEP_LABELS = ['Welcome', 'Venue', 'Roster', 'Review', 'Invite'];
+// The Welcome intro (hold gesture + carousel) is the app's launch moment,
+// not a step with anything to fill in — the rail starts at Account, the
+// wizard's first real step since account creation moved into it
+// (2026-09-16).
+const STEP_LABELS = ['Account', 'Venue', 'Roster', 'Review', 'Invite'];
 
 export function StepProgress({ currentIndex }: { currentIndex: number }) {
   return (
@@ -45,7 +49,7 @@ export default function OnboardingScreenShell({
   children,
   footer,
 }: {
-  /** 0-indexed: Welcome=0, Venue=1, Roster=2, Review=3, Invite=4. */
+  /** 0-indexed: Account=0, Venue=1, Roster=2, Review=3, Invite=4. */
   stepIndex: number;
   eyebrow: string;
   title: string;
@@ -54,7 +58,7 @@ export default function OnboardingScreenShell({
   footer: ReactNode;
 }) {
   return (
-    <div className="ob-root" style={{ position: 'fixed', inset: 0, zIndex: 50, overflow: 'auto' }}>
+    <div className="ob-root" style={{ position: 'fixed', inset: 0, zIndex: 50, overflow: 'hidden' }}>
       <div
         style={{
           position: 'fixed',
@@ -82,7 +86,8 @@ export default function OnboardingScreenShell({
         }}
       />
 
-      <div style={{ position: 'relative', zIndex: 1, minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '72px 24px 48px' }}>
+      <div className="ob-stage ob-stage--scroll" style={{ zIndex: 1 }}>
+      <div style={{ position: 'relative', minHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '72px 24px 48px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', animation: 'ob-fade-in .52s cubic-bezier(.16,1,.3,1) both' }}>
           <img src="/shiftsync-mark.svg" alt="ShiftSync" width={88} height={44} style={{ display: 'block', marginBottom: 10 }} />
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
@@ -137,6 +142,7 @@ export default function OnboardingScreenShell({
 
           <div style={{ marginTop: 30, paddingBottom: 24, animation: 'ob-fade-up .52s cubic-bezier(.16,1,.3,1) .56s both' }}>{footer}</div>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -1,8 +1,9 @@
-import { createBrowserRouter, Link, Navigate, useLocation } from 'react-router-dom';
+import { createBrowserRouter, Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { Pencil, Rocket } from 'lucide-react';
 import { AppShell, type RouteHandle } from './components/shiftsync/AppShell';
 import { useIdentity } from './state/IdentityContext';
+import { loadBoundVenue } from './api/venueBinding';
 import HomeContent from './routes/HomeRoute';
 import SchedulingContent from './routes/SchedulingRoute';
 import ScheduleEditorContent from './routes/ScheduleEditorRoute';
@@ -10,7 +11,6 @@ import FloorPlanContent from './routes/FloorPlanRoute';
 import PeopleContent from './routes/PeopleRoute';
 import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
-import SignupContent from './routes/SignupRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
 import OnboardingContent from './routes/OnboardingRoute';
 
@@ -112,6 +112,28 @@ function RequireSession({ children, managerOnly }: { children: ReactNode; manage
 }
 
 /**
+ * `/` used to render `HomeContent` unconditionally — fine for a signed-in
+ * session or a kiosk device with a venue already bound (see
+ * `HomeContent`/`venueBinding.ts`'s "anonymous glance board" design), but a
+ * genuinely first-time visitor (no session, no bound venue, no `?venue=`
+ * link) has no venue context for Home to show anything with — they'd land on
+ * a silently empty board with no indication of what to do next. That visitor
+ * is sent to `/onboarding` instead — the Welcome intro plus account creation
+ * as its first step (see OnboardingRoute.tsx) — now the actual default
+ * landing experience for a brand-new visitor. Checked with the same
+ * `?venue=` param and `loadBoundVenue()` read `HomeContent` itself uses, so
+ * this never fires for the kiosk case it's not meant to touch.
+ */
+function RootRoute() {
+  const { session } = useIdentity();
+  const [searchParams] = useSearchParams();
+  if (!session && !searchParams.get('venue') && !loadBoundVenue()) {
+    return <Navigate to="/onboarding" replace />;
+  }
+  return <HomeContent />;
+}
+
+/**
  * `/scheduling`'s header action — only rendered for a MANAGER/OWNER
  * session. `/schedule` itself is `managerOnly`-gated (see `RequireSession`
  * above) purely as a safety net for a stale bookmark or direct URL entry;
@@ -187,7 +209,7 @@ export const router = createBrowserRouter([
   {
     element: <AppShell />,
     children: [
-      { path: '/', element: <HomeContent />, handle: handles.home },
+      { path: '/', element: <RootRoute />, handle: handles.home },
       {
         path: '/scheduling',
         element: (
@@ -242,17 +264,20 @@ export const router = createBrowserRouter([
       },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
-      // Not behind RequireSession — this is how someone gets their FIRST
-      // session (a brand-new venue). Gating it would make it unreachable.
-      { path: '/signup', element: <SignupContent />, handle: handles.signup },
+      // Account creation moved INTO the onboarding wizard as its first step
+      // (2026-09-16, see OnboardingRoute.tsx/AccountScreen.tsx); kept as a
+      // redirect so the "Sign up your restaurant" links and any old bookmark
+      // still land somewhere real.
+      { path: '/signup', element: <Navigate to="/onboarding" replace />, handle: handles.signup },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
+      // Deliberately NOT behind RequireSession (2026-09-16): account creation
+      // is the wizard's own first step now, so a visitor with no session at
+      // all must be able to reach it. OnboardingRoute.tsx applies the same
+      // per-step protection itself (session required from Venue onward,
+      // STAFF sent to /my-shifts).
       {
         path: '/onboarding',
-        element: (
-          <RequireSession managerOnly>
-            <OnboardingContent />
-          </RequireSession>
-        ),
+        element: <OnboardingContent />,
         handle: handles.onboarding,
       },
       {
@@ -263,11 +288,7 @@ export const router = createBrowserRouter([
         // segment) since that syntax isn't supported across all v6 minor
         // versions; both point at the exact same element.
         path: '/onboarding/:step',
-        element: (
-          <RequireSession managerOnly>
-            <OnboardingContent />
-          </RequireSession>
-        ),
+        element: <OnboardingContent />,
         handle: handles.onboarding,
       },
     ],

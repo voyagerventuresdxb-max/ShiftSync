@@ -7,6 +7,25 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — long-lived, no r
 const MAX_OTP_ATTEMPTS = 5;
 
 /**
+ * Local-testing shortcut: when explicitly enabled, `DEV_OTP_BYPASS_CODE`
+ * verifies successfully for ANY phone/purpose regardless of the real code on
+ * file — skips needing `ALLOW_DEV_OTP_ECHO`'s real-code echo (or a live SMS
+ * provider) just to click through login/join/signup locally.
+ *
+ * Fail-closed and explicitly opt-in, same rationale as `ALLOW_DEV_OTP_ECHO`
+ * (see routes/identity.ts): deliberately NOT keyed off `NODE_ENV`, because
+ * nothing in this repo's scripts, Dockerfile or start command ever sets
+ * `NODE_ENV=production` — that check would silently accept the fixed code in
+ * every real deployment. Kept as its OWN flag rather than folded into
+ * `ALLOW_DEV_OTP_ECHO`: echoing a just-generated code back to the person who
+ * generated it is much lower-stakes than a fixed code that authenticates as
+ * ANY phone number on file — someone should be able to enable one without
+ * the other.
+ */
+const DEV_OTP_BYPASS = process.env.ALLOW_DEV_OTP_BYPASS === 'true';
+export const DEV_OTP_BYPASS_CODE = '000000';
+
+/**
  * Digits only, dropping a leading international-dialing prefix so
  * "+971 50 123 4567", "00971501234567", and "0501234567" can all match the
  * same stored number. Shared by identity.ts (login) and join.ts
@@ -66,6 +85,8 @@ export async function verifyOtpCode(
   purpose: OtpPurpose,
   submittedCode: string,
 ): Promise<{ ok: boolean; reason?: string }> {
+  if (DEV_OTP_BYPASS && submittedCode === DEV_OTP_BYPASS_CODE) return { ok: true };
+
   // Look up on the same normalized digits `createOtpCode` stored (see there).
   const record = await prisma.otpCode.findFirst({
     where: { phone: phoneDigits(phone), purpose, consumedAt: null },

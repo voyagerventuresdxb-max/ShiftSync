@@ -521,7 +521,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
         }}
       />
 
-      <div style={{ position: 'relative', width: '100%', maxWidth: 460, height: '100%', margin: '0 auto' }}>
+      <div className="ob-stage" style={{ zIndex: 3 }}>
         {(phase === 'hold' || isSettled) && (
           <div
             style={{
@@ -861,7 +861,12 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
               inset: 0,
               zIndex: 10,
               animation: 'ob-fade-in .6s cubic-bezier(.32,.72,0,1) both',
-              background: 'linear-gradient(180deg,#0A0908,#050403)',
+              // The prototype's done phase is a bare two-stop gradient —
+              // read as an unstyled screen in QA (round 1, item 5), so it
+              // takes the same ambient treatment as the carousel behind it
+              // plus a soft halo under the mark, instead of flat black.
+              background:
+                'radial-gradient(38% 22% at 50% 34%,rgba(201,166,107,.14),transparent 70%),radial-gradient(45% 40% at 24% 18%,rgba(201,166,107,.10),transparent 60%),radial-gradient(60% 55% at 78% 78%,rgba(60,40,20,.42),transparent 65%),linear-gradient(180deg,#0A0908,#050403)',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -871,13 +876,13 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
             }}
           >
             <img src="/shiftsync-mark.svg" alt="ShiftSync" style={{ width: 88, height: 44, display: 'block', marginBottom: 28 }} />
-            <div className="ob-serif" style={{ fontSize: 34, lineHeight: 1.15, color: 'var(--ob-champagne)', letterSpacing: '-.005em' }}>Let&apos;s set up your venue.</div>
-            <div style={{ font: "500 13.5px/1.55 'Manrope'", color: 'var(--ob-bronze)', marginTop: 14, maxWidth: 260 }}>Next: name your venue, add your floor, and invite your team.</div>
+            <div className="ob-serif" style={{ fontSize: 34, lineHeight: 1.15, color: 'var(--ob-champagne)', letterSpacing: '-.005em', textWrap: 'pretty' }}>Let&apos;s set up your venue.</div>
+            <div style={{ font: "500 13.5px/1.55 'Manrope'", color: 'var(--ob-bronze)', marginTop: 14, maxWidth: 260, textWrap: 'pretty' }}>Next: verify your number, name your venue, add your floor, and invite your team.</div>
             <button
               onClick={onContinue}
               style={{ marginTop: 36, display: 'inline-block', padding: '15px 28px', borderRadius: 14, background: 'var(--ob-bone)', color: '#100D0A', font: "600 14px/1 'Manrope'", letterSpacing: '.005em' }}
             >
-              Continue to Venue
+              Continue
             </button>
             <button
               onClick={resetToHold}
