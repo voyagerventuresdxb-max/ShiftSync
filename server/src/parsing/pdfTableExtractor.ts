@@ -129,9 +129,10 @@ const DAY_HEADER_RE = /^(sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursda
 // side by side (a week is 5-7 of them, with at most a leading name-column
 // label breaking the run) — scattered, non-adjacent matches are the
 // signature of a DATA row that merely happens to contain a couple of
-// date-shaped cells, not a header. This matters because DAY_HEADER_RE's
-// `\d{1,2}[-/]\d{1,2}` date branch (meant for "17-08") also matches an
-// ordinary shift-time-range cell like "10-18" or "9-17" — a multi-page PDF
+// date-shaped cells, not a header. This matters because DAY_HEADER_RE used
+// to have a bare-numeric `\d{1,2}[-/]\d{1,2}` date branch (meant for
+// "17-08") that also matched an ordinary shift-time-range cell like "10-18"
+// or "9-17" (removed — see DAY_HEADER_RE's own comment) — a multi-page PDF
 // where only page 1 repeats the day-header row previously had page 2's
 // plain data rows false-positively picked as that page's OWN anchor row
 // (two unrelated time cells, e.g. "10-18" and "10-18", counted as 2 "day
@@ -155,6 +156,18 @@ function longestConsecutiveDayRun(row: RowCluster): number {
   return longest;
 }
 
+// This function has been "fixed" twice (PR #17, then #18) by tightening
+// what counts as a day-shaped cell — and both times a real roster input
+// broke it again. That's the ceiling of this approach: ANY heuristic that
+// matches header-vs-data by cell shape/value will eventually collide with
+// real employee data that happens to look the same way (a header and an
+// employee's identical or date-shaped shift values are indistinguishable in
+// isolation). If a new input breaks this again, don't reach for another
+// regex/count tweak — that just relocates the bug. The actual fix (PR #18)
+// is structural, in extractPdfGrid: the first confidently-detected header
+// wins for the whole document and is never re-derived from a later page's
+// content. Improve detection here if you must, but keep that "never
+// re-derive" rule — it's what closes this class of bug, not another patch.
 function findAnchorRow(rows: RowCluster[]): RowCluster | null {
   for (const row of rows.slice(0, 10)) {
     if (longestConsecutiveDayRun(row) >= MIN_CONSECUTIVE_DAY_HEADERS) return row;
