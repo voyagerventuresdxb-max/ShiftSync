@@ -51,10 +51,32 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+/**
+ * Thrown when the buffer handed to hasPdfTextLayer/extractPdfGrid isn't a
+ * PDF pdfjs-dist can even open at all (0 bytes, or bytes that aren't a PDF
+ * container) — distinct from a valid PDF that simply has no text layer or
+ * no day-header row, which are "not this shape, try the next fallback"
+ * cases, not malformed-input cases. See schedules.ts's upload route (issue
+ * #19): this used to propagate as an untyped rejection all the way to the
+ * route's generic catch-all, producing a 500 ("Unexpected error...") for
+ * what is really a 422-shaped "this file is broken" case.
+ */
+export class MalformedPdfError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause !== undefined ? { cause } : undefined);
+    this.name = 'MalformedPdfError';
+  }
+}
+
 /** Extracts positioned text items per page. Returns [] for a page with no text layer at all. */
 async function extractPositionedItems(buffer: Buffer): Promise<PositionedItem[][]> {
   const data = new Uint8Array(buffer);
-  const doc = await pdfjs.getDocument({ data, isEvalSupported: false, standardFontDataUrl: STANDARD_FONT_DATA_URL }).promise;
+  let doc: Awaited<ReturnType<typeof pdfjs.getDocument>['promise']>;
+  try {
+    doc = await pdfjs.getDocument({ data, isEvalSupported: false, standardFontDataUrl: STANDARD_FONT_DATA_URL }).promise;
+  } catch (err) {
+    throw new MalformedPdfError(err instanceof Error ? err.message : 'This file could not be read as a PDF.', err);
+  }
   const pages: PositionedItem[][] = [];
   try {
     for (let p = 1; p <= doc.numPages; p++) {

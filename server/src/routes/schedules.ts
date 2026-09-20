@@ -4,7 +4,7 @@ import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
 import { parseWorkbookBuffer, buildMergeExpandedGrid, listOtherSheetNames, TemplateDetectionError } from '../parsing/parseWorkbook.js';
 import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
-import { extractPdfGrid, hasPdfTextLayer } from '../parsing/pdfTableExtractor.js';
+import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from '../parsing/pdfTableExtractor.js';
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
 import { parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
@@ -386,6 +386,16 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
       // section header) — a loud, visible failure for the manager to see
       // and retry/escalate, not a silent 200-success with missing rows.
       return res.status(422).json({ error: err.message, errorCode: 'roster_extraction_anomaly' });
+    }
+    if (err instanceof MalformedPdfError) {
+      // 0 bytes or bytes that aren't a PDF at all (issue #19) — a bad
+      // upload, not a server fault. Same 422 treatment as every other
+      // unparseable-input case in this route (VisionIngestionError,
+      // TemplateDetectionError, RosterExtractionAnomalyError above).
+      return res.status(422).json({
+        error: "This file doesn't look like a valid PDF — please check it opens correctly and re-upload.",
+        errorCode: 'malformed_pdf',
+      });
     }
     console.error('[schedules.upload] failed', err);
     if (err instanceof Error) {

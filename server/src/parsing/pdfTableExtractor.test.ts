@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { extractPdfGrid, hasPdfTextLayer } from './pdfTableExtractor.js';
+import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from './pdfTableExtractor.js';
 import { parseExcelGrid } from './deterministicGridParser.js';
 
 const WEEK_START = '2026-08-17';
@@ -395,4 +395,38 @@ test('inconsistent row spacing: irregular gaps between data rows still split int
   assert.ok(byName('Chen').some((r) => r.startTime === '11:00' && r.endTime === '15:00'));
   assert.ok(byName('Chen').some((r) => r.startTime === '09:00' && r.endTime === '17:00'));
   assert.equal(result.anomalies.length, 0);
+});
+
+// Regression (issue #19): a genuinely malformed buffer (0 bytes, or bytes
+// that aren't a PDF at all) used to propagate as an untyped pdfjs-dist
+// rejection all the way to schedules.ts's generic catch-all, producing a
+// 500 ("Unexpected error...") for what is really a 422-shaped "this file
+// is broken" case — inconsistent with every other unparseable-input case
+// in that route, which all map to a typed error and a 422. Both
+// hasPdfTextLayer and extractPdfGrid now throw the same typed
+// MalformedPdfError (both go through extractPositionedItems), which
+// schedules.ts's outer catch maps to a 422.
+test('a 0-byte file throws a typed MalformedPdfError, not an untyped rejection', async () => {
+  const empty = Buffer.alloc(0);
+  await assert.rejects(() => hasPdfTextLayer(empty), MalformedPdfError);
+  await assert.rejects(() => extractPdfGrid(empty), MalformedPdfError);
+});
+
+test('a buffer that is not a PDF at all throws a typed MalformedPdfError, not an untyped rejection', async () => {
+  const garbage = Buffer.from('this is not a pdf at all, just garbage bytes 0000000');
+  await assert.rejects(() => hasPdfTextLayer(garbage), MalformedPdfError);
+  await assert.rejects(() => extractPdfGrid(garbage), MalformedPdfError);
+});
+
+// A well-formed PDF with no text layer at all (a genuine scanned/image-only
+// page) is NOT malformed — it's a valid "not this shape" case that should
+// keep falling through to the Docling/vision fallback, not get swept up
+// into the new MalformedPdfError path.
+test('a well-formed PDF with no text layer does NOT throw MalformedPdfError', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([700, 400]);
+  page.drawRectangle({ x: 50, y: 50, width: 100, height: 100 });
+  const buffer = Buffer.from(await doc.save());
+  await assert.doesNotReject(() => hasPdfTextLayer(buffer));
+  assert.equal(await hasPdfTextLayer(buffer), false);
 });
