@@ -51,6 +51,22 @@ function OnboardingFlow({ locationId }: { locationId: string | null }) {
   if (stepRequiresSession(step) && !locationId) {
     // Same shape as router.tsx's RequireSession redirect, so login lands
     // back on the step that was requested.
+    //
+    // Currently unreached in practice (QA pass, 2026-09-20): this only
+    // fires if `session` (from useIdentity()) goes null WITHOUT
+    // OnboardingStateProvider remounting — `unlockedSteps` there is seeded
+    // once, in a useState initializer, so a step it already unlocked (e.g.
+    // 'venue') stays resolved even after locationId goes null, as long as
+    // this component tree hasn't remounted. But nothing in the app today
+    // sets `session` to null reactively while this tree stays mounted:
+    // IdentityContext's logout() has exactly one call site (MyShiftsRoute,
+    // unrelated to onboarding), there's no storage-event listener, and no
+    // expiry timer — a plain reload is the only way session actually
+    // clears, and a reload re-seeds unlockedSteps fresh from the new (null)
+    // locationId, which resolves to 'account', never reaching this branch.
+    // Left in as defensive code, not dead-code-removed — revisit whether
+    // it's reachable if/when token expiry or a forced-logout event is
+    // added (tracked as a follow-up, see issue #20).
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
     return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
   }
