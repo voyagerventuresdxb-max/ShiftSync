@@ -322,6 +322,55 @@ test('a header row with an explicit "Name" label on the name column parses corre
   assert.ok(fatima.every((r) => r.startTime === '09:00' && r.endTime === '17:00'));
 });
 
+// Regression (same QA pass, follow-up check): the "identical shift 3 days
+// running" test above proves the structural fix survives THAT input, but on
+// its own it can't rule out the fix secretly still depending on the values
+// being identical (e.g. if some remaining code path matched on repeated
+// text rather than purely on row position). It shouldn't — the whole point
+// of "never re-derive once established" is that it never looks at a later
+// page's cell VALUES for header detection at all — but an irregular pattern
+// is what a real venue's schedule usually looks like, so it's worth its own
+// explicit case rather than trusting that the identical-shift test
+// generalizes.
+test('multi-page PDF: an employee with an IRREGULAR (non-identical) shift pattern on a continuation page is not mistaken for that page\'s header', async () => {
+  const buffer = await buildMultiPagePdf([
+    [
+      { text: 'Monday', x: 140, y: 380 },
+      { text: 'Tuesday', x: 240, y: 380 },
+      { text: 'Wednesday', x: 340, y: 380 },
+      { text: 'Fatima', x: 20, y: 360 },
+      { text: '9-17', x: 140, y: 360 },
+      { text: '9-17', x: 240, y: 360 },
+      { text: 'OFF', x: 340, y: 360 },
+    ],
+    [
+      // Marcus is the ONLY row on this page, and every one of his 3 shifts
+      // is a DIFFERENT time range — still 3 adjacent day-shaped cells (the
+      // exact shape findAnchorRow used to key off), just not identical
+      // values, to confirm the fix isn't secretly relying on repetition.
+      { text: 'Marcus', x: 20, y: 360 },
+      { text: '9-17', x: 140, y: 360 },
+      { text: '14-22', x: 240, y: 360 },
+      { text: '10-18', x: 340, y: 360 },
+    ],
+  ]);
+
+  assert.equal(await hasPdfTextLayer(buffer), true);
+  const grid = await extractPdfGrid(buffer);
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.templateLabel, 'Deterministic Grid Parser');
+
+  const names = result.rows.map((r) => r.employeeName);
+  assert.ok(names.includes('Fatima'), `expected Fatima (page 1) in parsed rows: ${JSON.stringify(names)}`);
+  assert.ok(names.includes('Marcus'), `expected Marcus (page 2) in parsed rows, not silently dropped: ${JSON.stringify(names)}`);
+
+  const marcus = result.rows.filter((r) => r.employeeName === 'Marcus');
+  assert.equal(marcus.length, 3, `expected all 3 of Marcus's distinct shifts, got: ${JSON.stringify(marcus)}`);
+  assert.ok(marcus.some((r) => r.startTime === '09:00' && r.endTime === '17:00'), 'Monday 9-17');
+  assert.ok(marcus.some((r) => r.startTime === '14:00' && r.endTime === '22:00'), 'Tuesday 14-22');
+  assert.ok(marcus.some((r) => r.startTime === '10:00' && r.endTime === '18:00'), 'Wednesday 10-18');
+});
+
 test('inconsistent row spacing: irregular gaps between data rows still split into distinct rows, not merged', async () => {
   const buffer = await buildPdf([
     { text: '17-Aug', x: 100, y: 380 },
