@@ -1,5 +1,6 @@
 /** Client for the Shoutouts API (server/src/routes/shoutouts.ts). */
 import { ApiError } from './schedules';
+import { withAuth } from './identity';
 
 export interface ShoutoutDto {
   id: string;
@@ -33,17 +34,26 @@ export async function fetchShoutouts(locationId: string): Promise<ShoutoutDto[]>
   return data.shoutouts;
 }
 
-/** POST /api/shoutouts */
-export async function postShoutout(input: {
-  locationId: string;
-  employeeId: string;
-  authorId?: string;
-  shiftSnapshot?: string;
-  note: string;
-}): Promise<ShoutoutDto> {
+/**
+ * POST /api/shoutouts — `requireSession`-gated server-side, so this now
+ * takes the caller's own session token (`token`, same "token first" shape as
+ * `shifts.ts`'s `createShift`) — 2026-09-20 tenant-isolation fix: the route
+ * previously accepted no Authorization header at all from this client, which
+ * meant every real POST from the app was silently 401ing.
+ */
+export async function postShoutout(
+  token: string,
+  input: {
+    locationId: string;
+    employeeId: string;
+    authorId?: string;
+    shiftSnapshot?: string;
+    note: string;
+  },
+): Promise<ShoutoutDto> {
   const data = await request<{ shoutout: ShoutoutDto }>('/api/shoutouts', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ ...input, authorId: input.authorId ?? null, shiftSnapshot: input.shiftSnapshot ?? null }),
   });
   return data.shoutout;

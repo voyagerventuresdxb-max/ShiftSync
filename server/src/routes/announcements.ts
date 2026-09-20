@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession } from '../middleware/requireSession.js';
+import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
 import { createAnnouncement } from '../lib/actions/communicationActions.js';
 
 export const announcementsRouter = Router();
@@ -39,20 +39,26 @@ announcementsRouter.get('/:locationId', async (req, res) => {
 });
 
 /**
- * POST /api/announcements — body: { locationId, authorId?, body }.
+ * POST /api/announcements — body: { authorId?, body }.
  * `requireSession`-gated (spec 2026-09-11-voice-post-announcement-shoutout-design.md
  * §2.3a) — this route previously required no authentication at all, so
  * anyone could broadcast an announcement to a venue attributed to an
  * arbitrary authorId. This is an authentication fix only, not a role
  * restriction: any signed-in user, same audience as before this fix, can
  * still post — only anonymous access is closed.
+ *
+ * `locationId` comes from the caller's own session, not the request body
+ * (2026-09-20 tenant-isolation fix — the earlier `req.body.locationId` was
+ * only checked for existence, not ownership, so any signed-in user at any
+ * venue could post into a different venue's feed by naming its locationId;
+ * same fix shape as `shifts.ts`'s POST /, which already sources `locationId`
+ * from the session for the same reason).
  */
 announcementsRouter.post('/', requireSession, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const authorId = req.body?.authorId ? String(req.body.authorId).trim() : null;
     const body = String(req.body?.body ?? '').trim();
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!body) return res.status(400).json({ error: 'body is required.' });
 
     const result = await createAnnouncement({ locationId, authorId, body });
@@ -76,15 +82,22 @@ announcementsRouter.post('/', requireSession, async (req, res) => {
   }
 });
 
-/** PATCH /api/announcements/:id — body: { body } */
-announcementsRouter.patch('/:id', async (req, res) => {
+/**
+ * PATCH /api/announcements/:id — body: { body }.
+ * `requireSession`-gated, scoped to the caller's own venue via
+ * `ownedOrNotFound` (2026-09-20 tenant-isolation fix — this route previously
+ * had no auth middleware and no ownership check at all: anyone, signed in or
+ * not, who had or guessed an announcement id could edit any venue's
+ * announcement).
+ */
+announcementsRouter.patch('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const body = String(req.body?.body ?? '').trim();
     if (!body) return res.status(400).json({ error: 'body is required.' });
 
     const existing = await prisma.announcement.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Announcement "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Announcement "${id}" not found.`)) return;
 
     const updated = await prisma.announcement.update({
       where: { id },
@@ -107,12 +120,17 @@ announcementsRouter.patch('/:id', async (req, res) => {
   }
 });
 
-/** DELETE /api/announcements/:id */
-announcementsRouter.delete('/:id', async (req, res) => {
+/**
+ * DELETE /api/announcements/:id
+ * `requireSession`-gated, scoped to the caller's own venue via
+ * `ownedOrNotFound` — same 2026-09-20 tenant-isolation fix as PATCH, above:
+ * this route had no auth middleware and no ownership check at all before.
+ */
+announcementsRouter.delete('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.announcement.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Announcement "${id}" not found.` });
+    if (!ownedOrNotFound(req, res, existing, `Announcement "${id}" not found.`)) return;
     await prisma.announcement.delete({ where: { id } });
     return res.status(204).send();
   } catch (err) {
