@@ -1,6 +1,7 @@
 /**
  * Minimal seed for exercising the upload->confirm flow end-to-end.
- * Creates one Organization, one Location, 3 Roles, and 2 active Users.
+ * Creates one Organization, one Location, 5 Roles, 2 active Users, and one
+ * FloorPlanImage (the minimum the server test suite expects to find).
  * Idempotent: safe to re-run (upserts by unique name).
  *
  * Usage: npx tsx server/scripts/seed-test-data.ts
@@ -62,11 +63,31 @@ async function main() {
     }),
   ]);
 
+  // A floor-plan image row for the seed venue. Four server tests
+  // (sectionActions.test.ts, voice.test.ts's ASSIGN_SECTION + compound-
+  // transcript cases) look one up on the first location and bail with
+  // "seed data (... floor plan image) must exist" otherwise. On the old
+  // shared cloud DB one happened to exist from manual use; a fresh local
+  // Postgres has nothing until it's seeded here. No real file is needed —
+  // those tests only read the row and create their own sections under it.
+  const floorPlanImage = await prisma.floorPlanImage.upsert({
+    where: { id: 'seed-floor-plan' },
+    update: {},
+    create: {
+      id: 'seed-floor-plan',
+      locationId: location.id,
+      fileUrl: '/uploads/floor-plans/seed-floor-plan.png',
+      originalName: 'seed-floor-plan.png',
+      mimeType: 'image/png',
+    },
+  });
+
   console.log('Seeded:');
   console.log('  organizationId:', org.id);
   console.log('  locationId:', location.id);
   console.log('  roles:', roles.map((r) => r.name).join(', '));
   console.log('  users:', users.map((u) => u.fullName).join(', '));
+  console.log('  floorPlanImageId:', floorPlanImage.id);
 }
 
 main()
