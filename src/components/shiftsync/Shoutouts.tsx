@@ -90,7 +90,7 @@ export function Shoutouts() {
     setSaving(true);
     setError(null);
     try {
-      const created = await postShoutout({
+      const created = await postShoutout(session.token, {
         locationId,
         employeeId,
         authorId: currentEmployeeId,

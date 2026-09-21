@@ -82,18 +82,20 @@ export function Announcements() {
     // implies a real signed-in user — an anonymous kiosk visit to Home can
     // have a non-null `locationId` via the venue-binding mechanism, and this
     // error copy's own promise ("must be signed in") has to actually hold.
-    if (!draft.id && !session) {
-      setError('You must be signed in to post an announcement.');
+    // Both create AND edit require a session now (2026-09-20: PATCH closed
+    // its auth gap), so this guard is no longer create-only.
+    if (!session) {
+      setError(draft.id ? 'You must be signed in to edit an announcement.' : 'You must be signed in to post an announcement.');
       return;
     }
     setSaving(true);
     setError(null);
     try {
       if (draft.id) {
-        const updated = await updateAnnouncement(draft.id, draft.body.trim());
+        const updated = await updateAnnouncement(session.token, draft.id, draft.body.trim());
         setItems((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       } else {
-        const created = await postAnnouncement(locationId!, draft.body.trim(), currentEmployeeId);
+        const created = await postAnnouncement(session.token, locationId!, draft.body.trim(), currentEmployeeId);
         setItems((prev) => [created, ...prev]);
       }
       setDraft(null);
@@ -105,8 +107,14 @@ export function Announcements() {
   }
 
   async function remove(id: string) {
+    // DELETE is now `requireSession`-gated server-side (2026-09-20) — same
+    // guard shape as `save()`, above.
+    if (!session) {
+      setError('You must be signed in to delete an announcement.');
+      return;
+    }
     try {
-      await deleteAnnouncement(id);
+      await deleteAnnouncement(session.token, id);
       setItems((prev) => prev.filter((a) => a.id !== id));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not delete the announcement.');

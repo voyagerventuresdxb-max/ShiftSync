@@ -17,6 +17,15 @@ import { notifyUsersBatched, notifyUser } from '../push.js';
  * rather than validated per caller. The auth gap itself (`requireSession`)
  * is closed at the route layer, not here — see routes/announcements.ts and
  * routes/shoutouts.ts.
+ *
+ * `locationId` here is trusted as already belonging to the caller — both
+ * `input.locationId` args are the session-derived `req.user.locationId` at
+ * every call site (routes/announcements.ts, routes/shoutouts.ts, voice.ts),
+ * never a request-supplied value (2026-09-20 tenant-isolation fix: the REST
+ * routes previously forwarded `req.body.locationId` straight through, and
+ * this function only ever checked that the location *existed*, not that it
+ * was the caller's own — closed at the route layer, same as the auth gap
+ * above, not by adding an ownership check in here).
  */
 
 const ANNOUNCEMENT_BODY_MAX = 1000;

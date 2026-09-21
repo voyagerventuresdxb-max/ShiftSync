@@ -38,20 +38,25 @@ shoutoutsRouter.get('/:locationId', async (req, res) => {
 });
 
 /**
- * POST /api/shoutouts — body: { locationId, employeeId, authorId?, shiftSnapshot?, note }.
+ * POST /api/shoutouts — body: { employeeId, authorId?, shiftSnapshot?, note }.
  * `requireSession`-gated (spec 2026-09-11-voice-post-announcement-shoutout-design.md
  * §2.3a) — same authentication-only fix as announcements.ts's POST above;
  * this route previously required no session at all.
+ *
+ * `locationId` comes from the caller's own session, not the request body
+ * (2026-09-20 tenant-isolation fix — same shape as announcements.ts's POST:
+ * `createShoutout` only checked the given locationId *existed*, not that it
+ * belonged to the caller, so any signed-in user could shoutout into a
+ * different venue's feed by naming its locationId).
  */
 shoutoutsRouter.post('/', requireSession, async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const locationId = req.user!.locationId;
     const employeeId = String(req.body?.employeeId ?? '').trim();
     const authorId = req.body?.authorId ? String(req.body.authorId).trim() : null;
     const shiftSnapshot = req.body?.shiftSnapshot ? String(req.body.shiftSnapshot).trim() : null;
     const note = String(req.body?.note ?? '').trim();
 
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!employeeId) return res.status(400).json({ error: 'employeeId is required.' });
     if (!note) return res.status(400).json({ error: 'note is required.' });
 
