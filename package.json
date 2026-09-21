@@ -19,6 +19,7 @@
     "prisma:generate": "node scripts/with-branch-schema.mjs \"prisma generate\"",
     "prisma:migrate": "node scripts/with-branch-schema.mjs \"prisma migrate dev\"",
     "prisma:studio": "node scripts/with-branch-schema.mjs \"prisma studio\"",
+    "db:setup": "node scripts/setup-local-db.mjs",
     "db:seed": "node scripts/with-branch-schema.mjs \"tsx server/scripts/seed-test-data.ts\"",
     "server:dev": "node scripts/with-branch-schema.mjs \"kill-port 4000 && tsx watch server/src/index.ts\"",
     "server:typecheck": "tsc -p server/tsconfig.json --noEmit",

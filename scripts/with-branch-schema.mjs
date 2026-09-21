@@ -4,7 +4,8 @@
  * derived from the current git branch, instead of whatever schema the raw
  * .env value names (normally `public`).
  *
- * This exists because every worktree in this repo shares one Supabase
+ * This exists because every worktree on a machine shares one Postgres (the
+ * local docker one from `npm run db:setup` — see docker-compose.yml)
  * database. Two separate incidents happened before this script did:
  * a migration run in one branch's worktree silently dropped a column
  * another branch's feature depended on, because Prisma assumed the live

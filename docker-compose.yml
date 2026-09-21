@@ -1,0 +1,44 @@
+# Local development Postgres — the only database a worktree needs.
+#
+# One container, shared by every worktree on this machine: the fixed `name:`
+# below means `docker compose up` from ANY worktree targets the same
+# container + volume, so the per-branch-schema convention in
+# scripts/with-branch-schema.mjs keeps worktrees isolated from each other
+# inside it (each branch gets its own `dev_<branch>` schema) — no need for one
+# Postgres per worktree.
+#
+# Start it with `npm run db:setup` (scripts/setup-local-db.mjs), which also
+# waits for readiness, migrates, seeds and bootstraps this branch's schema.
+#
+# Credentials are deliberately fixed and committed: this instance only ever
+# runs on a developer's own machine and never holds real venue data.
+# `.env.example` ships the matching DATABASE_URL, so nothing needs editing.
+#
+# If 5432 is already taken on your machine, set POSTGRES_PORT (in your shell
+# or in .env — compose reads both) and mirror it in DATABASE_URL.
+
+name: shiftsync-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: shiftsync-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: shiftsync_dev
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - shiftsync-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev -d shiftsync_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  # Named volume: data survives `docker compose down` and container restarts.
+  # `docker compose down -v` is the only thing that wipes it.
+  shiftsync-dev-pgdata:
