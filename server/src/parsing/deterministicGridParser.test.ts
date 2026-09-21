@@ -674,3 +674,84 @@ test('unrecognized-merged-name-cell audit fixture: real employees keep only thei
     assert.equal(a.confidence, 0);
   }
 });
+
+// --- findHeaderRows structural gate (Issue #22) -----------------------------
+//
+// findHeaderRows used to take the FIRST row in the top 15 with >=2 cells that
+// resolve as a date. But resolveDayMonthDate accepts numeric pairs, so a shift
+// range whose end hour is <=12 ("9-12", "8-11") reads as a calendar date
+// (Dec 9, Nov 8) — and a data row holding two of them was taken for the
+// header, silently re-dating every shift in the file. The same content test
+// also decided whether the row under the header was a "second header row", so
+// a real first employee with two such cells was swallowed and vanished.
+
+test('Issue #22: an early row whose shift ranges read as dates ("9-12", "8-11") is not mistaken for the header', () => {
+  const grid: unknown[][] = [
+    ['Opening cover', '9-12', '8-11', '9-12'], // date-shaped, but really shifts — NOT the header
+    ['', 'Monday', 'Tuesday', 'Wednesday'], // the real header
+    ['Fatima', '9-17', '9-17', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.templateLabel, 'Deterministic Grid Parser');
+  assert.equal(result.anomalies.length, 0);
+  // Dated from the REAL header (Mon/Tue 2026-08-17/18), not Dec 9 / Nov 8.
+  assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
+});
+
+test('Issue #22: one shift repeated across an early row ("9-12" x3 = a single distinct date) is not mistaken for the header', () => {
+  const grid: unknown[][] = [
+    ['Cover', '9-12', '9-12', '9-12'],
+    ['', 'Monday', 'Tuesday', 'Wednesday'],
+    ['Fatima', '9-17', '9-17', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
+});
+
+test('Issue #22: the first staff row directly under the header is not swallowed as a "second header row" when its shift ranges read as dates', () => {
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday', 'Wednesday'],
+    ['Layla', '6-10', '7-11', '8-12'], // three date-shaped cells — but a real employee
+    ['Fatima', '9-17', '9-17', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.deepEqual(keys(result.rows), [
+    'Fatima|2026-08-17|09:00-17:00',
+    'Fatima|2026-08-18|09:00-17:00',
+    'Layla|2026-08-17|06:00-10:00',
+    'Layla|2026-08-18|07:00-11:00',
+    'Layla|2026-08-19|08:00-12:00',
+  ]);
+});
+
+// Guards: shapes that ALSO look header-ish/date-ish and must keep working
+// exactly as before the gate existed.
+
+test('a numeric day-month header row ("17/08 | 18/08 | 19/08") is still the header even though each cell also parses as a shift', () => {
+  const grid: unknown[][] = [
+    ['', '17/08', '18/08', '19/08'],
+    ['Fatima', '9-17', '9-17', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
+});
+
+test('a real second header row (weekday names beneath numeric dates) is still skipped, not read as the first staff row', () => {
+  const grid: unknown[][] = [
+    ['', '17-Aug', '18-Aug', '19-Aug'],
+    ['', 'Monday', 'Tuesday', 'Wednesday'],
+    ['Fatima', '9-17', '9-17', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.anomalies.length, 0);
+  assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
+});
+
+test('a header row that labels its own name column ("Name | Monday | Tuesday | Wednesday") is still recognized', () => {
+  const grid: unknown[][] = [
+    ['Name', 'Monday', 'Tuesday', 'Wednesday'],
+    ['Fatima', '9-17', '9-17', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
+});

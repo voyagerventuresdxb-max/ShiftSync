@@ -626,15 +626,69 @@ interface DayColumn {
   period: 'AM' | 'PM' | null;
 }
 
+/**
+ * Longest span, in days, one header row's dates may cover. Two weeks of day
+ * columns is the widest layout this parser targets; a "header" whose dates
+ * straddle more than that is a row of unrelated values (e.g. shift ranges
+ * that happen to read as day-month dates), not consecutive days.
+ */
+const MAX_HEADER_DATE_SPAN_DAYS = 13;
+
+/**
+ * Whether a row that has >=2 cells resolving as header dates is really a
+ * header, or a data row that merely LOOKS like one.
+ *
+ * Content alone can't answer this: resolveDayMonthDate accepts numeric
+ * pairs, so a shift range whose end hour is <=12 ("9-12", "8-11") reads as
+ * a calendar date (Dec 9, Nov 8). Any row holding two of them — an opening-
+ * cover line above the real header, or the first employee's own row directly
+ * beneath it — used to be taken for a header, silently shifting every date
+ * in the file or swallowing that employee's whole week.
+ *
+ * Same principle as isRoleHeaderLabel/rowHasShiftShapedData next door: real
+ * shift-shaped content is proof a row is data, whatever else it resembles.
+ *  - No date cell also parses as a shift (day names, "17-Aug", ISO/Date
+ *    cells): unambiguously a header.
+ *  - Otherwise the cells are ambiguous — "17/08" is both a date AND a valid
+ *    17:00-08:00 shift, and numeric day-month headers are a supported layout
+ *    — so fall back to structure: a header lists one short run of days. Its
+ *    dates must span >=2 distinct days within MAX_HEADER_DATE_SPAN_DAYS,
+ *    which shift-derived "dates" ("9-12","8-11" -> Dec 9, Nov 8, or the
+ *    same shift repeated, i.e. one date) don't.
+ *
+ * Residual: a data row whose shift ranges happen to read as consecutive days
+ * (e.g. "8-12","9-12","10-12" = Dec 8, 9, 10) is indistinguishable by
+ * content or structure from a numeric header and is still accepted.
+ */
+function isPlausibleHeaderRow(row: unknown[], weekStart: string): boolean {
+  const dates: string[] = [];
+  const dateColumns: DayColumn[] = [];
+  for (let c = 1; c < row.length; c++) {
+    const date = resolveHeaderDate(row[c], weekStart);
+    if (date) {
+      dates.push(date);
+      dateColumns.push({ colIndex: c, date, period: null });
+    }
+  }
+  if (dates.length < 2) return false;
+  // Legend codes are detected after the header is found, so there is none to
+  // consult here — and a legend code ("M", "E") never resolves as a date.
+  if (!rowHasShiftShapedData(row, dateColumns, {})) return true;
+
+  const distinct = [...new Set(dates)].sort();
+  if (distinct.length < 2) return false;
+  const spanDays = (Date.parse(distinct[distinct.length - 1]) - Date.parse(distinct[0])) / 86_400_000;
+  return spanDays <= MAX_HEADER_DATE_SPAN_DAYS;
+}
+
 /** Locates the day-header row and, if present, the AM/PM sub-header row directly beneath it. */
 function findHeaderRows(grid: unknown[][], weekStart: string): { dayRowIdx: number; periodRowIdx: number | null; dataStartIdx: number } | null {
   for (let r = 0; r < Math.min(grid.length, 15); r++) {
     const row = grid[r] ?? [];
-    let dateHits = 0;
-    for (let c = 1; c < row.length; c++) {
-      if (resolveHeaderDate(row[c], weekStart)) dateHits++;
-    }
-    if (dateHits >= 2) {
+    // First row that is PLAUSIBLY a header wins and is final — the loop
+    // returns immediately, so no later row can override it. A row that
+    // merely has date-shaped cells but reads as data is skipped, not chosen.
+    if (isPlausibleHeaderRow(row, weekStart)) {
       const nextRow = grid[r + 1] ?? [];
       const nextIsPeriodRow = nextRow.slice(1).some((cell) => /^(am|pm)$/i.test(normalizeCell(cell)));
       if (nextIsPeriodRow) {
@@ -643,13 +697,11 @@ function findHeaderRows(grid: unknown[][], weekStart: string): { dayRowIdx: numb
       // Some files stack a second header row with no AM/PM concept at all
       // — a weekday-name row ("Monday", "Tuesday", ...) repeating the same
       // dates already read from the numeric-date row above it. Detected
-      // the same way as the date row itself (>=2 resolvable date-like
-      // cells) and skipped, so it isn't mistaken for the first staff row.
-      let secondDateHits = 0;
-      for (let c = 1; c < nextRow.length; c++) {
-        if (resolveHeaderDate(nextRow[c], weekStart)) secondDateHits++;
-      }
-      const dataStartIdx = secondDateHits >= 2 ? r + 2 : r + 1;
+      // with the same gate as the date row itself and skipped, so it isn't
+      // mistaken for the first staff row — and, by the same gate, a real
+      // first staff row whose shift ranges read as dates ("6-10","7-11")
+      // is NOT mistaken for it, which used to drop that employee entirely.
+      const dataStartIdx = isPlausibleHeaderRow(nextRow, weekStart) ? r + 2 : r + 1;
       return { dayRowIdx: r, periodRowIdx: null, dataStartIdx };
     }
   }
