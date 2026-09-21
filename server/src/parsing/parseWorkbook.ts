@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import { readWorkbook, WorkbookReadError } from './workbookReader.js';
 import { detectTemplate, describeExpectedTemplates } from './templates.js';
 import { parseDateCell, parseTimeCell, parseTimeRangeCell, parseBreakMinutes, isOvernight } from './normalize.js';
 import type { ParsedShiftRow, ParsedWorkbookResult, RowIssue, TemplateField } from './types.js';
@@ -13,74 +13,34 @@ export class TemplateDetectionError extends Error {
 const MAX_ROWS = 5000;
 
 /**
- * Expands every HORIZONTAL merged range in a worksheet (spanning multiple
- * COLUMNS within one row) by copying the top-left cell's value into every
- * cell it covers, mutating the sheet in place. Must run before
- * sheet_to_json, which otherwise leaves every covered cell but the top-left
- * blank — undercounting or misaligning rows whenever a source file merges a
- * day-header cell across several columns, or a role-section banner across
- * the full staff-block width.
- *
- * Deliberately does NOT expand a VERTICAL merge (spanning multiple ROWS in
- * one column, `range.e.r > range.s.r`) — every genuine merge shape this app
- * has ever seen in a real reference fixture is horizontal; a vertical merge
- * has no legitimate case here (see the round-2 audit) and is a real,
- * observed authoring pattern instead: a manager vertically merges a
- * staff-name cell across several rows purely for visual grouping, each row
- * still carrying that OWN row's real, DIFFERENT shift data underneath.
- * Auto-expanding it the same way a horizontal merge is expanded would
- * silently attribute every one of those rows' shifts to whoever's name
- * happens to be the merge's top-left cell — the other real employees those
- * rows may represent would vanish with zero anomaly, zero warning. Leaving
- * it un-expanded instead means those rows keep their real (blank) name
- * cell, which deterministicGridParser.ts's 'unrecognized_merged_name_cell'
- * handling then surfaces explicitly instead of silently dropping.
- */
-function expandMergedCells(sheet: XLSX.WorkSheet): void {
-  const merges = sheet['!merges'] ?? [];
-  for (const range of merges) {
-    if (range.e.r > range.s.r) continue; // vertical merge — never auto-expanded, see above
-    const topLeftAddr = XLSX.utils.encode_cell({ r: range.s.r, c: range.s.c });
-    const topLeftCell = sheet[topLeftAddr];
-    if (!topLeftCell) continue;
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        if (r === range.s.r && c === range.s.c) continue;
-        sheet[XLSX.utils.encode_cell({ r, c })] = { ...topLeftCell };
-      }
-    }
-  }
-}
-
-/**
  * Reads a workbook buffer's first sheet into a 2D grid, with merged ranges
- * expanded and the range read explicitly from the sheet's own `!ref` (not a
- * trimmed/inferred range) so offsets don't shift when the data doesn't start
- * at A1. Shared by the long-format template parser below and by the
- * grid-format (VLM/deterministic) fallback path for sheets that don't match
- * any of the 3 master templates.
+ * resolved (horizontal merges expanded, vertical ones left blank — see
+ * workbookReader.ts) and columns aligned to the sheet's own used range, so
+ * offsets don't shift when the data doesn't start at A1. Shared by the
+ * long-format template parser below and by the grid-format (VLM/deterministic)
+ * fallback path for sheets that don't match any of the 3 master templates.
+ *
+ * Async since the move off SheetJS (exceljs loads asynchronously).
  */
-export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string): unknown[][] {
-  let workbook: XLSX.WorkBook;
-  try {
-    workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-  } catch (err) {
-    throw new TemplateDetectionError(
-      `Could not read "${originalFilename}" as an Excel or CSV file: ${(err as Error).message}`,
-    );
-  }
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
+export async function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string): Promise<unknown[][]> {
+  const snapshot = await readWorkbookOrThrow(buffer, originalFilename);
+  if (snapshot.sheetNames.length === 0) {
     throw new TemplateDetectionError(`"${originalFilename}" has no worksheets.`);
   }
-  const sheet = workbook.Sheets[sheetName];
-  expandMergedCells(sheet);
-  return XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    range: sheet['!ref'],
-    blankrows: false,
-    defval: null,
-  });
+  // Callers get their own rows: the snapshot is memoised per upload, so a
+  // caller that mutated a shared row would corrupt the next caller's grid.
+  return snapshot.grid.map((row) => row.slice());
+}
+
+async function readWorkbookOrThrow(buffer: Buffer, originalFilename: string) {
+  try {
+    return await readWorkbook(buffer);
+  } catch (err) {
+    if (err instanceof WorkbookReadError) {
+      throw new TemplateDetectionError(`Could not read "${originalFilename}" as an Excel or CSV file: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -95,16 +55,9 @@ export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string)
  * app's own target venues, and the wrong tab landing first can otherwise
  * look exactly like a normal successful import.
  */
-export function listOtherSheetNames(buffer: Buffer, originalFilename: string): string[] {
-  let workbook: XLSX.WorkBook;
-  try {
-    workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
-  } catch (err) {
-    throw new TemplateDetectionError(
-      `Could not read "${originalFilename}" as an Excel or CSV file: ${(err as Error).message}`,
-    );
-  }
-  return workbook.SheetNames.slice(1);
+export async function listOtherSheetNames(buffer: Buffer, originalFilename: string): Promise<string[]> {
+  const snapshot = await readWorkbookOrThrow(buffer, originalFilename);
+  return snapshot.sheetNames.slice(1);
 }
 
 /** Serializes a 2D grid into a tab-separated text block for the VLM text-ingestion path. */
@@ -115,13 +68,13 @@ export function gridToTsvText(grid: unknown[][]): string {
 }
 
 /**
- * Parses an uploaded .xlsx/.xls/.csv buffer into clean shift rows.
+ * Parses an uploaded .xlsx/.csv buffer into clean shift rows.
  * Throws TemplateDetectionError when the sheet matches none of the 3 master
  * templates (missing/renamed required columns) — callers should surface this
  * as a 422 with the expected-template description.
  */
-export function parseWorkbookBuffer(buffer: Buffer, originalFilename: string): ParsedWorkbookResult {
-  const grid: unknown[][] = buildMergeExpandedGrid(buffer, originalFilename);
+export async function parseWorkbookBuffer(buffer: Buffer, originalFilename: string): Promise<ParsedWorkbookResult> {
+  const grid: unknown[][] = await buildMergeExpandedGrid(buffer, originalFilename);
 
   if (grid.length === 0) {
     throw new TemplateDetectionError(`"${originalFilename}" is empty.`);

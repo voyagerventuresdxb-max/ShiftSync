@@ -148,7 +148,7 @@ export default function RosterScreen({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".xlsx,.xls,.csv,.pdf"
+        accept=".xlsx,.csv,.pdf"
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0];

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import * as XLSX from 'xlsx';
 import { listOtherSheetNames } from './parseWorkbook.js';
+import { buildXlsx } from './workbookTestUtils.js';
 
 // Round-2 audit finding: this app's parsers only ever read a workbook's
 // first sheet (buildMergeExpandedGrid/parseWorkbookBuffer both hardcode
@@ -14,25 +14,23 @@ import { listOtherSheetNames } from './parseWorkbook.js';
 // anomaly rather than silently importing (or failing on) whatever the
 // first tab happens to contain.
 
-test('listOtherSheetNames returns every sheet name except the first, in order', () => {
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['x']]), 'This Week');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['y']]), 'Prior Week (archive)');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['z']]), 'Notes');
-  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+test('listOtherSheetNames returns every sheet name except the first, in order', async () => {
+  const buffer = await buildXlsx([
+    { name: 'This Week', rows: [['x']] },
+    { name: 'Prior Week (archive)', rows: [['y']] },
+    { name: 'Notes', rows: [['z']] },
+  ]);
 
-  assert.deepEqual(listOtherSheetNames(buffer, 'test.xlsx'), ['Prior Week (archive)', 'Notes']);
+  assert.deepEqual(await listOtherSheetNames(buffer, 'test.xlsx'), ['Prior Week (archive)', 'Notes']);
 });
 
-test('listOtherSheetNames returns an empty array for a normal single-sheet file', () => {
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['x']]), 'Roster');
-  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+test('listOtherSheetNames returns an empty array for a normal single-sheet file', async () => {
+  const buffer = await buildXlsx([{ name: 'Roster', rows: [['x']] }]);
 
-  assert.deepEqual(listOtherSheetNames(buffer, 'test.xlsx'), []);
+  assert.deepEqual(await listOtherSheetNames(buffer, 'test.xlsx'), []);
 });
 
-test('unrecognized-workbook-sheets audit fixture: correctly names both ignored tabs (before this fix: nothing in the response indicated the real roster on "This Week" was never read)', () => {
+test('unrecognized-workbook-sheets audit fixture: correctly names both ignored tabs (before this fix: nothing in the response indicated the real roster on "This Week" was never read)', async () => {
   const buffer = readFileSync('server/test-fixtures/edge-case-audit-round2/3-multi-sheet-workbook.xlsx');
-  assert.deepEqual(listOtherSheetNames(buffer, '3-multi-sheet-workbook.xlsx'), ['This Week', 'Prior Week (archive)']);
+  assert.deepEqual(await listOtherSheetNames(buffer, '3-multi-sheet-workbook.xlsx'), ['This Week', 'Prior Week (archive)']);
 });

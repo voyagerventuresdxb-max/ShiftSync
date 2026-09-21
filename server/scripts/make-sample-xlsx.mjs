@@ -1,5 +1,4 @@
-﻿import * as XLSX from "xlsx";
-import { writeFileSync } from "node:fs";
+import { writeXlsxFile } from './xlsxWriter.mjs';
 
 const rows = [
   ["Employee Name", "Role", "Date", "Start Time", "End Time", "Manager Floor Notes"],
@@ -9,8 +8,5 @@ const rows = [
   ["", "Host", "21/08/2026", "09:00", "17:00", ""],
 ];
 
-const ws = XLSX.utils.aoa_to_sheet(rows);
-const wb = XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(wb, ws, "Roster");
-writeFileSync("server/test-fixtures/sample-roster.xlsx", XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+await writeXlsxFile("server/test-fixtures/sample-roster.xlsx", [{ name: "Roster", rows }]);
 console.log("written");

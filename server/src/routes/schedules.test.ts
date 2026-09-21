@@ -335,3 +335,72 @@ test('schedules.ts POST /upload/:batchId/confirm: an edit naming a deactivated r
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+// --- xlsx -> exceljs migration (Issue #23): upload-path behavior that changed ---
+
+/** A real MANAGER session at a throwaway venue, plus the cleanup for it. */
+async function uploadFixture(name: string) {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: `__upload-test__ ${name}`, timezone: 'Asia/Dubai' },
+  });
+  const manager = await prisma.user.create({
+    data: { locationId: location.id, fullName: `__upload-test__ ${name} manager`, systemRole: 'MANAGER' },
+  });
+  const token = await sessionFor(manager.id);
+  return {
+    token,
+    cleanup: async () => {
+      await prisma.user.deleteMany({ where: { locationId: location.id } });
+      await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+    },
+  };
+}
+
+async function postUpload(baseUrl: string, token: string, filename: string, bytes: Buffer, mimetype: string) {
+  const form = new FormData();
+  form.append('file', new Blob([new Uint8Array(bytes)], { type: mimetype }), filename);
+  return fetch(`${baseUrl}/api/schedules/upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+}
+
+// exceljs cannot read legacy binary .xls (SheetJS could). Before this route
+// change the unreadable-file error was thrown a second time from INSIDE the
+// catch that handled the first, escaping to the generic handler as a 500 —
+// so the uploader would never have seen why. Every .xls upload is now that case.
+test('schedules.ts POST /upload: a legacy .xls is refused with a 422 and an actionable message, not a generic 500', async () => {
+  const { token, cleanup } = await uploadFixture('legacy-xls');
+  try {
+    await withServer(async (baseUrl) => {
+      const ole2 = Buffer.concat([Buffer.from('d0cf11e0a1b11ae1', 'hex'), Buffer.alloc(512)]);
+      const res = await postUpload(baseUrl, token, 'roster.xls', ole2, 'application/vnd.ms-excel');
+      assert.equal(res.status, 422);
+      const body = (await res.json()) as { error: string };
+      assert.match(body.error, /roster\.xls/);
+      assert.match(body.error, /legacy Excel/);
+      assert.match(body.error, /Save As/);
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+// Windows browsers label a plain .csv `application/vnd.ms-excel`, so the
+// format is sniffed from the bytes, not the mimetype. And SheetJS's CSV
+// reader turned every "9-17" cell into a Date, so a normal CSV roster could
+// never have parsed; exceljs keeps it text.
+test('schedules.ts POST /upload: a semicolon-separated CSV roster (mislabelled application/vnd.ms-excel) with "9-17" shifts parses into real shifts', async () => {
+  const { token, cleanup } = await uploadFixture('csv-roster');
+  try {
+    await withServer(async (baseUrl) => {
+      const csv = ['Name;2026-08-17;2026-08-18', 'Fatima;9-17;10-18'].join('\n') + '\n';
+      const res = await postUpload(baseUrl, token, 'roster.csv', Buffer.from(csv, 'utf8'), 'application/vnd.ms-excel');
+      assert.equal(res.status, 200, await res.clone().text());
+      const body = (await res.json()) as { preview: { employeeName: string; date: string; startTime: string; endTime: string }[] };
+      const shifts = body.preview.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}`).sort();
+      assert.deepEqual(shifts, ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|10:00-18:00']);
+    });
+  } finally {
+    await cleanup();
+  }
+});

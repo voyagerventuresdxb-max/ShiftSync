@@ -7,16 +7,12 @@
  *   5. combined-worst-case.xlsx  — ALL-CAPS staff + novel ALL-CAPS headers
  * (4, the skewed scanned-image PDF, is built separately — needs rasterization.)
  */
-import * as XLSX from 'xlsx';
-import { writeFileSync } from 'node:fs';
+import { writeXlsxFile } from './xlsxWriter.mjs';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function writeXlsx(rows, filename) {
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Roster');
-  writeFileSync(`server/test-fixtures/edge-case-audit/${filename}`, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+async function writeXlsx(rows, filename) {
+  await writeXlsxFile(`server/test-fixtures/edge-case-audit/${filename}`, [{ name: 'Roster', rows }]);
   console.log(`written ${filename}`);
 }
 
@@ -32,7 +28,7 @@ function writeXlsx(rows, filename) {
     ['CHEN WEI LING', '9-13', '9-13', '14-18', '14-18', 'OFF', '9-13', '9-13'],
     ['DIVYA MENON', '14-18', 'OFF', '9-13', '9-13', '14-18', '14-18', 'OFF'],
   ];
-  writeXlsx(rows, '1-all-caps-roster.xlsx');
+  await writeXlsx(rows, '1-all-caps-roster.xlsx');
 }
 
 // 2. Novel/unconventional section header vocabulary (Title Case — neither
@@ -48,7 +44,7 @@ function writeXlsx(rows, filename) {
     ['Valet & Door', '', '', '', '', '', '', ''],
     ['Hamza Idris', '18-02', 'OFF', '18-02', '18-02', '18-02', '18-02', 'OFF'],
   ];
-  writeXlsx(rows, '2-novel-header-vocab.xlsx');
+  await writeXlsx(rows, '2-novel-header-vocab.xlsx');
 }
 
 // 3. No unlabeled staff rows above the first section header — the header
@@ -65,7 +61,7 @@ function writeXlsx(rows, filename) {
     ['BACK OF HOUSE', '', '', '', '', '', '', ''],
     ['Sara Jamal', '9-17', '9-17', '13-21', 'OFF', '9-17', '13-21', 'OFF'],
   ];
-  writeXlsx(rows, '3-no-anchor-first-header.xlsx');
+  await writeXlsx(rows, '3-no-anchor-first-header.xlsx');
 }
 
 // 5. Combined worst case: ALL-CAPS staff names + novel ALL-CAPS headers.
@@ -82,7 +78,7 @@ function writeXlsx(rows, filename) {
     ['TARIQ AZIZ', '9-17', '9-17', '13-21', 'OFF', '9-17', '13-21', 'OFF'],
     ['MONA SAEED', '9-17', 'OFF', '9-17', '13-21', '13-21', '9-17', 'OFF'],
   ];
-  writeXlsx(rows, '5-combined-worst-case.xlsx');
+  await writeXlsx(rows, '5-combined-worst-case.xlsx');
 }
 
 console.log('all edge-case fixtures written');

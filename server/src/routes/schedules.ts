@@ -58,7 +58,7 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const allowed = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-      'application/vnd.ms-excel', // .xls
+      'application/vnd.ms-excel', // legacy .xls — AND what Windows browsers label plain .csv; format is sniffed from bytes, not this
       'text/csv',
       'application/csv',
       'application/pdf', // .pdf
@@ -68,7 +68,7 @@ const upload = multer({
     if (allowed.includes(file.mimetype) || allowedExt.test(file.originalname)) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported file type "${file.mimetype || file.originalname}". Upload a .xlsx, .xls, .csv, .pdf, .png, .jpg, or .webp file.`));
+      cb(new Error(`Unsupported file type "${file.mimetype || file.originalname}". Upload a .xlsx, .csv, .pdf, .png, .jpg, or .webp file.`));
     }
   },
 });
@@ -261,7 +261,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
       }
     } else {
       try {
-        const workbook = parseWorkbookBuffer(req.file.buffer, req.file.originalname);
+        const workbook = await parseWorkbookBuffer(req.file.buffer, req.file.originalname);
         parsed = { rows: workbook.rows, issues: workbook.issues, templateLabel: workbook.templateLabel };
       } catch (err) {
         if (err instanceof TemplateDetectionError) {
@@ -275,7 +275,17 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
           // days-as-rows, or headers it can't locate at all) — this keeps
           // the format coverage already validated for those shapes
           // instead of hard-rejecting the upload.
-          const grid = buildMergeExpandedGrid(req.file.buffer, req.file.originalname);
+          // A file that can't be READ at all (e.g. a legacy .xls, which exceljs
+          // can't open) makes this throw the same TemplateDetectionError again
+          // — from inside this catch, so it would escape to the generic 500
+          // below and the uploader would never see why. Surface it as a 422.
+          let grid: unknown[][];
+          try {
+            grid = await buildMergeExpandedGrid(req.file.buffer, req.file.originalname);
+          } catch (readErr) {
+            if (readErr instanceof TemplateDetectionError) return res.status(422).json({ error: readErr.message });
+            throw readErr;
+          }
           // Every parser in this app only ever reads the workbook's first
           // sheet (see listOtherSheetNames' own doc comment) — a
           // multi-tab file (per-outlet, per-week archive, a notes tab
@@ -285,7 +295,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
           // whenever more than one sheet exists, regardless of whether
           // the first sheet's own parse succeeds — the manager, not the
           // app, is the one who can tell whether the other tabs matter.
-          const otherSheetNames = listOtherSheetNames(req.file.buffer, req.file.originalname);
+          const otherSheetNames = await listOtherSheetNames(req.file.buffer, req.file.originalname);
           const ignoredSheetsAnomaly: AnomalyRecord | null =
             otherSheetNames.length > 0
               ? {
