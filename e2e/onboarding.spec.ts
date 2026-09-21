@@ -94,7 +94,11 @@ test.describe('onboarding — full real gate', () => {
     // Editing it here proves the two steps still hand the same Location to
     // each other.
     await page.waitForSelector('text=Tell us about the room.');
-    await expect(page.getByText(venueName, { exact: true })).toBeVisible();
+    // Scoped to `main`: the onboarding overlay renders inside it, while the
+    // AppShell banner behind it also shows the venue name once its own fetch
+    // lands — an unscoped getByText raced between 1 and 2 matches (strict-
+    // mode violation ≈ 1 run in 6), which is what made this test flaky.
+    await expect(page.getByRole('main').getByText(venueName, { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Rename' }).click();
     await expect(page.getByPlaceholder('e.g. Sefarina, DIFC')).toHaveValue(venueName);
     await page.getByPlaceholder('e.g. Sefarina, DIFC').fill('E2E Test Restaurant');
