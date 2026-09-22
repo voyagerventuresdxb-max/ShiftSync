@@ -83,18 +83,31 @@ export function stepPath(step: OnboardingStep): string {
   return step === 'welcome' ? '/onboarding' : `/onboarding/${step}`;
 }
 
+/** What the manager picked on Roster — enough for that screen to re-render its "file attached" state after a Back or a reload. */
+export interface UploadedFileMeta {
+  name: string;
+  size: number;
+  viaPhoto: boolean;
+}
+
 interface OnboardingStateValue {
   step: OnboardingStep;
   setStep: (step: OnboardingStep) => void;
   /** Roster's parsed-but-unconfirmed upload batch (batchId + preview rows), read by Review. Null when Roster was skipped, hasn't run yet, or didn't survive a reload. */
   uploadResult: UploadResponse | null;
-  setUploadResult: (result: UploadResponse | null) => void;
+  /** The file behind `uploadResult`; null whenever `uploadResult` is null. */
+  uploadFile: UploadedFileMeta | null;
+  setUploadResult: (result: UploadResponse | null, file?: UploadedFileMeta) => void;
 }
 
 const OnboardingStateCtx = createContext<OnboardingStateValue | null>(null);
 
 function uploadResultStorageKey(locationId: string): string {
   return `shiftsync.onboarding.uploadResult.${locationId}`;
+}
+
+function uploadFileStorageKey(locationId: string): string {
+  return `shiftsync.onboarding.uploadFile.${locationId}`;
 }
 
 function unlockedStepsStorageKey(locationId: string): string {
@@ -164,17 +177,31 @@ export function OnboardingStateProvider({ locationId, children }: { locationId: 
     }
   });
 
+  const [uploadFile, setUploadFileState] = useState<UploadedFileMeta | null>(() => {
+    if (!locationId) return null;
+    try {
+      const raw = sessionStorage.getItem(uploadFileStorageKey(locationId));
+      return raw ? (JSON.parse(raw) as UploadedFileMeta) : null;
+    } catch {
+      return null;
+    }
+  });
+
   const setStep = (next: OnboardingStep) => {
     setUnlockedSteps((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
     navigate(stepPath(next), { replace: true });
   };
 
-  const setUploadResult = (result: UploadResponse | null) => {
+  const setUploadResult = (result: UploadResponse | null, file?: UploadedFileMeta) => {
+    const fileMeta = result ? (file ?? null) : null;
     setUploadResultState(result);
+    setUploadFileState(fileMeta);
     if (!locationId) return;
     try {
       if (result) sessionStorage.setItem(uploadResultStorageKey(locationId), JSON.stringify(result));
       else sessionStorage.removeItem(uploadResultStorageKey(locationId));
+      if (fileMeta) sessionStorage.setItem(uploadFileStorageKey(locationId), JSON.stringify(fileMeta));
+      else sessionStorage.removeItem(uploadFileStorageKey(locationId));
     } catch {
       // sessionStorage unavailable (private browsing, quota) — in-memory
       // state still carries the app through the rest of THIS tab session,
@@ -183,9 +210,9 @@ export function OnboardingStateProvider({ locationId, children }: { locationId: 
   };
 
   const value: OnboardingStateValue = useMemo(
-    () => ({ step, setStep, uploadResult, setUploadResult }),
+    () => ({ step, setStep, uploadResult, uploadFile, setUploadResult }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setStep/setUploadResult close over navigate (stable) and locationId (listed)
-    [step, uploadResult, locationId],
+    [step, uploadResult, uploadFile, locationId],
   );
 
   return <OnboardingStateCtx.Provider value={value}>{children}</OnboardingStateCtx.Provider>;

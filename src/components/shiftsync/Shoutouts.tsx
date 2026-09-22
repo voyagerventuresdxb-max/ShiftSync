@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Award, Plus, X } from 'lucide-react';
-import { fetchShoutouts, postShoutout, type ShoutoutDto } from '@/api/shoutouts';
+import { Award, Plus, Trash2, X } from 'lucide-react';
+import { deleteShoutout, fetchShoutouts, postShoutout, type ShoutoutDto } from '@/api/shoutouts';
 import { ApiError } from '@/api/schedules';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
@@ -108,6 +108,22 @@ export function Shoutouts() {
     }
   }
 
+  // Anyone signed in may post a shoutout; removing one is manager/owner only,
+  // no author exception (server-enforced — this only hides a control that
+  // would 403). Positive check so an unexpected role string fails closed.
+  const canModerate = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
+
+  async function remove(id: string) {
+    if (!session) return;
+    setError(null);
+    try {
+      await deleteShoutout(session.token, id);
+      setItems((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not delete the shoutout.');
+    }
+  }
+
   return (
     <section className="panel animate-rise p-4 sm:p-5">
       <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
@@ -198,13 +214,22 @@ export function Shoutouts() {
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent">
                   {initials(s.employeeName)}
                 </span>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{s.employeeName}</p>
                   <p className="text-sm text-muted-foreground">{s.note}</p>
                   <p className="mt-1.5 text-[11px] text-muted-foreground">
                     {s.shiftSnapshot ?? 'Shift no longer on the rota'} · {s.authorName ?? 'Manager'} · {timeAgo(s.createdAt)}
                   </p>
                 </div>
+                {canModerate && (
+                  <button
+                    onClick={() => void remove(s.id)}
+                    aria-label="Delete shoutout"
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             </li>
           ))}

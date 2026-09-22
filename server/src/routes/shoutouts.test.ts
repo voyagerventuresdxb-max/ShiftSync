@@ -148,3 +148,42 @@ test('shoutouts.ts: POST attributes the shoutout to the session user, ignoring a
     await cleanupVenue(venue.location.id);
   }
 });
+
+// Permission model (2026-09-22, deliberate product decision — see the DELETE
+// route's doc comment): anyone signed in at the venue may POST a shoutout;
+// removing one is manager/owner only, with NO author exception; managers
+// stay confined to their own venue.
+test('shoutouts.ts permission model: STAFF can post, cannot delete even their own (403); a manager can delete a STAFF-authored one; a manager is still confined to their own venue (404)', async () => {
+  const venueA = await createVenue('perm-A');
+  const venueB = await createVenue('perm-B');
+  try {
+    await withServer(async (baseUrl) => {
+      const staffToken = await sessionFor(venueA.staff.id);
+      const managerAToken = await sessionFor(venueA.manager.id);
+      const managerBToken = await sessionFor(venueB.manager.id);
+      const json = (token: string) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
+
+      const post = await fetch(`${baseUrl}/api/shoutouts`, {
+        method: 'POST',
+        headers: json(staffToken),
+        body: JSON.stringify({ employeeId: venueA.manager.id, note: '__shoutouts-test__ posted by staff' }),
+      });
+      assert.equal(post.status, 201, 'a STAFF session must be able to post a shoutout');
+      const { shoutout } = (await post.json()) as { shoutout: { id: string } };
+
+      const staffDelete = await fetch(`${baseUrl}/api/shoutouts/${shoutout.id}`, { method: 'DELETE', headers: json(staffToken) });
+      assert.equal(staffDelete.status, 403, 'STAFF deleting their own shoutout must be refused');
+
+      const crossDelete = await fetch(`${baseUrl}/api/shoutouts/${shoutout.id}`, { method: 'DELETE', headers: json(managerBToken) });
+      assert.equal(crossDelete.status, 404, "a manager must not be able to delete another venue's shoutout");
+      assert.ok(await prisma.shoutout.findUnique({ where: { id: shoutout.id } }), 'neither refused delete may have landed');
+
+      const managerDelete = await fetch(`${baseUrl}/api/shoutouts/${shoutout.id}`, { method: 'DELETE', headers: json(managerAToken) });
+      assert.equal(managerDelete.status, 204, "the venue's manager must be able to delete a STAFF-authored shoutout");
+      assert.equal(await prisma.shoutout.findUnique({ where: { id: shoutout.id } }), null);
+    });
+  } finally {
+    await cleanupVenue(venueA.location.id);
+    await cleanupVenue(venueB.location.id);
+  }
+});

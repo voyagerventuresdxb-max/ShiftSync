@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { createOtpCode, phoneDigits } from '../lib/identity.js';
+import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
 
 const prisma = new PrismaClient();
 
@@ -90,6 +91,17 @@ test('POST /api/signup/verify-otp: a real new signup creates Organization+Locati
     const organization = await prisma.organization.findUnique({ where: { id: organizationId } });
     assert.ok(organization, 'a real Organization row must exist');
     assert.equal(organization!.name, venueName);
+
+    // Zero-setup scheduling: the default roles exist the moment signup
+    // finishes, as ordinary active Role rows, so the venue can build a rota
+    // with no roster upload and no admin setup step.
+    const roles = await prisma.role.findMany({ where: { locationId }, orderBy: { name: 'asc' } });
+    assert.deepEqual(
+      roles.map((r) => r.name),
+      [...DEFAULT_ROLES].sort(),
+      'every default role must be seeded for the new venue',
+    );
+    assert.ok(roles.every((r) => r.isActive), 'seeded roles are active');
 
     const auditRow = await prisma.auditLog.findFirst({
       where: { locationId, entityType: 'Location', entityId: locationId },

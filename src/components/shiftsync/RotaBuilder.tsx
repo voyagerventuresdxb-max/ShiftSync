@@ -28,6 +28,7 @@ import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { OfflineActionNotice } from '@/components/shiftsync/OfflineNotice';
 import { ApiError } from '@/api/schedules';
+import { fetchRoles } from '@/api/roles';
 import {
   fetchRotaTemplates,
   saveRotaTemplate,
@@ -206,17 +207,42 @@ export function RotaBuilder() {
     };
   }, [weekStart, assignedUserIdsKey, session]);
 
-  // Every role a staff member actually holds, plus any extra role seen on
-  // this week's shifts. Directory-first means a location with staff on
-  // roles can build a brand-new week from cold, with no shifts to learn from.
+  // The venue's own active roles (seeded at signup, managed in the Staff
+  // Directory) — the primary source, so a brand-new venue with no staff
+  // assigned and no shifts yet can still build its first week. Fetched
+  // fresh on mount so a rename/removal made on /people shows here.
+  const [venueRoles, setVenueRoles] = useState<RoleOption[]>([]);
+  useEffect(() => {
+    if (!session) {
+      setVenueRoles([]);
+      return;
+    }
+    let cancelled = false;
+    fetchRoles(session.token)
+      .then((roles) => {
+        if (!cancelled) setVenueRoles(roles);
+      })
+      .catch(() => {
+        // Directory/shift-derived options below still work without this.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, staffDirectory]);
+
+  // Venue roles first, then every role a staff member holds, then any role
+  // seen on this week's shifts (so an existing shift's own role can be
+  // prefilled when edited even if it was since removed). Venue roles are
+  // applied LAST so a renamed role shows its current name everywhere.
   const roleOptions = useMemo(() => {
     const byId = new Map<string, RoleOption>();
     for (const s of staffDirectory) {
       if (s.roleId && s.roleName) byId.set(s.roleId, { id: s.roleId, name: s.roleName });
     }
     for (const r of shiftRoleOptions) byId.set(r.id, r);
+    for (const r of venueRoles) byId.set(r.id, r);
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [staffDirectory, shiftRoleOptions]);
+  }, [staffDirectory, shiftRoleOptions, venueRoles]);
 
   // `sections` is derived from `mergedRoster.employees`, which only ever
   // contains people with an in-session upload commit or a shift THIS week.
@@ -540,7 +566,14 @@ export function RotaBuilder() {
       {sheet?.kind === 'shift' && (
         <ShiftSheet
           draft={sheet.draft}
-          roleOptions={roleOptions}
+          // A NEW shift may only use the venue's active roles (a removed role
+          // is refused server-side); an EXISTING shift keeps its own role
+          // selectable even if it was removed since, so it can still be edited.
+          roleOptions={
+            sheet.draft.id || venueRoles.length === 0
+              ? roleOptions
+              : roleOptions.filter((r) => venueRoles.some((v) => v.id === r.id))
+          }
           online={online}
           onClose={() => setSheet(null)}
           onSave={(d) => void saveDraft(d)}
