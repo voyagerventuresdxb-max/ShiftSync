@@ -160,3 +160,70 @@ test('announcements.ts: a real owner session can still edit and delete its own v
     await cleanupVenue(venue.location.id);
   }
 });
+
+// Permission model (2026-09-22, deliberate product decision — see the PATCH
+// route's doc comment): anyone signed in at the venue may POST, but PATCH and
+// DELETE are manager/owner only, with NO author exception. Tenant isolation
+// is unchanged: a manager is still confined to their own venue.
+test('announcements.ts permission model: STAFF can post, cannot edit/delete even their own post (403); a manager can edit/delete a STAFF-authored post; a manager is still confined to their own venue (404)', async () => {
+  const venueA = await createVenue('perm-A');
+  const venueB = await createVenue('perm-B');
+  const staffA = await prisma.user.create({
+    data: { locationId: venueA.location.id, fullName: '__announcements-test__ perm-A staff', systemRole: 'STAFF' },
+  });
+  try {
+    await withServer(async (baseUrl) => {
+      const staffToken = await sessionFor(staffA.id);
+      const managerAToken = await sessionFor(venueA.manager.id);
+      const managerBToken = await sessionFor(venueB.manager.id);
+      const json = (token: string) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
+
+      // STAFF can create.
+      const post = await fetch(`${baseUrl}/api/announcements`, {
+        method: 'POST',
+        headers: json(staffToken),
+        body: JSON.stringify({ body: '__announcements-test__ posted by staff' }),
+      });
+      assert.equal(post.status, 201, 'a STAFF session must be able to post an announcement');
+      const { announcement } = (await post.json()) as { announcement: { id: string } };
+
+      // STAFF cannot edit or delete — not even their own post.
+      const staffPatch = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, {
+        method: 'PATCH',
+        headers: json(staffToken),
+        body: JSON.stringify({ body: 'edited by its own STAFF author' }),
+      });
+      assert.equal(staffPatch.status, 403, 'STAFF editing their own post must be refused');
+      const staffDelete = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, { method: 'DELETE', headers: json(staffToken) });
+      assert.equal(staffDelete.status, 403, 'STAFF deleting their own post must be refused');
+      const untouched = await prisma.announcement.findUnique({ where: { id: announcement.id } });
+      assert.equal(untouched?.body, '__announcements-test__ posted by staff');
+
+      // A manager from ANOTHER venue is still confined to their own (tenant isolation regression check).
+      const crossPatch = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, {
+        method: 'PATCH',
+        headers: json(managerBToken),
+        body: JSON.stringify({ body: 'edited cross-venue' }),
+      });
+      assert.equal(crossPatch.status, 404, "a manager must not be able to edit another venue's announcement");
+      const crossDelete = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, { method: 'DELETE', headers: json(managerBToken) });
+      assert.equal(crossDelete.status, 404, "a manager must not be able to delete another venue's announcement");
+      assert.ok(await prisma.announcement.findUnique({ where: { id: announcement.id } }), 'cross-venue delete must not have landed');
+
+      // The venue's own manager can edit and delete the STAFF-authored post.
+      const managerPatch = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, {
+        method: 'PATCH',
+        headers: json(managerAToken),
+        body: JSON.stringify({ body: '__announcements-test__ edited by manager' }),
+      });
+      assert.equal(managerPatch.status, 200, "the venue's manager must be able to edit a STAFF-authored post");
+      assert.equal((await prisma.announcement.findUnique({ where: { id: announcement.id } }))?.body, '__announcements-test__ edited by manager');
+      const managerDelete = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, { method: 'DELETE', headers: json(managerAToken) });
+      assert.equal(managerDelete.status, 204, "the venue's manager must be able to delete a STAFF-authored post");
+      assert.equal(await prisma.announcement.findUnique({ where: { id: announcement.id } }), null);
+    });
+  } finally {
+    await cleanupVenue(venueA.location.id);
+    await cleanupVenue(venueB.location.id);
+  }
+});
