@@ -26,7 +26,7 @@ would hit the app bundle, not the server. Two ways round it:
 The rest of this guide sets up **A**, and marks where B differs.
 
 **Prerequisite for A:** the production web deployment must be live (`docs/deployment.md`,
-steps 1–3 done and `https://shift-sync-shift-sync1.vercel.app/api/health` answering).
+steps 1–3 done and `https://shift-sync-two-ashy.vercel.app/api/health` answering).
 Until then the native app has nothing to load.
 
 ## 1. Toolchains needed on your machine
@@ -63,10 +63,10 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     // Option A (thin wrapper): load the deployed site. Remove this block for option B.
-    url: 'https://shift-sync-shift-sync1.vercel.app',
+    url: 'https://shift-sync-two-ashy.vercel.app',
     // Let the WebView follow links to the same site and the API host without
     // bouncing to the system browser.
-    allowNavigation: ['shift-sync-shift-sync1.vercel.app', '*.up.railway.app'],
+    allowNavigation: ['shift-sync-two-ashy.vercel.app', '*.up.railway.app'],
   },
   ios: {
     contentInset: 'automatic',

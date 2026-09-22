@@ -1,5 +1,22 @@
 # MVP readiness report — 2026-09-22
 
+> ## ⚠️ DEMO-ONLY SETTINGS — REVERT IMMEDIATELY AFTER THE MBRIF PITCH
+>
+> 1. **`ALLOW_DEV_OTP_ECHO=true` on the Railway API service (`shiftsync-api`).** There is no
+>    SMS integration, so this flag shows the real one-time code on screen to whoever
+>    requested it. While it is on, **anyone who has the URL can sign in as any phone
+>    number.** After the pitch: Railway → `shiftsync-api` → Variables → delete
+>    `ALLOW_DEV_OTP_ECHO` (the service redeploys automatically), then confirm a signup
+>    attempt no longer shows a "Dev code" chip.
+> 2. **The production URL `https://shift-sync-two-ashy.vercel.app` is now public**
+>    (Deployment Protection = Standard, so previews stay behind Vercel login but production
+>    does not). Treat it as private until the pitch — do not post it — and right after the
+>    pitch either turn Vercel Authentication back to "All Deployments" or keep it public
+>    **only** once item 1 is removed and real SMS/OTP delivery exists.
+> 3. Do both **the same day as the pitch**, not "later". The API's `FRONTEND_ORIGIN`, the
+>    Postgres data (a handful of throwaway `MBRIF … check` venues created by this
+>    verification) and the Railway project can stay.
+
 **Scope.** Everything a manager or staff member touches, from the Welcome intro to the
 core scheduling loop, driven through the real UI with Playwright (real clicks, real file
 picker, real uploads through the upload control — no API shortcuts on the positive
@@ -10,28 +27,37 @@ header (#22) (#27)`). No production system was touched; the only external calls 
 read-only GitHub API reads and two HTTP GETs to Vercel URLs that both answered with an
 SSO redirect.
 
-**Final call (2026-09-22, end of session):**
+**Final call (2026-09-22, end of session): GO for a live demo from
+`https://shift-sync-two-ashy.vercel.app`, subject to the demo-only warnings above.**
 
-- **App: GO** on merged `master` (`33408ba`). #37, #38 and #39 are merged; the fix PRs
-  #31–#35 are still open and should be merged before the pitch. The onboarding flow,
-  including the roster upload the founder hit, works end to end on both viewports; the
-  one blocker-class product gap (no way to create a Role without a roster upload) is
-  closed by #38; the announcement permission model is decided and enforced by #37.
-- **Live production URL: NO-GO until three things happen, in this order** — none of
-  them possible from the repo alone (see "Web deployment — final state" below): the
-  Railway API host URL is provided and its `/api/health` verified; `vercel.json` gets that
-  host; the Vercel Production Branch is flipped to `master`. Until then the production
-  URL returns `404 DEPLOYMENT_NOT_FOUND` — **it has never been live**. Demo from a
-  controlled environment (docker Postgres + `npm run dev:all`, which is exactly what this
-  review verified) unless the three steps are completed and re-verified first.
+- **App: GO** on merged `master` (`51b6714`). #37, #38, #39 and #40 are merged; the fix
+  PRs #31–#35 are still open and should be merged before the pitch (each is independent
+  and green). The onboarding flow, including the roster upload the founder hit, works
+  end to end on both viewports; the one blocker-class product gap (no way to create a
+  Role without a roster upload) is closed by #38; the announcement permission model is
+  decided and enforced by #37.
+- **Live production URL: GO — verified end to end on the real production domain** (see
+  "Web deployment — final state"): `/api/health` through the Vercel→Railway rewrite;
+  deep-link `GET /onboarding/venue` served by the SPA fallback; a full UI signup at phone
+  size on the production URL with the real OTP echo → venue created → Venue saved via
+  PATCH through the rewrite → Roster step; an in-browser reload on `/onboarding/venue`
+  keeping the step; the 8 seeded roles present for the live venue; zero console/page
+  errors. Screenshots captured for each step. This is the **first time this project has
+  had a live production deployment** — the earlier one was canceled on 2026-09-15 and
+  `master` had only ever built as a preview.
+- **Safe to demo the live URL?** Yes, with the caveats above: the API is the same code
+  and the same start path (`prisma migrate deploy && tsx server/src/index.ts`) the local
+  review ran; the Railway service is on a hobby plan with no scaling (fine for a pitch,
+  cold starts are not an issue — the process is long-lived). Keep the local
+  environment (`npm run db:setup` + `npm run dev:all`) ready as the fallback — it was
+  verified just as thoroughly and does not depend on network, Vercel or Railway.
+- **Not on the live site:** `GEMINI_API_KEY` is not set on Railway, so voice commands and
+  image/scanned-PDF roster ingestion are unavailable there until it is added (Excel/CSV/
+  text-PDF rosters work). `VAPID_*` unset → push notifications disabled (a one-line
+  server notice). Neither affects the onboarding → rota → staff loop.
 - **Native app: NONE EXISTS.** No Capacitor project in any branch; this machine cannot
-  build one (Windows, no Xcode/Android SDK). `docs/capacitor-setup.md` is the exact guide
-  for doing it on a machine that can.
-- **Demo-only settings — must be reverted after MBRIF:** `ALLOW_DEV_OTP_ECHO=true` on the
-  Railway API (shows the real one-time code on screen — anyone with the URL can log in
-  as any phone number while it is on), and the production URL itself while that flag is
-  set. Remove the variable and redeploy the API immediately after the pitch; treat the
-  URL as private until then.
+  build one (Windows, no Xcode/Android SDK/JDK). `docs/capacitor-setup.md` is the exact
+  guide for doing it on a machine that can.
 
 ---
 
@@ -207,7 +233,7 @@ inspection) plus HTTP GETs:
 
 | Fact | Evidence |
 |---|---|
-| **The production URL has never been live.** `https://shift-sync-shift-sync1.vercel.app` (the project's "Latest Production URL") returns `404 DEPLOYMENT_NOT_FOUND`. | `curl`; `vercel ls --prod` shows exactly one Production deployment, status **Canceled** ("Canceled from the Vercel Dashboard"), `1a8220e`, 2026-09-15. |
+| **The production URL has never been live.** `https://shift-sync-two-ashy.vercel.app` (the project's "Latest Production URL") returns `404 DEPLOYMENT_NOT_FOUND`. | `curl`; `vercel ls --prod` shows exactly one Production deployment, status **Canceled** ("Canceled from the Vercel Dashboard"), `1a8220e`, 2026-09-15. |
 | Every push to `master` builds successfully but as a **preview** (`target: preview`, alias `shift-sync-git-master-…`). | `vercel inspect` on the latest master deployment. So the project's Production Branch is not `master`; no build failure is involved. |
 | The Vercel project deployed the **frontend only**: `tsc -b && vite build` → `dist/`. No serverless function, no `vercel.json`, no `DATABASE_URL`/`GEMINI_API_KEY` in the project env (only `UPLOAD_CACHE_FILE`, `VAPID_*`). The Express API was never hosted anywhere. | Build log of the latest master deployment; `vercel env ls production`. This is why every `/api` call on any Vercel URL fails — and the most likely cause of what the founder saw last week. |
 | Previews sit behind Vercel Deployment Protection (SSO redirect). Not touched, per instruction. | Every preview URL → `302` to `vercel.com/sso-api`. |
@@ -217,28 +243,24 @@ the static frontend**, `/api/*` and `/uploads/*` rewritten to Railway (**#39, me
 Sequencing, per the founder: API first, verify it live, **then** flip Production Branch — so
 the first thing that goes live is a working combination.
 
-Verified so far:
+What was done, in that order, and what each step proved:
 
-- `npm run server:start` (`prisma migrate deploy && tsx server/src/index.ts`) applies the
-  migration history and answers `/api/health` in ~4 s (local, through the branch-schema wrapper).
-- `master` with the new `vercel.json` builds and deploys cleanly on Vercel (preview, `Ready`).
-- The regenerated lockfile passes the dependency check the old one failed.
+| Step | Result |
+|---|---|
+| Railway project `shiftsync` created with the owner's CLI login (no project existed under the account); Postgres plugin added; service `shiftsync-api` created from this repo's `master` (root `/`, so `railway.json` applies); variables set: `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `FRONTEND_ORIGIN`, `ALLOW_DEV_OTP_ECHO=true`. Not set: `GEMINI_API_KEY`, `VAPID_*` (founder's). | **DONE** — no Railway token was needed |
+| Domain generated: `https://shiftsync-api-production.up.railway.app` | **DONE** |
+| First deploy: all 24 migrations applied on the fresh Postgres; `ShiftSync API listening`; `/api/health` → `{"ok":true}` at t+120 s | **PASS** |
+| Live signup against the Railway API: `request-otp` echoes the code → `verify-otp` 201 OWNER → authenticated reads confirm the rows (location by id, the 8 seeded roles, owner in the staff directory) → same phone again → 409 → login round-trip → same user | **PASS** |
+| `vercel.json` rewrites pointed at the Railway domain (**#40, merged**, master `51b6714`) | **DONE** |
+| Vercel Production Branch → `master` (founder, dashboard); latest master build promoted to Production (`vercel promote`) — the first live production deployment in the project's history | **DONE** |
+| Deployment Protection was covering the production domain ("All Deployments" → every request 302 to Vercel SSO) — founder set it to **Standard Protection** (previews protected, production public). Correct production domain: `https://shift-sync-two-ashy.vercel.app` (the `shift-sync-shift-sync1` alias is stale and still SSO-gated; ignore it). | **DONE** |
+| **Production URL, verified end to end** (Playwright, 390×844, screenshots per step): `/api/health` through the rewrite → `200 {"ok":true}` · deep-link `GET /onboarding/venue` → 200 HTML with the app root (SPA fallback) · Welcome → Account → phone → **OTP echoed on the live UI** → name + venue → `verify-otp` 201 → Venue step · **in-browser reload on `/onboarding/venue` keeps the step** · city + type → Continue → **PATCH through the rewrite** → Roster step · `/api/roles` for the live venue lists the 8 seeded defaults · **console/page errors: none** | **PASS** |
+| `FRONTEND_ORIGIN` corrected to the real production domain (invite links are minted only against this allowlist) | **DONE** — redeploy in progress at the time of writing |
 
-**Still pending on the founder's side (nothing further can be verified without them):**
-
-1. Create the Railway service from the repo (`master`, root `/`), add Railway Postgres, set
-   `DATABASE_URL`, `FRONTEND_ORIGIN=https://shift-sync-shift-sync1.vercel.app`,
-   `GEMINI_API_KEY`, `ALLOW_DEV_OTP_ECHO=true` (demo only), generate a domain — and **send
-   the `https://<service>.up.railway.app` host**. Two messages so far carried only the
-   literal placeholder text, so `vercel.json` still contains `RAILWAY_API_HOST`.
-2. Then: `/api/health` on the Railway domain → a full live signup against it (real OTP echo,
-   real venue/owner rows) → patch the host into `vercel.json` on `master`.
-3. Then: Vercel Settings → Git → Production Branch = `master` (dashboard-only).
-4. Then: production URL end to end — `/api/health` through the rewrite, a live signup
-   through the Vercel URL, and a deep-link reload (`/onboarding/venue`) to prove the SPA
-   fallback, not just the root path.
-
-Only after step 4 passes should the live URL be shown at MBRIF; until then, demo locally.
+Residual notes: the rewrite proxies uploads through Vercel — the 10 MB roster limit was not
+exercised on the live URL (local review covered it); test one real `.xlsx` upload on the
+production URL before the pitch. `docs/deployment.md` (on `master`) is the runbook for
+redoing any of this.
 
 ### Native app (Capacitor) — final state
 
