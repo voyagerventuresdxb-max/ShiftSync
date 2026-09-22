@@ -98,6 +98,18 @@ Two things learned doing this for real on 2026-09-22:
 - The project's production domain is `shift-sync-two-ashy.vercel.app`; the older
   `shift-sync-shift-sync1.vercel.app` alias is stale and stays SSO-gated — ignore it.
 
+Two things learned doing this for real on 2026-09-22:
+
+- Changing the Production Branch does **not** build anything by itself. Either push to
+  `master` afterwards, or promote the latest master build:
+  `npx vercel@latest promote https://<latest-master-deployment>.vercel.app --yes`
+  (creates a new Production deployment from that Git build; `npx vercel ls --prod` shows it).
+- If the production domain answers `302` to `vercel.com/sso-api`, Deployment Protection is
+  covering production: Settings → Deployment Protection → Vercel Authentication →
+  **Standard Protection** (previews stay protected, production is public). Dashboard-only.
+- The project's production domain is `shift-sync-two-ashy.vercel.app`; the older
+  `shift-sync-shift-sync1.vercel.app` alias is stale and stays SSO-gated — ignore it.
+
 Then verify on the production URL, not a preview (previews sit behind Vercel SSO):
 
 ```
