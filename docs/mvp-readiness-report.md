@@ -30,9 +30,11 @@ SSO redirect.
 **Final call (2026-09-22, end of session): GO for a live demo from
 `https://shift-sync-two-ashy.vercel.app`, subject to the demo-only warnings above.**
 
-- **App: GO** on merged `master` (`51b6714`). #37, #38, #39 and #40 are merged; the fix
-  PRs #31–#35 are still open and should be merged before the pitch (each is independent
-  and green). The onboarding flow, including the roster upload the founder hit, works
+- **App: GO** on merged `master` (`7bad1f9`). **All nine PRs are merged** — the five fix
+  PRs #31–#35 (squash-merged in order, each confirmed `MERGED` before the next) plus
+  #37, #38, #39 and #40 — and that exact commit is what both Vercel (promoted build
+  `shift-sync-aiqw7z9m4`) and Railway (deployment `e85a9ebc`, branch `master`) are
+  serving. The onboarding flow, including the roster upload the founder hit, works
   end to end on both viewports; the one blocker-class product gap (no way to create a
   Role without a roster upload) is closed by #38; the announcement permission model is
   decided and enforced by #37.
@@ -150,7 +152,7 @@ tested in this environment.
 
 ---
 
-## PRs opened (#37, #38, #39 merged on 2026-09-22; #30–#35 still open — merging those is your call)
+## PRs opened (#31–#35, #37, #38, #39, #40 all merged on 2026-09-22; still open: #30 exceljs, #36 this report, #41 deployment-doc fixes)
 
 | PR | Fix | Severity |
 |---|---|---|
@@ -187,7 +189,7 @@ opt-in audit scripts, run with `MVP_AUDIT=1`) and this report are on
 ## Follow-up build (same night): the two gaps turned into features
 
 Both built after the first pass, each on its own PR, each verified against local Postgres
-with a clean run before being opened. Neither is merged.
+with a clean run before being opened. Both are merged and live.
 
 ### #38 — Zero-setup scheduling (closes 2.2.9)
 
@@ -256,11 +258,33 @@ What was done, in that order, and what each step proved:
 | Deployment Protection was covering the production domain ("All Deployments" → every request 302 to Vercel SSO) — founder set it to **Standard Protection** (previews protected, production public). Correct production domain: `https://shift-sync-two-ashy.vercel.app` (the `shift-sync-shift-sync1` alias is stale and still SSO-gated; ignore it). | **DONE** |
 | **Production URL, verified end to end** (Playwright, 390×844, screenshots per step): `/api/health` through the rewrite → `200 {"ok":true}` · deep-link `GET /onboarding/venue` → 200 HTML with the app root (SPA fallback) · Welcome → Account → phone → **OTP echoed on the live UI** → name + venue → `verify-otp` 201 → Venue step · **in-browser reload on `/onboarding/venue` keeps the step** · city + type → Continue → **PATCH through the rewrite** → Roster step · `/api/roles` for the live venue lists the 8 seeded defaults · **console/page errors: none** | **PASS** |
 | `FRONTEND_ORIGIN` corrected to the real production domain (invite links are minted only against this allowlist); after the redeploy, a live mint through the production URL returns `https://shift-sync-two-ashy.vercel.app/join?location=…` with a real QR PNG | **PASS** |
+| **Final checkpoint — #31–#35 merged** (squash, in order, each `gh pr view` → `MERGED`: `856c183`, `a48247f`, `60af8a7`, `7a61ce8`, `7bad1f9`). #35 needed a conflict resolution in the two test files (both sides' tests kept; 61/61 pass). `master` = `7bad1f9`. | **DONE** |
+| Vercel: the `7bad1f9` master build (still produced as a *preview* — see notes) promoted to Production; `vercel inspect https://shift-sync-two-ashy.vercel.app` → `dpl_vTTmKFfh…`, `target production`, `Ready`, url `shift-sync-aiqw7z9m4` | **DONE** |
+| Railway: **did not auto-deploy on merge** (latest deployment stayed at `51b6714`). Redeployed with `railway redeploy --from-source --service shiftsync-api -y` → deployment `e85a9ebc`, commit `7bad1f9`, branch `master`, `SUCCESS`; build table shows `start │ npm run server:start`; runtime log: 24 migrations, "No pending migrations", `ShiftSync API listening`; `/api/health` → `200 application/json {"ok":true}` | **PASS** |
+| **Production URL re-verified after all nine merges** (same Playwright run, 390×844, screenshots): steps 1–7 as above all PASS (health via rewrite, SPA deep link, OTP echo, signup → Venue, reload keeps step, PATCH → Roster, 8 seeded roles) **plus step 8, proving the merged code is what's live:** `POST /api/announcements` with a spoofed `authorId` in the body → `201` and `authorId === session user` (#35); OWNER `DELETE` of that announcement → `204` (#37). Console/page errors: none. | **PASS** |
 
 Residual notes: the rewrite proxies uploads through Vercel — the 10 MB roster limit was not
 exercised on the live URL (local review covered it); test one real `.xlsx` upload on the
 production URL before the pitch. `docs/deployment.md` (on `master`) is the runbook for
 redoing any of this.
+
+**Two deployment-automation gaps to know about (neither blocks the demo — what is live now
+is correct — but each future `master` merge will need a manual step until fixed):**
+
+1. **Vercel still builds `master` merges as Preview, not Production**, even after the
+   Production Branch setting was changed — the two merges made after the flip both came out
+   `target: preview`. Until the dashboard setting sticks (re-check Settings → Git → Production
+   Branch; if it already says `master`, save it again or contact Vercel), the recipe is:
+   `gh api repos/voyagerventuresdxb-max/ShiftSync/deployments?sha=<master sha>` →
+   `environment_url` → `npx vercel promote <that url> --yes`.
+2. **Railway does not auto-deploy on GitHub merges** (no deployment was created for either
+   merge tonight). Either install/authorize the Railway GitHub App on the repo (Railway →
+   service → Settings → Source), or redeploy by hand: `railway redeploy --from-source
+   --service shiftsync-api -y`. **Do not use `railway up`:** a CLI upload of the same commit
+   was built by Railpack as a *Vite static site* (Caddy serving `dist/`, `railway.json`'s
+   `startCommand` ignored) and served `index.html` from `/api/health` for ~10 minutes tonight
+   until the `--from-source` redeploy replaced it. The GitHub-sourced build honours
+   `railway.json` correctly.
 
 ### Native app (Capacitor) — final state
 
@@ -309,6 +333,18 @@ branch schema:
 
 Nothing regressed between the fixes, and the click-throughs that failed on master for
 each bug pass with all five together.
+
+### Final run on the real merged `master` (`7bad1f9`, all nine PRs)
+
+| Check | Result |
+|---|---|
+| `npm run typecheck` / `server:typecheck` | clean |
+| `npm run lint` | 0 errors, 16 pre-existing warnings |
+| `npm run build` | OK |
+| `npm test` | 57/57 |
+| `npm run test:server` | 270 tests: 269 pass, 0 fail, 1 skip (Docling sidecar) |
+| Playwright (`npm run test:e2e`, non-audit specs) | 10/10 |
+| Production URL after Vercel promote + Railway redeploy | 9/9 steps PASS, no console errors (table above) |
 
 ## How to re-run this review
 
