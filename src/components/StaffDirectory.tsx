@@ -107,11 +107,13 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     setSavingId(entry.id);
     try {
       const updated = await updateStaffMember(session.token, entry.id, updates);
-      setStaff((prev) => {
-        const next = prev.map((s) => (s.id === entry.id ? updated : s));
-        onChanged?.(next);
-        return next;
-      });
+      // `onChanged` sets state in AppStateProvider — calling it from inside a
+      // setState updater runs it during THIS component's render, which React
+      // flags ("Cannot update a component while rendering a different
+      // component"). Compute the next list first, then notify.
+      const next = staff.map((s) => (s.id === entry.id ? updated : s));
+      setStaff(next);
+      onChanged?.(next);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : errorMessage);
@@ -130,11 +132,10 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     setAdding(true);
     try {
       const created = await addStaffMember(session.token, { fullName, jobTitle: newTitle.trim() || null });
-      setStaff((prev) => {
-        const next = [...prev, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
-        onChanged?.(next);
-        return next;
-      });
+      // Same as handleFieldSave: notify outside the updater, never during render.
+      const next = [...staff, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
+      setStaff(next);
+      onChanged?.(next);
       setNewName('');
       setNewTitle('');
       setError(null);
