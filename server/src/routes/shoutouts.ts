@@ -53,7 +53,9 @@ shoutoutsRouter.post('/', requireSession, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const employeeId = String(req.body?.employeeId ?? '').trim();
-    const authorId = req.body?.authorId ? String(req.body.authorId).trim() : null;
+    // Author is the signed-in user, never a body-supplied id — see the
+    // matching note on announcements.ts's POST.
+    const authorId = req.user!.id;
     const shiftSnapshot = req.body?.shiftSnapshot ? String(req.body.shiftSnapshot).trim() : null;
     const note = String(req.body?.note ?? '').trim();
 

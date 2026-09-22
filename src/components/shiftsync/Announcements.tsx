@@ -27,7 +27,7 @@ function formatStamp(iso: string): string {
 }
 
 export function Announcements() {
-  const { locationId, currentEmployeeId, mergedRoster } = useAppState();
+  const { locationId } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [items, setItems] = useState<AnnouncementDto[]>([]);
@@ -95,7 +95,7 @@ export function Announcements() {
         const updated = await updateAnnouncement(session.token, draft.id, draft.body.trim());
         setItems((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       } else {
-        const created = await postAnnouncement(session.token, locationId!, draft.body.trim(), currentEmployeeId);
+        const created = await postAnnouncement(session.token, locationId!, draft.body.trim());
         setItems((prev) => [created, ...prev]);
       }
       setDraft(null);
@@ -121,8 +121,11 @@ export function Announcements() {
     }
   }
 
-  const authorName = (a: AnnouncementDto) =>
-    a.authorName ?? mergedRoster.employees.find((e) => e.id === currentEmployeeId)?.name ?? 'Management';
+  // Never the viewer's own "Viewing" employee as a stand-in: on My Shifts
+  // that showed a manager's announcement as posted by the staff member
+  // reading it. The server attributes every post to its session user now, so
+  // this fallback only covers rows written before that.
+  const authorName = (a: AnnouncementDto) => a.authorName ?? 'Management';
 
   // Anyone signed in may post; editing/deleting is manager/owner only, with
   // no author exception (server-enforced in announcements.ts — this only
