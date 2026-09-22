@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { createAnnouncement } from '../lib/actions/communicationActions.js';
 
 export const announcementsRouter = Router();
@@ -89,8 +89,14 @@ announcementsRouter.post('/', requireSession, async (req, res) => {
  * had no auth middleware and no ownership check at all: anyone, signed in or
  * not, who had or guessed an announcement id could edit any venue's
  * announcement).
+ *
+ * Permission model (2026-09-22, deliberate product decision): ANY signed-in
+ * user at the venue may POST — frontline staff get a voice here, which
+ * 7shifts (admins/managers only) does not give them — but EDIT and DELETE are
+ * manager/owner only, with no author exception: a STAFF member cannot edit
+ * or delete even their own post. Managers stay venue-scoped.
  */
-announcementsRouter.patch('/:id', requireSession, async (req, res) => {
+announcementsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const body = String(req.body?.body ?? '').trim();
@@ -125,8 +131,9 @@ announcementsRouter.patch('/:id', requireSession, async (req, res) => {
  * `requireSession`-gated, scoped to the caller's own venue via
  * `ownedOrNotFound` — same 2026-09-20 tenant-isolation fix as PATCH, above:
  * this route had no auth middleware and no ownership check at all before.
+ * Manager/owner only, no author exception — same model as PATCH above.
  */
-announcementsRouter.delete('/:id', requireSession, async (req, res) => {
+announcementsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.announcement.findUnique({ where: { id } });

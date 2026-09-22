@@ -167,7 +167,14 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       hiredAt?: Date | null;
       isActive?: boolean;
       terminatedAt?: Date | null;
+      roleId?: string | null;
     } = {};
+    if (req.body?.roleId !== undefined) {
+      if (req.body.roleId !== null && typeof req.body.roleId !== 'string') {
+        return res.status(400).json({ error: 'roleId must be a string or null.' });
+      }
+      data.roleId = req.body.roleId === null ? null : String(req.body.roleId).trim() || null;
+    }
     if (req.body?.fullName !== undefined) {
       const fullName = String(req.body.fullName).trim();
       if (!fullName) return res.status(400).json({ error: 'fullName cannot be empty.' });
@@ -208,6 +215,16 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
 
     const existing = await prisma.user.findUnique({ where: { id: userId } });
     if (!ownedOrNotFound(req, res, existing, `Staff member "${userId}" not found.`)) return;
+
+    // The role must be one of THIS venue's active roles — same check
+    // shifts.ts applies to a shift's roleId. Another venue's role id (or a
+    // removed one) is a 404, not a silent cross-tenant link.
+    if (data.roleId) {
+      const role = await prisma.role.findUnique({ where: { id: data.roleId } });
+      if (!role || role.locationId !== req.user!.locationId || !role.isActive) {
+        return res.status(404).json({ error: `Role "${data.roleId}" not found.` });
+      }
+    }
 
     // Employment status is the isActive + terminatedAt pair, so the toggle has
     // to move both — otherwise terminatedAt stays permanently null and the two

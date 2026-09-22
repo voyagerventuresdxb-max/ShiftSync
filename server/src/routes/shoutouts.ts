@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession } from '../middleware/requireSession.js';
+import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { createShoutout } from '../lib/actions/communicationActions.js';
 
 export const shoutoutsRouter = Router();
@@ -80,5 +80,26 @@ shoutoutsRouter.post('/', requireSession, async (req, res) => {
   } catch (err) {
     console.error('[shoutouts.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while saving the shoutout.' });
+  }
+});
+
+/**
+ * DELETE /api/shoutouts/:id
+ * Same permission model as announcements.ts (2026-09-22): anyone signed in at
+ * the venue may POST a shoutout, but removing one is manager/owner only, with
+ * no author exception, and scoped to the caller's own venue via
+ * `ownedOrNotFound`. There is no edit route — a shoutout is tied to one
+ * colleague and one shift; if it's wrong it gets removed and re-posted.
+ */
+shoutoutsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.shoutout.findUnique({ where: { id } });
+    if (!ownedOrNotFound(req, res, existing, `Shoutout "${id}" not found.`)) return;
+    await prisma.shoutout.delete({ where: { id } });
+    return res.status(204).send();
+  } catch (err) {
+    console.error('[shoutouts.delete] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while deleting the shoutout.' });
   }
 });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
-import { periodOf, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
+import { periodOf, pickViewedEmployee, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
 import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
@@ -92,8 +92,12 @@ export default function SchedulingContent() {
   }, [weekStart, searchParams, setWeekStart, setSearchParams]);
 
   const [mode, setMode] = useState<Mode>('personal');
-  const activeEmployee =
-    mergedRoster.employees.find((e) => e.id === currentEmployeeId) ?? mergedRoster.employees[0];
+  // A STAFF member opening Scheduling must land on THEIR OWN rota — the
+  // "Viewing" dropdown used to default to whoever happened to be first on the
+  // week's roster, so they saw a colleague's shifts (and a Request-cover
+  // button that could only 404 for them). Managers keep the first-entry
+  // default: for them this view is a team review, not a personal one.
+  const activeEmployee = pickViewedEmployee(mergedRoster.employees, currentEmployeeId, session?.user ?? null);
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
 

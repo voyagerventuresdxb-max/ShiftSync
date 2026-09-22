@@ -58,3 +58,18 @@ export async function postShoutout(
   });
   return data.shoutout;
 }
+
+/** DELETE /api/shoutouts/:id — manager/owner only (see server/src/routes/shoutouts.ts). */
+export async function deleteShoutout(token: string, id: string): Promise<void> {
+  const res = await fetch(`/api/shoutouts/${id}`, { method: 'DELETE', headers: withAuth(token) });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // non-JSON error body; keep the generic message
+    }
+    throw new ApiError(message, res.status);
+  }
+}

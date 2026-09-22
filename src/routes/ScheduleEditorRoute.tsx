@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CalendarPlus, Clock, Lock, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { weekDates, weekdayOf } from '../engine/rosterView';
 import { useAppState } from '../state/AppStateContext';
+import { useIdentity } from '../state/IdentityContext';
 import { ApiError } from '../api/schedules';
+import { fetchRoles } from '../api/roles';
 
 interface RoleOption {
   id: string;
@@ -53,17 +55,38 @@ export default function ScheduleEditorContent() {
   const dayShifts = mergedRoster.shifts.filter((s) => s.date === activeDate).sort((a, b) => a.start.localeCompare(b.start));
   const staffOptions = sections.flatMap((s) => s.employees);
 
-  // Every role a staff member actually holds, deduped by `roleId` — the same
-  // directory-derived source RotaBuilder.tsx uses for its own role picker,
-  // so a shift created here never drifts from one created there. No new
-  // backend endpoint: `staffDirectory` already carries `roleId`/`roleName`.
+  // The venue's active roles (seeded at signup, managed in the Staff
+  // Directory) plus every role a staff member holds — the same sources
+  // RotaBuilder.tsx uses, so a shift created here never drifts from one
+  // created there, and a brand-new venue can schedule with nobody assigned
+  // to a role yet. Venue roles are applied last so a rename shows through.
+  const { session } = useIdentity();
+  const [venueRoles, setVenueRoles] = useState<RoleOption[]>([]);
+  useEffect(() => {
+    if (!session) {
+      setVenueRoles([]);
+      return;
+    }
+    let cancelled = false;
+    fetchRoles(session.token)
+      .then((roles) => {
+        if (!cancelled) setVenueRoles(roles);
+      })
+      .catch(() => {
+        // Directory-derived options below still work without this.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
   const roleOptions = useMemo(() => {
     const byId = new Map<string, RoleOption>();
     for (const s of staffDirectory) {
       if (s.roleId && s.roleName) byId.set(s.roleId, { id: s.roleId, name: s.roleName });
     }
+    for (const r of venueRoles) byId.set(r.id, r);
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [staffDirectory]);
+  }, [staffDirectory, venueRoles]);
 
   return (
     <div className="space-y-5">

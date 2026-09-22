@@ -52,10 +52,25 @@ export default function RosterScreen({
   onSkip: () => void;
 }) {
   const { session } = useIdentity();
-  const { setUploadResult } = useOnboardingState();
+  const { uploadResult, uploadFile, setUploadResult } = useOnboardingState();
 
-  const [zone, setZone] = useState<ZoneState>({ phase: 'empty' });
-  const [viaPhoto, setViaPhoto] = useState(false);
+  // A batch already parsed this session (Back from Review, or a reload on
+  // this step) is still the attached file — starting from 'empty' here used
+  // to show a blank zone with Continue disabled, forcing a needless
+  // re-upload even though Review still had the rows.
+  const [zone, setZone] = useState<ZoneState>(() => {
+    if (!uploadResult) return { phase: 'empty' };
+    const fileName = uploadFile?.name ?? 'Uploaded roster';
+    return {
+      phase: 'ready',
+      fileName,
+      ext: uploadFile ? extOf(fileName) : 'FILE',
+      sizeLabel: uploadFile ? sizeLabel(uploadFile.size) : `${uploadResult.summary.totalRows} shifts found`,
+      result: uploadResult,
+      viaPhoto: uploadFile?.viaPhoto ?? false,
+    };
+  });
+  const [viaPhoto, setViaPhoto] = useState(uploadFile?.viaPhoto ?? false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
@@ -74,7 +89,7 @@ export default function RosterScreen({
       // (unlike Venue's PATCH), so there's no reason for it to sit stale in
       // local state. Also what makes "picking one zone replaces the other"
       // correct from Review's perspective, not just this screen's.
-      setUploadResult(result);
+      setUploadResult(result, { name: file.name, size: file.size, viaPhoto: pickedViaPhoto });
     } catch (err) {
       const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Could not read that file.';
       setZone({ phase: 'error', fileName: file.name, message });

@@ -956,3 +956,30 @@ body {
   padding-top: 0.75rem;
   border-top: 1px solid var(--border);
 }
+
+/* Staff Directory → Roles panel (default roles seeded at signup; rename / remove / add). */
+.staff-directory-roles {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.staff-directory-roles .section-label {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+.staff-directory-role-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.375rem;
+}
+.staff-directory-role-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.staff-directory-role-row .staff-directory-input-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+}

@@ -37,3 +37,23 @@ export function shiftsFor(roster: Roster, employeeId: string): Shift[] {
 export function totalHours(shifts: Shift[]): number {
   return shifts.reduce((sum, s) => sum + shiftHours(s.start, s.end), 0);
 }
+
+/**
+ * Which employee the Personal Rota shows. An explicit "Viewing" selection
+ * always wins. With none, a STAFF session lands on its own rota when it is
+ * on this week's roster; a MANAGER/OWNER (whose use of this view is a team
+ * review) and any session not on the roster get the first entry.
+ */
+export function pickViewedEmployee<E extends { id: string }>(
+  employees: E[],
+  currentEmployeeId: string | undefined,
+  sessionUser: { id: string; systemRole: 'OWNER' | 'MANAGER' | 'STAFF' } | null,
+): E | undefined {
+  const selected = employees.find((e) => e.id === currentEmployeeId);
+  if (selected) return selected;
+  if (sessionUser?.systemRole === 'STAFF') {
+    const self = employees.find((e) => e.id === sessionUser.id);
+    if (self) return self;
+  }
+  return employees[0];
+}

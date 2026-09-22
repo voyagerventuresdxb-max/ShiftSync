@@ -124,6 +124,12 @@ export function Announcements() {
   const authorName = (a: AnnouncementDto) =>
     a.authorName ?? mergedRoster.employees.find((e) => e.id === currentEmployeeId)?.name ?? 'Management';
 
+  // Anyone signed in may post; editing/deleting is manager/owner only, with
+  // no author exception (server-enforced in announcements.ts — this only
+  // hides controls that would 403). Positive check, same rationale as
+  // router.tsx's RequireSession: an unexpected role string fails closed.
+  const canModerate = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
+
   return (
     <section className="panel animate-rise p-4 sm:p-5">
       <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
@@ -192,6 +198,7 @@ export function Announcements() {
                     {a.editedAt ? ` · edited ${timeAgo(a.editedAt)}` : ''}
                   </p>
                 </div>
+                {canModerate && (
                 <div className="flex shrink-0 gap-1.5">
                   <button
                     onClick={() => setDraft({ id: a.id, body: a.body })}
@@ -208,6 +215,7 @@ export function Announcements() {
                     <Trash2 className="h-3 w-3" />
                   </button>
                 </div>
+                )}
               </div>
             </li>
           ))}

@@ -80,7 +80,7 @@ export async function addStaffMember(
   });
 }
 
-/** PATCH /api/staff-directory/:userId — accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, isActive. */
+/** PATCH /api/staff-directory/:userId — accepts fullName, jobTitle, phone, preferredLanguage, hiredAt, isActive, roleId. */
 export async function updateStaffMember(
   token: string,
   userId: string,
@@ -91,6 +91,8 @@ export async function updateStaffMember(
     preferredLanguage?: string | null;
     hiredAt?: string | null;
     isActive?: boolean;
+    /** One of the venue's active roles (GET /api/roles), or null to unassign. */
+    roleId?: string | null;
   },
 ): Promise<StaffDirectoryEntry> {
   return request<StaffDirectoryEntry>(`/api/staff-directory/${userId}`, {
