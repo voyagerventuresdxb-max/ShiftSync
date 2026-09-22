@@ -20,7 +20,7 @@ function timeAgo(iso: string): string {
 }
 
 export function Shoutouts() {
-  const { locationId, mergedRoster, currentEmployeeId } = useAppState();
+  const { locationId, mergedRoster } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [items, setItems] = useState<ShoutoutDto[]>([]);
@@ -93,7 +93,6 @@ export function Shoutouts() {
       const created = await postShoutout(session.token, {
         locationId,
         employeeId,
-        authorId: currentEmployeeId,
         shiftSnapshot: snapshot,
         note: note.trim(),
       });

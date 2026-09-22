@@ -57,7 +57,12 @@ announcementsRouter.get('/:locationId', async (req, res) => {
 announcementsRouter.post('/', requireSession, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
-    const authorId = req.body?.authorId ? String(req.body.authorId).trim() : null;
+    // The author is whoever is signed in — never a body-supplied id. The
+    // client used to send its "Viewing" employee (or nothing at all for a
+    // fresh venue), so announcements were attributed to a colleague, or to
+    // nobody — and an author-less announcement then rendered under the
+    // VIEWER's own name on their My Shifts screen.
+    const authorId = req.user!.id;
     const body = String(req.body?.body ?? '').trim();
     if (!body) return res.status(400).json({ error: 'body is required.' });
 
