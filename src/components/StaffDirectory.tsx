@@ -6,6 +6,7 @@ import {
   type StaffDirectoryEntry,
 } from '../api/staffDirectory';
 import { ApiError } from '../api/schedules';
+import { createRole, fetchRoles, removeRole, renameRole, type RoleSummary } from '../api/roles';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice, OfflineActionNotice } from './shiftsync/OfflineNotice';
@@ -17,7 +18,7 @@ interface StaffDirectoryProps {
 }
 
 type EditableFieldUpdates = Partial<
-  Pick<StaffDirectoryEntry, 'jobTitle' | 'phone' | 'preferredLanguage' | 'hiredAt' | 'isActive'>
+  Pick<StaffDirectoryEntry, 'jobTitle' | 'phone' | 'preferredLanguage' | 'hiredAt' | 'isActive' | 'roleId'>
 >;
 
 /**
@@ -54,6 +55,89 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   const [newTitle, setNewTitle] = useState('');
   const [adding, setAdding] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
+
+  // The venue's roles — seeded at signup (shared/defaultRoles.ts) and managed
+  // right here: rename, remove, add. Every shift-write endpoint keys off a
+  // role id, so this is what makes a brand-new venue schedulable with no
+  // roster upload at all.
+  const [roles, setRoles] = useState<RoleSummary[]>([]);
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
+  const [newRoleName, setNewRoleName] = useState('');
+  const [roleBusyId, setRoleBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!session) {
+      setRoles([]);
+      return;
+    }
+    let cancelled = false;
+    fetchRoles(session.token)
+      .then((list) => {
+        if (!cancelled) setRoles(list);
+      })
+      .catch(() => {
+        // The staff table still works; the role picker just has nothing to offer.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  /** Local list + parent notification, computed first so no parent state is set inside an updater. */
+  const replaceStaff = (next: StaffDirectoryEntry[]) => {
+    setStaff(next);
+    onChanged?.(next);
+  };
+
+  const handleAddRole = async () => {
+    const name = newRoleName.trim();
+    if (!name || !session || !online) return;
+    setRoleBusyId('new');
+    try {
+      const created = await createRole(session.token, name);
+      setRoles((prev) => [...prev.filter((r) => r.id !== created.id), created].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewRoleName('');
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not add that role.');
+    } finally {
+      setRoleBusyId(null);
+    }
+  };
+
+  const handleRenameRole = async (role: RoleSummary) => {
+    const name = (roleDrafts[role.id] ?? role.name).trim();
+    if (!session || !online || !name || name === role.name) return;
+    setRoleBusyId(role.id);
+    try {
+      const renamed = await renameRole(session.token, role.id, name);
+      setRoles((prev) => prev.map((r) => (r.id === renamed.id ? renamed : r)).sort((a, b) => a.name.localeCompare(b.name)));
+      // Staff on this role show the new name straight away — they hold the id.
+      replaceStaff(staff.map((s) => (s.roleId === renamed.id ? { ...s, roleName: renamed.name } : s)));
+      setError(null);
+    } catch (err) {
+      setRoleDrafts((prev) => ({ ...prev, [role.id]: role.name }));
+      setError(err instanceof ApiError ? err.message : 'Could not rename that role.');
+    } finally {
+      setRoleBusyId(null);
+    }
+  };
+
+  const handleRemoveRole = async (role: RoleSummary) => {
+    if (!session || !online) return;
+    setRoleBusyId(role.id);
+    try {
+      await removeRole(session.token, role.id);
+      setRoles((prev) => prev.filter((r) => r.id !== role.id));
+      // The server unassigns everyone on the role; mirror that locally.
+      replaceStaff(staff.map((s) => (s.roleId === role.id ? { ...s, roleId: null, roleName: null } : s)));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not remove that role.');
+    } finally {
+      setRoleBusyId(null);
+    }
+  };
 
   useEffect(() => {
     // Reads are session-gated server-side now — with no session yet (e.g. a
@@ -162,7 +246,8 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
           <p className="hint">
             Job titles here are set by the venue and never inferred from an
             uploaded roster — they're what populates the Management tier in
-            the roster grid above.
+            the roster grid above. The Role column is what the rota builder
+            schedules against.
           </p>
 
           {error && (
@@ -196,7 +281,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                     <th>Start date</th>
                     <th>Status</th>
                     <th>Venue</th>
-                    <th>Parsed role</th>
+                    <th>Role</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -207,6 +292,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                       saving={savingId === entry.id}
                       disabled={!online}
                       isManager={isManager}
+                      roles={roles}
                       onSave={(updates, errorMessage) => handleFieldSave(entry, updates, errorMessage)}
                     />
                   ))}
@@ -246,6 +332,52 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                 </button>
               </div>
               {!online && <OfflineActionNotice />}
+
+              <section className="staff-directory-roles" aria-label="Roles">
+                <h3 className="section-label">Roles</h3>
+                <p className="hint">
+                  Every venue starts with a default set so you can build a rota straight away — rename, remove or add to fit your floor.
+                  Removing a role unassigns it from staff; shifts already scheduled on it keep it.
+                </p>
+                <ul className="staff-directory-role-list">
+                  {roles.map((role) => (
+                    <li key={role.id} className="staff-directory-role-row">
+                      <input
+                        className="staff-directory-input staff-directory-input-inline"
+                        aria-label={`Role name: ${role.name}`}
+                        value={roleDrafts[role.id] ?? role.name}
+                        onChange={(e) => setRoleDrafts((prev) => ({ ...prev, [role.id]: e.target.value }))}
+                        onBlur={() => void handleRenameRole(role)}
+                        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                        disabled={roleBusyId === role.id || !online}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        aria-label={`Remove role ${role.name}`}
+                        onClick={() => void handleRemoveRole(role)}
+                        disabled={roleBusyId === role.id || !online}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                  {roles.length === 0 && <li className="hint">No roles yet — add one below.</li>}
+                </ul>
+                <div className="staff-directory-add">
+                  <input
+                    className="staff-directory-input"
+                    placeholder="New role (e.g. Sommelier)"
+                    value={newRoleName}
+                    onChange={(e) => setNewRoleName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && void handleAddRole()}
+                    disabled={!online}
+                  />
+                  <button className="btn btn-primary" onClick={() => void handleAddRole()} disabled={roleBusyId === 'new' || !newRoleName.trim() || !online}>
+                    {roleBusyId === 'new' ? 'Adding…' : 'Add role'}
+                  </button>
+                </div>
+              </section>
             </>
           )}
         </div>
@@ -259,6 +391,7 @@ function StaffRow({
   saving,
   disabled,
   isManager,
+  roles,
   onSave,
 }: {
   entry: StaffDirectoryEntry;
@@ -267,6 +400,8 @@ function StaffRow({
   disabled: boolean;
   /** False for a STAFF session — every field renders as plain text, matching Floor Plan's AssignmentBoard read-only treatment rather than showing editable controls that would 403 on click. */
   isManager: boolean;
+  /** The venue's active roles, for the Role picker. */
+  roles: RoleSummary[];
   onSave: (updates: EditableFieldUpdates, errorMessage: string) => void;
 }) {
   const [title, setTitle] = useState(entry.jobTitle ?? '');
@@ -374,7 +509,23 @@ function StaffRow({
         </button>
       </td>
       <td className="cell-num">{entry.venueName}</td>
-      <td className="cell-num">{entry.roleName ?? '—'}</td>
+      <td>
+        <select
+          className="staff-directory-input staff-directory-input-inline"
+          aria-label={`Role for ${entry.fullName}`}
+          value={entry.roleId ?? ''}
+          onChange={(e) => onSave({ roleId: e.target.value || null }, 'Could not update that role.')}
+          disabled={saving || disabled}
+        >
+          <option value="">— No role —</option>
+          {roles.map((r) => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
+          {entry.roleId && !roles.some((r) => r.id === entry.roleId) && (
+            <option value={entry.roleId}>{entry.roleName ?? 'Removed role'}</option>
+          )}
+        </select>
+      </td>
     </tr>
   );
 }

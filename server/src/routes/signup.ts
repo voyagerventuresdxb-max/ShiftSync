@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { findPhoneMatches } from './identity.js';
 import { writeAuditLog } from '../lib/auditLog.js';
+import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
 
 export const signupRouter = Router();
 
@@ -97,6 +98,12 @@ signupRouter.post('/verify-otp', async (req, res) => {
       const user = await tx.user.create({
         data: { locationId: location.id, fullName, phone, systemRole: 'OWNER' },
       });
+      // Zero-setup scheduling: the venue can build its first rota the moment
+      // signup finishes, with no roster upload and no admin setup step (the
+      // Locations → Departments → Roles chore 7shifts makes an admin do by
+      // hand first). Ordinary Role rows — renamed/removed/added later from
+      // the Staff Directory. See shared/defaultRoles.ts.
+      await tx.role.createMany({ data: DEFAULT_ROLES.map((name) => ({ locationId: location.id, name })) });
       // AuditAction has no dedicated "venue/location created" value; STAFF_CREATED
       // is reused here as the closest existing fit (a new Owner IS a new User),
       // per the task brief's explicit go-ahead rather than adding a new enum
