@@ -124,7 +124,10 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     }
 
     const role = await prisma.role.findUnique({ where: { id: roleId } });
-    if (!role || role.locationId !== locationId) return res.status(404).json({ error: `Role "${roleId}" not found.` });
+    // A removed role (roles.ts DELETE deactivates, never deletes, so existing
+    // shifts keep theirs) can still be edited on an old shift, but no NEW
+    // shift can be created on it.
+    if (!role || role.locationId !== locationId || !role.isActive) return res.status(404).json({ error: `Role "${roleId}" not found or no longer active.` });
     if (userId) {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });

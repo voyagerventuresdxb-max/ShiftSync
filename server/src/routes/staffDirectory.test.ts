@@ -256,3 +256,40 @@ test('PATCH /api/staff-directory/:userId: PATCHing a phone already taken by anot
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+test('PATCH /api/staff-directory/:userId: roleId assigns one of the venue\'s active roles, null unassigns, another venue\'s role is a 404', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__staffdirectory-test__ roles', timezone: 'Asia/Dubai' },
+  });
+  const other = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__staffdirectory-test__ roles other', timezone: 'Asia/Dubai' },
+  });
+  const role = await prisma.role.create({ data: { locationId: location.id, name: 'Host' } });
+  const foreignRole = await prisma.role.create({ data: { locationId: other.id, name: 'Host' } });
+  const staff = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Roled', systemRole: 'STAFF' } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager R', systemRole: 'MANAGER' } });
+  try {
+    await withServer(async (baseUrl) => {
+      const token = await sessionFor(manager.id);
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const assign = await fetch(`${baseUrl}/api/staff-directory/${staff.id}`, { method: 'PATCH', headers, body: JSON.stringify({ roleId: role.id }) });
+      assert.equal(assign.status, 200);
+      const assigned = (await assign.json()) as { roleId: string | null; roleName: string | null };
+      assert.equal(assigned.roleId, role.id);
+      assert.equal(assigned.roleName, 'Host');
+
+      const foreign = await fetch(`${baseUrl}/api/staff-directory/${staff.id}`, { method: 'PATCH', headers, body: JSON.stringify({ roleId: foreignRole.id }) });
+      assert.equal(foreign.status, 404, "another venue's role must not be assignable");
+      assert.equal((await prisma.user.findUnique({ where: { id: staff.id } }))?.roleId, role.id, 'the refused write must not have landed');
+
+      const clear = await fetch(`${baseUrl}/api/staff-directory/${staff.id}`, { method: 'PATCH', headers, body: JSON.stringify({ roleId: null }) });
+      assert.equal(clear.status, 200);
+      assert.equal(((await clear.json()) as { roleId: string | null }).roleId, null);
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: other.id } }).catch(() => {});
+  }
+});
