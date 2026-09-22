@@ -10,13 +10,17 @@ header (#22) (#27)`). No production system was touched; the only external calls 
 read-only GitHub API reads and two HTTP GETs to Vercel URLs that both answered with an
 SSO redirect.
 
-**Verdict: not quite — one blocker-class product gap and one deployment unknown stand
-between this and "submit".** The onboarding flow, including the roster upload the founder
-hit, works end to end on both viewports. Five real bugs were found and fixed, each on its
-own PR. Two things need the founder's decision before this is honestly "ready": a venue
-that skips the roster upload can never create a shift (no way to create a Role), and the
-repo contains nothing that deploys the API, so whether the Vercel site has a working
-backend at all could not be verified from here.
+**Verdict (updated after the follow-up build, same night): ready on the app side once
+PRs #31–#38 are merged; one deployment unknown remains.** The onboarding flow, including
+the roster upload the founder hit, works end to end on both viewports. Five real bugs were
+found and fixed, each on its own PR. The one blocker-class product gap the first pass found
+(a venue that skips the roster upload could never create a shift) is now closed by **#38
+(zero-setup scheduling: default roles at signup + Staff Directory role control)**, and the
+announcement permission question is decided and enforced by **#37**. What is still not
+verifiable from here: the repo contains nothing that deploys the API, and the one Vercel
+Production deployment is still `1a8220e` from 2026-09-15 (re-checked after the follow-up
+build — unchanged), so whether the live site has a working backend must be confirmed by
+whoever owns the Vercel project.
 
 ---
 
@@ -68,7 +72,7 @@ tested in this environment.
 | 2.2.6 | Staff Directory list refreshes after approving a join request on the same page | **FAIL (low)** | The new member only appears after a reload. Not fixed — cosmetic, and the two panels don't share state today. |
 | 2.2.7 | Pending Approvals: a real join request appears; Approve creates an active STAFF user | **PASS** | |
 | 2.2.8 | Rota builder: add a shift (role, times, briefing note) → draft chip → Publish & notify → "Published · locked"; DB status PUBLISHED | **PASS** | |
-| 2.2.9 | **A venue that skipped the roster upload can never create a shift** | **DECIDE (blocker-class)** | The only code path that ever creates a `Role` is roster-confirm (`server/src/routes/schedules.ts:520`). With no upload there are no roles, the Staff Directory can't assign one (job title only; `roleId` is read-only), and the rota builder's New-shift sheet says "No roles found — assign roles to staff in the Staff Directory first", pointing at a control that doesn't exist. The Shift Editor needs a `roleId` too. A minimal role picker/creator in the directory, or seeding the canonical roles at signup, are both small — but which one is a product call. The click-through worked around it by inserting a role directly in the DB. |
+| 2.2.9 | **A venue that skipped the roster upload can never create a shift** | **FIXED (blocker-class → closed by #38)** | First pass: the only code path that ever created a `Role` was roster-confirm (`server/src/routes/schedules.ts:520`); with no upload there were no roles, the Staff Directory couldn't assign one, and the rota builder's New-shift sheet pointed at a Staff Directory control that didn't exist. **#38** seeds a default, fully editable role set at signup (`shared/defaultRoles.ts`), adds a Roles API (create / rename / remove-with-no-orphaned-shifts), a Role column + Roles panel in the Staff Directory, and makes the rota builder and Shift Editor list the venue's roles. Verified by `e2e/zero-setup-scheduling.spec.ts`: fresh signup → shift created with zero roster upload → rename/remove/add stay in sync with the rota. See "Follow-up build" below. |
 | 2.2.10 | Personal Rota (manager viewing a staff member): shift, briefing, Confirmed badge | **PASS** | |
 | 2.2.11 | Hours tracking: clock in / clock out on the viewed employee; attendance log closed | **PASS** | |
 | 2.2.12 | Swap approval: pending request shows requester, shift, proposed cover; Approve → "Approved · shift reassigned"; shift's `userId` reassigned; requester's My Shifts no longer lists it | **PASS** | The panel flips optimistically before the write lands (~1 s); the DB catches up. |
@@ -87,7 +91,7 @@ tested in this environment.
 | 2.3.6 | `/scheduling` for STAFF opens on **their own** rota | **FIXED** | The "Viewing" dropdown defaulted to the first roster entry, so staff landed on a colleague's rota with a Request-cover button that could only 404. **PR #33.** Residual: a staff member with no shift this week is not on the roster at all and still falls back to a colleague. |
 | 2.3.7 | Request cover: pick a colleague → Send → "Cover request sent"; card shows "Swap pending" | **PASS** | |
 | 2.3.8 | Request cover is only offered when another colleague also has a shift that week | **DECIDE (medium)** | Cover candidates come from the week's roster, not the Staff Directory — a staff member scheduled alone that week has no way to ask for cover. Not changed: whether candidates should be "anyone active at the venue" is a product call (it also affects who a manager can propose). |
-| 2.3.9 | STAFF can edit and delete any announcement in their venue | **DECIDE (medium)** | PATCH/DELETE are session + venue-scoped only; the UI shows edit/delete controls to staff on "Broadcast · one-way" posts. Almost certainly not intended, but the route comments say "any signed-in user can post" was deliberate, so this needs a decision (author-only? manager-only?). |
+| 2.3.9 | STAFF can edit and delete any announcement in their venue | **DECIDED + FIXED (#37)** | First pass: PATCH/DELETE were session + venue-scoped only, and the UI showed edit/delete controls to staff. Decided policy (deliberately more permissive than 7shifts, where employees are read-only): **anyone signed in may post; only MANAGER/OWNER may edit or delete, with no author exception; managers stay venue-scoped.** **#37** enforces this server-side (announcements PATCH/DELETE + a new manager-only shoutout DELETE) and hides the controls from staff. See "Follow-up build" below. |
 | 2.3.10 | Staff-side times render in the browser's locale/timezone (12h `05:00 PM–11:00 PM`), manager side is 24h `17:00 – 23:00` | **FAIL (low)** | `MyShiftsRoute` uses `toLocaleTimeString` with no venue timezone — a staff phone set to another zone shows the wrong wall-clock time. Not fixed this pass. |
 
 ### Part 2.4 — AI voice layer
@@ -118,6 +122,8 @@ tested in this environment.
 | [#33](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/33) | Scheduling: STAFF Personal Rota defaults to the signed-in user | medium |
 | [#34](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/34) | People: StaffDirectory no longer sets parent state during its own render | low |
 | [#35](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/35) | Announcements/shoutouts: author is the session user, not the "Viewing" employee | medium |
+| [#37](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/37) | Announcements/shoutouts permission model: anyone posts, only managers edit/delete (no author exception), venue-scoped | feature (closes 2.3.9) |
+| [#38](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/38) | Zero-setup scheduling: default roles at signup + Roles API + Staff Directory role control + rota-builder/Shift-Editor sync | feature (closes 2.2.9) |
 | [#30](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/30) | (earlier tonight) xlsx → exceljs migration + parser robustness audit | — |
 
 Each PR carries a regression test that was confirmed to fail without its fix. The
@@ -128,15 +134,66 @@ opt-in audit scripts, run with `MVP_AUDIT=1`) and this report are on
 
 ## Decisions needed before "ready"
 
-1. **Roles for venues that skip the roster (2.2.9).** Pick one: seed the 9 canonical roles at
-   signup, add a role picker to the Staff Directory, or make the rota builder's role field
-   free-text-with-create. Without one of these, "skip roster → add staff → build rota" is a
-   dead end.
+1. ~~**Roles for venues that skip the roster (2.2.9).**~~ **Done — #38** seeds default roles at
+   signup and adds the Staff Directory role control. Merge order note: #38 is independent of
+   #31–#35, but its e2e spec temporarily excludes the React warning that #34 fixes.
 2. **Production API hosting (3.5).** Confirm where the Express server runs for the Vercel
-   site, and redeploy Production from current master (it is a week and 7 commits stale).
-3. **Who may edit/delete announcements (2.3.9)** and **who counts as a cover candidate (2.3.8).**
+   site, and redeploy Production from current master (it is a week and 7 commits stale;
+   re-checked after the follow-up build — still `1a8220e`).
+3. ~~**Who may edit/delete announcements (2.3.9)**~~ **Decided and enforced — #37** (anyone
+   posts, managers moderate, no author exception). **Who counts as a cover candidate (2.3.8)**
+   is still open.
 4. **Voice end-to-end (2.4.1)** needs a live Gemini key on a real device before it is
    demoed as working; the execute paths are unit-verified, the listening path is not.
+
+## Follow-up build (same night): the two gaps turned into features
+
+Both built after the first pass, each on its own PR, each verified against local Postgres
+with a clean run before being opened. Neither is merged.
+
+### #38 — Zero-setup scheduling (closes 2.2.9)
+
+Positioning: 7shifts requires an admin to build Locations → Departments → Roles by hand
+before any shift can be scheduled. ShiftSync now seeds a default, fully editable role set
+at signup, so a brand-new venue builds its first rota the moment onboarding ends — with or
+without a roster upload.
+
+| Check | Result |
+|---|---|
+| Signup seeds `Waiter, Head Waiter, Bartender, Host, Chef, Runner, Supervisor, Management` as active `Role` rows (canonical spellings, so a later roster upload matches them instead of duplicating) | **PASS** — `signup.test.ts` |
+| Roles API: create (dup → 409, re-adding a removed name reactivates the same row), rename (staff + shifts follow), remove (deactivate: staff unassigned, existing shifts keep the role, hidden from `GET /api/roles`, new shift on it → 404, assigning it → 404) | **PASS** — `roles.test.ts` |
+| Permissions: STAFF create/rename/remove → 403; cross-venue manager rename/remove → 404; cross-venue role assignment → 404 | **PASS** — `roles.test.ts` |
+| Staff Directory `roleId` assign / clear / foreign role → 404 | **PASS** — `staffDirectory.test.ts` |
+| **Playwright click-through**: fresh signup → skip roster → defaults visible in the directory's Roles panel → assign Bartender to the owner → rename to Mixologist (owner's row follows without reload) → rota builder offers Mixologist, not Bartender → **shift created with zero roster upload** → remove Mixologist (owner unassigned) + add Sommelier → rota builder: existing shift intact and still labelled, Mixologist no longer offered, Sommelier is | **PASS** — `e2e/zero-setup-scheduling.spec.ts` |
+| Existing suites | `npm test` 52/52 · `test:server` 265/266 (Docling skip) · `onboarding` + `review-persistence` specs pass (roster confirm now matches seeded roles instead of creating them) · typecheck ×2 · lint |
+
+Residual: the Shift Editor (`/schedule`) and rota builder both list the venue's roles now;
+a removed role stays selectable only on the shift that already has it.
+
+### #37 — Announcement / shoutout permission model (closes 2.3.9)
+
+Policy, deliberately more permissive than 7shifts (employees read-only there): **any
+authenticated user posts in their own venue; only MANAGER/OWNER edit or delete, with no
+author exception; managers stay venue-scoped.**
+
+| Check | Result |
+|---|---|
+| STAFF can create an announcement / a shoutout (201) | **PASS** |
+| STAFF editing or deleting their **own** announcement → 403, row untouched; STAFF deleting their own shoutout → 403 | **PASS** |
+| Own-venue manager edits (200) and deletes (204) a STAFF-authored announcement; deletes a STAFF-authored shoutout (204) | **PASS** |
+| Manager from another venue editing/deleting → 404, row untouched (tenant-isolation regression check) | **PASS** |
+| UI: edit/delete controls render only for a manager/owner session (server enforces regardless); Shoutouts gains a manager-only Delete | **PASS** (existing core-loop click-through still green) |
+| Suites | announcements + shoutouts + voice + communicationActions 59/59; new tests fail without the route change · typecheck ×2 · lint |
+
+Note: shoutouts had no removal route at all before; #37 adds manager-only `DELETE`. No
+edit route for shoutouts — a wrong one is removed and re-posted.
+
+### Production deployment re-check
+
+Unchanged since the first pass: GitHub still shows exactly one Vercel **Production**
+deployment, `1a8220e` (2026-09-15), now 7 commits behind master plus the eight open PRs;
+every deployment URL answers with a Vercel SSO redirect. Still the one item this review
+cannot close from the repo.
 
 ## What was not covered
 
