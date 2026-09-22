@@ -184,6 +184,11 @@ export default function VenueScreen({
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
+              // The fallback input (name empty, editingName false) must become
+              // a real edit session on focus — otherwise the first keystroke
+              // makes the name non-empty and swaps the input for the summary
+              // mid-typing, leaving the manager with a one-letter venue name.
+              onFocus={() => setEditingName(true)}
               onBlur={() => setEditingName(false)}
               placeholder="e.g. Sefarina, DIFC"
               disabled={disabled}
