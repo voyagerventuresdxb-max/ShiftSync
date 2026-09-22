@@ -68,9 +68,11 @@ export function resolveDayMonthDate(value: unknown, weekStart: string): string |
 /** Parses a spreadsheet date cell: JS Date (xlsx cellDates), Excel serial, or common string formats. */
 export function parseDateCell(value: unknown): string | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    // xlsx's cellDates:true builds these from UTC fields — read them back as
-    // UTC too, so the host machine's local timezone can never shift the
+    // exceljs builds these from UTC epoch math (workbookReader.ts) — read them
+    // back as UTC too, so the host machine's local timezone can never shift the
     // calendar day (e.g. UTC midnight rendering as "yesterday" west of UTC).
+    // (The SheetJS reader this replaced built them from LOCAL time, so typed
+    // dates and times read wrong on any non-UTC host — see Issue #23.)
     return dayjs.utc(value).format('YYYY-MM-DD');
   }
   if (typeof value === 'number' && Number.isFinite(value)) {

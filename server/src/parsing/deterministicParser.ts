@@ -13,7 +13,6 @@
  *    Waiter/Runner) via keyword matching
  *  - Leave/absence codes (Off, A/L, PH, Sick, etc.)
  */
-import * as XLSX from 'xlsx';
 import { isOvernight } from './normalize.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
 
@@ -145,29 +144,24 @@ export function parseShiftCell(cellValue: unknown): {
 }
 
 /**
- * Parses a roster file (Excel/CSV ArrayBuffer or PDF text) into a
+ * Parses pre-extracted PDF text (lines from pdf-parse) into a
  * ParsedVisionResult. `weekStart` is the ISO date of the roster week's first
  * day (Sunday); day columns are mapped to it in order.
+ *
+ * This used to also take `'xlsx' | 'csv'` and read them with SheetJS. Nothing
+ * ever called it that way (its only caller passes 'pdf-text', and no test
+ * exercised the other branch) — Excel/CSV rosters go through
+ * workbookReader.ts + deterministicGridParser.ts — so the branch was removed
+ * with the SheetJS dependency (Issue #23) rather than ported to exceljs's
+ * async API for no caller.
  */
 export function parseRotaFile(
-  fileBuffer: ArrayBuffer | string,
-  fileType: 'xlsx' | 'csv' | 'pdf-text',
+  fileBuffer: string,
+  fileType: 'pdf-text',
   weekStart?: string,
 ): ParsedVisionResult {
-  let rawRows: unknown[][] = [];
-
-  if (fileType === 'xlsx' || fileType === 'csv') {
-    const workbook = XLSX.read(fileBuffer, { type: 'array' });
-    const firstSheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[firstSheetName];
-    rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
-  } else if (fileType === 'pdf-text') {
-    // fileBuffer is pre-extracted text lines from pdf-parse.
-    rawRows = String(fileBuffer)
-      .split('\n')
-      .map((line) => line.split(/\s{2,}/));
-  }
-
+  void fileType; // kept so the single existing call shape is unchanged
+  const rawRows: unknown[][] = fileBuffer.split('\n').map((line) => line.split(/\s{2,}/));
   return processRowsIntoRoster(rawRows, weekStart);
 }
 

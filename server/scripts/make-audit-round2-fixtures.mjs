@@ -3,20 +3,16 @@
  * per the round-2 audit brief. See MEMORY.md for the audit writeup this
  * accompanies. Synthetic data, realistic structures.
  */
-import * as XLSX from 'xlsx';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { writeXlsxFile } from './xlsxWriter.mjs';
 
 const DIR = 'server/test-fixtures/edge-case-audit-round2';
 mkdirSync(DIR, { recursive: true });
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function writeXlsx(rows, filename, opts = {}) {
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  if (opts.merges) ws['!merges'] = opts.merges;
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, opts.sheetName ?? 'Roster');
-  writeFileSync(`${DIR}/${filename}`, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+async function writeXlsx(rows, filename, opts = {}) {
+  await writeXlsxFile(`${DIR}/${filename}`, [{ name: opts.sheetName ?? 'Roster', rows, merges: opts.merges }]);
   console.log(`written ${filename}`);
 }
 
@@ -31,7 +27,7 @@ function writeXlsx(rows, filename, opts = {}) {
     ['البار Bar', '', '', '', '', '', '', ''],
     ['سارة يوسف Sara Youssef', '17-01', '17-01', 'OFF', '17-01', '17-01', '17-01', 'OFF'],
   ];
-  writeXlsx(rows, '1-bilingual-arabic.xlsx');
+  await writeXlsx(rows, '1-bilingual-arabic.xlsx');
 }
 
 // 2a. Merged cell spanning what should be the header (day-name) row.
@@ -44,7 +40,7 @@ function writeXlsx(rows, filename, opts = {}) {
   ];
   // Merge the entire first row (a title banner) across all 8 columns —
   // the row directly ABOVE the real day-header row.
-  writeXlsx(rows, '2a-merged-header-row.xlsx', {
+  await writeXlsx(rows, '2a-merged-header-row.xlsx', {
     merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }],
   });
 }
@@ -62,7 +58,7 @@ function writeXlsx(rows, filename, opts = {}) {
   ];
   // "Karim El-Sayed" merged vertically across rows 1-3 (0-indexed 1..3) —
   // as if 3 different shift patterns belonged to one merged name cell.
-  writeXlsx(rows, '2b-merged-staff-rows.xlsx', {
+  await writeXlsx(rows, '2b-merged-staff-rows.xlsx', {
     merges: [{ s: { r: 1, c: 0 }, e: { r: 3, c: 0 } }],
   });
 }
@@ -71,30 +67,25 @@ function writeXlsx(rows, filename, opts = {}) {
 // the REAL roster on tab 2, and a "Prior Week" tab third (different,
 // decoy roster data) — tests whether the app reads the right tab at all.
 {
-  const wb = XLSX.utils.book_new();
-  const notesWs = XLSX.utils.aoa_to_sheet([
+  const notesRows = [
     ['Notes for the week'],
     ['Please confirm holiday cover by Thursday.'],
     ['Contact: manager@venue.ae'],
-  ]);
-  XLSX.utils.book_append_sheet(wb, notesWs, 'Notes');
-
+  ];
   const realRows = [
     ['', ...DAYS],
     ['Amara Okafor', '9-17', '9-17', 'OFF', '9-17', '14-22', '14-22', 'OFF'],
     ['Priya Nair', '14-22', '14-22', '14-22', 'OFF', '9-17', '9-17', 'OFF'],
   ];
-  const realWs = XLSX.utils.aoa_to_sheet(realRows);
-  XLSX.utils.book_append_sheet(wb, realWs, 'This Week');
-
   const decoyRows = [
     ['', ...DAYS],
     ['Zeynep Kaya', '10-18', '10-18', 'OFF', '10-18', '10-18', 'OFF', 'OFF'],
   ];
-  const decoyWs = XLSX.utils.aoa_to_sheet(decoyRows);
-  XLSX.utils.book_append_sheet(wb, decoyWs, 'Prior Week (archive)');
-
-  writeFileSync(`${DIR}/3-multi-sheet-workbook.xlsx`, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  await writeXlsxFile(`${DIR}/3-multi-sheet-workbook.xlsx`, [
+    { name: 'Notes', rows: notesRows },
+    { name: 'This Week', rows: realRows },
+    { name: 'Prior Week (archive)', rows: decoyRows },
+  ]);
   console.log('written 3-multi-sheet-workbook.xlsx');
 }
 
@@ -107,7 +98,7 @@ function writeXlsx(rows, filename, opts = {}) {
     ['Hassan Ali', '11am-3pm/6pm-11pm', '11am-3pm/6pm-11pm', 'OFF', '11am-3pm/6pm-11pm', '11am-3pm/6pm-11pm', '11am-3pm/6pm-11pm', 'OFF'],
     ['Ana Cruz', '9-17', '9-17', '9-17', 'OFF', '9-17', '9-17', 'OFF'],
   ];
-  writeXlsx(rows, '4-split-shifts.xlsx');
+  await writeXlsx(rows, '4-split-shifts.xlsx');
 }
 
 // 5. Time-format inconsistency — 12hr and 24hr mixed in the same file,
@@ -118,7 +109,7 @@ function writeXlsx(rows, filename, opts = {}) {
     ['Tariq Aziz', '9:00am-5:00pm', '09:00-17:00', 'OFF', '23:00-02:00', 'TBD', 'Close', '9-5'],
     ['Mona Saeed', '14:00-22:00', '2pm-10pm', 'OFF', '9:00-17:00', '9:00am-', '', 'OFF'],
   ];
-  writeXlsx(rows, '5-time-format-inconsistency.xlsx');
+  await writeXlsx(rows, '5-time-format-inconsistency.xlsx');
 }
 
 // 6. Footer/trailing noise — signature block, Prepared/Approved by lines, a
@@ -136,7 +127,7 @@ function writeXlsx(rows, filename, opts = {}) {
     [],
     ['Legend: Sup = Supervisor, Run = Runner'],
   ];
-  writeXlsx(rows, '6-footer-trailing-noise.xlsx');
+  await writeXlsx(rows, '6-footer-trailing-noise.xlsx');
 }
 
 // 7a. Missing structure — no day-of-week column at all (just a flat
@@ -148,7 +139,7 @@ function writeXlsx(rows, filename, opts = {}) {
     ['Layla Nasser', 'Waiter', '10-18'],
     ['Omar Fathi', 'Runner', '14-22'],
   ];
-  writeXlsx(rows, '7a-missing-day-column.xlsx');
+  await writeXlsx(rows, '7a-missing-day-column.xlsx');
 }
 
 // 7b. Extra structure — an unexplained extra column inserted mid-table
@@ -159,7 +150,7 @@ function writeXlsx(rows, filename, opts = {}) {
     ['Sara Jamal', 'B-1042', '9-17', '9-17', '13-21', 'OFF', '9-17', '13-21', 'OFF'],
     ['Khalid Nasser', 'B-1043', '14-22', '14-22', 'OFF', '14-22', '10-18', '10-18', 'OFF'],
   ];
-  writeXlsx(rows, '7b-extra-column.xlsx');
+  await writeXlsx(rows, '7b-extra-column.xlsx');
 }
 
 // 8. Nested sub-headers — a role header ("SERVICE") followed by a
@@ -173,7 +164,7 @@ function writeXlsx(rows, filename, opts = {}) {
     ['Lunch', '', '', '', '', '', '', ''],
     ['Aisha Malik', '11-16', '11-16', '11-16', 'OFF', '11-16', '11-16', 'OFF'],
   ];
-  writeXlsx(rows, '8-nested-subheaders.xlsx');
+  await writeXlsx(rows, '8-nested-subheaders.xlsx');
 }
 
 console.log('all round-2 audit fixtures written');

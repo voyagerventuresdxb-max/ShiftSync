@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import * as XLSX from 'xlsx';
+import { buildXlsx } from './workbookTestUtils.js';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { buildMergeExpandedGrid } from './parseWorkbook.js';
 
@@ -134,7 +134,7 @@ test('leave/absence codes become leave records, not shifts or anomalies', () => 
   assert.equal(result.leaveRecords[1].category, 'public_holiday');
 });
 
-test('end-to-end: real .xlsx with actual merged cells (!merges), not a pre-expanded array', () => {
+test('end-to-end: real .xlsx with actual merged cells (!merges), not a pre-expanded array', async () => {
   // Exercises the real pipeline a route handler would use: an actual
   // workbook buffer with genuine merge ranges (day header spanning AM/PM
   // sub-columns, role-section header spanning the full staff-block width),
@@ -151,18 +151,11 @@ test('end-to-end: real .xlsx with actual merged cells (!merges), not a pre-expan
     ['Chen', '9-13', null, '9-13', '14-18'],
     ['Divya', null, '14-18', '9-13', null],
   ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!merges'] = [
-    { s: { r: 0, c: 1 }, e: { r: 0, c: 2 } },
-    { s: { r: 0, c: 3 }, e: { r: 0, c: 4 } },
-    { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } },
-    { s: { r: 5, c: 0 }, e: { r: 5, c: 4 } },
-  ];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Roster');
-  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  // Merge ranges (A1 notation): Monday and Tuesday each over their AM/PM
+  // pair, and the two role banners across the full staff-block width.
+  const buffer = await buildXlsx([{ name: 'Roster', rows: aoa, merges: ['B1:C1', 'D1:E1', 'A3:E3', 'A6:E6'] }]);
 
-  const grid = buildMergeExpandedGrid(buffer, 'test.xlsx');
+  const grid = await buildMergeExpandedGrid(buffer, 'test.xlsx');
   const result = parseExcelGrid(grid, WEEK_START);
 
   assert.equal(result.rows.length, 11);
@@ -559,9 +552,9 @@ test('returns 0 rows with no throw when the grid has no recognizable day-header 
 // novel Title-Case section header not in ROLE_ALIASES ("Poolside Detail")
 // previously parsed correctly (times, names preserved) but left every
 // affected row's roleName blank, with only a warning buried in `issues`.
-test('unrecognized-section-header audit fixture: rows stay correctly grouped under the header\'s own raw text (never blank), each unique header surfaces as exactly one blocking anomaly', () => {
+test('unrecognized-section-header audit fixture: rows stay correctly grouped under the header\'s own raw text (never blank), each unique header surfaces as exactly one blocking anomaly', async () => {
   const buffer = readFileSync('server/test-fixtures/edge-case-audit/2-novel-header-vocab.xlsx');
-  const grid = buildMergeExpandedGrid(buffer, '2-novel-header-vocab.xlsx');
+  const grid = await buildMergeExpandedGrid(buffer, '2-novel-header-vocab.xlsx');
   const result = parseExcelGrid(grid, '2026-08-24'); // Monday
 
   assert.equal(result.templateLabel, 'Deterministic Grid Parser');
@@ -626,20 +619,17 @@ test('unrecognized-section-header promotion never overwrites an already-REAL rec
 // (expandMergedCells must never propagate a VERTICAL merge's value down),
 // and the fixture-based test after it proves the full pipeline on the
 // audit's own real file.
-test('a staff-name cell vertically merged across rows (!merges with e.r > s.r) is NOT auto-expanded — each row keeps its own real, different shift data, surfaced as an anomaly instead of silently merged into one identity', () => {
+test('a staff-name cell vertically merged across rows (!merges with e.r > s.r) is NOT auto-expanded — each row keeps its own real, different shift data, surfaced as an anomaly instead of silently merged into one identity', async () => {
   const aoa: (string | number | null)[][] = [
     ['', 'Monday', 'Tuesday'],
     ['Karim El-Sayed', '10-18', '10-18'],
     [null, '14-22', '14-22'], // vertically merged with the row above — a DIFFERENT real shift pattern underneath
     ['Reem Fakhoury', '9-17', 'OFF'],
   ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!merges'] = [{ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } }]; // vertical: e.r (2) > s.r (1)
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Roster');
-  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  // Vertical merge: column A, rows 2-3 (1-based) — the range spans more than one ROW.
+  const buffer = await buildXlsx([{ name: 'Roster', rows: aoa, merges: ['A2:A3'] }]);
 
-  const grid = buildMergeExpandedGrid(buffer, 'test.xlsx');
+  const grid = await buildMergeExpandedGrid(buffer, 'test.xlsx');
   // The mechanism itself: row 2's name cell must still read blank/null —
   // never silently filled in with "Karim El-Sayed" the way a horizontal
   // merge (see the test above) IS correctly expected to expand.
@@ -657,9 +647,9 @@ test('a staff-name cell vertically merged across rows (!merges with e.r > s.r) i
   assert.match(result.anomalies[0].rawText, /14-22/);
 });
 
-test('unrecognized-merged-name-cell audit fixture: real employees keep only their own shifts, the 2 orphaned merged rows surface as distinct anomalies (before this fix: 20 rows, all attributed to 2 names, 0 anomalies)', () => {
+test('unrecognized-merged-name-cell audit fixture: real employees keep only their own shifts, the 2 orphaned merged rows surface as distinct anomalies (before this fix: 20 rows, all attributed to 2 names, 0 anomalies)', async () => {
   const buffer = readFileSync('server/test-fixtures/edge-case-audit-round2/2b-merged-staff-rows.xlsx');
-  const grid = buildMergeExpandedGrid(buffer, '2b-merged-staff-rows.xlsx');
+  const grid = await buildMergeExpandedGrid(buffer, '2b-merged-staff-rows.xlsx');
   const result = parseExcelGrid(grid, '2026-08-24'); // Monday
 
   const byEmployee = (name: string) => result.rows.filter((r) => r.employeeName === name);

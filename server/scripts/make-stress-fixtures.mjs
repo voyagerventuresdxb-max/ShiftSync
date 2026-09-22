@@ -21,18 +21,13 @@
  *      testing whether split-shift/gap logic holds up under realistic
  *      Ramadan-density content in the existing format.
  */
-import * as XLSX from 'xlsx';
-import { writeFileSync } from 'node:fs';
+import { writeXlsxFile } from './xlsxWriter.mjs';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAYS_AR = ['الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد'];
 
-function writeXlsx(rows, merges, filename) {
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  if (merges) ws['!merges'] = merges;
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Roster');
-  writeFileSync(`server/test-fixtures/stress/${filename}`, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+async function writeXlsx(rows, merges, filename) {
+  await writeXlsxFile(`server/test-fixtures/stress/${filename}`, [{ name: 'Roster', rows, merges }]);
   console.log(`written ${filename}`);
 }
 
@@ -54,7 +49,7 @@ function writeXlsx(rows, merges, filename) {
     pad(['', '', ...DAYS]),
     pad(['Priya Nair', 'Bartender', '17-01', '17-01', 'OFF', '17-01', '17-01', '17-01', 'OFF']),
   ];
-  writeXlsx(
+  await writeXlsx(
     rows,
     [
       { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } },
@@ -81,7 +76,7 @@ function writeXlsx(rows, merges, filename) {
     ['G', 'General', '09:00-18:00'],
     ['OFF', 'Day Off'],
   ].map((r) => pad(r, 9));
-  writeXlsx(rows, undefined, '2-legend-code-shifts.xlsx');
+  await writeXlsx(rows, undefined, '2-legend-code-shifts.xlsx');
 }
 
 // 3. Bilingual Arabic/English headers
@@ -91,7 +86,7 @@ function writeXlsx(rows, merges, filename) {
     ['فاطمة الزهراء Fatima Zahra', 'نادل Waiter', '10:00-18:00', '10:00-18:00', 'إجازة OFF', '10:00-18:00', '14:00-22:00', '14:00-22:00', 'إجازة OFF'],
     ['يوسف حسن Youssef Hassan', 'كابتن Captain', '14:00-22:00', '14:00-22:00', '14:00-22:00', 'إجازة OFF', '10:00-18:00', '10:00-18:00', 'إجازة OFF'],
   ];
-  writeXlsx(rows, undefined, '3-bilingual-arabic-english.xlsx');
+  await writeXlsx(rows, undefined, '3-bilingual-arabic-english.xlsx');
 }
 
 // 4. Days-as-rows / staff-as-columns (orthogonal orientation)
@@ -106,7 +101,7 @@ function writeXlsx(rows, merges, filename) {
     ['29/08/2026 Sat', '14-22', '10-18', '14-22', '10-18'],
     ['30/08/2026 Sun', 'OFF', 'OFF', 'OFF', 'OFF'],
   ];
-  writeXlsx(rows, undefined, '4-days-as-rows.xlsx');
+  await writeXlsx(rows, undefined, '4-days-as-rows.xlsx');
 }
 
 // 5. Real Dubai fine-dining role hierarchy
@@ -124,7 +119,7 @@ function writeXlsx(rows, merges, filename) {
     ['Hassan Ali', 'Chef de Partie', '09-17', '09-17', '13-21', 'OFF', '09-17', '13-21', 'OFF'],
     ['Ana Cruz', 'Commis Chef', '13-21', '13-21', '09-17', '09-17', 'OFF', '09-17', '13-21'],
   ].map((r) => [...r, ...Array(Math.max(0, 9 - r.length)).fill('')].slice(0, 9));
-  writeXlsx(rows, undefined, '5-dubai-fine-dining-roles.xlsx');
+  await writeXlsx(rows, undefined, '5-dubai-fine-dining-roles.xlsx');
 }
 
 // 6. Ramadan-compressed split shifts (same normal grid, ~6h split content)
@@ -134,7 +129,7 @@ function writeXlsx(rows, merges, filename) {
     ['Mona Saeed', 'Waiter', '11:00-14:00/18:00-21:00', '11:00-14:00/18:00-21:00', 'OFF', '11:00-14:00/18:00-21:00', '11:00-14:00/18:00-21:00', '11:00-14:00/18:00-21:00', 'OFF'],
     ['Tariq Aziz', 'Captain', '12:00-15:00/19:00-22:00', 'OFF', '12:00-15:00/19:00-22:00', '12:00-15:00/19:00-22:00', '12:00-15:00/19:00-22:00', '12:00-15:00/19:00-22:00', 'OFF'],
   ];
-  writeXlsx(rows, undefined, '6-ramadan-split-shifts.xlsx');
+  await writeXlsx(rows, undefined, '6-ramadan-split-shifts.xlsx');
 }
 
 console.log('all fixtures written');
