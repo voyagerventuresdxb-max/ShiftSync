@@ -10,17 +10,28 @@ header (#22) (#27)`). No production system was touched; the only external calls 
 read-only GitHub API reads and two HTTP GETs to Vercel URLs that both answered with an
 SSO redirect.
 
-**Verdict (updated after the follow-up build, same night): ready on the app side once
-PRs #31–#38 are merged; one deployment unknown remains.** The onboarding flow, including
-the roster upload the founder hit, works end to end on both viewports. Five real bugs were
-found and fixed, each on its own PR. The one blocker-class product gap the first pass found
-(a venue that skips the roster upload could never create a shift) is now closed by **#38
-(zero-setup scheduling: default roles at signup + Staff Directory role control)**, and the
-announcement permission question is decided and enforced by **#37**. What is still not
-verifiable from here: the repo contains nothing that deploys the API, and the one Vercel
-Production deployment is still `1a8220e` from 2026-09-15 (re-checked after the follow-up
-build — unchanged), so whether the live site has a working backend must be confirmed by
-whoever owns the Vercel project.
+**Final call (2026-09-22, end of session):**
+
+- **App: GO** on merged `master` (`33408ba`). #37, #38 and #39 are merged; the fix PRs
+  #31–#35 are still open and should be merged before the pitch. The onboarding flow,
+  including the roster upload the founder hit, works end to end on both viewports; the
+  one blocker-class product gap (no way to create a Role without a roster upload) is
+  closed by #38; the announcement permission model is decided and enforced by #37.
+- **Live production URL: NO-GO until three things happen, in this order** — none of
+  them possible from the repo alone (see "Web deployment — final state" below): the
+  Railway API host URL is provided and its `/api/health` verified; `vercel.json` gets that
+  host; the Vercel Production Branch is flipped to `master`. Until then the production
+  URL returns `404 DEPLOYMENT_NOT_FOUND` — **it has never been live**. Demo from a
+  controlled environment (docker Postgres + `npm run dev:all`, which is exactly what this
+  review verified) unless the three steps are completed and re-verified first.
+- **Native app: NONE EXISTS.** No Capacitor project in any branch; this machine cannot
+  build one (Windows, no Xcode/Android SDK). `docs/capacitor-setup.md` is the exact guide
+  for doing it on a machine that can.
+- **Demo-only settings — must be reverted after MBRIF:** `ALLOW_DEV_OTP_ECHO=true` on the
+  Railway API (shows the real one-time code on screen — anyone with the URL can log in
+  as any phone number while it is on), and the production URL itself while that flag is
+  set. Remove the variable and redeploy the API immediately after the pitch; treat the
+  URL as private until then.
 
 ---
 
@@ -113,7 +124,7 @@ tested in this environment.
 
 ---
 
-## PRs opened (all unmerged — merging is your call)
+## PRs opened (#37, #38, #39 merged on 2026-09-22; #30–#35 still open — merging those is your call)
 
 | PR | Fix | Severity |
 |---|---|---|
@@ -124,6 +135,7 @@ tested in this environment.
 | [#35](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/35) | Announcements/shoutouts: author is the session user, not the "Viewing" employee | medium |
 | [#37](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/37) | Announcements/shoutouts permission model: anyone posts, only managers edit/delete (no author exception), venue-scoped | feature (closes 2.3.9) |
 | [#38](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/38) | Zero-setup scheduling: default roles at signup + Roles API + Staff Directory role control + rota-builder/Shift-Editor sync | feature (closes 2.2.9) |
+| [#39](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/39) | Deployment: `vercel.json` rewrites to the Railway API, `railway.json`, `server:start` (migrate deploy + tsx), regenerated lockfile, `docs/deployment.md` — **merged** | infra (closes 3.5 once Railway is live) |
 | [#30](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/30) | (earlier tonight) xlsx → exceljs migration + parser robustness audit | — |
 
 Each PR carries a regression test that was confirmed to fail without its fix. The
@@ -137,9 +149,9 @@ opt-in audit scripts, run with `MVP_AUDIT=1`) and this report are on
 1. ~~**Roles for venues that skip the roster (2.2.9).**~~ **Done — #38** seeds default roles at
    signup and adds the Staff Directory role control. Merge order note: #38 is independent of
    #31–#35, but its e2e spec temporarily excludes the React warning that #34 fixes.
-2. **Production API hosting (3.5).** Confirm where the Express server runs for the Vercel
-   site, and redeploy Production from current master (it is a week and 7 commits stale;
-   re-checked after the follow-up build — still `1a8220e`).
+2. ~~**Production API hosting (3.5).**~~ **Decided — Railway for the API, Vercel keeps the
+   frontend (#39, merged).** Remaining steps are on the founder's side; see "Web
+   deployment — final state".
 3. ~~**Who may edit/delete announcements (2.3.9)**~~ **Decided and enforced — #37** (anyone
    posts, managers moderate, no author exception). **Who counts as a cover candidate (2.3.8)**
    is still open.
@@ -188,12 +200,65 @@ author exception; managers stay venue-scoped.**
 Note: shoutouts had no removal route at all before; #37 adds manager-only `DELETE`. No
 edit route for shoutouts — a wrong one is removed and re-posted.
 
-### Production deployment re-check
+## Web deployment — final state
 
-Unchanged since the first pass: GitHub still shows exactly one Vercel **Production**
-deployment, `1a8220e` (2026-09-15), now 7 commits behind master plus the eight open PRs;
-every deployment URL answers with a Vercel SSO redirect. Still the one item this review
-cannot close from the repo.
+What was actually established, using the owner's already-logged-in Vercel CLI (read-only
+inspection) plus HTTP GETs:
+
+| Fact | Evidence |
+|---|---|
+| **The production URL has never been live.** `https://shift-sync-shift-sync1.vercel.app` (the project's "Latest Production URL") returns `404 DEPLOYMENT_NOT_FOUND`. | `curl`; `vercel ls --prod` shows exactly one Production deployment, status **Canceled** ("Canceled from the Vercel Dashboard"), `1a8220e`, 2026-09-15. |
+| Every push to `master` builds successfully but as a **preview** (`target: preview`, alias `shift-sync-git-master-…`). | `vercel inspect` on the latest master deployment. So the project's Production Branch is not `master`; no build failure is involved. |
+| The Vercel project deployed the **frontend only**: `tsc -b && vite build` → `dist/`. No serverless function, no `vercel.json`, no `DATABASE_URL`/`GEMINI_API_KEY` in the project env (only `UPLOAD_CACHE_FILE`, `VAPID_*`). The Express API was never hosted anywhere. | Build log of the latest master deployment; `vercel env ls production`. This is why every `/api` call on any Vercel URL fails — and the most likely cause of what the founder saw last week. |
+| Previews sit behind Vercel Deployment Protection (SSO redirect). Not touched, per instruction. | Every preview URL → `302` to `vercel.com/sso-api`. |
+
+Decision taken (founder, with full tradeoffs): **Railway hosts the Express API, Vercel keeps
+the static frontend**, `/api/*` and `/uploads/*` rewritten to Railway (**#39, merged**).
+Sequencing, per the founder: API first, verify it live, **then** flip Production Branch — so
+the first thing that goes live is a working combination.
+
+Verified so far:
+
+- `npm run server:start` (`prisma migrate deploy && tsx server/src/index.ts`) applies the
+  migration history and answers `/api/health` in ~4 s (local, through the branch-schema wrapper).
+- `master` with the new `vercel.json` builds and deploys cleanly on Vercel (preview, `Ready`).
+- The regenerated lockfile passes the dependency check the old one failed.
+
+**Still pending on the founder's side (nothing further can be verified without them):**
+
+1. Create the Railway service from the repo (`master`, root `/`), add Railway Postgres, set
+   `DATABASE_URL`, `FRONTEND_ORIGIN=https://shift-sync-shift-sync1.vercel.app`,
+   `GEMINI_API_KEY`, `ALLOW_DEV_OTP_ECHO=true` (demo only), generate a domain — and **send
+   the `https://<service>.up.railway.app` host**. Two messages so far carried only the
+   literal placeholder text, so `vercel.json` still contains `RAILWAY_API_HOST`.
+2. Then: `/api/health` on the Railway domain → a full live signup against it (real OTP echo,
+   real venue/owner rows) → patch the host into `vercel.json` on `master`.
+3. Then: Vercel Settings → Git → Production Branch = `master` (dashboard-only).
+4. Then: production URL end to end — `/api/health` through the rewrite, a live signup
+   through the Vercel URL, and a deep-link reload (`/onboarding/venue`) to prove the SPA
+   fallback, not just the root path.
+
+Only after step 4 passes should the live URL be shown at MBRIF; until then, demo locally.
+
+### Native app (Capacitor) — final state
+
+- **No native app exists.** Searched every branch and worktree: no `capacitor.config.*`,
+  no `ios/` / `android/`, no `@capacitor/*` dependency. The only "capacitor" strings in the
+  repo are inside vendored lockfiles under `.ai/skills/`.
+- **This machine cannot build one.** Windows host; no Xcode (macOS-only), no Android
+  Studio, no Android SDK (`ANDROID_HOME` unset, no SDK directory), no JDK, no Gradle. Per
+  the agreed rule, no build was attempted.
+- **What was produced instead:** `docs/capacitor-setup.md` — the exact setup for a machine
+  with the toolchains: install `@capacitor/core|cli|ios|android`, `cap init`, the
+  `capacitor.config.ts` to use, `cap add ios/android`, `cap sync`, the native permissions
+  the app needs (microphone for voice, camera/photo for roster photos), first-run checks,
+  and the one design decision — for MBRIF, a thin wrapper that loads the deployed site
+  (`server.url`), because the web app uses relative `/api` URLs; bundling `dist/` needs a
+  `VITE_API_BASE_URL` change across `src/api/*` first. Two known native caveats are called
+  out: WebView microphone permission bridging (test on a real device first), and web push
+  not working inside a WebView.
+- **Prerequisite:** the production web deployment must be live before the thin-wrapper
+  app has anything to load.
 
 ## What was not covered
 
