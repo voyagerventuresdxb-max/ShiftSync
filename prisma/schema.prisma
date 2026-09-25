@@ -306,6 +306,8 @@ enum AuditAction {
   ROTA_TEMPLATE_DELETED
   POLICY_DOCUMENT_UPLOADED
   POLICY_DOCUMENT_DELETED
+  LEAVE_MARKED // RotaLeave created or its type changed (rota builder leave chips)
+  LEAVE_REMOVED
 }
 
 model AuditLog {

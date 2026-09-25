@@ -10,9 +10,8 @@ import { LEAVE_LABELS, LEAVE_TYPES, deleteLeave, setLeave } from '../lib/actions
  * Leave chips on the rota builder grid (golden-path v0, 2026-09-25) — see
  * the RotaLeave model and lib/actions/leaveActions.ts for the rules.
  *
- * Audit: there is no leave-specific AuditAction yet (adding one is a schema
- * change of its own), so writes log as MANUAL_OVERRIDE with
- * entityType "RotaLeave" and the leave in the note.
+ * Audit: LEAVE_MARKED (create or type change) / LEAVE_REMOVED, entityType
+ * "RotaLeave", with the leave in the note.
  */
 export const rotaLeavesRouter = Router();
 
@@ -91,7 +90,7 @@ rotaLeavesRouter.put('/', requireSession, requireManager, async (req, res) => {
       (tx) => setLeave({ locationId, userId, date, type, createdById: actorId }, tx),
       (r) =>
         r.result === 'ok'
-          ? { locationId, actorId, action: 'MANUAL_OVERRIDE', entityType: 'RotaLeave', entityId: r.leave.id, note: `leave ${r.created ? 'marked' : 'changed'}: ${LEAVE_LABELS[type]} on ${date} for ${user.fullName}` }
+          ? { locationId, actorId, action: 'LEAVE_MARKED', entityType: 'RotaLeave', entityId: r.leave.id, note: `leave ${r.created ? 'marked' : 'changed'}: ${LEAVE_LABELS[type]} on ${date} for ${user.fullName}` }
           : null,
     );
     if (outcome.result === 'conflict') return res.status(409).json({ error: outcome.message });
@@ -114,7 +113,7 @@ rotaLeavesRouter.delete('/:id', requireSession, requireManager, async (req, res)
       () => ({
         locationId: existing.locationId,
         actorId: req.user!.id,
-        action: 'MANUAL_OVERRIDE',
+        action: 'LEAVE_REMOVED',
         entityType: 'RotaLeave',
         entityId: id,
         note: `leave removed: ${LEAVE_LABELS[existing.type]} on ${existing.date.toISOString().slice(0, 10)}`,
