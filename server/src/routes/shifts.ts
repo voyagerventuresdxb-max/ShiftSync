@@ -373,8 +373,8 @@ shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
     // "Unpublished changes" = anything still DRAFT in the week (2026-09-25).
     // An edit to an already-PUBLISHED shift is live the moment it's saved
     // (and its staff member is notified — lib/actions/shiftActions.ts), so it
-    // no longer counts; this used to compare `updatedAt > publishedAt`,
-    // which flagged live edits as unpublished and missed nothing new.
+    // no longer counts. (This used to compare `updatedAt > publishedAt`,
+    // which reported live edits as "unpublished changes".)
     const [draftShifts, draftLeaves] = await Promise.all([
       prisma.shift.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),
       prisma.rotaLeave.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),

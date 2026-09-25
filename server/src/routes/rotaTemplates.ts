@@ -51,24 +51,18 @@ rotaTemplatesRouter.get('/:locationId', requireSession, async (req, res) => {
  * authenticated STAFF session could create/delete templates or apply one to
  * bulk-create a full week of real shifts — the same class of gap
  * `shifts.ts`'s own `requireManager` fix closed earlier). `locationId` comes
- * from the session, not the body. `createdById` is only honored for a
- * MANAGER/OWNER session — the `STAFF ? self : ...` branch below is now
- * unreachable and kept only as defense in depth, matching `shifts.ts`.
+ * from the session, not the body, and so does `createdById` (a body value
+ * is ignored since 2026-09-25, matching `shifts.ts`).
  */
 rotaTemplatesRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const name = String(req.body?.name ?? '').trim();
     const entries = Array.isArray(req.body?.entries) ? (req.body.entries as TemplateEntry[]) : [];
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
-
-    if (createdById !== req.user!.id) {
-      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
-      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
-    }
+    // Always the signed-in manager — a body-supplied createdById is ignored
+    // (2026-09-25, same rule as routes/shifts.ts): it let the audit trail and
+    // the created rows name someone other than whoever actually did this.
+    const createdById = req.user!.id;
 
     if (!name) return res.status(400).json({ error: 'name is required.' });
     if (entries.length === 0) return res.status(400).json({ error: 'entries must be a non-empty array.' });
@@ -133,16 +127,11 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (re
   try {
     const { id } = req.params;
     const weekStart = String(req.body?.weekStart ?? '').trim();
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    // Always the signed-in manager — a body-supplied createdById is ignored
+    // (2026-09-25, same rule as routes/shifts.ts): it let the audit trail and
+    // the created rows name someone other than whoever actually did this.
+    const createdById = req.user!.id;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
-
-    if (createdById !== req.user!.id) {
-      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
-      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
-    }
 
     // Ownership check stays here (the route knows the caller's own venue via
     // the session; the extracted action doesn't take a callerLocationId to
@@ -154,7 +143,7 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (re
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const result = await applyRotaTemplate({ templateId: id, weekStart: start, createdById, actorId: req.user!.id });
     if (result.result !== 'ok') {
-      return res.status(404).json({ error: result.message });
+      return res.status(result.result === 'blocked_by_leave' ? 409 : 404).json({ error: result.message });
     }
     return res.status(201).json({ createdCount: result.createdCount });
   } catch (err) {

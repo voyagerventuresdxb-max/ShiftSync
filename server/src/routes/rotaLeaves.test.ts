@@ -164,3 +164,73 @@ test('voice /execute honors the same rule: CREATE_SHIFT and EDIT_SHIFT onto a bl
     assert.equal(edit.status, 409);
     assert.equal((await prisma.shift.findUnique({ where: { id: tue.body.shift.id } }))!.date.toISOString().slice(0, 10), TUE);
   }));
+
+test('leave is refused on the other shift-writing paths too: template apply (409), swap approval (409), roster upload (row skipped)', () =>
+  run(async (f, baseUrl) => {
+    const mgr = api(baseUrl, f.mgrToken);
+    await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: TUE, type: 'SICK_LEAVE' });
+
+    // Template with the staff member on Tuesday (dayOffset 1 from WEEK).
+    const template = await prisma.rotaTemplate.create({
+      data: { locationId: f.location.id, name: `${TAG} tpl`, entries: [{ dayOffset: 1, roleId: f.role.id, userId: f.staff.id, start: '17:00', end: '23:00' }], createdById: f.manager.id },
+    });
+    const applied = await mgr('POST', `/api/rota-templates/${template.id}/apply`, { weekStart: WEEK });
+    assert.equal(applied.status, 409);
+    assert.match(applied.body.error, /Sick Leave/);
+    assert.equal(await prisma.shift.count({ where: { locationId: f.location.id } }), 0);
+
+    // A coworker asks the staff member (on leave Tuesday) to cover their Tuesday shift.
+    const coworker = await prisma.user.create({ data: { locationId: f.location.id, fullName: `${TAG} coworker`, systemRole: 'STAFF' } });
+    const shift = await prisma.shift.create({
+      data: { locationId: f.location.id, roleId: f.role.id, userId: coworker.id, date: new Date(`${TUE}T00:00:00.000Z`), startTime: new Date(`${TUE}T13:00:00.000Z`), endTime: new Date(`${TUE}T19:00:00.000Z`), status: 'PUBLISHED' },
+    });
+    const swap = await prisma.shiftSwapRequest.create({
+      data: { shiftId: shift.id, requestedById: coworker.id, targetUserId: f.staff.id, type: 'COVER', status: 'PENDING', expiresAt: new Date(Date.now() + 86_400_000) },
+    });
+    const decided = await mgr('PATCH', `/api/swap-requests/${swap.id}`, { decision: 'approved' });
+    assert.equal(decided.status, 409);
+    assert.equal((await prisma.shift.findUnique({ where: { id: shift.id } }))!.userId, coworker.id, 'the shift was not handed to someone on leave');
+
+    // Roster upload confirm: the row for the person on leave is skipped, not imported over the leave.
+    const { persistShifts } = await import('../parsing/persistShifts.js');
+    const row = (userId: string, date: string, rowNumber: number) =>
+      ({ rowNumber, date, startTime: '17:00', endTime: '23:00', overnight: false, breakMinutes: 0, managerNotes: null, resolvedRoleId: f.role.id, resolvedUserId: userId }) as unknown as Parameters<typeof persistShifts>[3][number];
+    const persisted = await persistShifts(prisma, f.location.id, f.manager.id, [row(f.staff.id, TUE, 1), row(f.staff.id, MON, 2)]);
+    assert.equal(persisted.createdCount, 1);
+    assert.equal(persisted.blockedByLeaveCount, 1);
+  }));
+
+test('GET /api/rota-leaves: staff see only their own published leave; colleagues and the anonymous kiosk see none; bad dates are 400', () =>
+  run(async (f, baseUrl) => {
+    const mgr = api(baseUrl, f.mgrToken);
+    await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'SICK_LEAVE' });
+    await mgr('POST', `/api/shifts/${f.location.id}/publish`, { weekStart: WEEK });
+    const colleague = await prisma.user.create({ data: { locationId: f.location.id, fullName: `${TAG} colleague`, systemRole: 'STAFF' } });
+    const colleagueToken = (await issueSession(colleague.id)).plainToken;
+
+    const list = async (token: string | null) => (await api(baseUrl, token)('GET', `/api/rota-leaves/${f.location.id}?weekStart=${WEEK}`)).body.leaves as { userId: string }[];
+    assert.deepEqual((await list(f.staffToken)).map((l) => l.userId), [f.staff.id]);
+    assert.deepEqual(await list(colleagueToken), [], "a colleague never sees someone else's leave type");
+    assert.deepEqual(await list(null), [], 'the anonymous kiosk never sees leave');
+    assert.equal((await list(f.mgrToken)).length, 1);
+
+    assert.equal((await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: '2031-02-31', type: 'DAY_OFF' })).status, 400);
+    assert.equal((await mgr('GET', `/api/rota-leaves/${f.location.id}?weekStart=2031-13-01`)).status, 400);
+  }));
+
+test('rota template apply takes createdById from the session, never the body', () =>
+  run(async (f, baseUrl) => {
+    const template = await prisma.rotaTemplate.create({
+      data: { locationId: f.location.id, name: `${TAG} tpl2`, entries: [{ dayOffset: 0, roleId: f.role.id, userId: null, start: '09:00', end: '12:00' }], createdById: f.manager.id },
+    });
+    const res = await api(baseUrl, f.mgrToken)('POST', `/api/rota-templates/${template.id}/apply`, { weekStart: WEEK, createdById: f.staff.id });
+    assert.equal(res.status, 201);
+    assert.equal((await prisma.shift.findFirst({ where: { locationId: f.location.id } }))!.createdById, f.manager.id);
+  }));
+
+test('voice publish preview counts leave: a leave-only week is publishable and its staff are counted', () =>
+  run(async (f, baseUrl) => {
+    await api(baseUrl, f.mgrToken)('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'DAY_OFF' });
+    const { getRotaPublishPreview } = await import('../lib/actions/rotaActions.js');
+    assert.deepEqual(await getRotaPublishPreview(f.location.id, new Date(`${WEEK}T00:00:00.000Z`)), { shiftCount: 0, leaveCount: 1, staffCount: 1 });
+  }));

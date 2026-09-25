@@ -231,15 +231,16 @@ export async function refinePublishRotaResponse(
   if (Number.isNaN(weekStart.getTime())) {
     return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to publish.' };
   }
-  const { shiftCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
-  if (shiftCount === 0) {
+  const { shiftCount, leaveCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
+  if (shiftCount === 0 && leaveCount === 0) {
     return {
       intent: 'UNRECOGNIZED',
       reason: `No shifts exist for the week of ${response.weekStart} yet.`,
       summary: `There are no shifts scheduled for the week of ${response.weekStart} yet — nothing to publish.`,
     };
   }
-  const summary = `This will publish ${shiftCount} shift${shiftCount === 1 ? '' : 's'} across ${staffCount} staff member${staffCount === 1 ? '' : 's'} for the week of ${response.weekStart} — confirm?`;
+  const leavePart = leaveCount > 0 ? ` and ${leaveCount} leave entr${leaveCount === 1 ? 'y' : 'ies'}` : '';
+  const summary = `This will publish ${shiftCount} shift${shiftCount === 1 ? '' : 's'}${leavePart} across ${staffCount} staff member${staffCount === 1 ? '' : 's'} for the week of ${response.weekStart} — confirm?`;
   return { ...response, summary };
 }
 

@@ -441,15 +441,10 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
     const batch = uploadCache.get(batchId);
     if (!ownedOrNotFound(req, res, batch, 'This preview has expired or was already confirmed. Please re-upload the file.')) return;
 
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
-
-    if (createdById !== req.user!.id) {
-      const onBehalfUser = await prisma.user.findUnique({ where: { id: createdById } });
-      if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
-    }
+    // Always the signed-in manager — a body-supplied createdById is ignored
+    // (2026-09-25, same rule as routes/shifts.ts): it let the audit trail and
+    // the created rows name someone other than whoever actually did this.
+    const createdById = req.user!.id;
 
     const removedRowNumbers = new Set<number>(
       Array.isArray(req.body?.removedRowNumbers) ? req.body.removedRowNumbers.filter((n: unknown) => typeof n === 'number') : [],
@@ -599,6 +594,7 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
       message: `Imported ${result.createdCount} shift(s).`,
       createdCount: result.createdCount,
       skippedCount: result.skippedCount,
+      blockedByLeaveCount: result.blockedByLeaveCount,
       rows: result.rows,
     });
   } catch (err) {

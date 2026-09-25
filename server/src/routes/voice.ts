@@ -394,6 +394,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // 'conflict' is NOT "already decided" (the PENDING guard above covers
         // that) — isRequestLocked() only ever fires on a still-PENDING request
         // whose shift a DIFFERENT approved request already reassigned.
+        if (result.result === 'target_on_leave') {
+          return respond(409, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
         if (result.result === 'conflict') {
           const msg = 'That shift was already reassigned by another swap request.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
@@ -631,7 +634,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
         const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
         if (result.result !== 'ok') {
-          return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+          return respond(result.result === 'blocked_by_leave' ? 409 : 404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }
         return respond(201, { executed: true, result: { createdCount: result.createdCount, templateName: result.templateName } }, 'EXECUTED');
       }
