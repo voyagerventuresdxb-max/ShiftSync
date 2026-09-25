@@ -6,9 +6,9 @@ import { formatVenueTime } from '../lib/venueTime.js';
 import { requireSession, requireManager, optionalSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { visibleShiftFilter } from '../lib/shiftVisibility.js';
 import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
-import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
-import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { createShift, editShift, removeShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
 
 export const shiftsRouter = Router();
@@ -214,11 +214,8 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
     // Always the signed-in manager — never a body-supplied id (an on-behalf
     // id let the audit trail name whoever was selected in "Viewing", even STAFF).
     const actorId = req.user!.id;
-    const updated = await withAuditedTransaction(
-      prisma,
-      (tx) => updateShift(id, data as Prisma.ShiftUpdateInput, tx),
-      () => ({ locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id }),
-    );
+    // editShift = audit row + write + "your shift changed" if it was PUBLISHED (shared with voice EDIT_SHIFT).
+    const updated = await editShift({ id, data: data as Prisma.ShiftUpdateInput, audit: { locationId: existing.locationId, actorId } });
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });
   } catch (err) {
     console.error('[shifts.update] failed', err);
@@ -235,17 +232,8 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
     // Always the signed-in manager — never a body-supplied id (an on-behalf
     // id let the audit trail name whoever was selected in "Viewing", even STAFF).
     const actorId = req.user!.id;
-    await withAuditedTransaction(
-      prisma,
-      async (tx) => {
-        // Audit-before-delete: writeAuditLog runs directly inside mutate (in
-        // this original order), and buildEntry below returns null so the
-        // helper doesn't also write a second row after the delete.
-        await writeAuditLog(tx, { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id });
-        await tx.shift.delete({ where: { id } });
-      },
-      () => null,
-    );
+    // removeShift = audit-before-delete + delete + "your shift was removed" if it was PUBLISHED.
+    await removeShift({ id, audit: { locationId: existing.locationId, actorId } });
     return res.status(204).send();
   } catch (err) {
     console.error('[shifts.delete] failed', err);
@@ -382,11 +370,16 @@ shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
     const publish = await prisma.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
     if (!publish) return res.status(200).json({ publishedAt: null, notifiedCount: 0, hasUnpublishedChanges: false });
 
-    const [changedShifts, draftLeaves] = await Promise.all([
-      prisma.shift.count({ where: { locationId, date: { gte: start, lt: end }, updatedAt: { gt: publish.publishedAt } } }),
+    // "Unpublished changes" = anything still DRAFT in the week (2026-09-25).
+    // An edit to an already-PUBLISHED shift is live the moment it's saved
+    // (and its staff member is notified — lib/actions/shiftActions.ts), so it
+    // no longer counts; this used to compare `updatedAt > publishedAt`,
+    // which flagged live edits as unpublished and missed nothing new.
+    const [draftShifts, draftLeaves] = await Promise.all([
+      prisma.shift.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),
       prisma.rotaLeave.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),
     ]);
-    const changedCount = changedShifts + draftLeaves;
+    const changedCount = draftShifts + draftLeaves;
     return res.status(200).json({
       publishedAt: publish.publishedAt.toISOString(),
       notifiedCount: publish.notifiedCount,

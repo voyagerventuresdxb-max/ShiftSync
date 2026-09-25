@@ -644,10 +644,9 @@ model RotaTemplate {
 }
 
 // One row per (location, week) once that week has been published at least
-// once. `publishedAt` is compared against each shift's own `updatedAt` to
-// tell RotaBuilder whether a published week has unpublished edits sitting
-// on top of it — a week can have shifts added/edited after publishing
-// without a second model per shift to track that.
+// once. Whether a published week has unpublished changes is the count of
+// DRAFT shifts/leave in it (routes/shifts.ts publish-status) — edits to an
+// already-PUBLISHED shift are live immediately and notify the staff member.
 model RotaPublish {
   id            String   @id @default(cuid())
   locationId    String   @map("location_id")
