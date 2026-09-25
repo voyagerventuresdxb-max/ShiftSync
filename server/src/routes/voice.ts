@@ -11,7 +11,7 @@ import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDe
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
-import { createShift, updateShift } from '../lib/actions/shiftActions.js';
+import { createShift, editShift } from '../lib/actions/shiftActions.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
 import { createAnnouncement, createShoutout } from '../lib/actions/communicationActions.js';
@@ -545,11 +545,8 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           }
         }
 
-        const updated = await withAuditedTransaction(
-          prisma,
-          (tx) => updateShift(intent.shiftId, data as Parameters<typeof updateShift>[1], tx),
-          () => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: intent.shiftId, note }),
-        );
+        // Same mutator as REST PATCH: audit row + write + staff notification when the shift was PUBLISHED.
+        const updated = await editShift({ id: intent.shiftId, data: data as Parameters<typeof editShift>[0]['data'], audit: { locationId, actorId, note } });
         return respond(200, { executed: true, result: updated }, 'EXECUTED');
       }
       case 'ASSIGN_SECTION': {

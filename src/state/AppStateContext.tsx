@@ -8,6 +8,7 @@ import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirec
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
 import { fetchWeekLeaves, setLeave, deleteLeave, type LeaveDto } from '../api/rotaLeaves';
+import { useRefetchOnReturn } from '../lib/scheduleRefresh';
 import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
@@ -581,6 +582,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     refreshPublishInfo();
   }, [refreshPublishInfo]);
+
+  // Staff (and managers on a second device) pick up changes made elsewhere
+  // when they come back to the app or open a notification — no websockets in v0.
+  useRefetchOnReturn(
+    useCallback(() => {
+      void refetchWeekShifts();
+      void refetchWeekLeaves();
+      refreshPublishInfo();
+    }, [refetchWeekShifts, refetchWeekLeaves, refreshPublishInfo]),
+  );
 
   const weekLocked = Boolean(publishInfo?.publishedAt) && !publishInfo?.hasUnpublishedChanges;
 
