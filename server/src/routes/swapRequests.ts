@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma.js';
 import { isRequestLocked } from '../lib/swapRequestPolicy.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
 import {
   SWAP_REQUEST_INCLUDE,
   createSwapRequest,
@@ -107,7 +108,7 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
     const [shift, target] = await Promise.all([
       prisma.shift.findUnique({
         where: { id: shiftId },
-        select: { id: true, userId: true, locationId: true },
+        select: { id: true, userId: true, locationId: true, status: true },
       }),
       // The proposed cover must be a real, active staff member at the SAME
       // location — mirrors voice.ts's REQUEST_SWAP validation exactly.
@@ -116,7 +117,10 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
         select: { id: true },
       }),
     ]);
-    if (!shift || shift.userId !== effectiveRequesterId || shift.locationId !== locationId) {
+    // A draft is invisible to staff (lib/shiftVisibility.ts), so it can't be
+    // swapped by them either — same 404 as "not yours", nothing leaked.
+    const hiddenDraft = shift?.status !== 'PUBLISHED' && !canSeeDraftShifts(req.user, locationId);
+    if (!shift || hiddenDraft || shift.userId !== effectiveRequesterId || shift.locationId !== locationId) {
       return res.status(404).json({ error: 'That shift could not be found among your own upcoming shifts.' });
     }
     if (!target) return res.status(404).json({ error: 'That staff member could not be found at your location.' });

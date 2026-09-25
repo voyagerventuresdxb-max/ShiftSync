@@ -96,9 +96,9 @@ interface AppStateValue {
   refetchWeekShifts: () => Promise<void>;
   createRotaShift: (input: Omit<Parameters<typeof createShift>[1], 'locationId'>) => Promise<void>;
   updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[2]) => Promise<void>;
-  deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
-  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => Promise<void>;
-  publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
+  deleteRotaShift: (id: string) => Promise<void>;
+  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts']) => Promise<void>;
+  publishCurrentWeek: () => Promise<{ publishedAt: string; notifiedCount: number }>;
   publishInfo: PublishInfo | null;
   /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
   weekLocked: boolean;
@@ -205,7 +205,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const seq = ++reqSeqRef.current;
     const targetWeek = weekStart;
     try {
-      const dtos = await fetchWeekShifts(locationId, weekStart);
+      const dtos = await fetchWeekShifts(locationId, weekStart, session?.token);
       if (seq !== reqSeqRef.current) return;
       setWeekShifts(
         dtos.map((s) => ({
@@ -246,7 +246,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // `setState(false)` when already `false` is a no-op re-render.
       if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
-  }, [weekStart, locationId]);
+  }, [weekStart, locationId, session?.token]);
 
   useEffect(() => {
     void refetchWeekShifts();
@@ -333,10 +333,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   useEffect(() => {
+    // Managers only: seeding a STAFF session with `employees[0]` counted as an
+    // explicit "Viewing" pick in `pickViewedEmployee`, so a staff member who
+    // wasn't first on the roster opened Scheduling on a colleague's rota.
+    if (session?.user.systemRole !== 'OWNER' && session?.user.systemRole !== 'MANAGER') return;
     if (currentEmployeeId === undefined && mergedRoster.employees.length > 0) {
       setCurrentEmployeeId(mergedRoster.employees[0]!.id);
     }
-  }, [currentEmployeeId, mergedRoster.employees]);
+  }, [currentEmployeeId, mergedRoster.employees, session?.user.systemRole]);
 
   useEffect(() => {
     // Swap requests are session-gated server-side now. Same shared-device
@@ -474,9 +478,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteRotaShift = useCallback(
-    async (id: string, actorId?: string) => {
+    async (id: string) => {
       if (!session) throw new Error('You must be signed in to do this.');
-      await deleteShift(session.token, id, actorId);
+      await deleteShift(session.token, id);
       // `buildCommitted` stamps the real persisted `Shift.id` onto a confirmed
       // upload row, so the row just deleted from the DB may also be sitting in
       // the never-refreshed `committed` snapshot. Refetching `weekShifts`
@@ -493,21 +497,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const bulkCreateRotaShifts = useCallback(
-    // `createdById` is threaded through so bulk-created shifts get a real
-    // actor in the AuditLog — the underlying client has always accepted it,
-    // this wrapper just never passed it on.
-    async (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => {
+    // The AuditLog actor is the session user, resolved server-side.
+    async (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts']) => {
       if (!session) throw new Error('You must be signed in to do this.');
-      await bulkCreateShifts(session.token, { locationId: session.user.locationId, createdById, shifts });
+      await bulkCreateShifts(session.token, { locationId: session.user.locationId, shifts });
       await refetchWeekShifts();
     },
     [refetchWeekShifts, session],
   );
 
   const publishCurrentWeek = useCallback(
-    async (publishedById?: string) => {
+    async () => {
       if (!session) throw new Error('You must be signed in to do this.');
-      const result = await publishWeek(session.token, session.user.locationId, weekStart, publishedById);
+      const result = await publishWeek(session.token, session.user.locationId, weekStart);
       await refetchWeekShifts();
       return result;
     },

@@ -72,10 +72,37 @@ export async function requireSession(req: Request, res: Response, next: NextFunc
  */
 export function requireManager(req: Request, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: 'Missing or malformed Authorization header.' });
-  if (req.user.systemRole === 'STAFF') {
+  // Positive allowlist, not `=== 'STAFF'`: any role this check doesn't know
+  // about (a future enum value, a malformed row) is refused, not waved through.
+  if (!isManagerRole(req.user.systemRole)) {
     return res.status(403).json({ error: 'This action requires a manager or owner account.' });
   }
   next();
+}
+
+/** True only for the manager tier (OWNER/MANAGER). Fail-closed: anything else — STAFF or an unknown value — is false. */
+export function isManagerRole(role: string | null | undefined): boolean {
+  return role === 'OWNER' || role === 'MANAGER';
+}
+
+/**
+ * Like `requireSession`, but never rejects: a valid bearer token sets
+ * `req.user`, a missing/invalid/expired one leaves it unset and the request
+ * proceeds as anonymous. For reads that serve both the anonymous kiosk and
+ * signed-in users with different visibility (e.g. drafts for managers only)
+ * — the handler MUST treat an unset `req.user` as the least-privileged case.
+ */
+export async function optionalSession(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const token = bearerToken(req);
+    if (token) {
+      const user = await resolveSession(token);
+      if (user) req.user = user;
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 /**

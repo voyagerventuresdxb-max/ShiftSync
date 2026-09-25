@@ -92,12 +92,16 @@ export default function SchedulingContent() {
   }, [weekStart, searchParams, setWeekStart, setSearchParams]);
 
   const [mode, setMode] = useState<Mode>('personal');
+  // Positive allowlist (fail-closed): builder/upload/"Viewing" controls render
+  // only for the manager tier. The server enforces the same rule on every
+  // write (requireManager); this just stops staff seeing controls that 403.
+  const isManager = session?.user.systemRole === 'OWNER' || session?.user.systemRole === 'MANAGER';
   // A STAFF member opening Scheduling must land on THEIR OWN rota — the
   // "Viewing" dropdown used to default to whoever happened to be first on the
   // week's roster, so they saw a colleague's shifts (and a Request-cover
   // button that could only 404 for them). Managers keep the first-entry
   // default: for them this view is a team review, not a personal one.
-  const activeEmployee = pickViewedEmployee(mergedRoster.employees, currentEmployeeId, session?.user ?? null);
+  const activeEmployee = pickViewedEmployee(mergedRoster.employees, isManager ? currentEmployeeId : undefined, session?.user ?? null);
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
 
@@ -309,7 +313,7 @@ export default function SchedulingContent() {
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
-          {mode === 'personal' && mergedRoster.employees.length > 0 && (
+          {isManager && mode === 'personal' && mergedRoster.employees.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="eyebrow">Viewing</span>
               <select
@@ -365,12 +369,14 @@ export default function SchedulingContent() {
         </aside>
       </div>
 
-      <div className="mt-5">
-        <RotaBuilder />
-      </div>
+      {isManager && (
+        <div className="mt-5">
+          <RotaBuilder />
+        </div>
+      )}
 
       <div className="mt-5">
-        <ShiftUpload onCommitted={handleCommitted} />
+        {isManager && <ShiftUpload onCommitted={handleCommitted} />}
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>

@@ -90,7 +90,6 @@ export function RotaBuilder() {
     weekLocked: locked,
     refreshPublishInfo,
     refetchWeekShifts,
-    currentEmployeeId,
   } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
@@ -150,7 +149,7 @@ export function RotaBuilder() {
     // page with no locationId has nothing else to render anyway.
     if (!locationId) return;
     let cancelled = false;
-    fetchWeekShifts(locationId, weekStart)
+    fetchWeekShifts(locationId, weekStart, session?.token)
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
@@ -169,7 +168,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, dataVersion, locationId]);
+  }, [weekStart, dataVersion, locationId, session?.token]);
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
@@ -334,7 +333,6 @@ export function RotaBuilder() {
           end: draft.end,
           briefingNote: draft.briefingNote || null,
           sidework: draft.sidework,
-          actorId: currentEmployeeId,
         });
       } else {
         await createRotaShift({
@@ -345,7 +343,6 @@ export function RotaBuilder() {
           end: draft.end,
           briefingNote: draft.briefingNote || undefined,
           sidework: draft.sidework,
-          createdById: currentEmployeeId,
         });
       }
       bump();
@@ -359,7 +356,7 @@ export function RotaBuilder() {
   const removeShift = async (id: string) => {
     if (!online) return;
     try {
-      await deleteRotaShift(id, currentEmployeeId);
+      await deleteRotaShift(id);
       bump();
       refreshPublishInfo();
       setSheet(null);
@@ -380,7 +377,7 @@ export function RotaBuilder() {
     // going offline still ends after.
     if (!online) return;
     try {
-      await updateRotaShift(id, { date, userId, actorId: currentEmployeeId });
+      await updateRotaShift(id, { date, userId });
       bump();
       refreshPublishInfo();
     } catch (err) {
@@ -398,7 +395,7 @@ export function RotaBuilder() {
       return;
     }
     try {
-      const result = await publishCurrentWeek(currentEmployeeId);
+      const result = await publishCurrentWeek();
       bump();
       refreshPublishInfo();
       say(`Rota published — ${result.notifiedCount} staff notified.`);
@@ -434,7 +431,7 @@ export function RotaBuilder() {
       return;
     }
     try {
-      const template = await saveRotaTemplate(session.token, name, entries, currentEmployeeId);
+      const template = await saveRotaTemplate(session.token, name, entries);
       setTemplates((prev) => [...prev, template]);
       say(`Saved "${template.name}" — ${entries.length} shifts captured.`);
       setSheet(null);
@@ -596,7 +593,7 @@ export function RotaBuilder() {
             // Apply/Delete buttons instead.
             if (!online) return;
             try {
-              const result = await applyRotaTemplate(session.token, t.id, weekStart, currentEmployeeId);
+              const result = await applyRotaTemplate(session.token, t.id, weekStart);
               await refetchWeekShifts();
               bump();
               refreshPublishInfo();
