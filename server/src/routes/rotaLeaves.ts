@@ -26,21 +26,38 @@ function leaveToDto(l: RotaLeave) {
   };
 }
 
+/** A real calendar date in YYYY-MM-DD (rejects 2026-02-31, 2026-13-01 — `new Date` would make those Invalid Date and 500). */
+function isIsoDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
 /**
  * GET /api/rota-leaves/:locationId?weekStart=YYYY-MM-DD — the 7 days from
- * weekStart. Same visibility as GET /api/shifts/:locationId: drafts only for
- * a manager of this venue; staff and the anonymous kiosk get PUBLISHED only.
+ * weekStart. Leave type can be health data (Sick Leave), so this is stricter
+ * than the shift read:
+ *  - a manager of this venue sees everyone's leave, drafts included;
+ *  - a staff member of this venue sees only their OWN leave, published only;
+ *  - anyone else (anonymous kiosk, another venue) gets an empty list.
  */
 rotaLeavesRouter.get('/:locationId', optionalSession, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
+    if (!isIsoDate(weekStart)) return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
+    const isVenueManager = canSeeDraftShifts(req.user, locationId);
+    const isVenueStaff = Boolean(req.user) && req.user!.locationId === locationId;
+    if (!isVenueManager && !isVenueStaff) return res.status(200).json({ leaves: [] });
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 7);
     const leaves = await prisma.rotaLeave.findMany({
-      where: { locationId, date: { gte: start, lt: end }, ...(canSeeDraftShifts(req.user, locationId) ? {} : { status: 'PUBLISHED' as const }) },
+      where: {
+        locationId,
+        date: { gte: start, lt: end },
+        ...(isVenueManager ? {} : { userId: req.user!.id, status: 'PUBLISHED' as const }),
+      },
       orderBy: [{ date: 'asc' }],
     });
     return res.status(200).json({ leaves: leaves.map(leaveToDto) });
@@ -62,7 +79,7 @@ rotaLeavesRouter.put('/', requireSession, requireManager, async (req, res) => {
     const date = String(req.body?.date ?? '').trim();
     const type = String(req.body?.type ?? '').trim() as LeaveType;
     if (!userId) return res.status(400).json({ error: 'userId is required.' });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date is required, as YYYY-MM-DD.' });
+    if (!isIsoDate(date)) return res.status(400).json({ error: 'date is required, as YYYY-MM-DD.' });
     if (!LEAVE_TYPES.includes(type)) return res.status(400).json({ error: `type must be one of ${LEAVE_TYPES.join(', ')}.` });
 
     const user = await prisma.user.findUnique({ where: { id: userId } });

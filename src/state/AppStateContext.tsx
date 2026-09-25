@@ -107,7 +107,7 @@ interface AppStateValue {
   setRotaLeave: (input: Parameters<typeof setLeave>[1]) => Promise<void>;
   removeRotaLeave: (id: string) => Promise<void>;
   publishInfo: PublishInfo | null;
-  /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
+  /** True when the viewed week is published and has no DRAFT shifts/leave left in it (edits to published shifts are live, so they don't unlock it). Editors hide add/drag affordances on this. */
   weekLocked: boolean;
   refreshPublishInfo: () => void;
 }

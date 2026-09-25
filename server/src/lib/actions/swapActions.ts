@@ -6,6 +6,7 @@ import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
+import { findBlockingLeave, blockedByLeaveMessage } from './leaveActions.js';
 
 dayjs.extend(utc);
 
@@ -93,6 +94,7 @@ export async function decideSwapRequest(input: {
   | { result: 'ok'; request: SwapRequestWithRelations }
   | { result: 'not_found' }
   | { result: 'conflict' }
+  | { result: 'target_on_leave'; message: string }
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
     where: { id: input.id },
@@ -109,10 +111,17 @@ export async function decideSwapRequest(input: {
     include: {
       requestedBy: SWAP_REQUEST_INCLUDE.requestedBy,
       targetUser: SWAP_REQUEST_INCLUDE.targetUser,
-      shift: { select: { userId: true, locationId: true } },
+      shift: { select: { userId: true, locationId: true, date: true } },
     },
   });
   if (!existing) return { result: 'not_found' };
+
+  // The cover can't be handed a shift on a day they're on blocking leave
+  // (RotaLeave) — same rule as every other shift write.
+  if (input.decision === 'approved' && existing.targetUserId) {
+    const leave = await findBlockingLeave(existing.targetUserId, existing.shift.date);
+    if (leave) return { result: 'target_on_leave', message: blockedByLeaveMessage(leave, existing.targetUser?.fullName) };
+  }
 
   if (isRequestLocked({ status: existing.status }, { userId: existing.shift.userId }, existing.requestedById)) {
     return { result: 'conflict' };

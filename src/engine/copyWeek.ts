@@ -13,6 +13,8 @@
  *  - the person is no longer an active staff member at the venue;
  *  - an identical shift (person, day, role, start, end) already exists in
  *    the target week — so pressing the button twice doesn't double the rota.
+ *    Matched by COUNT, not presence: two identical open Bartender slots last
+ *    week become two this week (minus any identical ones already there).
  */
 export interface CopySourceShift {
   employeeId: string | null;
@@ -56,7 +58,10 @@ export function planCopyWeek(input: {
   blockingLeaveKeys: Set<string>;
   activeUserIds: Set<string>;
 }): CopyPlan {
-  const existing = new Set(input.targetWeekShifts.map(keyOf));
+  // How many identical shifts the target week already has, per key; each one
+  // absorbs one matching source row.
+  const alreadyThere = new Map<string, number>();
+  for (const t of input.targetWeekShifts) alreadyThere.set(keyOf(t), (alreadyThere.get(keyOf(t)) ?? 0) + 1);
   const plan: CopyPlan = { rows: [], skippedLeave: 0, skippedInactive: 0, skippedDuplicate: 0 };
   for (const s of input.previousWeekShifts) {
     const row: CopyRow = {
@@ -76,11 +81,12 @@ export function planCopyWeek(input: {
       continue;
     }
     const key = keyOf(row);
-    if (existing.has(key)) {
+    const remaining = alreadyThere.get(key) ?? 0;
+    if (remaining > 0) {
+      alreadyThere.set(key, remaining - 1);
       plan.skippedDuplicate += 1;
       continue;
     }
-    existing.add(key);
     plan.rows.push(row);
   }
   return plan;

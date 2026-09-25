@@ -87,10 +87,14 @@ function schemaFor(intents: readonly string[]) {
 const STAFF_SCHEMA = schemaFor(STAFF_INTENTS);
 const MANAGER_SCHEMA = schemaFor(MANAGER_INTENTS);
 
+// Positive allowlist (fail-closed), same rule as requireManager: only
+// OWNER/MANAGER get manager intents; STAFF or any unknown role gets staff's.
+const isManagerTier = (systemRole: SystemRole) => systemRole === 'OWNER' || systemRole === 'MANAGER';
+
 export function intentSchemaFor(systemRole: SystemRole) {
-  return systemRole === 'STAFF' ? STAFF_SCHEMA : MANAGER_SCHEMA;
+  return isManagerTier(systemRole) ? MANAGER_SCHEMA : STAFF_SCHEMA;
 }
 
 export function allowedIntentsFor(systemRole: SystemRole): readonly string[] {
-  return systemRole === 'STAFF' ? STAFF_INTENTS : MANAGER_INTENTS;
+  return isManagerTier(systemRole) ? MANAGER_INTENTS : STAFF_INTENTS;
 }

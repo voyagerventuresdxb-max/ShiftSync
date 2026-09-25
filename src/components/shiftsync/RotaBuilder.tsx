@@ -386,7 +386,7 @@ export function RotaBuilder() {
 
   const moveShift = async (id: string, date: string, userId: string | null) => {
     if (locked) {
-      say('This week is published and locked — publish again after making changes to update it.');
+      say('This week is published — tap a shift to edit it instead; the staff member is notified of the change.');
       return;
     }
     // Belt-and-suspenders: dragging is already disabled offline via

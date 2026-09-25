@@ -13,9 +13,11 @@ function dayOf(date: string | Date): Date {
 
 /**
  * The blocking leave (any type but HALF_DAY) a staff member has on `date`,
- * or null. Every shift write that assigns a person to a day calls this —
- * REST create/edit/bulk and voice CREATE_SHIFT/EDIT_SHIFT — so the rule
- * can't be bypassed by picking a different entry point.
+ * or null. Every shift write that assigns a person to a day calls this:
+ * REST create/edit/bulk, voice CREATE_SHIFT/EDIT_SHIFT, rota template apply
+ * (REST + voice), roster upload confirm (skips the row) and swap approval.
+ * It is an application-level check, not a DB constraint — two concurrent
+ * writes (a shift and a leave for the same person/day) can both pass.
  */
 export async function findBlockingLeave(userId: string, date: string | Date, client: Client = prisma): Promise<RotaLeave | null> {
   const leave = await client.rotaLeave.findUnique({ where: { userId_date: { userId, date: dayOf(date) } } });
