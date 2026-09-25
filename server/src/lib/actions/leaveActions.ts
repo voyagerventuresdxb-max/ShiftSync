@@ -1,8 +1,13 @@
 import type { LeaveType, Prisma, RotaLeave } from '@prisma/client';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../prisma.js';
+import { notifyUser } from '../push.js';
 import { LEAVE_LABELS, LEAVE_TYPES, leaveBlocksShift } from '../../../../shared/leaveTypes.js';
 
 export { LEAVE_LABELS, LEAVE_TYPES, leaveBlocksShift };
+
+dayjs.extend(utc);
 
 type Client = Prisma.TransactionClient | typeof prisma;
 
@@ -31,7 +36,7 @@ export function blockedByLeaveMessage(leave: Pick<RotaLeave, 'type' | 'date'>, f
 }
 
 export type SetLeaveResult =
-  | { result: 'ok'; leave: RotaLeave; created: boolean }
+  | { result: 'ok'; leave: RotaLeave; created: boolean; previous: RotaLeave | null }
   | { result: 'conflict'; message: string };
 
 /**
@@ -62,9 +67,30 @@ export async function setLeave(
     : await client.rotaLeave.create({
         data: { locationId: input.locationId, userId: input.userId, date, type: input.type, createdById: input.createdById, status: 'DRAFT' },
       });
-  return { result: 'ok', leave, created: !existing };
+  return { result: 'ok', leave, created: !existing, previous: existing };
 }
 
 export async function deleteLeave(id: string, client: Client = prisma): Promise<void> {
   await client.rotaLeave.delete({ where: { id } });
+}
+
+/**
+ * Tells the staff member (only them — never managers or colleagues) that a
+ * PUBLISHED leave of theirs was changed or removed; a DRAFT leave notifies
+ * no one, same rule as shifts. The copy NEVER names the leave type: push
+ * notifications show on a lock screen, and a type like Sick Leave is health
+ * data — the type is visible in-app only, after sign-in. `after === null`
+ * means removed. Call after the write commits (a push failure must not roll
+ * it back).
+ */
+export async function notifyPublishedLeaveChange(before: RotaLeave, after: RotaLeave | null): Promise<void> {
+  if (before.status !== 'PUBLISHED') return;
+  if (after && after.type === before.type) return;
+  const day = dayjs.utc(before.date).format('ddd D MMM');
+  await notifyUser(
+    before.userId,
+    after
+      ? { title: 'Leave updated', body: `Your leave on ${day} was updated.`, url: '/scheduling' }
+      : { title: 'Leave removed', body: `Your leave on ${day} was removed.`, url: '/scheduling' },
+  );
 }
