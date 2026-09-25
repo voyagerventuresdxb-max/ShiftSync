@@ -86,15 +86,17 @@ test('GET /api/shifts/:locationId — drafts only for a manager of that venue; s
   }
 });
 
-test('GET /api/my-shifts never returns a draft', async () => {
+test('GET /api/my-shifts never returns a draft, and gives start/end in venue time', async () => {
   const f = await fixture();
   try {
     const token = await sessionFor(f.staff.id);
     await withServer(async (baseUrl) => {
       const res = await fetch(`${baseUrl}/api/my-shifts`, { headers: { Authorization: `Bearer ${token}` } });
       assert.equal(res.status, 200);
-      const body = (await res.json()) as { shifts: { id: string }[] };
+      const body = (await res.json()) as { shifts: { id: string; start: string; end: string }[] };
       assert.deepEqual(body.shifts.map((s) => s.id), [f.published.id]);
+      // 12:00Z–16:00Z is 16:00–20:00 in Dubai — wall-clock venue time, whatever the device timezone.
+      assert.deepEqual([body.shifts[0]!.start, body.shifts[0]!.end], ['16:00', '20:00']);
     });
   } finally {
     await teardown(f.org.id);

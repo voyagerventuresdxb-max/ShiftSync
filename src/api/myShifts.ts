@@ -12,6 +12,9 @@ export interface MyShiftEntry {
   date: string;
   startTime: string;
   endTime: string;
+  /** "17:00" — wall-clock start in the venue's timezone (render this, not startTime). */
+  start: string;
+  end: string;
   roleName: string;
   status: 'DRAFT' | 'PUBLISHED' | 'COMPLETED' | 'CANCELLED';
 }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession } from '../middleware/requireSession.js';
+import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
 
 export const myShiftsRouter = Router();
 
@@ -19,6 +20,7 @@ myShiftsRouter.get('/', requireSession, async (req, res) => {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
+    const timezone = await venueTimezoneFor(req.user!.locationId);
     const shifts = await prisma.shift.findMany({
       // PUBLISHED only — a staff member never sees a draft (golden-path v0).
       where: { userId, date: { gte: today }, status: 'PUBLISHED' },
@@ -45,6 +47,11 @@ myShiftsRouter.get('/', requireSession, async (req, res) => {
         date: s.date.toISOString().slice(0, 10),
         startTime: s.startTime.toISOString(),
         endTime: s.endTime.toISOString(),
+        // Wall-clock times in the VENUE's timezone — the client renders these,
+        // not the instants above, so a phone set to another timezone (or a
+        // test browser in UTC) still shows the shift as it's actually worked.
+        start: formatVenueTime(s.startTime, timezone),
+        end: formatVenueTime(s.endTime, timezone),
         roleName: s.role.name,
         status: s.status,
       })),

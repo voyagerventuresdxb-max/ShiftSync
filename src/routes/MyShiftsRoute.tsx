@@ -100,8 +100,7 @@ export default function MyShiftsContent() {
             {shifts.map((s) => (
               <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
                 <span className="font-medium">{s.date}</span> · {s.roleName} ·{' '}
-                {new Date(s.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–
-                {new Date(s.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {s.start}–{s.end}
               </li>
             ))}
           </ul>
