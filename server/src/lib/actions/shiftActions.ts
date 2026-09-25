@@ -75,6 +75,16 @@ export async function notifyPublishedShiftChange(before: ShiftSnapshot, after: S
     return;
   }
 
+  // Moved into a week that isn't published: it went back to DRAFT
+  // (editShift), so for the staff member it's gone — same "removed" message.
+  if (after.status !== 'PUBLISHED') {
+    if (before.userId) {
+      sends.push(notifyUser(before.userId, { title: 'Shift removed', body: `Your shift on ${was} was removed.`, url: '/my-shifts' }));
+    }
+    await Promise.all(sends);
+    return;
+  }
+
   const now = labelOf(after, timezone);
   if (before.userId !== after.userId) {
     if (before.userId) {
@@ -100,11 +110,24 @@ function notifyInBackground(before: ShiftSnapshot, after: ShiftSnapshot | null):
   void notifyPublishedShiftChange(before, after).catch((err) => console.error('[shiftActions] change notification failed', before.id, err));
 }
 
+/** Monday (UTC date) of the week containing a `@db.Date` value — the key RotaPublish rows use. */
+function weekStartOf(date: Date): Date {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d;
+}
+
 /**
  * The one way a shift is edited after creation — REST PATCH /api/shifts/:id
  * and voice EDIT_SHIFT both go through here, so both write the same
  * SHIFT_UPDATED audit row AND both notify staff when a PUBLISHED shift
  * changes. Validation stays with the caller (same split as createShift).
+ *
+ * A shift takes the publish state of the week it lives in (2026-09-25): a
+ * PUBLISHED shift moved into a week that has never been published goes back
+ * to DRAFT (its staff member is told it was removed); moved into a published
+ * week it stays live. A DRAFT shift stays DRAFT wherever it moves — nobody
+ * has reviewed it, so it is never auto-published.
  */
 export async function editShift(input: {
   id: string;
@@ -117,7 +140,16 @@ export async function editShift(input: {
     prisma,
     async (tx) => {
       const before = await tx.shift.findUniqueOrThrow({ where: { id: input.id } });
-      return { before, updated: await updateShift(input.id, input.data, tx) };
+      const data = { ...input.data };
+      const nextDate = data.date instanceof Date ? data.date : typeof data.date === 'string' ? new Date(data.date) : null;
+      if (before.status === 'PUBLISHED' && nextDate && weekStartOf(nextDate).getTime() !== weekStartOf(before.date).getTime()) {
+        const targetWeekPublished = await tx.rotaPublish.findUnique({
+          where: { locationId_weekStart: { locationId: before.locationId, weekStart: weekStartOf(nextDate) } },
+          select: { id: true },
+        });
+        if (!targetWeekPublished) data.status = 'DRAFT';
+      }
+      return { before, updated: await updateShift(input.id, data, tx) };
     },
     () => ({ ...input.audit, shiftId: input.id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: input.id }),
   );

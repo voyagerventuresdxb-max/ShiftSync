@@ -144,3 +144,61 @@ test('voice EDIT_SHIFT on a PUBLISHED shift notifies exactly like REST (shared m
     const audit = await prisma.auditLog.findFirst({ where: { entityId: id, action: 'SHIFT_UPDATED' } });
     assert.match(audit?.note ?? '', /^\[voice\]/);
   }));
+
+// A shift takes the publish state of the week it lives in (2026-09-25).
+const NEXT_WEEK = '2031-05-12';
+const NEXT_TUE = '2031-05-13';
+
+test('moving a PUBLISHED shift into an unpublished week makes it DRAFT, hides it from staff, and tells them it was removed', () =>
+  run(async (f, call) => {
+    const id = await createAndMaybePublish(f, call, true);
+    const moved = await call('PATCH', `/api/shifts/${id}`, { date: NEXT_TUE });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.shift.status, 'draft');
+    assert.equal((await prisma.shift.findUnique({ where: { id } }))!.status, 'DRAFT');
+    const [n] = await notificationsFor(f.sara.id, 1);
+    assert.equal(n?.title, 'Shift removed');
+    assert.equal(n?.body, 'Your shift on Tue 6 May · 17:00–23:00 was removed.');
+    // DRAFT = invisible to staff and the kiosk (lib/shiftVisibility.ts, covered in shiftVisibility.test.ts).
+    assert.equal(await prisma.shift.count({ where: { userId: f.sara.id, status: 'PUBLISHED' } }), 0);
+  }));
+
+test('moving a PUBLISHED shift into a published week keeps it live and sends the normal change notification', () =>
+  run(async (f, call) => {
+    // Publish next week first (it needs something in it).
+    await call('POST', '/api/shifts', { roleId: f.role.id, userId: f.omar.id, date: NEXT_TUE, start: '10:00', end: '14:00' });
+    assert.equal((await call('POST', `/api/shifts/${f.location.id}/publish`, { weekStart: NEXT_WEEK })).status, 200);
+    const id = await createAndMaybePublish(f, call, true);
+    await prisma.notification.deleteMany({ where: { userId: { in: [f.sara.id, f.omar.id] } } });
+
+    const moved = await call('PATCH', `/api/shifts/${id}`, { date: NEXT_TUE });
+    assert.equal(moved.status, 200);
+    assert.equal((await prisma.shift.findUnique({ where: { id } }))!.status, 'PUBLISHED');
+    const [n] = await notificationsFor(f.sara.id, 1);
+    assert.equal(n?.title, 'Shift changed');
+    assert.equal(n?.body, 'Your shift on Tue 6 May · 17:00–23:00 is now Tue 13 May · 17:00–23:00.');
+  }));
+
+test('voice EDIT_SHIFT follows the same week-state rule (shared mutator)', () =>
+  run(async (f, call) => {
+    const id = await createAndMaybePublish(f, call, true);
+    const res = await call('POST', '/api/voice/execute', {
+      transcript: 'move it to next tuesday',
+      intent: { intent: 'EDIT_SHIFT', shiftId: id, date: NEXT_TUE, confidence: 0.9, summary: 'x' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await prisma.shift.findUnique({ where: { id } }))!.status, 'DRAFT');
+    assert.equal((await notificationsFor(f.sara.id, 1))[0]?.title, 'Shift removed');
+  }));
+
+test('a DRAFT shift moved into a published week stays DRAFT (never auto-published) and notifies no one', () =>
+  run(async (f, call) => {
+    await call('POST', '/api/shifts', { roleId: f.role.id, userId: f.omar.id, date: NEXT_TUE, start: '10:00', end: '14:00' });
+    assert.equal((await call('POST', `/api/shifts/${f.location.id}/publish`, { weekStart: NEXT_WEEK })).status, 200);
+    const id = await createAndMaybePublish(f, call, false);
+    await prisma.notification.deleteMany({ where: { userId: { in: [f.sara.id, f.omar.id] } } });
+    assert.equal((await call('PATCH', `/api/shifts/${id}`, { date: NEXT_TUE })).status, 200);
+    assert.equal((await prisma.shift.findUnique({ where: { id } }))!.status, 'DRAFT');
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal((await notificationsFor(f.sara.id, 0)).length, 0);
+  }));
