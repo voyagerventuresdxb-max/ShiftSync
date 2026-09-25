@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, pickViewedEmployee, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
+import { reconcileWeekParam } from '../engine/weekStart';
 import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
 import { TeamMatrix, type MatrixCell, type MatrixMember } from '../components/shiftsync/TeamMatrix';
@@ -32,7 +33,6 @@ function formatDayMonth(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
   const { session } = useIdentity();
@@ -62,33 +62,20 @@ export default function SchedulingContent() {
 
   // `weekStart` lives in AppStateContext, which sits ABOVE the router
   // (mounted in App.tsx wrapping <RouterProvider>), so it can't read the URL
-  // itself — this component, which IS inside the router, is what reconciles
-  // the two, in both directions, in one effect:
-  //  - an incoming `?week=` differing from the current state (a hard
-  //    refresh, a shared/bookmarked link, OR — the case a two-effect
-  //    version of this got wrong — remounting via in-app client-side
-  //    navigation away from and back to /scheduling with no `?week=` in the
-  //    URL) adopts INTO state, and returns without also writing the URL in
-  //    this same pass;
-  //  - otherwise, whatever `weekStart` actually is gets written back to the
-  //    URL if it doesn't already match (Prev/Next-week clicks, template
-  //    application, or simply the URL having gone stale/bare on remount).
-  // The `return` after `setWeekStart` is what avoids the race a two-effect
-  // version of this had: `setWeekStart` doesn't land in this closure until a
-  // later render, so writing the URL in the SAME pass would write the STALE
-  // pre-adopt week; returning defers that write to the next run, by which
-  // point `weekStart` and the URL already agree (a no-op) or the effect
-  // naturally re-syncs. `replace` so paging through weeks doesn't spam
-  // browser history with a back-button entry per week.
+  // itself — this component, which IS inside the router, reconciles the two.
+  // The decision lives in engine/weekStart.ts's `reconcileWeekParam`
+  // (unit-tested); `lastSyncedWeek` is the week both sides last agreed on,
+  // which is how a Prev/Next click (state moved) is told apart from a
+  // bookmark or back/forward (URL moved). `replace` so paging through weeks
+  // doesn't add a history entry per week.
+  const lastSyncedWeek = useRef<string | null>(null);
   useEffect(() => {
-    const param = searchParams.get('week');
-    if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
-      setWeekStart(param);
-      return;
-    }
-    if (param !== weekStart) {
+    const { adopt, write, lastSynced } = reconcileWeekParam(searchParams.get('week'), weekStart, lastSyncedWeek.current);
+    lastSyncedWeek.current = lastSynced;
+    if (adopt) setWeekStart(adopt);
+    if (write) {
       const next = new URLSearchParams(searchParams);
-      next.set('week', weekStart);
+      next.set('week', write);
       setSearchParams(next, { replace: true });
     }
   }, [weekStart, searchParams, setWeekStart, setSearchParams]);
