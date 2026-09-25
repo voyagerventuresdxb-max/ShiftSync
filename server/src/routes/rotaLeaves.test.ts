@@ -89,6 +89,7 @@ test('PUT /api/rota-leaves marks a DRAFT leave; staff/anonymous cannot see it un
 
     const audit = await prisma.auditLog.findFirst({ where: { entityType: 'RotaLeave', entityId: put.body.leave.id } });
     assert.equal(audit?.actorId, f.manager.id);
+    assert.equal(audit?.action, 'LEAVE_MARKED');
   }));
 
 test('a blocking leave refuses a shift that day (REST create, bulk, and edit onto the day); HALF_DAY allows one', () =>
@@ -142,6 +143,7 @@ test('rota-leaves writes are manager-only, own venue only, and validate their in
     const put = await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'DAY_OFF' });
     assert.equal((await staff('DELETE', `/api/rota-leaves/${put.body.leave.id}`)).status, 403);
     assert.equal((await mgr('DELETE', `/api/rota-leaves/${put.body.leave.id}`)).status, 204);
+    assert.equal((await prisma.auditLog.findFirst({ where: { entityType: 'RotaLeave', entityId: put.body.leave.id, action: 'LEAVE_REMOVED' } }))?.actorId, f.manager.id);
     assert.equal(await prisma.rotaLeave.count({ where: { userId: f.staff.id } }), 0);
   }));
 
