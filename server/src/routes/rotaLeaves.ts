@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, optionalSession, ownedOrNotFound } from '../middleware/requireSession.js';
 import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
-import { LEAVE_LABELS, LEAVE_TYPES, deleteLeave, setLeave } from '../lib/actions/leaveActions.js';
+import { LEAVE_LABELS, LEAVE_TYPES, deleteLeave, notifyPublishedLeaveChange, setLeave } from '../lib/actions/leaveActions.js';
 
 /**
  * Leave chips on the rota builder grid (golden-path v0, 2026-09-25) — see
@@ -94,6 +94,10 @@ rotaLeavesRouter.put('/', requireSession, requireManager, async (req, res) => {
           : null,
     );
     if (outcome.result === 'conflict') return res.status(409).json({ error: outcome.message });
+    if (outcome.previous) {
+      const { previous, leave } = outcome;
+      void notifyPublishedLeaveChange(previous, leave).catch((err) => console.error('[rotaLeaves.set] notification failed', err));
+    }
     return res.status(outcome.created ? 201 : 200).json({ leave: leaveToDto(outcome.leave) });
   } catch (err) {
     console.error('[rotaLeaves.set] failed', err);
@@ -119,6 +123,7 @@ rotaLeavesRouter.delete('/:id', requireSession, requireManager, async (req, res)
         note: `leave removed: ${LEAVE_LABELS[existing.type]} on ${existing.date.toISOString().slice(0, 10)}`,
       }),
     );
+    void notifyPublishedLeaveChange(existing, null).catch((err) => console.error('[rotaLeaves.delete] notification failed', err));
     return res.status(204).send();
   } catch (err) {
     console.error('[rotaLeaves.delete] failed', err);

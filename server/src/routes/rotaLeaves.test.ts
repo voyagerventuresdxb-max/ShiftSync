@@ -236,3 +236,56 @@ test('voice publish preview counts leave: a leave-only week is publishable and i
     const { getRotaPublishPreview } = await import('../lib/actions/rotaActions.js');
     assert.deepEqual(await getRotaPublishPreview(f.location.id, new Date(`${WEEK}T00:00:00.000Z`)), { shiftCount: 0, leaveCount: 1, staffCount: 1 });
   }));
+
+async function notificationsFor(userId: string, expected: number) {
+  const deadline = Date.now() + 3000;
+  let rows = await prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
+  while (rows.length < expected && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    rows = await prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
+  }
+  return rows;
+}
+
+const LEAVE_WORDS = /day off|annual|sick|unpaid|half day/i;
+
+test('changing or removing a PUBLISHED leave notifies only that staff member, and the copy never names the leave type', () =>
+  run(async (f, baseUrl) => {
+    const mgr = api(baseUrl, f.mgrToken);
+    const colleague = await prisma.user.create({ data: { locationId: f.location.id, fullName: `${TAG} colleague`, systemRole: 'STAFF' } });
+    const put = await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'SICK_LEAVE' });
+    assert.equal((await mgr('POST', `/api/shifts/${f.location.id}/publish`, { weekStart: WEEK })).status, 200);
+    assert.equal((await notificationsFor(f.staff.id, 1))[0]?.title, 'Schedule updated'); // publish digest landed
+    await prisma.notification.deleteMany({ where: { userId: { in: [f.staff.id, f.manager.id, colleague.id] } } });
+
+    assert.equal((await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'UNPAID_LEAVE' })).status, 200);
+    const [updated] = await notificationsFor(f.staff.id, 1);
+    assert.equal(updated?.title, 'Leave updated');
+    assert.match(updated!.body, /^Your leave on \w{3} 7 Apr was updated\.$/);
+    assert.doesNotMatch(`${updated!.title} ${updated!.body}`, LEAVE_WORDS);
+
+    assert.equal((await mgr('DELETE', `/api/rota-leaves/${put.body.leave.id}`)).status, 204);
+    const all = await notificationsFor(f.staff.id, 2);
+    assert.equal(all[1]?.title, 'Leave removed');
+    assert.match(all[1]!.body, /^Your leave on \w{3} 7 Apr was removed\.$/);
+    assert.doesNotMatch(`${all[1]!.title} ${all[1]!.body}`, LEAVE_WORDS);
+
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(await prisma.notification.count({ where: { userId: { in: [f.manager.id, colleague.id] } } }), 0, 'managers and colleagues are not notified');
+  }));
+
+test('changing or removing a DRAFT leave, or re-saving the same type, notifies no one', () =>
+  run(async (f, baseUrl) => {
+    const mgr = api(baseUrl, f.mgrToken);
+    const put = await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'DAY_OFF' });
+    await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'ANNUAL_LEAVE' });
+    await mgr('DELETE', `/api/rota-leaves/${put.body.leave.id}`);
+
+    await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: TUE, type: 'DAY_OFF' });
+    await mgr('POST', `/api/shifts/${f.location.id}/publish`, { weekStart: WEEK });
+    await notificationsFor(f.staff.id, 1);
+    await prisma.notification.deleteMany({ where: { userId: f.staff.id } });
+    await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: TUE, type: 'DAY_OFF' }); // same type: no change
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(await prisma.notification.count({ where: { userId: f.staff.id } }), 0);
+  }));
