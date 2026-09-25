@@ -19,6 +19,7 @@ import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
+import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
 
 export const voiceRouter = Router();
 
@@ -328,8 +329,10 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         return respond(200, { executed: true, result: result.mark }, 'EXECUTED');
       }
       case 'REQUEST_SWAP': {
-        const shift = await prisma.shift.findUnique({ where: { id: intent.shiftId }, select: { userId: true, locationId: true } });
-        if (!shift || shift.userId !== actorId || shift.locationId !== locationId) {
+        const shift = await prisma.shift.findUnique({ where: { id: intent.shiftId }, select: { userId: true, locationId: true, status: true } });
+        // Drafts are invisible to staff (lib/shiftVisibility.ts) — same 404 as the REST route.
+        const hiddenDraft = shift?.status !== 'PUBLISHED' && !canSeeDraftShifts(req.user, locationId);
+        if (!shift || hiddenDraft || shift.userId !== actorId || shift.locationId !== locationId) {
           const msg = 'That shift could not be found among your own upcoming shifts.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }

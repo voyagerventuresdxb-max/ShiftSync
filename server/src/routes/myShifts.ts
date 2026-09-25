@@ -20,7 +20,8 @@ myShiftsRouter.get('/', requireSession, async (req, res) => {
     today.setUTCHours(0, 0, 0, 0);
 
     const shifts = await prisma.shift.findMany({
-      where: { userId, date: { gte: today } },
+      // PUBLISHED only — a staff member never sees a draft (golden-path v0).
+      where: { userId, date: { gte: today }, status: 'PUBLISHED' },
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
       take: 5,
       include: { role: { select: { name: true } } },

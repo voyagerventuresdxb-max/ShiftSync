@@ -7,6 +7,7 @@ import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.
 import { voiceModel } from './model.js';
 import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
 import { bestMatch } from '../lib/textSimilarity.js';
+import { visibleShiftFilter } from '../lib/shiftVisibility.js';
 
 export class VoiceIntentError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -59,7 +60,9 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
 
   const startOfToday = new Date(`${today}T00:00:00.000Z`);
   const shifts = await prisma.shift.findMany({
-    where: { userId: user.id, date: { gte: startOfToday } },
+    // Same draft rule as every other shift read (lib/shiftVisibility.ts): a
+    // STAFF caller's own schedule is PUBLISHED shifts only.
+    where: { userId: user.id, date: { gte: startOfToday }, ...visibleShiftFilter(user, user.locationId) },
     orderBy: { date: 'asc' },
     take: 10,
   });
