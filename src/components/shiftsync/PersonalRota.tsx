@@ -20,6 +20,8 @@ export interface RotaCard {
   sidework?: string[];
   /** "Terrace (AM)"-style labels for this day's PUBLISHED Floor Plan section assignments, if any — DRAFT assignments never appear here. Empty/omitted means no assignment yet, not "loading". */
   sectionAssignments?: string[];
+  /** Leave marked for this day on the rota builder ("Annual Leave", "Half Day"…). PUBLISHED only for staff — the server never returns their drafts. */
+  leaveLabel?: string;
 }
 
 export interface CoverCandidate {
@@ -112,11 +114,14 @@ function ShiftCard({
                 {meta.label}
               </span>
             )}
+            {shift.leaveLabel && !isOff && (
+              <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent">{shift.leaveLabel}</span>
+            )}
           </div>
 
           {isOff ? (
             <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-              <Moon className="h-3.5 w-3.5 shrink-0" /> No shift scheduled.
+              <Moon className="h-3.5 w-3.5 shrink-0" /> {shift.leaveLabel ? 'On leave — no shift scheduled.' : 'No shift scheduled.'}
             </p>
           ) : (
             <>

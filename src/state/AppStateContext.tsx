@@ -7,6 +7,7 @@ import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
+import { fetchWeekLeaves, setLeave, deleteLeave, type LeaveDto } from '../api/rotaLeaves';
 import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
@@ -99,6 +100,11 @@ interface AppStateValue {
   deleteRotaShift: (id: string) => Promise<void>;
   bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts']) => Promise<void>;
   publishCurrentWeek: () => Promise<{ publishedAt: string; notifiedCount: number }>;
+  /** Leave marked on the grid for the viewed week (drafts only for a venue manager — server decides). */
+  weekLeaves: LeaveDto[];
+  refetchWeekLeaves: () => Promise<void>;
+  setRotaLeave: (input: Parameters<typeof setLeave>[1]) => Promise<void>;
+  removeRotaLeave: (id: string) => Promise<void>;
   publishInfo: PublishInfo | null;
   /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
   weekLocked: boolean;
@@ -251,6 +257,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refetchWeekShifts();
   }, [refetchWeekShifts]);
+
+  // Leave for the viewed week — same week/venue/token keying and the same
+  // stale-response guard as `refetchWeekShifts`, above.
+  const [weekLeaves, setWeekLeaves] = useState<LeaveDto[]>([]);
+  const leaveSeqRef = useRef(0);
+  const refetchWeekLeaves = useCallback(async () => {
+    if (!locationId) {
+      setWeekLeaves([]);
+      return;
+    }
+    const seq = ++leaveSeqRef.current;
+    try {
+      const leaves = await fetchWeekLeaves(locationId, weekStart, session?.token);
+      if (seq === leaveSeqRef.current) setWeekLeaves(leaves);
+    } catch {
+      // Keep what's on screen on a connectivity blip (same rule as shifts);
+      // the next refetch replaces it.
+    }
+  }, [weekStart, locationId, session?.token]);
+
+  useEffect(() => {
+    void refetchWeekLeaves();
+  }, [refetchWeekLeaves]);
 
   const mergedRoster: Roster = useMemo(() => {
     const withCommitted = mergeCommitted(roster, committed);
@@ -510,10 +539,28 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     async () => {
       if (!session) throw new Error('You must be signed in to do this.');
       const result = await publishWeek(session.token, session.user.locationId, weekStart);
-      await refetchWeekShifts();
+      await Promise.all([refetchWeekShifts(), refetchWeekLeaves()]);
       return result;
     },
-    [weekStart, refetchWeekShifts, session],
+    [weekStart, refetchWeekShifts, refetchWeekLeaves, session],
+  );
+
+  const setRotaLeave = useCallback(
+    async (input: Parameters<typeof setLeave>[1]) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await setLeave(session.token, input);
+      await refetchWeekLeaves();
+    },
+    [refetchWeekLeaves, session],
+  );
+
+  const removeRotaLeave = useCallback(
+    async (id: string) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await deleteLeave(session.token, id);
+      await refetchWeekLeaves();
+    },
+    [refetchWeekLeaves, session],
   );
 
   // Publish/lock state is shared, not RotaBuilder-local: the Shift Editor
@@ -570,6 +617,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       deleteRotaShift,
       bulkCreateRotaShifts,
       publishCurrentWeek,
+      weekLeaves,
+      refetchWeekLeaves,
+      setRotaLeave,
+      removeRotaLeave,
       publishInfo,
       weekLocked,
       refreshPublishInfo,
@@ -599,6 +650,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       deleteRotaShift,
       bulkCreateRotaShifts,
       publishCurrentWeek,
+      weekLeaves,
+      refetchWeekLeaves,
+      setRotaLeave,
+      removeRotaLeave,
       publishInfo,
       weekLocked,
       refreshPublishInfo,

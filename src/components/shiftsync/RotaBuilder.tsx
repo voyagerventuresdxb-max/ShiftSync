@@ -39,6 +39,8 @@ import {
 } from '@/api/rotaTemplates';
 import { fetchWeekShifts } from '@/api/shifts';
 import { fetchAvailability, type AvailabilityMarkDto } from '@/api/availability';
+import type { LeaveDto } from '@/api/rotaLeaves';
+import { LEAVE_LABELS, LEAVE_TYPES, leaveBlocksShift, type LeaveTypeKey } from '../../../shared/leaveTypes';
 
 /** dnd-kit sensor config, matching FloorPlan/AssignmentBoard.tsx exactly: touch gets a delay so scrolling doesn't start a drag, mouse gets a distance threshold. */
 const sensors = [
@@ -69,7 +71,12 @@ interface RoleOption {
   name: string;
 }
 
-type Sheet = { kind: 'shift'; draft: DraftShift } | { kind: 'templates' } | { kind: 'saveTemplate' } | null;
+type Sheet =
+  | { kind: 'shift'; draft: DraftShift }
+  | { kind: 'leave'; leave: LeaveDto; personName: string }
+  | { kind: 'templates' }
+  | { kind: 'saveTemplate' }
+  | null;
 
 /** The grid's synthetic "unassigned" row — a real drop target so a shift can be pulled off a person without being deleted. */
 const OPEN_ROW = 'open';
@@ -90,6 +97,9 @@ export function RotaBuilder() {
     weekLocked: locked,
     refreshPublishInfo,
     refetchWeekShifts,
+    weekLeaves,
+    setRotaLeave,
+    removeRotaLeave,
   } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
@@ -269,6 +279,10 @@ export function RotaBuilder() {
 
   const fail = (err: unknown, fallback: string) => say(err instanceof ApiError ? err.message : fallback);
 
+  const leaveByKey = useMemo(() => new Map(weekLeaves.map((l) => [`${l.userId}|${l.date}`, l])), [weekLeaves]);
+  const leaveFor = (date: string, userId: string | null) => (userId ? leaveByKey.get(`${userId}|${date}`) : undefined);
+  const personName = (userId: string) => staffDirectory.find((s) => s.id === userId)?.fullName ?? mergedRoster.employees.find((e) => e.id === userId)?.name ?? 'This staff member';
+
   const cellShifts = (date: string, userId: string | null) =>
     weekShifts.filter((s) => s.date === date && (userId === null ? s.employeeId.startsWith('open-') : s.employeeId === userId));
 
@@ -376,6 +390,11 @@ export function RotaBuilder() {
     // every other write path here, in case a drag that started just before
     // going offline still ends after.
     if (!online) return;
+    const leave = leaveFor(date, userId);
+    if (leave && leaveBlocksShift(leave.type)) {
+      say(`${personName(leave.userId)} is on ${LEAVE_LABELS[leave.type]} that day — remove the leave before adding a shift.`);
+      return;
+    }
     try {
       await updateRotaShift(id, { date, userId });
       bump();
@@ -385,8 +404,33 @@ export function RotaBuilder() {
     }
   };
 
+  // Leave writes follow the same offline block as shifts: no queue, the
+  // button is disabled and the handler refuses outright while offline.
+  const saveLeave = async (userId: string, date: string, type: LeaveTypeKey) => {
+    if (!online) return;
+    try {
+      await setRotaLeave({ userId, date, type });
+      refreshPublishInfo();
+      setSheet(null);
+    } catch (err) {
+      fail(err, 'Could not save that leave.');
+      setSheet(null);
+    }
+  };
+
+  const removeLeave = async (id: string) => {
+    if (!online) return;
+    try {
+      await removeRotaLeave(id);
+      refreshPublishInfo();
+      setSheet(null);
+    } catch (err) {
+      fail(err, 'Could not remove that leave.');
+    }
+  };
+
   const publish = async () => {
-    if (weekShifts.length === 0) {
+    if (weekShifts.length === 0 && weekLeaves.length === 0) {
       say('Add some shifts before publishing this week.');
       return;
     }
@@ -534,8 +578,10 @@ export function RotaBuilder() {
                             date={d}
                             userId={person.userId}
                             shifts={cellShifts(d, person.userId)}
+                            leave={leaveFor(d, person.userId)}
                             onAdd={() => openNew(d, person.userId)}
                             onEdit={openEdit}
+                            onEditLeave={(l) => setSheet({ kind: 'leave', leave: l, personName: person.name })}
                             // Offline gets the same treatment as a published/
                             // locked week: no drag, no "add shift" affordance —
                             // this is separate from the "Published · locked"
@@ -555,7 +601,9 @@ export function RotaBuilder() {
           </DragDropProvider>
 
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-4">
-            <p className="text-[11px] text-muted-foreground">{weekShifts.length} shifts this week</p>
+            <p className="text-[11px] text-muted-foreground">
+              {weekShifts.length} shifts{weekLeaves.length > 0 ? ` · ${weekLeaves.length} leave` : ''} this week
+            </p>
           </footer>
         </>
       )}
@@ -574,7 +622,18 @@ export function RotaBuilder() {
           online={online}
           onClose={() => setSheet(null)}
           onSave={(d) => void saveDraft(d)}
+          onSaveLeave={(type) => sheet.draft.userId && void saveLeave(sheet.draft.userId, sheet.draft.date, type)}
           onDelete={(id) => void removeShift(id)}
+        />
+      )}
+      {sheet?.kind === 'leave' && (
+        <LeaveSheet
+          leave={sheet.leave}
+          personName={sheet.personName}
+          online={online}
+          onClose={() => setSheet(null)}
+          onChange={(type) => void saveLeave(sheet.leave.userId, sheet.leave.date, type)}
+          onRemove={() => void removeLeave(sheet.leave.id)}
         />
       )}
       {sheet?.kind === 'templates' && (
@@ -689,8 +748,10 @@ function Cell({
   date,
   userId,
   shifts,
+  leave,
   onAdd,
   onEdit,
+  onEditLeave,
   locked,
   suppressClick,
   availabilityMark,
@@ -698,8 +759,10 @@ function Cell({
   date: string;
   userId: string | null;
   shifts: Shift[];
+  leave?: LeaveDto;
   onAdd: () => void;
   onEdit: (s: Shift) => void;
+  onEditLeave: (l: LeaveDto) => void;
   locked: boolean;
   suppressClick: boolean;
   availabilityMark?: AvailabilityMarkDto;
@@ -714,15 +777,105 @@ function Cell({
       )}
     >
       {availabilityMark && <AvailabilityBadge mark={availabilityMark} />}
+      {leave && <LeaveChip leave={leave} onEdit={onEditLeave} />}
       {shifts.map((s) => (
         <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
       ))}
-      {!locked && (
+      {/* A blocking leave replaces the "+": the chip itself explains why (tap it). */}
+      {!locked && !(leave && leaveBlocksShift(leave.type)) && (
         <button onClick={onAdd} aria-label={`Add shift on ${date}`} className="grid h-6 w-full place-items-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:border-accent hover:text-accent">
           <Plus className="h-3 w-3" />
         </button>
       )}
     </div>
+  );
+}
+
+const LEAVE_TONE: Record<LeaveTypeKey, string> = {
+  DAY_OFF: 'border-border-strong bg-surface-raised text-muted-foreground',
+  ANNUAL_LEAVE: 'border-success/30 bg-success/12 text-success',
+  SICK_LEAVE: 'border-destructive/30 bg-destructive/12 text-destructive',
+  UNPAID_LEAVE: 'border-warning/30 bg-warning/12 text-warning',
+  HALF_DAY: 'border-dashed border-accent/40 bg-accent/8 text-accent',
+};
+
+/** A leave chip in a grid cell. Not draggable — leave is changed or removed through its own sheet. */
+function LeaveChip({ leave, onEdit }: { leave: LeaveDto; onEdit: (l: LeaveDto) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onEdit(leave)}
+      aria-label={`${LEAVE_LABELS[leave.type]} on ${leave.date}`}
+      className={cn('block w-full rounded-md border px-1.5 py-1 text-left text-[10px] font-semibold leading-tight', LEAVE_TONE[leave.type])}
+    >
+      {LEAVE_LABELS[leave.type]}
+    </button>
+  );
+}
+
+/** Every leave type (plus "Shift" unless `leaveOnly`), as one single-choice chip row. */
+function EntryTypeChips({ value, onChange, leaveOnly = false }: { value: 'SHIFT' | LeaveTypeKey; onChange: (v: 'SHIFT' | LeaveTypeKey) => void; leaveOnly?: boolean }) {
+  const options: { id: 'SHIFT' | LeaveTypeKey; label: string }[] = [
+    ...(leaveOnly ? [] : [{ id: 'SHIFT' as const, label: 'Shift' }]),
+    ...LEAVE_TYPES.map((t) => ({ id: t, label: LEAVE_LABELS[t] })),
+  ];
+  return (
+    <div role="radiogroup" aria-label="Entry type" className="flex flex-wrap gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          onClick={() => onChange(o.id)}
+          className={cn(
+            'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors duration-200',
+            value === o.id ? 'border-accent bg-accent text-accent-foreground' : 'border-border text-muted-foreground hover:border-accent/40 hover:text-foreground',
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LeaveSheet({
+  leave,
+  personName,
+  online,
+  onClose,
+  onChange,
+  onRemove,
+}: {
+  leave: LeaveDto;
+  personName: string;
+  online: boolean;
+  onClose: () => void;
+  onChange: (type: LeaveTypeKey) => void;
+  onRemove: () => void;
+}) {
+  const [type, setType] = useState<LeaveTypeKey>(leave.type);
+  return (
+    <SheetShell title={`${personName} · ${leave.date}`} onClose={onClose}>
+      <div className="space-y-3">
+        <EntryTypeChips leaveOnly value={type} onChange={(v) => v !== 'SHIFT' && setType(v)} />
+        <p className="text-xs text-muted-foreground">
+          {leaveBlocksShift(type)
+            ? `No shift can be added on this day while ${personName} is on ${LEAVE_LABELS[type]} — remove the leave first.`
+            : 'A shift can still be added on a half day.'}
+        </p>
+        <div className="flex gap-2 pt-1">
+          <button onClick={() => onChange(type)} disabled={!online || type === leave.type} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
+            <Check className="mr-1.5 inline h-4 w-4" /> Save leave
+          </button>
+          <button onClick={onRemove} disabled={!online} aria-label="Remove leave" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+        {!online && <OfflineActionNotice />}
+      </div>
+    </SheetShell>
   );
 }
 
@@ -776,6 +929,7 @@ function ShiftSheet({
   online,
   onClose,
   onSave,
+  onSaveLeave,
   onDelete,
 }: {
   draft: DraftShift;
@@ -783,14 +937,37 @@ function ShiftSheet({
   online: boolean;
   onClose: () => void;
   onSave: (d: DraftShift) => void;
+  onSaveLeave: (type: LeaveTypeKey) => void;
   onDelete: (id: string) => void;
 }) {
   const [local, setLocal] = useState(draft);
   const [sideworkText, setSideworkText] = useState(draft.sidework.join(', '));
+  // Leave can only be marked on a person's row, and only as a NEW entry —
+  // an existing shift is edited or deleted, never converted in place.
+  const canMarkLeave = !draft.id && draft.userId !== null;
+  const [entry, setEntry] = useState<'SHIFT' | LeaveTypeKey>('SHIFT');
+
+  if (entry !== 'SHIFT') {
+    return (
+      <SheetShell title="New entry" onClose={onClose}>
+        <div className="space-y-3">
+          <EntryTypeChips value={entry} onChange={setEntry} />
+          <p className="text-xs text-muted-foreground">
+            {leaveBlocksShift(entry) ? `${LEAVE_LABELS[entry]} replaces any shift on ${draft.date}.` : `A shift can still be added on a half day.`}
+          </p>
+          <button onClick={() => onSaveLeave(entry)} disabled={!online} className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
+            <Check className="mr-1.5 inline h-4 w-4" /> Mark {LEAVE_LABELS[entry]}
+          </button>
+          {!online && <OfflineActionNotice />}
+        </div>
+      </SheetShell>
+    );
+  }
 
   return (
     <SheetShell title={draft.id ? 'Edit shift' : 'New shift'} onClose={onClose}>
       <div className="space-y-3">
+        {canMarkLeave && <EntryTypeChips value={entry} onChange={setEntry} />}
         <div>
           <span className={label}>Role</span>
           {roleOptions.length === 0 ? (

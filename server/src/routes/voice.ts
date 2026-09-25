@@ -20,6 +20,7 @@ import { updateInteractionOutcome } from '../voice/interactionLog.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
 import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
+import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
 
 export const voiceRouter = Router();
 
@@ -465,6 +466,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
             const msg = `Staff member "${intent.userId}" not found.`;
             return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
           }
+          const leave = await findBlockingLeave(intent.userId, intent.date);
+          if (leave) {
+            const msg = blockedByLeaveMessage(leave, staff.fullName);
+            return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+          }
         }
         const timezone = await venueTimezoneFor(locationId);
         const overnight = intent.end <= intent.start;
@@ -529,6 +535,14 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           data.date = new Date(`${nextDate}T00:00:00.000Z`);
           data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
           data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
+        }
+        const nextUserId = intent.userId !== undefined ? intent.userId : existing.userId;
+        if (nextUserId && (intent.userId !== undefined || intent.date !== undefined)) {
+          const leave = await findBlockingLeave(nextUserId, nextDate);
+          if (leave) {
+            const msg = blockedByLeaveMessage(leave);
+            return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+          }
         }
 
         const updated = await withAuditedTransaction(
