@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Layers,
   Lock,
   Moon,
@@ -40,6 +41,7 @@ import {
 import { fetchWeekShifts } from '@/api/shifts';
 import { fetchAvailability, type AvailabilityMarkDto } from '@/api/availability';
 import type { LeaveDto } from '@/api/rotaLeaves';
+import { planCopyWeek } from '@/engine/copyWeek';
 import { LEAVE_LABELS, LEAVE_TYPES, leaveBlocksShift, type LeaveTypeKey } from '../../../shared/leaveTypes';
 
 /** dnd-kit sensor config, matching FloorPlan/AssignmentBoard.tsx exactly: touch gets a delay so scrolling doesn't start a drag, mouse gets a distance threshold. */
@@ -92,6 +94,7 @@ export function RotaBuilder() {
     createRotaShift,
     updateRotaShift,
     deleteRotaShift,
+    bulkCreateRotaShifts,
     publishCurrentWeek,
     publishInfo,
     weekLocked: locked,
@@ -109,6 +112,8 @@ export function RotaBuilder() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [suppressClick, setSuppressClick] = useState(false);
+  // Department (role-group) sections the manager has folded away, keyed by section key.
+  const [collapsedRows, setCollapsedRows] = useState<Record<string, boolean>>({});
 
   // `Shift` (engine/types) deliberately carries only a human-readable
   // `requiredRole`, but every write endpoint keys off the DB `roleId`. The
@@ -429,6 +434,49 @@ export function RotaBuilder() {
     }
   };
 
+  // Copy last week → this week through the existing bulk endpoint (every row
+  // lands as DRAFT). Planning lives in engine/copyWeek.ts: leave isn't
+  // copied, and rows blocked by this week's leave, for staff who've left, or
+  // already present are skipped and reported instead of failing the batch.
+  const [copying, setCopying] = useState(false);
+  const copyLastWeek = async () => {
+    if (!online || !locationId || !session || copying) return;
+    setCopying(true);
+    try {
+      const [previous, current] = await Promise.all([
+        fetchWeekShifts(locationId, shiftWeek(weekStart, -1), session.token),
+        fetchWeekShifts(locationId, weekStart, session.token),
+      ]);
+      if (previous.length === 0) {
+        say('Last week has no shifts to copy.');
+        return;
+      }
+      const plan = planCopyWeek({
+        previousWeekShifts: previous,
+        targetWeekShifts: current.map((c) => ({ userId: c.employeeId, date: c.date, roleId: c.roleId, start: c.start, end: c.end })),
+        blockingLeaveKeys: new Set(weekLeaves.filter((l) => leaveBlocksShift(l.type)).map((l) => `${l.userId}|${l.date}`)),
+        activeUserIds: new Set(staffDirectory.filter((s) => s.isActive).map((s) => s.id)),
+      });
+      const skipped = [
+        plan.skippedDuplicate && `${plan.skippedDuplicate} already here`,
+        plan.skippedLeave && `${plan.skippedLeave} on leave`,
+        plan.skippedInactive && `${plan.skippedInactive} no longer on staff`,
+      ].filter(Boolean);
+      if (plan.rows.length === 0) {
+        say(`Nothing to copy — ${skipped.join(', ')}.`);
+        return;
+      }
+      await bulkCreateRotaShifts(plan.rows);
+      bump();
+      refreshPublishInfo();
+      say(`Copied ${plan.rows.length} shift${plan.rows.length === 1 ? '' : 's'} from last week as drafts${skipped.length ? ` (skipped: ${skipped.join(', ')})` : ''}.`);
+    } catch (err) {
+      fail(err, 'Could not copy last week.');
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const publish = async () => {
     if (weekShifts.length === 0 && weekLeaves.length === 0) {
       say('Add some shifts before publishing this week.');
@@ -525,6 +573,9 @@ export function RotaBuilder() {
               <button onClick={() => void publish()} disabled={!online} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
                 <Send className="h-3.5 w-3.5" /> {publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
               </button>
+              <button onClick={() => void copyLastWeek()} disabled={!online || copying} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60">
+                <Copy className="h-3.5 w-3.5" /> {copying ? 'Copying…' : 'Copy last week'}
+              </button>
               <button onClick={() => setSheet({ kind: 'templates' })} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground">
                 <Layers className="h-3.5 w-3.5" /> Templates ({templates.length})
               </button>
@@ -561,12 +612,27 @@ export function RotaBuilder() {
                   ))}
                 </div>
 
-                {rows.map((row) => (
+                {rows.map((row) => {
+                  const rowCollapsed = Boolean(collapsedRows[row.key]);
+                  const rowShiftCount = row.people.reduce((n, p) => n + days.reduce((m, d) => m + cellShifts(d, p.userId).length, 0), 0);
+                  return (
                   <div key={row.key}>
-                    <div className={cn('border-b border-border/60 bg-surface-raised/50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]', row.flagged ? 'text-warning' : 'text-muted-foreground')}>
-                      {row.label}
-                    </div>
-                    {row.people.map((person) => (
+                    <button
+                      type="button"
+                      onClick={() => setCollapsedRows((prev) => ({ ...prev, [row.key]: !prev[row.key] }))}
+                      aria-expanded={!rowCollapsed}
+                      className={cn(
+                        'flex w-full items-center gap-2 border-b border-border/60 bg-surface-raised/50 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors hover:bg-surface-raised',
+                        row.flagged ? 'text-warning' : 'text-muted-foreground',
+                      )}
+                    >
+                      <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-300', rowCollapsed && '-rotate-90')} />
+                      <span>{row.label}</span>
+                      <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
+                        {row.people.length} · {rowShiftCount} shift{rowShiftCount === 1 ? '' : 's'}
+                      </span>
+                    </button>
+                    {!rowCollapsed && row.people.map((person) => (
                       <div key={person.id} className="grid grid-cols-[10rem_repeat(7,minmax(0,1fr))] border-b border-border/60">
                         <div className="flex items-center gap-2 p-3 text-sm font-medium">
                           {person.userId === null && <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
@@ -595,7 +661,8 @@ export function RotaBuilder() {
                       </div>
                     ))}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </DragDropProvider>
