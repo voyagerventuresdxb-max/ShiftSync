@@ -5,6 +5,7 @@ import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize
 import { formatVenueTime } from '../lib/venueTime.js';
 import { requireSession, requireManager, optionalSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { visibleShiftFilter } from '../lib/shiftVisibility.js';
+import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
@@ -134,6 +135,8 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     if (userId) {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+      const leave = await findBlockingLeave(userId, date);
+      if (leave) return res.status(409).json({ error: blockedByLeaveMessage(leave, user.fullName) });
     }
 
     const timezone = await venueTimezone(locationId);
@@ -201,6 +204,11 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       data.date = new Date(`${nextDate}T00:00:00.000Z`);
       data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
       data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
+    }
+    const nextUserId = data.userId !== undefined ? (data.userId as string | null) : existing.userId;
+    if (nextUserId && (req.body?.userId !== undefined || req.body?.date !== undefined)) {
+      const leave = await findBlockingLeave(nextUserId, nextDate);
+      if (leave) return res.status(409).json({ error: blockedByLeaveMessage(leave) });
     }
 
     // Always the signed-in manager — never a body-supplied id (an on-behalf
@@ -285,6 +293,13 @@ shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
         if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
       }
     }
+    // One blocking leave anywhere in the batch rejects the whole batch — the
+    // same all-or-nothing rule as the role/user checks above.
+    for (const r of rows) {
+      if (!r.userId) continue;
+      const leave = await findBlockingLeave(String(r.userId), r.date);
+      if (leave) return res.status(409).json({ error: blockedByLeaveMessage(leave) });
+    }
 
     const timezone = await venueTimezone(locationId);
     const created = await prisma.$transaction(
@@ -367,9 +382,11 @@ shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
     const publish = await prisma.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
     if (!publish) return res.status(200).json({ publishedAt: null, notifiedCount: 0, hasUnpublishedChanges: false });
 
-    const changedCount = await prisma.shift.count({
-      where: { locationId, date: { gte: start, lt: end }, updatedAt: { gt: publish.publishedAt } },
-    });
+    const [changedShifts, draftLeaves] = await Promise.all([
+      prisma.shift.count({ where: { locationId, date: { gte: start, lt: end }, updatedAt: { gt: publish.publishedAt } } }),
+      prisma.rotaLeave.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),
+    ]);
+    const changedCount = changedShifts + draftLeaves;
     return res.status(200).json({
       publishedAt: publish.publishedAt.toISOString(),
       notifiedCount: publish.notifiedCount,

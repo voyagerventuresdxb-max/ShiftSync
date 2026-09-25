@@ -12,6 +12,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { swapRequestsRouter } from './routes/swapRequests.js';
 import { shiftsRouter } from './routes/shifts.js';
 import { rotaTemplatesRouter } from './routes/rotaTemplates.js';
+import { rotaLeavesRouter } from './routes/rotaLeaves.js';
 import { attendanceRouter } from './routes/attendance.js';
 import { eightySixRouter } from './routes/eightySix.js';
 import { identityRouter } from './routes/identity.js';
@@ -61,6 +62,7 @@ export function createApp() {
   app.use('/api/swap-requests', swapRequestsRouter);
   app.use('/api/shifts', shiftsRouter);
   app.use('/api/rota-templates', rotaTemplatesRouter);
+  app.use('/api/rota-leaves', rotaLeavesRouter);
   app.use('/api/attendance', attendanceRouter);
   app.use('/api/eighty-six', eightySixRouter);
   app.use('/api/identity', identityRouter);

@@ -17,6 +17,7 @@ import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
+import { LEAVE_LABELS } from '../../shared/leaveTypes';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -54,6 +55,7 @@ export default function SchedulingContent() {
     handleCommitted,
     staffDirectoryByName,
     swapRequests,
+    weekLeaves,
   } = useAppState();
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -140,13 +142,16 @@ export default function SchedulingContent() {
     const shifts = shiftsFor(mergedRoster, activeEmployee.id);
     return dates.map((date) => {
       const dayShifts = shifts.filter((s) => s.date === date);
+      const leave = weekLeaves.find((l) => l.userId === activeEmployee.id && l.date === date);
+      const leaveLabel = leave ? LEAVE_LABELS[leave.type] : undefined;
       if (dayShifts.length === 0) {
         return {
           id: `${activeEmployee.id}-${date}`,
           day: weekdayOf(date),
           date: formatDayMonth(date),
           venue: '',
-          role: 'Rest day',
+          role: leaveLabel ?? 'Rest day',
+          leaveLabel,
           start: '—',
           end: '—',
           hours: 0,
@@ -176,9 +181,10 @@ export default function SchedulingContent() {
         sectionAssignments: myAssignments
           .filter((a) => a.shiftDate === date)
           .map((a) => `${a.sectionLabel} (${a.period})`),
+        leaveLabel,
       };
     });
-  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests, myAssignments]);
+  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests, myAssignments, weekLeaves]);
 
   const coverCandidates: CoverCandidate[] = activeEmployee
     ? mergedRoster.employees.filter((e) => e.id !== activeEmployee.id).map((e) => ({ id: e.id, name: e.name }))
