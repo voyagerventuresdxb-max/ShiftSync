@@ -28,17 +28,17 @@ model Organization {
 }
 
 model Location {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
-  name           String
-  emirate        String? // e.g. Dubai, Abu Dhabi, Sharjah
-  venueType      String?  @map("venue_type") // free-text category chosen from the onboarding wizard's card picker, e.g. "Fine Dining", "Nightclub"
-  address        String?
-  timezone       String   @default("Asia/Dubai")
-  currency       String   @default("AED")
-  isActive       Boolean  @default(true) @map("is_active")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id                       String    @id @default(cuid())
+  organizationId           String    @map("organization_id")
+  name                     String
+  emirate                  String? // e.g. Dubai, Abu Dhabi, Sharjah
+  venueType                String?   @map("venue_type") // free-text category chosen from the onboarding wizard's card picker, e.g. "Fine Dining", "Nightclub"
+  address                  String?
+  timezone                 String    @default("Asia/Dubai")
+  currency                 String    @default("AED")
+  isActive                 Boolean   @default(true) @map("is_active")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
   // Rate-limits the paid vision-fallback roster parse (hosted Gemini/Vertex
   // AI call, image/scanned-PDF uploads only) to once per location per week.
   // Deterministic-path parsing (Excel/CSV/text-layer PDF) is unaffected —
@@ -58,6 +58,7 @@ model Location {
   shoutouts            Shoutout[]
   rotaTemplates        RotaTemplate[]
   rotaPublishes        RotaPublish[]
+  rotaLeaves           RotaLeave[]
   eightySixItems       EightySixItem[]
   joinRequests         JoinRequest[]
   policyDocuments      PolicyDocument[]
@@ -146,6 +147,8 @@ model User {
   shoutoutsAuthored       Shoutout[]                 @relation("ShoutoutAuthor")
   rotaTemplatesCreated    RotaTemplate[]
   rotaPublishesMade       RotaPublish[]
+  rotaLeaves              RotaLeave[]                @relation("RotaLeaveUser")
+  rotaLeavesCreated       RotaLeave[]                @relation("RotaLeaveCreatedBy")
   eightySixItemsCreated   EightySixItem[]            @relation("EightySixCreatedBy")
   eightySixItemsBackOn    EightySixItem[]            @relation("EightySixBackOnBy")
   sessions                Session[]
@@ -300,6 +303,8 @@ enum AuditAction {
   ROTA_TEMPLATE_DELETED
   POLICY_DOCUMENT_UPLOADED
   POLICY_DOCUMENT_DELETED
+  LEAVE_MARKED // RotaLeave created or its type changed (rota builder leave chips)
+  LEAVE_REMOVED
 }
 
 model AuditLog {
@@ -641,10 +646,9 @@ model RotaTemplate {
 }
 
 // One row per (location, week) once that week has been published at least
-// once. `publishedAt` is compared against each shift's own `updatedAt` to
-// tell RotaBuilder whether a published week has unpublished edits sitting
-// on top of it — a week can have shifts added/edited after publishing
-// without a second model per shift to track that.
+// once. Whether a published week has unpublished changes is the count of
+// DRAFT shifts/leave in it (routes/shifts.ts publish-status) — edits to an
+// already-PUBLISHED shift are live immediately and notify the staff member.
 model RotaPublish {
   id            String   @id @default(cuid())
   locationId    String   @map("location_id")
@@ -658,6 +662,47 @@ model RotaPublish {
 
   @@unique([locationId, weekStart])
   @@map("rota_publishes")
+}
+
+// Leave marked on the rota builder grid (golden-path v0, 2026-09-25). A
+// separate table rather than a type on Shift: a Shift carries a role and
+// start/end instants that attendance and payroll read, and leave has
+// neither. One row per staff member per day. Every type except HALF_DAY
+// blocks a shift on that same day (enforced in lib/actions/leaveActions.ts
+// and the shift routes); HALF_DAY may sit alongside one. Drafts publish in
+// the same transaction as the week's shifts (rotaActions.publishRota) and
+// follow the same draft-visibility rule (lib/shiftVisibility.ts).
+enum LeaveType {
+  DAY_OFF
+  ANNUAL_LEAVE
+  SICK_LEAVE
+  UNPAID_LEAVE
+  HALF_DAY
+}
+
+enum RotaLeaveStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model RotaLeave {
+  id          String          @id @default(cuid())
+  locationId  String          @map("location_id")
+  userId      String          @map("user_id")
+  createdById String?         @map("created_by_id")
+  date        DateTime        @db.Date
+  type        LeaveType
+  status      RotaLeaveStatus @default(DRAFT)
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  user      User     @relation("RotaLeaveUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("RotaLeaveCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, date])
+  @@index([locationId, date])
+  @@map("rota_leaves")
 }
 
 // ---------------------------------------------------------------------------

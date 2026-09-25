@@ -1,10 +1,13 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from './normalize.js';
 import type { PreviewRow } from './types.js';
+import { findBlockingLeave } from '../lib/actions/leaveActions.js';
 
 export interface PersistShiftsResult {
   createdCount: number;
+  /** Every row not imported: no resolvable role, or on a blocking leave day (the latter also counted in blockedByLeaveCount). */
   skippedCount: number;
+  blockedByLeaveCount: number;
   rows: { rowNumber: number; shiftId: string; userId: string | null; date: string }[];
 }
 
@@ -32,7 +35,15 @@ export async function persistShifts(
   createdById: string | null,
   rows: PreviewRow[],
 ): Promise<PersistShiftsResult> {
-  const importable = rows.filter((r) => r.resolvedRoleId);
+  const withRole = rows.filter((r) => r.resolvedRoleId);
+  // A row for someone on a blocking leave that day (RotaLeave) is skipped,
+  // not imported over the leave — same rule as every other shift write.
+  const importable: PreviewRow[] = [];
+  for (const r of withRole) {
+    if (r.resolvedUserId && (await findBlockingLeave(r.resolvedUserId, r.date, prisma))) continue;
+    importable.push(r);
+  }
+  const blockedByLeaveCount = withRole.length - importable.length;
   const skippedCount = rows.length - importable.length;
 
   // Shift wall-clock times are always interpreted in the venue's own IANA
@@ -68,6 +79,7 @@ export async function persistShifts(
   return {
     createdCount: created.length,
     skippedCount,
+    blockedByLeaveCount,
     rows: created.map((shift, i) => ({
       rowNumber: importable[i]!.rowNumber,
       shiftId: shift.id,

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Layers,
   Lock,
   Moon,
@@ -39,6 +40,9 @@ import {
 } from '@/api/rotaTemplates';
 import { fetchWeekShifts } from '@/api/shifts';
 import { fetchAvailability, type AvailabilityMarkDto } from '@/api/availability';
+import type { LeaveDto } from '@/api/rotaLeaves';
+import { planCopyWeek } from '@/engine/copyWeek';
+import { LEAVE_LABELS, LEAVE_TYPES, leaveBlocksShift, type LeaveTypeKey } from '../../../shared/leaveTypes';
 
 /** dnd-kit sensor config, matching FloorPlan/AssignmentBoard.tsx exactly: touch gets a delay so scrolling doesn't start a drag, mouse gets a distance threshold. */
 const sensors = [
@@ -69,7 +73,12 @@ interface RoleOption {
   name: string;
 }
 
-type Sheet = { kind: 'shift'; draft: DraftShift } | { kind: 'templates' } | { kind: 'saveTemplate' } | null;
+type Sheet =
+  | { kind: 'shift'; draft: DraftShift }
+  | { kind: 'leave'; leave: LeaveDto; personName: string }
+  | { kind: 'templates' }
+  | { kind: 'saveTemplate' }
+  | null;
 
 /** The grid's synthetic "unassigned" row — a real drop target so a shift can be pulled off a person without being deleted. */
 const OPEN_ROW = 'open';
@@ -85,12 +94,15 @@ export function RotaBuilder() {
     createRotaShift,
     updateRotaShift,
     deleteRotaShift,
+    bulkCreateRotaShifts,
     publishCurrentWeek,
     publishInfo,
     weekLocked: locked,
     refreshPublishInfo,
     refetchWeekShifts,
-    currentEmployeeId,
+    weekLeaves,
+    setRotaLeave,
+    removeRotaLeave,
   } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
@@ -100,6 +112,8 @@ export function RotaBuilder() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [suppressClick, setSuppressClick] = useState(false);
+  // Department (role-group) sections the manager has folded away, keyed by section key.
+  const [collapsedRows, setCollapsedRows] = useState<Record<string, boolean>>({});
 
   // `Shift` (engine/types) deliberately carries only a human-readable
   // `requiredRole`, but every write endpoint keys off the DB `roleId`. The
@@ -150,7 +164,7 @@ export function RotaBuilder() {
     // page with no locationId has nothing else to render anyway.
     if (!locationId) return;
     let cancelled = false;
-    fetchWeekShifts(locationId, weekStart)
+    fetchWeekShifts(locationId, weekStart, session?.token)
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
@@ -169,7 +183,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, dataVersion, locationId]);
+  }, [weekStart, dataVersion, locationId, session?.token]);
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
@@ -270,6 +284,10 @@ export function RotaBuilder() {
 
   const fail = (err: unknown, fallback: string) => say(err instanceof ApiError ? err.message : fallback);
 
+  const leaveByKey = useMemo(() => new Map(weekLeaves.map((l) => [`${l.userId}|${l.date}`, l])), [weekLeaves]);
+  const leaveFor = (date: string, userId: string | null) => (userId ? leaveByKey.get(`${userId}|${date}`) : undefined);
+  const personName = (userId: string) => staffDirectory.find((s) => s.id === userId)?.fullName ?? mergedRoster.employees.find((e) => e.id === userId)?.name ?? 'This staff member';
+
   const cellShifts = (date: string, userId: string | null) =>
     weekShifts.filter((s) => s.date === date && (userId === null ? s.employeeId.startsWith('open-') : s.employeeId === userId));
 
@@ -334,7 +352,6 @@ export function RotaBuilder() {
           end: draft.end,
           briefingNote: draft.briefingNote || null,
           sidework: draft.sidework,
-          actorId: currentEmployeeId,
         });
       } else {
         await createRotaShift({
@@ -345,7 +362,6 @@ export function RotaBuilder() {
           end: draft.end,
           briefingNote: draft.briefingNote || undefined,
           sidework: draft.sidework,
-          createdById: currentEmployeeId,
         });
       }
       bump();
@@ -359,7 +375,7 @@ export function RotaBuilder() {
   const removeShift = async (id: string) => {
     if (!online) return;
     try {
-      await deleteRotaShift(id, currentEmployeeId);
+      await deleteRotaShift(id);
       bump();
       refreshPublishInfo();
       setSheet(null);
@@ -370,7 +386,7 @@ export function RotaBuilder() {
 
   const moveShift = async (id: string, date: string, userId: string | null) => {
     if (locked) {
-      say('This week is published and locked — publish again after making changes to update it.');
+      say('This week is published — tap a shift to edit it instead; the staff member is notified of the change.');
       return;
     }
     // Belt-and-suspenders: dragging is already disabled offline via
@@ -379,8 +395,13 @@ export function RotaBuilder() {
     // every other write path here, in case a drag that started just before
     // going offline still ends after.
     if (!online) return;
+    const leave = leaveFor(date, userId);
+    if (leave && leaveBlocksShift(leave.type)) {
+      say(`${personName(leave.userId)} is on ${LEAVE_LABELS[leave.type]} that day — remove the leave before adding a shift.`);
+      return;
+    }
     try {
-      await updateRotaShift(id, { date, userId, actorId: currentEmployeeId });
+      await updateRotaShift(id, { date, userId });
       bump();
       refreshPublishInfo();
     } catch (err) {
@@ -388,8 +409,76 @@ export function RotaBuilder() {
     }
   };
 
+  // Leave writes follow the same offline block as shifts: no queue, the
+  // button is disabled and the handler refuses outright while offline.
+  const saveLeave = async (userId: string, date: string, type: LeaveTypeKey) => {
+    if (!online) return;
+    try {
+      await setRotaLeave({ userId, date, type });
+      refreshPublishInfo();
+      setSheet(null);
+    } catch (err) {
+      fail(err, 'Could not save that leave.');
+      setSheet(null);
+    }
+  };
+
+  const removeLeave = async (id: string) => {
+    if (!online) return;
+    try {
+      await removeRotaLeave(id);
+      refreshPublishInfo();
+      setSheet(null);
+    } catch (err) {
+      fail(err, 'Could not remove that leave.');
+    }
+  };
+
+  // Copy last week → this week through the existing bulk endpoint (every row
+  // lands as DRAFT). Planning lives in engine/copyWeek.ts: leave isn't
+  // copied, and rows blocked by this week's leave, for staff who've left, or
+  // already present are skipped and reported instead of failing the batch.
+  const [copying, setCopying] = useState(false);
+  const copyLastWeek = async () => {
+    if (!online || !locationId || !session || copying) return;
+    setCopying(true);
+    try {
+      const [previous, current] = await Promise.all([
+        fetchWeekShifts(locationId, shiftWeek(weekStart, -1), session.token),
+        fetchWeekShifts(locationId, weekStart, session.token),
+      ]);
+      if (previous.length === 0) {
+        say('Last week has no shifts to copy.');
+        return;
+      }
+      const plan = planCopyWeek({
+        previousWeekShifts: previous,
+        targetWeekShifts: current.map((c) => ({ userId: c.employeeId, date: c.date, roleId: c.roleId, start: c.start, end: c.end })),
+        blockingLeaveKeys: new Set(weekLeaves.filter((l) => leaveBlocksShift(l.type)).map((l) => `${l.userId}|${l.date}`)),
+        activeUserIds: new Set(staffDirectory.filter((s) => s.isActive).map((s) => s.id)),
+      });
+      const skipped = [
+        plan.skippedDuplicate && `${plan.skippedDuplicate} already here`,
+        plan.skippedLeave && `${plan.skippedLeave} on leave`,
+        plan.skippedInactive && `${plan.skippedInactive} no longer on staff`,
+      ].filter(Boolean);
+      if (plan.rows.length === 0) {
+        say(`Nothing to copy — ${skipped.join(', ')}.`);
+        return;
+      }
+      await bulkCreateRotaShifts(plan.rows);
+      bump();
+      refreshPublishInfo();
+      say(`Copied ${plan.rows.length} shift${plan.rows.length === 1 ? '' : 's'} from last week as drafts${skipped.length ? ` (skipped: ${skipped.join(', ')})` : ''}.`);
+    } catch (err) {
+      fail(err, 'Could not copy last week.');
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const publish = async () => {
-    if (weekShifts.length === 0) {
+    if (weekShifts.length === 0 && weekLeaves.length === 0) {
       say('Add some shifts before publishing this week.');
       return;
     }
@@ -398,7 +487,7 @@ export function RotaBuilder() {
       return;
     }
     try {
-      const result = await publishCurrentWeek(currentEmployeeId);
+      const result = await publishCurrentWeek();
       bump();
       refreshPublishInfo();
       say(`Rota published — ${result.notifiedCount} staff notified.`);
@@ -434,7 +523,7 @@ export function RotaBuilder() {
       return;
     }
     try {
-      const template = await saveRotaTemplate(session.token, name, entries, currentEmployeeId);
+      const template = await saveRotaTemplate(session.token, name, entries);
       setTemplates((prev) => [...prev, template]);
       say(`Saved "${template.name}" — ${entries.length} shifts captured.`);
       setSheet(null);
@@ -476,13 +565,16 @@ export function RotaBuilder() {
               </button>
             </div>
 
-            <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto">
               <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium', locked ? 'border-success/25 bg-success/12 text-success' : 'border-warning/25 bg-warning/12 text-warning')}>
                 {locked ? <Lock className="h-3 w-3" /> : <PencilLine className="h-3 w-3" />}
                 {locked ? 'Published · locked' : publishInfo?.publishedAt ? 'Unpublished changes' : 'Draft'}
               </span>
               <button onClick={() => void publish()} disabled={!online} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
                 <Send className="h-3.5 w-3.5" /> {publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
+              </button>
+              <button onClick={() => void copyLastWeek()} disabled={!online || copying} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60">
+                <Copy className="h-3.5 w-3.5" /> {copying ? 'Copying…' : 'Copy last week'}
               </button>
               <button onClick={() => setSheet({ kind: 'templates' })} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground">
                 <Layers className="h-3.5 w-3.5" /> Templates ({templates.length})
@@ -512,22 +604,41 @@ export function RotaBuilder() {
             }}
           >
             <div className="overflow-x-auto">
-              <div className="min-w-[860px]">
-                <div className="grid grid-cols-[10rem_repeat(7,minmax(0,1fr))] border-b border-border bg-background/40">
-                  <div className="p-3 eyebrow">Staff</div>
+              {/* Phones scroll the week sideways inside this box (never the page);
+                  the name column and section labels stay pinned on the left. */}
+              <div className="min-w-[640px] sm:min-w-[860px]">
+                <div className="grid grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] border-b border-border bg-background/40 sm:grid-cols-[10rem_repeat(7,minmax(0,1fr))]">
+                  <div className="sticky left-0 z-[2] bg-surface p-3 eyebrow">Staff</div>
                   {days.map((d) => (
                     <div key={d} className="p-2.5 text-center text-xs font-medium">{weekdayOf(d)} {d.slice(8)}</div>
                   ))}
                 </div>
 
-                {rows.map((row) => (
+                {rows.map((row) => {
+                  const rowCollapsed = Boolean(collapsedRows[row.key]);
+                  const rowShiftCount = row.people.reduce((n, p) => n + days.reduce((m, d) => m + cellShifts(d, p.userId).length, 0), 0);
+                  return (
                   <div key={row.key}>
-                    <div className={cn('border-b border-border/60 bg-surface-raised/50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em]', row.flagged ? 'text-warning' : 'text-muted-foreground')}>
-                      {row.label}
-                    </div>
-                    {row.people.map((person) => (
-                      <div key={person.id} className="grid grid-cols-[10rem_repeat(7,minmax(0,1fr))] border-b border-border/60">
-                        <div className="flex items-center gap-2 p-3 text-sm font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setCollapsedRows((prev) => ({ ...prev, [row.key]: !prev[row.key] }))}
+                      aria-expanded={!rowCollapsed}
+                      className={cn(
+                        'flex w-full items-center gap-2 border-b border-border/60 bg-surface-raised/50 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors hover:bg-surface-raised',
+                        row.flagged ? 'text-warning' : 'text-muted-foreground',
+                      )}
+                    >
+                      <span className="sticky left-3 flex items-center gap-2">
+                        <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-300', rowCollapsed && '-rotate-90')} />
+                        <span>{row.label}</span>
+                        <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
+                          {row.people.length} · {rowShiftCount} shift{rowShiftCount === 1 ? '' : 's'}
+                        </span>
+                      </span>
+                    </button>
+                    {!rowCollapsed && row.people.map((person) => (
+                      <div key={person.id} className="grid grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] border-b border-border/60 sm:grid-cols-[10rem_repeat(7,minmax(0,1fr))]">
+                        <div className="sticky left-0 z-[2] flex min-w-0 items-center gap-2 bg-surface p-2 text-xs font-medium sm:p-3 sm:text-sm">
                           {person.userId === null && <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                           <span className="truncate">{person.name}</span>
                         </div>
@@ -537,8 +648,10 @@ export function RotaBuilder() {
                             date={d}
                             userId={person.userId}
                             shifts={cellShifts(d, person.userId)}
+                            leave={leaveFor(d, person.userId)}
                             onAdd={() => openNew(d, person.userId)}
                             onEdit={openEdit}
+                            onEditLeave={(l) => setSheet({ kind: 'leave', leave: l, personName: person.name })}
                             // Offline gets the same treatment as a published/
                             // locked week: no drag, no "add shift" affordance —
                             // this is separate from the "Published · locked"
@@ -552,13 +665,16 @@ export function RotaBuilder() {
                       </div>
                     ))}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </DragDropProvider>
 
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-4">
-            <p className="text-[11px] text-muted-foreground">{weekShifts.length} shifts this week</p>
+            <p className="text-[11px] text-muted-foreground">
+              {weekShifts.length} shifts{weekLeaves.length > 0 ? ` · ${weekLeaves.length} leave` : ''} this week
+            </p>
           </footer>
         </>
       )}
@@ -577,7 +693,18 @@ export function RotaBuilder() {
           online={online}
           onClose={() => setSheet(null)}
           onSave={(d) => void saveDraft(d)}
+          onSaveLeave={(type) => sheet.draft.userId && void saveLeave(sheet.draft.userId, sheet.draft.date, type)}
           onDelete={(id) => void removeShift(id)}
+        />
+      )}
+      {sheet?.kind === 'leave' && (
+        <LeaveSheet
+          leave={sheet.leave}
+          personName={sheet.personName}
+          online={online}
+          onClose={() => setSheet(null)}
+          onChange={(type) => void saveLeave(sheet.leave.userId, sheet.leave.date, type)}
+          onRemove={() => void removeLeave(sheet.leave.id)}
         />
       )}
       {sheet?.kind === 'templates' && (
@@ -596,7 +723,7 @@ export function RotaBuilder() {
             // Apply/Delete buttons instead.
             if (!online) return;
             try {
-              const result = await applyRotaTemplate(session.token, t.id, weekStart, currentEmployeeId);
+              const result = await applyRotaTemplate(session.token, t.id, weekStart);
               await refetchWeekShifts();
               bump();
               refreshPublishInfo();
@@ -692,8 +819,10 @@ function Cell({
   date,
   userId,
   shifts,
+  leave,
   onAdd,
   onEdit,
+  onEditLeave,
   locked,
   suppressClick,
   availabilityMark,
@@ -701,8 +830,10 @@ function Cell({
   date: string;
   userId: string | null;
   shifts: Shift[];
+  leave?: LeaveDto;
   onAdd: () => void;
   onEdit: (s: Shift) => void;
+  onEditLeave: (l: LeaveDto) => void;
   locked: boolean;
   suppressClick: boolean;
   availabilityMark?: AvailabilityMarkDto;
@@ -717,15 +848,105 @@ function Cell({
       )}
     >
       {availabilityMark && <AvailabilityBadge mark={availabilityMark} />}
+      {leave && <LeaveChip leave={leave} onEdit={onEditLeave} />}
       {shifts.map((s) => (
         <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
       ))}
-      {!locked && (
+      {/* A blocking leave replaces the "+": the chip itself explains why (tap it). */}
+      {!locked && !(leave && leaveBlocksShift(leave.type)) && (
         <button onClick={onAdd} aria-label={`Add shift on ${date}`} className="grid h-6 w-full place-items-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:border-accent hover:text-accent">
           <Plus className="h-3 w-3" />
         </button>
       )}
     </div>
+  );
+}
+
+const LEAVE_TONE: Record<LeaveTypeKey, string> = {
+  DAY_OFF: 'border-border-strong bg-surface-raised text-muted-foreground',
+  ANNUAL_LEAVE: 'border-success/30 bg-success/12 text-success',
+  SICK_LEAVE: 'border-destructive/30 bg-destructive/12 text-destructive',
+  UNPAID_LEAVE: 'border-warning/30 bg-warning/12 text-warning',
+  HALF_DAY: 'border-dashed border-accent/40 bg-accent/8 text-accent',
+};
+
+/** A leave chip in a grid cell. Not draggable — leave is changed or removed through its own sheet. */
+function LeaveChip({ leave, onEdit }: { leave: LeaveDto; onEdit: (l: LeaveDto) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onEdit(leave)}
+      aria-label={`${LEAVE_LABELS[leave.type]} on ${leave.date}`}
+      className={cn('block w-full rounded-md border px-1.5 py-1 text-left text-[10px] font-semibold leading-tight', LEAVE_TONE[leave.type])}
+    >
+      {LEAVE_LABELS[leave.type]}
+    </button>
+  );
+}
+
+/** Every leave type (plus "Shift" unless `leaveOnly`), as one single-choice chip row. */
+function EntryTypeChips({ value, onChange, leaveOnly = false }: { value: 'SHIFT' | LeaveTypeKey; onChange: (v: 'SHIFT' | LeaveTypeKey) => void; leaveOnly?: boolean }) {
+  const options: { id: 'SHIFT' | LeaveTypeKey; label: string }[] = [
+    ...(leaveOnly ? [] : [{ id: 'SHIFT' as const, label: 'Shift' }]),
+    ...LEAVE_TYPES.map((t) => ({ id: t, label: LEAVE_LABELS[t] })),
+  ];
+  return (
+    <div role="radiogroup" aria-label="Entry type" className="flex flex-wrap gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          role="radio"
+          aria-checked={value === o.id}
+          onClick={() => onChange(o.id)}
+          className={cn(
+            'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors duration-200',
+            value === o.id ? 'border-accent bg-accent text-accent-foreground' : 'border-border text-muted-foreground hover:border-accent/40 hover:text-foreground',
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LeaveSheet({
+  leave,
+  personName,
+  online,
+  onClose,
+  onChange,
+  onRemove,
+}: {
+  leave: LeaveDto;
+  personName: string;
+  online: boolean;
+  onClose: () => void;
+  onChange: (type: LeaveTypeKey) => void;
+  onRemove: () => void;
+}) {
+  const [type, setType] = useState<LeaveTypeKey>(leave.type);
+  return (
+    <SheetShell title={`${personName} · ${leave.date}`} onClose={onClose}>
+      <div className="space-y-3">
+        <EntryTypeChips leaveOnly value={type} onChange={(v) => v !== 'SHIFT' && setType(v)} />
+        <p className="text-xs text-muted-foreground">
+          {leaveBlocksShift(type)
+            ? `No shift can be added on this day while ${personName} is on ${LEAVE_LABELS[type]} — remove the leave first.`
+            : 'A shift can still be added on a half day.'}
+        </p>
+        <div className="flex gap-2 pt-1">
+          <button onClick={() => onChange(type)} disabled={!online || type === leave.type} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
+            <Check className="mr-1.5 inline h-4 w-4" /> Save leave
+          </button>
+          <button onClick={onRemove} disabled={!online} aria-label="Remove leave" className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-60">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+        {!online && <OfflineActionNotice />}
+      </div>
+    </SheetShell>
   );
 }
 
@@ -779,6 +1000,7 @@ function ShiftSheet({
   online,
   onClose,
   onSave,
+  onSaveLeave,
   onDelete,
 }: {
   draft: DraftShift;
@@ -786,14 +1008,37 @@ function ShiftSheet({
   online: boolean;
   onClose: () => void;
   onSave: (d: DraftShift) => void;
+  onSaveLeave: (type: LeaveTypeKey) => void;
   onDelete: (id: string) => void;
 }) {
   const [local, setLocal] = useState(draft);
   const [sideworkText, setSideworkText] = useState(draft.sidework.join(', '));
+  // Leave can only be marked on a person's row, and only as a NEW entry —
+  // an existing shift is edited or deleted, never converted in place.
+  const canMarkLeave = !draft.id && draft.userId !== null;
+  const [entry, setEntry] = useState<'SHIFT' | LeaveTypeKey>('SHIFT');
+
+  if (entry !== 'SHIFT') {
+    return (
+      <SheetShell title="New entry" onClose={onClose}>
+        <div className="space-y-3">
+          <EntryTypeChips value={entry} onChange={setEntry} />
+          <p className="text-xs text-muted-foreground">
+            {leaveBlocksShift(entry) ? `${LEAVE_LABELS[entry]} replaces any shift on ${draft.date}.` : `A shift can still be added on a half day.`}
+          </p>
+          <button onClick={() => onSaveLeave(entry)} disabled={!online} className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
+            <Check className="mr-1.5 inline h-4 w-4" /> Mark {LEAVE_LABELS[entry]}
+          </button>
+          {!online && <OfflineActionNotice />}
+        </div>
+      </SheetShell>
+    );
+  }
 
   return (
     <SheetShell title={draft.id ? 'Edit shift' : 'New shift'} onClose={onClose}>
       <div className="space-y-3">
+        {canMarkLeave && <EntryTypeChips value={entry} onChange={setEntry} />}
         <div>
           <span className={label}>Role</span>
           {roleOptions.length === 0 ? (

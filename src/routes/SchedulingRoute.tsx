@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, pickViewedEmployee, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
+import { reconcileWeekParam } from '../engine/weekStart';
 import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
 import { TeamMatrix, type MatrixCell, type MatrixMember } from '../components/shiftsync/TeamMatrix';
@@ -17,6 +18,7 @@ import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
+import { LEAVE_LABELS } from '../../shared/leaveTypes';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -31,7 +33,6 @@ function formatDayMonth(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
   const { session } = useIdentity();
@@ -54,50 +55,42 @@ export default function SchedulingContent() {
     handleCommitted,
     staffDirectoryByName,
     swapRequests,
+    weekLeaves,
   } = useAppState();
 
   const [searchParams, setSearchParams] = useSearchParams();
 
   // `weekStart` lives in AppStateContext, which sits ABOVE the router
   // (mounted in App.tsx wrapping <RouterProvider>), so it can't read the URL
-  // itself — this component, which IS inside the router, is what reconciles
-  // the two, in both directions, in one effect:
-  //  - an incoming `?week=` differing from the current state (a hard
-  //    refresh, a shared/bookmarked link, OR — the case a two-effect
-  //    version of this got wrong — remounting via in-app client-side
-  //    navigation away from and back to /scheduling with no `?week=` in the
-  //    URL) adopts INTO state, and returns without also writing the URL in
-  //    this same pass;
-  //  - otherwise, whatever `weekStart` actually is gets written back to the
-  //    URL if it doesn't already match (Prev/Next-week clicks, template
-  //    application, or simply the URL having gone stale/bare on remount).
-  // The `return` after `setWeekStart` is what avoids the race a two-effect
-  // version of this had: `setWeekStart` doesn't land in this closure until a
-  // later render, so writing the URL in the SAME pass would write the STALE
-  // pre-adopt week; returning defers that write to the next run, by which
-  // point `weekStart` and the URL already agree (a no-op) or the effect
-  // naturally re-syncs. `replace` so paging through weeks doesn't spam
-  // browser history with a back-button entry per week.
+  // itself — this component, which IS inside the router, reconciles the two.
+  // The decision lives in engine/weekStart.ts's `reconcileWeekParam`
+  // (unit-tested); `lastSyncedWeek` is the week both sides last agreed on,
+  // which is how a Prev/Next click (state moved) is told apart from a
+  // bookmark or back/forward (URL moved). `replace` so paging through weeks
+  // doesn't add a history entry per week.
+  const lastSyncedWeek = useRef<string | null>(null);
   useEffect(() => {
-    const param = searchParams.get('week');
-    if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
-      setWeekStart(param);
-      return;
-    }
-    if (param !== weekStart) {
+    const { adopt, write, lastSynced } = reconcileWeekParam(searchParams.get('week'), weekStart, lastSyncedWeek.current);
+    lastSyncedWeek.current = lastSynced;
+    if (adopt) setWeekStart(adopt);
+    if (write) {
       const next = new URLSearchParams(searchParams);
-      next.set('week', weekStart);
+      next.set('week', write);
       setSearchParams(next, { replace: true });
     }
   }, [weekStart, searchParams, setWeekStart, setSearchParams]);
 
   const [mode, setMode] = useState<Mode>('personal');
+  // Positive allowlist (fail-closed): builder/upload/"Viewing" controls render
+  // only for the manager tier. The server enforces the same rule on every
+  // write (requireManager); this just stops staff seeing controls that 403.
+  const isManager = session?.user.systemRole === 'OWNER' || session?.user.systemRole === 'MANAGER';
   // A STAFF member opening Scheduling must land on THEIR OWN rota — the
   // "Viewing" dropdown used to default to whoever happened to be first on the
   // week's roster, so they saw a colleague's shifts (and a Request-cover
   // button that could only 404 for them). Managers keep the first-entry
   // default: for them this view is a team review, not a personal one.
-  const activeEmployee = pickViewedEmployee(mergedRoster.employees, currentEmployeeId, session?.user ?? null);
+  const activeEmployee = pickViewedEmployee(mergedRoster.employees, isManager ? currentEmployeeId : undefined, session?.user ?? null);
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
 
@@ -136,13 +129,16 @@ export default function SchedulingContent() {
     const shifts = shiftsFor(mergedRoster, activeEmployee.id);
     return dates.map((date) => {
       const dayShifts = shifts.filter((s) => s.date === date);
+      const leave = weekLeaves.find((l) => l.userId === activeEmployee.id && l.date === date);
+      const leaveLabel = leave ? LEAVE_LABELS[leave.type] : undefined;
       if (dayShifts.length === 0) {
         return {
           id: `${activeEmployee.id}-${date}`,
           day: weekdayOf(date),
           date: formatDayMonth(date),
           venue: '',
-          role: 'Rest day',
+          role: leaveLabel ?? 'Rest day',
+          leaveLabel,
           start: '—',
           end: '—',
           hours: 0,
@@ -172,9 +168,10 @@ export default function SchedulingContent() {
         sectionAssignments: myAssignments
           .filter((a) => a.shiftDate === date)
           .map((a) => `${a.sectionLabel} (${a.period})`),
+        leaveLabel,
       };
     });
-  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests, myAssignments]);
+  }, [mergedRoster, activeEmployee, dates, venueName, swapRequests, myAssignments, weekLeaves]);
 
   const coverCandidates: CoverCandidate[] = activeEmployee
     ? mergedRoster.employees.filter((e) => e.id !== activeEmployee.id).map((e) => ({ id: e.id, name: e.name }))
@@ -309,7 +306,7 @@ export default function SchedulingContent() {
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
-          {mode === 'personal' && mergedRoster.employees.length > 0 && (
+          {isManager && mode === 'personal' && mergedRoster.employees.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="eyebrow">Viewing</span>
               <select
@@ -365,12 +362,14 @@ export default function SchedulingContent() {
         </aside>
       </div>
 
-      <div className="mt-5">
-        <RotaBuilder />
-      </div>
+      {isManager && (
+        <div className="mt-5">
+          <RotaBuilder />
+        </div>
+      )}
 
       <div className="mt-5">
-        <ShiftUpload onCommitted={handleCommitted} />
+        {isManager && <ShiftUpload onCommitted={handleCommitted} />}
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>

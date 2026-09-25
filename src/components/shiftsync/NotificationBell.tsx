@@ -4,6 +4,7 @@ import { Bell } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIdentity } from '@/state/IdentityContext';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead, type AppNotification } from '@/api/notifications';
+import { requestScheduleRefresh } from '@/lib/scheduleRefresh';
 
 /** How often to re-poll while the panel is closed — there's no push-to-client channel for "a new notification landed", so this is a plain interval, same pattern as ConnectivityContext's reachability check. */
 const POLL_MS = 30_000;
@@ -73,6 +74,9 @@ export function NotificationBell() {
           // just means it may show as unread again on the next poll.
         }
       }
+      // Refetch schedule views even when the target route is already mounted
+      // (AppState lives above the router, so navigating alone won't refetch).
+      requestScheduleRefresh();
       if (n.url) navigate(n.url);
     },
     [session, navigate],

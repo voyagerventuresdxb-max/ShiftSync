@@ -7,6 +7,8 @@ import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
+import { fetchWeekLeaves, setLeave, deleteLeave, type LeaveDto } from '../api/rotaLeaves';
+import { useRefetchOnReturn } from '../lib/scheduleRefresh';
 import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
@@ -96,11 +98,16 @@ interface AppStateValue {
   refetchWeekShifts: () => Promise<void>;
   createRotaShift: (input: Omit<Parameters<typeof createShift>[1], 'locationId'>) => Promise<void>;
   updateRotaShift: (id: string, patch: Parameters<typeof updateShift>[2]) => Promise<void>;
-  deleteRotaShift: (id: string, actorId?: string) => Promise<void>;
-  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => Promise<void>;
-  publishCurrentWeek: (publishedById?: string) => Promise<{ publishedAt: string; notifiedCount: number }>;
+  deleteRotaShift: (id: string) => Promise<void>;
+  bulkCreateRotaShifts: (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts']) => Promise<void>;
+  publishCurrentWeek: () => Promise<{ publishedAt: string; notifiedCount: number }>;
+  /** Leave marked on the grid for the viewed week (drafts only for a venue manager — server decides). */
+  weekLeaves: LeaveDto[];
+  refetchWeekLeaves: () => Promise<void>;
+  setRotaLeave: (input: Parameters<typeof setLeave>[1]) => Promise<void>;
+  removeRotaLeave: (id: string) => Promise<void>;
   publishInfo: PublishInfo | null;
-  /** True when the viewed week is published and has no edits since — every editor must gate its writes on this. */
+  /** True when the viewed week is published and has no DRAFT shifts/leave left in it (edits to published shifts are live, so they don't unlock it). Editors hide add/drag affordances on this. */
   weekLocked: boolean;
   refreshPublishInfo: () => void;
 }
@@ -205,7 +212,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const seq = ++reqSeqRef.current;
     const targetWeek = weekStart;
     try {
-      const dtos = await fetchWeekShifts(locationId, weekStart);
+      const dtos = await fetchWeekShifts(locationId, weekStart, session?.token);
       if (seq !== reqSeqRef.current) return;
       setWeekShifts(
         dtos.map((s) => ({
@@ -246,11 +253,34 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // `setState(false)` when already `false` is a no-op re-render.
       if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
-  }, [weekStart, locationId]);
+  }, [weekStart, locationId, session?.token]);
 
   useEffect(() => {
     void refetchWeekShifts();
   }, [refetchWeekShifts]);
+
+  // Leave for the viewed week — same week/venue/token keying and the same
+  // stale-response guard as `refetchWeekShifts`, above.
+  const [weekLeaves, setWeekLeaves] = useState<LeaveDto[]>([]);
+  const leaveSeqRef = useRef(0);
+  const refetchWeekLeaves = useCallback(async () => {
+    if (!locationId) {
+      setWeekLeaves([]);
+      return;
+    }
+    const seq = ++leaveSeqRef.current;
+    try {
+      const leaves = await fetchWeekLeaves(locationId, weekStart, session?.token);
+      if (seq === leaveSeqRef.current) setWeekLeaves(leaves);
+    } catch {
+      // Keep what's on screen on a connectivity blip (same rule as shifts);
+      // the next refetch replaces it.
+    }
+  }, [weekStart, locationId, session?.token]);
+
+  useEffect(() => {
+    void refetchWeekLeaves();
+  }, [refetchWeekLeaves]);
 
   const mergedRoster: Roster = useMemo(() => {
     const withCommitted = mergeCommitted(roster, committed);
@@ -333,10 +363,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   useEffect(() => {
+    // Managers only: seeding a STAFF session with `employees[0]` counted as an
+    // explicit "Viewing" pick in `pickViewedEmployee`, so a staff member who
+    // wasn't first on the roster opened Scheduling on a colleague's rota.
+    if (session?.user.systemRole !== 'OWNER' && session?.user.systemRole !== 'MANAGER') return;
     if (currentEmployeeId === undefined && mergedRoster.employees.length > 0) {
       setCurrentEmployeeId(mergedRoster.employees[0]!.id);
     }
-  }, [currentEmployeeId, mergedRoster.employees]);
+  }, [currentEmployeeId, mergedRoster.employees, session?.user.systemRole]);
 
   useEffect(() => {
     // Swap requests are session-gated server-side now. Same shared-device
@@ -474,9 +508,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const deleteRotaShift = useCallback(
-    async (id: string, actorId?: string) => {
+    async (id: string) => {
       if (!session) throw new Error('You must be signed in to do this.');
-      await deleteShift(session.token, id, actorId);
+      await deleteShift(session.token, id);
       // `buildCommitted` stamps the real persisted `Shift.id` onto a confirmed
       // upload row, so the row just deleted from the DB may also be sitting in
       // the never-refreshed `committed` snapshot. Refetching `weekShifts`
@@ -493,25 +527,41 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const bulkCreateRotaShifts = useCallback(
-    // `createdById` is threaded through so bulk-created shifts get a real
-    // actor in the AuditLog — the underlying client has always accepted it,
-    // this wrapper just never passed it on.
-    async (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts'], createdById?: string) => {
+    // The AuditLog actor is the session user, resolved server-side.
+    async (shifts: Parameters<typeof bulkCreateShifts>[1]['shifts']) => {
       if (!session) throw new Error('You must be signed in to do this.');
-      await bulkCreateShifts(session.token, { locationId: session.user.locationId, createdById, shifts });
+      await bulkCreateShifts(session.token, { locationId: session.user.locationId, shifts });
       await refetchWeekShifts();
     },
     [refetchWeekShifts, session],
   );
 
   const publishCurrentWeek = useCallback(
-    async (publishedById?: string) => {
+    async () => {
       if (!session) throw new Error('You must be signed in to do this.');
-      const result = await publishWeek(session.token, session.user.locationId, weekStart, publishedById);
-      await refetchWeekShifts();
+      const result = await publishWeek(session.token, session.user.locationId, weekStart);
+      await Promise.all([refetchWeekShifts(), refetchWeekLeaves()]);
       return result;
     },
-    [weekStart, refetchWeekShifts, session],
+    [weekStart, refetchWeekShifts, refetchWeekLeaves, session],
+  );
+
+  const setRotaLeave = useCallback(
+    async (input: Parameters<typeof setLeave>[1]) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await setLeave(session.token, input);
+      await refetchWeekLeaves();
+    },
+    [refetchWeekLeaves, session],
+  );
+
+  const removeRotaLeave = useCallback(
+    async (id: string) => {
+      if (!session) throw new Error('You must be signed in to do this.');
+      await deleteLeave(session.token, id);
+      await refetchWeekLeaves();
+    },
+    [refetchWeekLeaves, session],
   );
 
   // Publish/lock state is shared, not RotaBuilder-local: the Shift Editor
@@ -532,6 +582,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     refreshPublishInfo();
   }, [refreshPublishInfo]);
+
+  // Staff (and managers on a second device) pick up changes made elsewhere
+  // when they come back to the app or open a notification — no websockets in v0.
+  useRefetchOnReturn(
+    useCallback(() => {
+      void refetchWeekShifts();
+      void refetchWeekLeaves();
+      refreshPublishInfo();
+    }, [refetchWeekShifts, refetchWeekLeaves, refreshPublishInfo]),
+  );
 
   const weekLocked = Boolean(publishInfo?.publishedAt) && !publishInfo?.hasUnpublishedChanges;
 
@@ -568,6 +628,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       deleteRotaShift,
       bulkCreateRotaShifts,
       publishCurrentWeek,
+      weekLeaves,
+      refetchWeekLeaves,
+      setRotaLeave,
+      removeRotaLeave,
       publishInfo,
       weekLocked,
       refreshPublishInfo,
@@ -597,6 +661,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       deleteRotaShift,
       bulkCreateRotaShifts,
       publishCurrentWeek,
+      weekLeaves,
+      refetchWeekLeaves,
+      setRotaLeave,
+      removeRotaLeave,
       publishInfo,
       weekLocked,
       refreshPublishInfo,

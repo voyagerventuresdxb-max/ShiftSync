@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
 
 export const attendanceRouter = Router();
 
@@ -36,6 +37,10 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
     if (shiftId) {
       const shift = await prisma.shift.findUnique({ where: { id: shiftId } });
       if (!ownedOrNotFound(req, res, shift, `Shift "${shiftId}" not found.`)) return;
+      // Drafts are invisible to staff (lib/shiftVisibility.ts) — can't clock in against one either.
+      if (shift.status !== 'PUBLISHED' && !canSeeDraftShifts(req.user, shift.locationId)) {
+        return res.status(404).json({ error: `Shift "${shiftId}" not found.` });
+      }
     }
 
     // RACE CLOSED. The real enforcement is a DB-level partial unique index

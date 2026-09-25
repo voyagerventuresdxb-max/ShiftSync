@@ -7,6 +7,7 @@ import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.
 import { voiceModel } from './model.js';
 import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
 import { bestMatch } from '../lib/textSimilarity.js';
+import { visibleShiftFilter } from '../lib/shiftVisibility.js';
 
 export class VoiceIntentError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -59,7 +60,9 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
 
   const startOfToday = new Date(`${today}T00:00:00.000Z`);
   const shifts = await prisma.shift.findMany({
-    where: { userId: user.id, date: { gte: startOfToday } },
+    // Same draft rule as every other shift read (lib/shiftVisibility.ts): a
+    // STAFF caller's own schedule is PUBLISHED shifts only.
+    where: { userId: user.id, date: { gte: startOfToday }, ...visibleShiftFilter(user, user.locationId) },
     orderBy: { date: 'asc' },
     take: 10,
   });
@@ -228,15 +231,16 @@ export async function refinePublishRotaResponse(
   if (Number.isNaN(weekStart.getTime())) {
     return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to publish.' };
   }
-  const { shiftCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
-  if (shiftCount === 0) {
+  const { shiftCount, leaveCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
+  if (shiftCount === 0 && leaveCount === 0) {
     return {
       intent: 'UNRECOGNIZED',
       reason: `No shifts exist for the week of ${response.weekStart} yet.`,
       summary: `There are no shifts scheduled for the week of ${response.weekStart} yet — nothing to publish.`,
     };
   }
-  const summary = `This will publish ${shiftCount} shift${shiftCount === 1 ? '' : 's'} across ${staffCount} staff member${staffCount === 1 ? '' : 's'} for the week of ${response.weekStart} — confirm?`;
+  const leavePart = leaveCount > 0 ? ` and ${leaveCount} leave entr${leaveCount === 1 ? 'y' : 'ies'}` : '';
+  const summary = `This will publish ${shiftCount} shift${shiftCount === 1 ? '' : 's'}${leavePart} across ${staffCount} staff member${staffCount === 1 ? '' : 's'} for the week of ${response.weekStart} — confirm?`;
   return { ...response, summary };
 }
 

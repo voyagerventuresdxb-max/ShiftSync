@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { fetchMyShifts, ApiError, type MyShiftEntry } from '../api/myShifts';
@@ -8,6 +8,7 @@ import { weekDates, weekdayOf } from '../engine/rosterView';
 import { Announcements } from '../components/shiftsync/Announcements';
 import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { cn } from '../lib/utils';
+import { useRefetchOnReturn } from '../lib/scheduleRefresh';
 
 export default function MyShiftsContent() {
   const { session, logout } = useIdentity();
@@ -15,6 +16,10 @@ export default function MyShiftsContent() {
   const [shifts, setShifts] = useState<MyShiftEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Bumped when the person returns to the app or opens a notification, so a
+  // manager's edit shows up without a reload (lib/scheduleRefresh.ts).
+  const [refreshKey, setRefreshKey] = useState(0);
+  useRefetchOnReturn(useCallback(() => setRefreshKey((k) => k + 1), []));
 
   useEffect(() => {
     if (!session) {
@@ -49,7 +54,7 @@ export default function MyShiftsContent() {
     // `logout` is stable for this provider's lifetime; re-running on it would
     // re-fetch pointlessly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session, refreshKey]);
 
   if (!session) {
     return (
@@ -95,8 +100,7 @@ export default function MyShiftsContent() {
             {shifts.map((s) => (
               <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
                 <span className="font-medium">{s.date}</span> · {s.roleName} ·{' '}
-                {new Date(s.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–
-                {new Date(s.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {s.start}–{s.end}
               </li>
             ))}
           </ul>

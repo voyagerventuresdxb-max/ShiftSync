@@ -1,6 +1,7 @@
 import { prisma } from '../prisma.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
+import { findBlockingLeave, blockedByLeaveMessage } from './leaveActions.js';
 
 interface TemplateEntry {
   dayOffset: number;
@@ -25,17 +26,23 @@ interface TemplateEntry {
 export async function getRotaPublishPreview(
   locationId: string,
   weekStart: Date,
-): Promise<{ shiftCount: number; staffCount: number }> {
+): Promise<{ shiftCount: number; leaveCount: number; staffCount: number }> {
   const weekEnd = new Date(weekStart);
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
-  const shiftGroups = await prisma.shift.groupBy({
-    by: ['userId'],
-    where: { locationId, date: { gte: weekStart, lt: weekEnd } },
-    _count: true,
-  });
+  const [shiftGroups, leaves] = await Promise.all([
+    prisma.shift.groupBy({
+      by: ['userId'],
+      where: { locationId, date: { gte: weekStart, lt: weekEnd } },
+      _count: true,
+    }),
+    // Leave publishes with the shifts (publishRota), so the preview counts it
+    // too — otherwise voice refused a leave-only week REST would publish, and
+    // "N staff" undercounted who actually gets notified.
+    prisma.rotaLeave.findMany({ where: { locationId, date: { gte: weekStart, lt: weekEnd } }, select: { userId: true } }),
+  ]);
   const shiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
-  const staffCount = shiftGroups.filter((g) => g.userId !== null).length;
-  return { shiftCount, staffCount };
+  const staffIds = new Set([...shiftGroups.flatMap((g) => (g.userId ? [g.userId] : [])), ...leaves.map((l) => l.userId)]);
+  return { shiftCount, leaveCount: leaves.length, staffCount: staffIds.size };
 }
 
 export type PublishRotaResult =
@@ -47,7 +54,7 @@ export type PublishRotaResult =
  * Raw publish — exactly the `prisma.$transaction([...])` call
  * `routes/shifts.ts`'s `POST /:locationId/publish` made inline before this
  * extraction. Existence (location) and non-emptiness (the target week must
- * have at least one shift) checks live HERE, inside the action, rather than
+ * have at least one shift or leave entry) checks live HERE, inside the action, rather than
  * split across callers — unlike `sectionActions.ts`/`swapActions.ts`'s
  * validate-in-caller precedent, this slice's mutators own their own
  * validation so `routes/rotaTemplates.ts`/`routes/shifts.ts` and
@@ -71,9 +78,21 @@ export async function publishRota(input: {
     _count: true,
   });
   const shiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
-  if (shiftCount === 0) return { result: 'empty', message: 'No shifts exist for this week yet.' };
+  // Leave marked on the grid publishes with the shifts (RotaLeave, 2026-09-25).
+  const leaveUsers = await prisma.rotaLeave.findMany({
+    where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
+    select: { userId: true },
+    distinct: ['userId'],
+  });
+  if (shiftCount === 0 && leaveUsers.length === 0) return { result: 'empty', message: 'No shifts exist for this week yet.' };
 
-  const notifiedCount = shiftGroups.filter((g) => g.userId !== null).length;
+  const affectedUserIds = [
+    ...new Set([
+      ...shiftGroups.filter((g): g is typeof g & { userId: string } => g.userId !== null).map((g) => g.userId),
+      ...leaveUsers.map((l) => l.userId),
+    ]),
+  ];
+  const notifiedCount = affectedUserIds.length;
   // Capture one shared instant for both writes — see routes/shifts.ts's
   // original comment: without this, RotaPublish's `publishedAt` and Shift's
   // auto `@updatedAt` never line up, and every shift looks "changed since
@@ -89,11 +108,11 @@ export async function publishRota(input: {
       where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
       data: { status: 'PUBLISHED', updatedAt: publishedAt },
     }),
+    prisma.rotaLeave.updateMany({
+      where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
+      data: { status: 'PUBLISHED', updatedAt: publishedAt },
+    }),
   ]);
-
-  const affectedUserIds = shiftGroups
-    .filter((g): g is typeof g & { userId: string } => g.userId !== null)
-    .map((g) => g.userId);
 
   return { result: 'ok', publishedAt: publish.publishedAt, notifiedCount: publish.notifiedCount, affectedUserIds };
 }
@@ -102,7 +121,8 @@ export type ApplyRotaTemplateResult =
   | { result: 'ok'; createdCount: number; templateName: string }
   | { result: 'template_not_found'; message: string }
   | { result: 'invalid_role'; roleId: string; message: string }
-  | { result: 'invalid_user'; userId: string; message: string };
+  | { result: 'invalid_user'; userId: string; message: string }
+  | { result: 'blocked_by_leave'; message: string };
 
 /**
  * Raw apply — exactly the `withAuditedTransaction(...)` call
@@ -143,6 +163,16 @@ export async function applyRotaTemplate(input: {
         return { result: 'invalid_user', userId, message: `Staff member "${userId}" not found.` };
       }
     }
+  }
+
+  // Same leave rule as every other shift write (lib/actions/leaveActions.ts):
+  // one entry landing on a blocking leave day refuses the whole apply.
+  for (const e of entries) {
+    if (!e.userId) continue;
+    const date = new Date(input.weekStart);
+    date.setUTCDate(date.getUTCDate() + e.dayOffset);
+    const leave = await findBlockingLeave(String(e.userId), date);
+    if (leave) return { result: 'blocked_by_leave', message: blockedByLeaveMessage(leave) };
   }
 
   const location = await prisma.location.findUnique({ where: { id: template.locationId }, select: { timezone: true } });

@@ -21,7 +21,6 @@ export default function ScheduleEditorContent() {
     createRotaShift,
     updateRotaShift,
     deleteRotaShift,
-    currentEmployeeId,
     weekLocked,
     refreshPublishInfo,
   } = useAppState();
@@ -191,7 +190,7 @@ export default function ScheduleEditorContent() {
               {draft.id && (
                 <button
                   disabled={weekLocked || busy}
-                  onClick={() => void run(() => deleteRotaShift(draft.id!, currentEmployeeId), 'Could not delete that shift.')}
+                  onClick={() => void run(() => deleteRotaShift(draft.id!), 'Could not delete that shift.')}
                   aria-label="Delete shift"
                   className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-destructive/30 text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -203,12 +202,12 @@ export default function ScheduleEditorContent() {
                 onClick={() => {
                   if (draft.id) {
                     void run(
-                      () => updateRotaShift(draft.id!, { userId: draft.userId, start: draft.start, end: draft.end, actorId: currentEmployeeId }),
+                      () => updateRotaShift(draft.id!, { userId: draft.userId, start: draft.start, end: draft.end }),
                       'Could not save that shift.',
                     );
                   } else if (draft.roleId) {
                     void run(
-                      () => createRotaShift({ roleId: draft.roleId, userId: draft.userId, date: activeDate, start: draft.start, end: draft.end, createdById: currentEmployeeId }),
+                      () => createRotaShift({ roleId: draft.roleId, userId: draft.userId, date: activeDate, start: draft.start, end: draft.end }),
                       'Could not create that shift.',
                     );
                   }

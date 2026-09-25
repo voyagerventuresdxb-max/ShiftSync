@@ -3,10 +3,12 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
-import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
-import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { requireSession, requireManager, optionalSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { visibleShiftFilter } from '../lib/shiftVisibility.js';
+import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
-import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { createShift, editShift, removeShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
 
 export const shiftsRouter = Router();
@@ -59,8 +61,13 @@ async function venueTimezone(locationId: string): Promise<string> {
  * every consumer — signed-in or not — reads from). `/schedule` (the write
  * surface) requires a session; this read does not. Confirmed still correct
  * by the follow-up anonymous-read sweep.
+ *
+ * Drafts (2026-09-25, golden-path v0): PUBLISHED shifts only, unless the
+ * caller is a manager of THIS venue (`optionalSession` + `visibleShiftFilter`)
+ * — the builder needs its own drafts; staff and the anonymous kiosk never
+ * see a shift before it's published.
  */
-shiftsRouter.get('/:locationId', async (req, res) => {
+shiftsRouter.get('/:locationId', optionalSession, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();
@@ -73,7 +80,7 @@ shiftsRouter.get('/:locationId', async (req, res) => {
 
     const timezone = await venueTimezone(locationId);
     const shifts = await prisma.shift.findMany({
-      where: { locationId, date: { gte: start, lt: end } },
+      where: { locationId, date: { gte: start, lt: end }, ...visibleShiftFilter(req.user, locationId) },
       include: SHIFT_INCLUDE,
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
     });
@@ -85,7 +92,7 @@ shiftsRouter.get('/:locationId', async (req, res) => {
 });
 
 /**
- * POST /api/shifts — body: { roleId, userId?, date, start, end, breakMinutes?, briefingNote?, sidework?, createdById? }
+ * POST /api/shifts — body: { roleId, userId?, date, start, end, breakMinutes?, briefingNote?, sidework? }
  * `requireManager`-gated (2026-09-05 — see MEMORY.md; this was the real,
  * live gap a whole-branch review found: every mutation route here was
  * `requireSession`-only, so any authenticated STAFF session could create,
@@ -94,12 +101,10 @@ shiftsRouter.get('/:locationId', async (req, res) => {
  * Editor's own client renders these controls with no role check of its own
  * either). `locationId`/the acting user still come from the caller's own
  * session, not a client-supplied value, the same way `swapRequests.ts`'s
- * POST already resolves `requestedById`. `createdById` in the body is
- * honored for whichever MANAGER/OWNER is filing on behalf of the staff
- * member selected in the Shift Editor's "Viewing" dropdown; the `STAFF ?
- * self : ...` branch below is now unreachable (no STAFF session can pass
- * `requireManager`) and kept only as defense in depth, matching this
- * codebase's existing style at every other on-behalf-of site.
+ * POST already resolves `requestedById`. The actor (`createdById`) is always
+ * the signed-in manager (2026-09-25): a body-supplied id used to be honored,
+ * and the builder sent whoever was selected in "Viewing" — so the audit trail
+ * could name a STAFF member as the author of a manager's change.
  */
 shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
@@ -112,10 +117,9 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     const breakMinutes = Number(req.body?.breakMinutes ?? 0);
     const briefingNote = req.body?.briefingNote ? String(req.body.briefingNote).trim() : null;
     const sidework = Array.isArray(req.body?.sidework) ? req.body.sidework.map(String) : [];
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    // Always the signed-in manager — never a body-supplied id (an on-behalf
+    // id let the audit trail name whoever was selected in "Viewing", even STAFF).
+    const createdById = req.user!.id;
 
     if (!roleId) return res.status(400).json({ error: 'roleId is required.' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date is required, as YYYY-MM-DD.' });
@@ -131,6 +135,8 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     if (userId) {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
+      const leave = await findBlockingLeave(userId, date);
+      if (leave) return res.status(409).json({ error: blockedByLeaveMessage(leave, user.fullName) });
     }
 
     const timezone = await venueTimezone(locationId);
@@ -155,10 +161,9 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
 });
 
 /**
- * PATCH /api/shifts/:id — any subset of { roleId, userId, date, start, end, breakMinutes, briefingNote, sidework, actorId }
+ * PATCH /api/shifts/:id — any subset of { roleId, userId, date, start, end, breakMinutes, briefingNote, sidework }
  * `requireManager`-gated (2026-09-05, same fix as POST /, above — see its
- * comment and MEMORY.md). `actorId` in the body is honored for whichever
- * MANAGER/OWNER is acting (same "Viewing" on-behalf-of pattern as POST /).
+ * comment and MEMORY.md). The actor is always the session user, as POST /.
  */
 shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
@@ -200,16 +205,17 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
       data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
     }
+    const nextUserId = data.userId !== undefined ? (data.userId as string | null) : existing.userId;
+    if (nextUserId && (req.body?.userId !== undefined || req.body?.date !== undefined)) {
+      const leave = await findBlockingLeave(nextUserId, nextDate);
+      if (leave) return res.status(409).json({ error: blockedByLeaveMessage(leave) });
+    }
 
-    const actorId =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
-    const updated = await withAuditedTransaction(
-      prisma,
-      (tx) => updateShift(id, data as Prisma.ShiftUpdateInput, tx),
-      () => ({ locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id }),
-    );
+    // Always the signed-in manager — never a body-supplied id (an on-behalf
+    // id let the audit trail name whoever was selected in "Viewing", even STAFF).
+    const actorId = req.user!.id;
+    // editShift = audit row + write + "your shift changed" if it was PUBLISHED (shared with voice EDIT_SHIFT).
+    const updated = await editShift({ id, data: data as Prisma.ShiftUpdateInput, audit: { locationId: existing.locationId, actorId } });
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });
   } catch (err) {
     console.error('[shifts.update] failed', err);
@@ -217,27 +223,17 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   }
 });
 
-/** DELETE /api/shifts/:id — body (optional): { actorId }. `requireManager`-gated (2026-09-05, same fix as POST /, above); same on-behalf-of rule as PATCH. */
+/** DELETE /api/shifts/:id — `requireManager`-gated (2026-09-05, same fix as POST /, above); actor is always the session user, as PATCH. */
 shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
-    const actorId =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
-    await withAuditedTransaction(
-      prisma,
-      async (tx) => {
-        // Audit-before-delete: writeAuditLog runs directly inside mutate (in
-        // this original order), and buildEntry below returns null so the
-        // helper doesn't also write a second row after the delete.
-        await writeAuditLog(tx, { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id });
-        await tx.shift.delete({ where: { id } });
-      },
-      () => null,
-    );
+    // Always the signed-in manager — never a body-supplied id (an on-behalf
+    // id let the audit trail name whoever was selected in "Viewing", even STAFF).
+    const actorId = req.user!.id;
+    // removeShift = audit-before-delete + delete + "your shift was removed" if it was PUBLISHED.
+    await removeShift({ id, audit: { locationId: existing.locationId, actorId } });
     return res.status(204).send();
   } catch (err) {
     console.error('[shifts.delete] failed', err);
@@ -246,18 +242,16 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
 });
 
 /**
- * POST /api/shifts/bulk — body: { createdById?, shifts: [{ roleId, userId?, date, start, end, breakMinutes? }] }
+ * POST /api/shifts/bulk — body: { shifts: [{ roleId, userId?, date, start, end, breakMinutes? }] }
  * `requireManager`-gated (2026-09-05, same fix as POST /, above). `locationId`
- * comes from the session, and `createdById` in the body is honored for
- * whichever MANAGER/OWNER is acting — same rules as POST /.
+ * and the actor both come from the session — same rules as POST /.
  */
 shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    // Always the signed-in manager — never a body-supplied id (an on-behalf
+    // id let the audit trail name whoever was selected in "Viewing", even STAFF).
+    const createdById = req.user!.id;
     type BulkShiftRow = { roleId?: unknown; userId?: unknown; date: string; start: string; end: string; breakMinutes?: number };
     const rows = (Array.isArray(req.body?.shifts) ? req.body.shifts : []) as BulkShiftRow[];
     if (rows.length === 0) return res.status(400).json({ error: 'shifts must be a non-empty array.' });
@@ -286,6 +280,13 @@ shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
         const user = usersById.get(userId);
         if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
       }
+    }
+    // One blocking leave anywhere in the batch rejects the whole batch — the
+    // same all-or-nothing rule as the role/user checks above.
+    for (const r of rows) {
+      if (!r.userId) continue;
+      const leave = await findBlockingLeave(String(r.userId), r.date);
+      if (leave) return res.status(409).json({ error: blockedByLeaveMessage(leave) });
     }
 
     const timezone = await venueTimezone(locationId);
@@ -316,10 +317,11 @@ shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
 });
 
 /**
- * POST /api/shifts/:locationId/publish — body: { weekStart, publishedById? }
+ * POST /api/shifts/:locationId/publish — body: { weekStart }
  * `requireManager`-gated (2026-09-05, same fix as POST /, above), scoped to
- * the caller's own location; `publishedById` in the body is honored for
- * whichever MANAGER/OWNER is acting — same rules as POST /.
+ * the caller's own location. `publishedById` is always the session user — a
+ * body value is ignored (2026-09-25: the builder sent the "Viewing" employee,
+ * so RotaPublish rows named a STAFF member as publisher).
  */
 shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async (req, res) => {
   try {
@@ -327,10 +329,9 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     if (!assertOwnsLocation(req, res, locationId)) return;
     const weekStart = String(req.body?.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
-    const publishedById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.publishedById ? String(req.body.publishedById).trim() : '') || req.user!.id;
+    // Always the signed-in manager — never a body-supplied id (an on-behalf
+    // id let the audit trail name whoever was selected in "Viewing", even STAFF).
+    const publishedById = req.user!.id;
 
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const result = await publishRota({ locationId, weekStart: start, publishedById });
@@ -369,9 +370,16 @@ shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
     const publish = await prisma.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
     if (!publish) return res.status(200).json({ publishedAt: null, notifiedCount: 0, hasUnpublishedChanges: false });
 
-    const changedCount = await prisma.shift.count({
-      where: { locationId, date: { gte: start, lt: end }, updatedAt: { gt: publish.publishedAt } },
-    });
+    // "Unpublished changes" = anything still DRAFT in the week (2026-09-25).
+    // An edit to an already-PUBLISHED shift is live the moment it's saved
+    // (and its staff member is notified — lib/actions/shiftActions.ts), so it
+    // no longer counts. (This used to compare `updatedAt > publishedAt`,
+    // which reported live edits as "unpublished changes".)
+    const [draftShifts, draftLeaves] = await Promise.all([
+      prisma.shift.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),
+      prisma.rotaLeave.count({ where: { locationId, date: { gte: start, lt: end }, status: 'DRAFT' } }),
+    ]);
+    const changedCount = draftShifts + draftLeaves;
     return res.status(200).json({
       publishedAt: publish.publishedAt.toISOString(),
       notifiedCount: publish.notifiedCount,

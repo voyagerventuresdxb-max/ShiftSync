@@ -11,7 +11,7 @@ import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDe
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
-import { createShift, updateShift } from '../lib/actions/shiftActions.js';
+import { createShift, editShift } from '../lib/actions/shiftActions.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
 import { createAnnouncement, createShoutout } from '../lib/actions/communicationActions.js';
@@ -19,6 +19,8 @@ import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
+import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
+import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
 
 export const voiceRouter = Router();
 
@@ -328,8 +330,10 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         return respond(200, { executed: true, result: result.mark }, 'EXECUTED');
       }
       case 'REQUEST_SWAP': {
-        const shift = await prisma.shift.findUnique({ where: { id: intent.shiftId }, select: { userId: true, locationId: true } });
-        if (!shift || shift.userId !== actorId || shift.locationId !== locationId) {
+        const shift = await prisma.shift.findUnique({ where: { id: intent.shiftId }, select: { userId: true, locationId: true, status: true } });
+        // Drafts are invisible to staff (lib/shiftVisibility.ts) — same 404 as the REST route.
+        const hiddenDraft = shift?.status !== 'PUBLISHED' && !canSeeDraftShifts(req.user, locationId);
+        if (!shift || hiddenDraft || shift.userId !== actorId || shift.locationId !== locationId) {
           const msg = 'That shift could not be found among your own upcoming shifts.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
@@ -390,6 +394,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // 'conflict' is NOT "already decided" (the PENDING guard above covers
         // that) — isRequestLocked() only ever fires on a still-PENDING request
         // whose shift a DIFFERENT approved request already reassigned.
+        if (result.result === 'target_on_leave') {
+          return respond(409, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        }
         if (result.result === 'conflict') {
           const msg = 'That shift was already reassigned by another swap request.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
@@ -462,6 +469,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
             const msg = `Staff member "${intent.userId}" not found.`;
             return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
           }
+          const leave = await findBlockingLeave(intent.userId, intent.date);
+          if (leave) {
+            const msg = blockedByLeaveMessage(leave, staff.fullName);
+            return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+          }
         }
         const timezone = await venueTimezoneFor(locationId);
         const overnight = intent.end <= intent.start;
@@ -527,12 +539,17 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
           data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
         }
+        const nextUserId = intent.userId !== undefined ? intent.userId : existing.userId;
+        if (nextUserId && (intent.userId !== undefined || intent.date !== undefined)) {
+          const leave = await findBlockingLeave(nextUserId, nextDate);
+          if (leave) {
+            const msg = blockedByLeaveMessage(leave);
+            return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+          }
+        }
 
-        const updated = await withAuditedTransaction(
-          prisma,
-          (tx) => updateShift(intent.shiftId, data as Parameters<typeof updateShift>[1], tx),
-          () => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: intent.shiftId, note }),
-        );
+        // Same mutator as REST PATCH: audit row + write + staff notification when the shift was PUBLISHED.
+        const updated = await editShift({ id: intent.shiftId, data: data as Parameters<typeof editShift>[0]['data'], audit: { locationId, actorId, note } });
         return respond(200, { executed: true, result: updated }, 'EXECUTED');
       }
       case 'ASSIGN_SECTION': {
@@ -617,7 +634,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
         const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
         if (result.result !== 'ok') {
-          return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+          return respond(result.result === 'blocked_by_leave' ? 409 : 404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }
         return respond(201, { executed: true, result: { createdCount: result.createdCount, templateName: result.templateName } }, 'EXECUTED');
       }
