@@ -565,7 +565,7 @@ export function RotaBuilder() {
               </button>
             </div>
 
-            <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto">
               <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium', locked ? 'border-success/25 bg-success/12 text-success' : 'border-warning/25 bg-warning/12 text-warning')}>
                 {locked ? <Lock className="h-3 w-3" /> : <PencilLine className="h-3 w-3" />}
                 {locked ? 'Published · locked' : publishInfo?.publishedAt ? 'Unpublished changes' : 'Draft'}
@@ -604,9 +604,11 @@ export function RotaBuilder() {
             }}
           >
             <div className="overflow-x-auto">
-              <div className="min-w-[860px]">
-                <div className="grid grid-cols-[10rem_repeat(7,minmax(0,1fr))] border-b border-border bg-background/40">
-                  <div className="p-3 eyebrow">Staff</div>
+              {/* Phones scroll the week sideways inside this box (never the page);
+                  the name column and section labels stay pinned on the left. */}
+              <div className="min-w-[640px] sm:min-w-[860px]">
+                <div className="grid grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] border-b border-border bg-background/40 sm:grid-cols-[10rem_repeat(7,minmax(0,1fr))]">
+                  <div className="sticky left-0 z-[2] bg-surface p-3 eyebrow">Staff</div>
                   {days.map((d) => (
                     <div key={d} className="p-2.5 text-center text-xs font-medium">{weekdayOf(d)} {d.slice(8)}</div>
                   ))}
@@ -626,15 +628,17 @@ export function RotaBuilder() {
                         row.flagged ? 'text-warning' : 'text-muted-foreground',
                       )}
                     >
-                      <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-300', rowCollapsed && '-rotate-90')} />
-                      <span>{row.label}</span>
-                      <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
-                        {row.people.length} · {rowShiftCount} shift{rowShiftCount === 1 ? '' : 's'}
+                      <span className="sticky left-3 flex items-center gap-2">
+                        <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform duration-300', rowCollapsed && '-rotate-90')} />
+                        <span>{row.label}</span>
+                        <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
+                          {row.people.length} · {rowShiftCount} shift{rowShiftCount === 1 ? '' : 's'}
+                        </span>
                       </span>
                     </button>
                     {!rowCollapsed && row.people.map((person) => (
-                      <div key={person.id} className="grid grid-cols-[10rem_repeat(7,minmax(0,1fr))] border-b border-border/60">
-                        <div className="flex items-center gap-2 p-3 text-sm font-medium">
+                      <div key={person.id} className="grid grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] border-b border-border/60 sm:grid-cols-[10rem_repeat(7,minmax(0,1fr))]">
+                        <div className="sticky left-0 z-[2] flex min-w-0 items-center gap-2 bg-surface p-2 text-xs font-medium sm:p-3 sm:text-sm">
                           {person.userId === null && <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                           <span className="truncate">{person.name}</span>
                         </div>

@@ -114,7 +114,7 @@ export default function PolicyDocuments({ locationId, isManager }: { locationId:
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
-          <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input type="file" accept="application/pdf" className="min-w-0 max-w-full" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           <button
             className="btn btn-primary"
             onClick={() => void handleUpload()}
