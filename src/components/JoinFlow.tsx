@@ -1,7 +1,9 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, requestJoinOtp, verifyJoinOtp } from '../api/join';
 import { requestLoginOtp, verifyLoginOtp } from '../api/identity';
+import { getLoginConfig, type LoginMethods } from '../api/loginLinks';
+import { extractLoginLinkToken, LOGIN_LINK_PATH } from '../../shared/loginLinks';
 import { useIdentity } from '../state/IdentityContext';
 
 type Phase = 'phone' | 'otp' | 'pending' | 'error';
@@ -72,6 +74,41 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
   const [devCode, setDevCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const navigate = useNavigate();
+
+  // Which front doors exist (see server lib/loginLinks.ts LOGIN_METHODS).
+  // Until the server answers, only the paste box shows: it works in every
+  // mode, whereas the phone-code form would 403 in links-only mode.
+  const [loginMethods, setLoginMethods] = useState<LoginMethods | null>(null);
+  const [pastedLink, setPastedLink] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    void getLoginConfig().then((config) => {
+      if (!cancelled) setLoginMethods(config.loginMethods);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const otpEnabled = loginMethods === 'otp';
+
+  /**
+   * "Paste your login link": the installed home-screen app has its own
+   * storage, separate from Safari's, so a link tapped in WhatsApp (which
+   * opens Safari) signs in Safari only. Pasting the same link inside the
+   * installed app is how it gets its own session — hence this box exists
+   * on the login screen in both browser and installed contexts. It only
+   * navigates; the link is spent by the Sign in tap on /login/link.
+   */
+  const openPastedLink = () => {
+    const token = extractLoginLinkToken(pastedLink);
+    if (!token) {
+      setError("That doesn't look like a ShiftSync login link. Paste the whole link your manager sent you.");
+      return;
+    }
+    setError(null);
+    navigate(`${LOGIN_LINK_PATH}#${token}`);
+  };
 
   const isLogin = mode === 'login';
 
@@ -144,9 +181,11 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
     <section className="panel mx-auto max-w-md p-6">
       <h2 className="text-lg font-semibold">{isLogin ? 'Log in to ShiftSync' : 'Join ShiftSync'}</h2>
       <p className="hint mt-1">
-        {isLogin
-          ? "We'll text a code to the number your venue has on file."
-          : "New here? We'll match your number against your venue's roster."}
+        {!otpEnabled
+          ? 'ShiftSync signs you in with a link from your manager. Paste it below.'
+          : isLogin
+            ? "We'll text a code to the number your venue has on file."
+            : "New here? We'll match your number against your venue's roster."}
       </p>
 
       {error && (
@@ -156,6 +195,30 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
       )}
 
       {phase === 'phone' && (
+        <div className="mt-4 space-y-2" data-testid="paste-login-link">
+          <label className="text-xs text-muted-foreground" htmlFor="pasted-login-link">
+            {otpEnabled ? 'Have a login link? Paste it here' : 'Paste your login link'}
+          </label>
+          <input
+            id="pasted-login-link"
+            className="staff-directory-input w-full"
+            placeholder="https://…/login/link#…"
+            value={pastedLink}
+            onChange={(e) => setPastedLink(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') openPastedLink();
+            }}
+            autoComplete="off"
+            inputMode="url"
+          />
+          <button className={`btn ${otpEnabled ? 'btn-ghost' : 'btn-primary'} w-full`} onClick={openPastedLink} disabled={!pastedLink.trim()}>
+            Open login link
+          </button>
+          {!otpEnabled && <p className="hint">Don&apos;t have one? Ask your manager to send you a login link.</p>}
+        </div>
+      )}
+
+      {phase === 'phone' && otpEnabled && (
         <div className="mt-4 space-y-3">
           <input
             className="staff-directory-input w-full"
@@ -210,7 +273,7 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
        * mode when there's actually a venue to join, and the /signup link
        * below stands in as the real next step otherwise.
        */}
-      {phase !== 'pending' && (isLogin ? Boolean(locationId) : true) && (
+      {phase !== 'pending' && otpEnabled && (isLogin ? Boolean(locationId) : true) && (
         <button
           type="button"
           className="mt-5 w-full text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
@@ -229,7 +292,7 @@ export default function JoinFlow({ locationId, initialMode, returnTo }: { locati
        * not just whenever the CURRENT mode happens to be join — since a
        * locationId-less login screen has no working path to join at all.
        */}
-      {phase !== 'pending' && (!isLogin || !locationId) && (
+      {phase !== 'pending' && otpEnabled && (!isLogin || !locationId) && (
         <p className="mt-2 text-center text-xs text-muted-foreground">
           Setting up a brand-new venue?{' '}
           <Link to="/signup" className="underline-offset-2 hover:text-foreground hover:underline">

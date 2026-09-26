@@ -7,6 +7,7 @@ import {
 } from '../api/staffDirectory';
 import { ApiError } from '../api/schedules';
 import { createRole, fetchRoles, removeRole, renameRole, type RoleSummary } from '../api/roles';
+import { issueLoginLink, LoginLinkApiError, type IssuedLoginLink } from '../api/loginLinks';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice, OfflineActionNotice } from './shiftsync/OfflineNotice';
@@ -283,6 +284,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                     <th>Status</th>
                     <th>Venue</th>
                     <th>Role</th>
+                    {isManager && <th>Login link</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -294,6 +296,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                       disabled={!online}
                       isManager={isManager}
                       roles={roles}
+                      sessionToken={session?.token ?? null}
                       onSave={(updates, errorMessage) => handleFieldSave(entry, updates, errorMessage)}
                     />
                   ))}
@@ -393,6 +396,7 @@ function StaffRow({
   disabled,
   isManager,
   roles,
+  sessionToken,
   onSave,
 }: {
   entry: StaffDirectoryEntry;
@@ -403,6 +407,8 @@ function StaffRow({
   isManager: boolean;
   /** The venue's active roles, for the Role picker. */
   roles: RoleSummary[];
+  /** Bearer token for "Send login link"; null renders the button disabled. */
+  sessionToken: string | null;
   onSave: (updates: EditableFieldUpdates, errorMessage: string) => void;
 }) {
   const [title, setTitle] = useState(entry.jobTitle ?? '');
@@ -527,6 +533,75 @@ function StaffRow({
           )}
         </select>
       </td>
+      <td>
+        <LoginLinkCell entry={entry} sessionToken={sessionToken} disabled={disabled} />
+      </td>
     </tr>
+  );
+}
+
+/**
+ * "Send login link" for one staff member. The server decides who the caller
+ * may issue for (manager → own staff, owner → own org, platform admin →
+ * owners/managers) and answers 404 otherwise — surfaced here as a plain
+ * sentence rather than a raw error. The link is shown once, with the native
+ * share sheet (WhatsApp on a phone) and a copy fallback; it is never listed
+ * again, since only its hash is stored.
+ */
+function LoginLinkCell({ entry, sessionToken, disabled }: { entry: StaffDirectoryEntry; sessionToken: string | null; disabled: boolean }) {
+  const [issued, setIssued] = useState<IssuedLoginLink | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const send = async () => {
+    if (!sessionToken) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      setIssued(await issueLoginLink(sessionToken, entry.id));
+    } catch (err) {
+      if (err instanceof LoginLinkApiError && err.status === 404) setMessage("You can't send a login link to this person.");
+      else if (err instanceof LoginLinkApiError && err.status === 429) setMessage('Too many links sent in the last hour — try again later.');
+      else setMessage(err instanceof Error ? err.message : 'Could not create a login link.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const share = async () => {
+    if (!issued) return;
+    const payload = { title: 'ShiftSync login link', text: issued.shareText, url: issued.url };
+    try {
+      if (typeof navigator.share === 'function') {
+        await navigator.share(payload);
+        return;
+      }
+      await navigator.clipboard.writeText(`${issued.shareText}\n${issued.url}`);
+      setMessage('Copied — paste it into WhatsApp.');
+    } catch {
+      // Share sheet dismissed, or clipboard blocked — the link is still shown below.
+    }
+  };
+
+  if (!entry.isActive) return <span className="hint">—</span>;
+
+  return (
+    <div className="space-y-1">
+      <button className="btn btn-ghost" onClick={() => void send()} disabled={busy || disabled || !sessionToken}>
+        {busy ? 'Creating…' : issued ? 'New link' : 'Send login link'}
+      </button>
+      {issued && (
+        <div className="space-y-1">
+          <button className="btn btn-primary" onClick={() => void share()}>
+            {typeof navigator !== 'undefined' && typeof navigator.share === 'function' ? 'Share…' : 'Copy link'}
+          </button>
+          <code className="block max-w-[16rem] break-all text-[11px] text-muted-foreground" data-testid="login-link-url">
+            {issued.url}
+          </code>
+          <p className="hint">Works once · expires {new Date(issued.expiresAt).toLocaleString()}</p>
+        </div>
+      )}
+      {message && <p className="hint">{message}</p>}
+    </div>
   );
 }

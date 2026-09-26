@@ -5,6 +5,7 @@ import { findPhoneMatches } from './identity.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
 import { otpRequestRateLimiters, otpVerifyRateLimiters } from '../middleware/rateLimit.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { devOtpEchoEnabled, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const signupRouter = Router();
@@ -17,7 +18,7 @@ export const signupRouter = Router();
  * `locationId` here because there is no location yet; that's the entire
  * point of this route.
  */
-signupRouter.post('/request-otp', ...otpRequestRateLimiters, async (req, res) => {
+signupRouter.post('/request-otp', requireOtpEnabled, ...otpRequestRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
@@ -48,7 +49,7 @@ signupRouter.post('/request-otp', ...otpRequestRateLimiters, async (req, res) =>
  * collects the venue's real emirate/address/venueType right after this, so
  * only the bare minimum is collected here.
  */
-signupRouter.post('/verify-otp', ...otpVerifyRateLimiters, async (req, res) => {
+signupRouter.post('/verify-otp', requireOtpEnabled, ...otpVerifyRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();

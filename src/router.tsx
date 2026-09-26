@@ -13,6 +13,7 @@ import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
 import OnboardingContent from './routes/OnboardingRoute';
+import LoginLinkContent from './routes/LoginLinkRoute';
 
 /**
  * Gates the manager-dashboard pages (Scheduling/Approvals, Floor Plan,
@@ -264,6 +265,9 @@ export const router = createBrowserRouter([
       },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
+      // One-time login links land here (token in the fragment). Never behind
+      // RequireSession — this IS how a session is obtained. See LoginLinkRoute.
+      { path: '/login/link', element: <LoginLinkContent />, handle: handles.join },
       // Account creation moved INTO the onboarding wizard as its first step
       // (2026-09-16, see OnboardingRoute.tsx/AccountScreen.tsx); kept as a
       // redirect so the "Sign up your restaurant" links and any old bookmark

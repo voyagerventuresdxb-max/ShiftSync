@@ -59,6 +59,8 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | `DATABASE_URL` | the Railway Postgres URL |
    | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the CORS allowlist and the only origin invite links are minted for (`server/src/lib/frontendOrigins.ts`); comma-separate to add a custom domain later. **The server refuses to start in production without it.** |
    | `TRUST_PROXY` | `2` — number of reverse-proxy hops in front of the API (Railway's edge + the Vercel rewrite), so the per-IP login rate limits see the real client address instead of Vercel's. Set `1` if the API is ever called directly rather than through Vercel. |
+   | `LOGIN_METHODS` | leave unset (= `links`): people sign in with one-time login links only and the phone-code (OTP) routes answer 403. `otp` re-enables the phone-code flows — only once real SMS/WhatsApp delivery exists. |
+   | `LOGIN_LINK_TTL_HOURS` | optional, default `24` — how long an issued login link stays redeemable. Also quoted in the share text. |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice) |
    | `PORT` | injected by Railway; the server reads it |
@@ -67,6 +69,23 @@ history from scratch, which is exactly what `server:start` does on every boot.
    the live site. Do **not** work around that with `ALLOW_DEV_OTP_ECHO` (see below) —
    it lets anyone who knows a phone number log in as that person. One-time login links
    shared by a manager are the planned replacement.
+
+### Getting the first people in (login links)
+
+There is no self-signup in links mode. Two operator-only scripts, run on the API
+host (`tsx` is installed there); neither has an API equivalent by design:
+
+```
+tsx server/scripts/create-org-shell.ts --venue "Il Gattopardo" --owner "Layla Haddad" --phone +971501234567
+    → creates the venue shell (Organization + Location + OWNER + default roles) and prints the
+      owner's first login link. Send it on WhatsApp; their tap lands in the onboarding wizard at Venue.
+tsx server/scripts/grant-platform-admin.ts +971501234567
+    → flags that user as platform admin (may issue links to any venue's owners/managers from the app).
+```
+
+Locally the same scripts run as `npm run org:create -- …` and `npm run admin:grant -- …`
+(against the current branch's schema). From then on: owners send links to their managers and
+staff, managers to their staff — Staff Directory → "Send login link" → share sheet.
 
 ### Required in production
 

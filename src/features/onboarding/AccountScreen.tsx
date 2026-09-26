@@ -1,6 +1,8 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, requestSignupOtp, verifySignupOtp } from '../../api/signup';
+import { getLoginConfig, type LoginMethods } from '../../api/loginLinks';
+import { extractLoginLinkToken, LOGIN_LINK_PATH } from '../../../shared/loginLinks';
 import { useIdentity } from '../../state/IdentityContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
 
@@ -73,7 +75,99 @@ function SecondaryLink({ to, children }: { to: string; children: React.ReactNode
   );
 }
 
-export default function AccountScreen({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
+/**
+ * Links-only mode (LOGIN_METHODS=links, the default): there is no
+ * phone-code signup, so the wizard's Account step becomes "paste the login
+ * link you were sent". A brand-new venue's owner gets that first link from
+ * the operator (server/scripts/create-org-shell.ts); their tap lands them
+ * back in this wizard at Venue, already signed in, so this step is skipped
+ * for them entirely (OnboardingRoute's `skipAccount`).
+ */
+function LinkOnlyAccountScreen({ onBack }: { onBack: () => void }) {
+  const navigate = useNavigate();
+  const [pastedLink, setPastedLink] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const enabled = !!pastedLink.trim();
+  const openPastedLink = () => {
+    const token = extractLoginLinkToken(pastedLink);
+    if (!token) {
+      setError("That doesn't look like a ShiftSync login link. Paste the whole link you were sent.");
+      return;
+    }
+    navigate(`${LOGIN_LINK_PATH}#${token}`);
+  };
+  const primaryStyle: React.CSSProperties = {
+    width: '100%',
+    display: 'block',
+    textAlign: 'center',
+    padding: '16px 20px',
+    borderRadius: 14,
+    background: enabled ? 'var(--ob-bone)' : 'rgba(239,234,224,.10)',
+    color: enabled ? '#100D0A' : 'var(--ob-dim-2)',
+    font: "600 14px/1 'Manrope'",
+    letterSpacing: '.005em',
+    transition: 'background-color var(--ob-t), color var(--ob-t)',
+    border: 0,
+    cursor: enabled ? 'pointer' : 'default',
+  };
+  return (
+    <OnboardingScreenShell
+      stepIndex={0}
+      eyebrow="Step 1 of 5 · Account"
+      title="Your login link."
+      onBack={onBack}
+      footer={
+        <>
+          <button onClick={openPastedLink} disabled={!enabled} style={primaryStyle}>
+            Open login link
+          </button>
+          <div style={{ textAlign: 'center', marginTop: 14, font: "500 10px/1 'Manrope'", letterSpacing: '.28em', textTransform: 'uppercase', color: 'var(--ob-dim-2)' }}>
+            Next · Venue
+          </div>
+        </>
+      }
+    >
+      {error && <div style={{ color: '#e5484d', font: "400 13px/1.5 'Manrope'" }}>{error}</div>}
+      <div style={{ font: "400 14px/1.55 'Manrope'", color: 'var(--ob-stone)', maxWidth: 300 }}>
+        ShiftSync is invite-only right now. Paste the login link you were sent — it works once and signs you straight in.
+      </div>
+      <Field label="Login link" value={pastedLink}>
+        <input
+          type="url"
+          inputMode="url"
+          autoComplete="off"
+          value={pastedLink}
+          onChange={(e) => setPastedLink(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') openPastedLink();
+          }}
+          placeholder="https://…/login/link#…"
+          style={INPUT}
+        />
+      </Field>
+    </OnboardingScreenShell>
+  );
+}
+
+export default function AccountScreen(props: { onBack: () => void; onContinue: () => void }) {
+  const [loginMethods, setLoginMethods] = useState<LoginMethods | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getLoginConfig().then((config) => {
+      if (!cancelled) setLoginMethods(config.loginMethods);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // Nothing renders until the mode is known — showing the phone form for a
+  // beat and then swapping it out would be worse than a short blank.
+  if (loginMethods === null) return null;
+  if (loginMethods === 'links') return <LinkOnlyAccountScreen onBack={props.onBack} />;
+  return <OtpAccountScreen {...props} />;
+}
+
+function OtpAccountScreen({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const { login } = useIdentity();
   const [phase, setPhase] = useState<Phase>('phone');
   const [phone, setPhone] = useState('');

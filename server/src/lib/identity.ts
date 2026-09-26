@@ -110,10 +110,13 @@ export async function verifyOtpCode(
 }
 
 /** Issues a new bearer session token for a real, already-verified User. */
-export async function issueSession(userId: string): Promise<{ plainToken: string; expiresAt: Date }> {
+export async function issueSession(
+  userId: string,
+  client: Pick<typeof prisma, 'session'> = prisma,
+): Promise<{ plainToken: string; expiresAt: Date }> {
   const plainToken = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await prisma.session.create({
+  await client.session.create({
     data: { userId, tokenHash: hashOtp(plainToken), expiresAt },
   });
   return { plainToken, expiresAt };
@@ -137,4 +140,41 @@ export async function resolveSession(plainToken: string): Promise<User | null> {
   });
   if (!session || session.expiresAt < new Date()) return null;
   return session.user;
+}
+
+/**
+ * Finds active users anywhere in the system whose stored phone normalizes to
+ * the same digits as `phone`. Returns ALL matches, because `phoneDigits` is
+ * lossy (it strips leading `971`/`0`) and `User.phone` has no unique
+ * constraint at the DB level yet — two genuinely different numbers can
+ * normalize to the same digits, and silently picking the first would hand
+ * one person another person's session.
+ *
+ * Deliberately GLOBAL, not location-scoped: login no longer requires knowing
+ * which venue you belong to before you can even request a code — you don't
+ * know that up front from a bare `/join?mode=login` redirect (see
+ * `RequireSession` in `router.tsx`, and the real bug this fixed: it redirects
+ * a signed-out visit with no location context at all, so a login flow that
+ * required one couldn't be reached). Matches `server/src/routes/signup.ts`'s
+ * own global, unscoped phone lookup — both now treat phone as the real
+ * cross-venue identity key, consistent with Decision A1 (one User, one
+ * Location, phone intended to be globally unique — a DB-level unique
+ * constraint on `User.phone` is a separate, still-pending, explicitly
+ * user-gated migration; this is the application-layer half of that same
+ * model, already necessary regardless of when that migration lands).
+ */
+// Exported so signup.ts's own global "does this phone already have an
+// account" check reuses this instead of re-implementing the same lossy
+// digits-filter a second time — one lookup, one place to fix if phone
+// normalization ever changes. Selects only the fields either caller actually
+// needs (not full rows) — this scans every active phone-bearing User in the
+// system on every login attempt now that it's global, not location-scoped,
+// so keeping each row cheap matters more than it did before.
+export async function findPhoneMatches(phone: string) {
+  const digits = phoneDigits(phone);
+  const users = await prisma.user.findMany({
+    where: { isActive: true, phone: { not: null } },
+    select: { id: true, phone: true, fullName: true, jobTitle: true, locationId: true, systemRole: true },
+  });
+  return users.filter((u) => u.phone && phoneDigits(u.phone) === digits);
 }

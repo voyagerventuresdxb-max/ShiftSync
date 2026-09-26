@@ -122,12 +122,20 @@ model User {
   hiredAt           DateTime?  @map("hired_at")
   terminatedAt      DateTime?  @map("terminated_at")
   isActive          Boolean    @default(true) @map("is_active")
+  // Platform operator (us), not a venue role: may issue login links to any
+  // venue's owners/managers. Deliberately a flag rather than a SystemRole
+  // value so it never collides with the OWNER/MANAGER/STAFF permission
+  // model, and it is granted ONLY by the CLI (server/scripts/
+  // grant-platform-admin.ts) — no API route can set it.
+  isPlatformAdmin   Boolean    @default(false) @map("is_platform_admin")
   createdAt         DateTime   @default(now()) @map("created_at")
   updatedAt         DateTime   @updatedAt @map("updated_at")
 
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
   role     Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
 
+  loginLinks              LoginLink[]                @relation("LoginLinkUser")
+  loginLinksIssued        LoginLink[]                @relation("LoginLinkIssuedBy")
   shifts                  Shift[]                    @relation("ShiftAssignee")
   shiftsCreated           Shift[]                    @relation("ShiftCreatedBy")
   swapRequestsInitiated   ShiftSwapRequest[]         @relation("SwapRequestedBy")
@@ -300,6 +308,10 @@ enum AuditAction {
   ROTA_TEMPLATE_DELETED
   POLICY_DOCUMENT_UPLOADED
   POLICY_DOCUMENT_DELETED
+  LOGIN_LINK_ISSUED
+  LOGIN_LINK_REDEEMED
+  LOGIN_LINK_REVOKED
+  LOGIN_LINK_REJECTED
 }
 
 model AuditLog {
@@ -704,6 +716,37 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+/**
+ * A one-time login link (server/src/lib/actions/loginLinkActions.ts). Only
+ * the sha256 of the token is stored; the token itself travels in the URL
+ * fragment. Bound to one user, single-use (`consumedAt` is set atomically
+ * on redeem), expires after LOGIN_LINK_TTL_HOURS, revocable (`revokedAt`),
+ * and superseded whenever a newer link is issued for the same user.
+ * `issuedById` is null for links minted by the CLI (a venue's very first
+ * owner link) rather than by a signed-in issuer.
+ */
+model LoginLink {
+  id                String    @id @default(cuid())
+  tokenHash         String    @unique @map("token_hash")
+  userId            String    @map("user_id")
+  issuedById        String?   @map("issued_by_id")
+  // The target's location at issue time — what the audit log is scoped to.
+  locationId        String    @map("location_id")
+  expiresAt         DateTime  @map("expires_at")
+  consumedAt        DateTime? @map("consumed_at")
+  revokedAt         DateTime? @map("revoked_at")
+  redeemedIp        String?   @map("redeemed_ip")
+  redeemedUserAgent String?   @map("redeemed_user_agent")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user     User  @relation("LoginLinkUser", fields: [userId], references: [id], onDelete: Cascade)
+  issuedBy User? @relation("LoginLinkIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, consumedAt])
+  @@index([issuedById])
+  @@map("login_links")
 }
 
 // One Web Push subscription per (browser, device) a user has opted into —

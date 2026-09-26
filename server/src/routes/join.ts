@@ -6,12 +6,13 @@ import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } f
 import { notifyUser } from '../lib/push.js';
 import { getManagerIdsForLocation } from '../lib/managers.js';
 import { otpRequestRateLimiters, otpVerifyRateLimiters } from '../middleware/rateLimit.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { devOtpEchoEnabled, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const joinRouter = Router();
 
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
-joinRouter.post('/request-otp', ...otpRequestRateLimiters, async (req, res) => {
+joinRouter.post('/request-otp', requireOtpEnabled, ...otpRequestRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
@@ -40,7 +41,7 @@ joinRouter.post('/request-otp', ...otpRequestRateLimiters, async (req, res) => {
  * required in this branch) and returns `pending: true` with no session —
  * the "fallback to manual entry landing in Pending Approvals" path.
  */
-joinRouter.post('/verify-otp', ...otpVerifyRateLimiters, async (req, res) => {
+joinRouter.post('/verify-otp', requireOtpEnabled, ...otpVerifyRateLimiters, async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     const phone = String(req.body?.phone ?? '').trim();
