@@ -7,6 +7,7 @@ import {
   getExistingSubscriptionEndpoint,
   subscribeToPush,
   unsubscribeFromPush,
+  needsHomeScreenInstallForPush,
 } from '../../lib/push';
 
 type Status = 'checking' | 'unsupported' | 'denied' | 'subscribed' | 'not-subscribed';
@@ -83,6 +84,13 @@ export function NotificationSettings() {
 
       {status === 'checking' ? (
         <p className="hint mt-2">Checking this device…</p>
+      ) : status === 'unsupported' && needsHomeScreenInstallForPush() ? (
+        // iPhone/iPad in a Safari tab: PushManager only exists once the app
+        // is on the Home Screen, so "unsupported" here means "install first".
+        <p className="hint mt-2">
+          On iPhone, notifications work once ShiftSync is on your Home Screen. In Safari tap <strong>Share</strong>, then{' '}
+          <strong>Add to Home Screen</strong>, and open ShiftSync from there to turn them on.
+        </p>
       ) : status === 'unsupported' ? (
         <p className="hint mt-2">Push notifications aren't supported in this browser.</p>
       ) : status === 'denied' ? (
