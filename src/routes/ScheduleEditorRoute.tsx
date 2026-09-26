@@ -145,7 +145,7 @@ export default function ScheduleEditorContent() {
       </button>
 
       {draft && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 backdrop-blur-sm sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 pb-[env(safe-area-inset-bottom)] backdrop-blur-sm sm:items-center sm:pb-0">
           <div className="panel w-full max-w-md p-4">
             <div className="grid grid-cols-2 gap-3">
               <input type="time" value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} className="rounded-lg border border-border bg-background/60 px-3 py-2 text-sm" />

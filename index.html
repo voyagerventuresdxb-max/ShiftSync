@@ -2,7 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover is what makes env(safe-area-inset-*) non-zero on an
+      iPhone — without it every safe-area padding in the app is inert.
+      interactive-widget=resizes-content keeps the layout viewport above the
+      keyboard on Android Chrome; Safari ignores it (see src/lib/keyboardInset.ts).
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0F0F12" />
     <title>ShiftSync — Hospitality Shift Scheduling</title>
     <!--
