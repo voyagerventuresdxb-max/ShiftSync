@@ -168,3 +168,25 @@ export const otpRequestRateLimiters = [makeOtpLimiter(30, otpIpKey), makeOtpLimi
 
 /** Mount on every POST …/verify-otp. */
 export const otpVerifyRateLimiters = [makeOtpLimiter(60, otpIpKey), makeOtpLimiter(10, otpPhoneKey)];
+
+/**
+ * Login links (routes/loginLinks.ts).
+ *  - Issuing is session-keyed (a manager minting links for their staff):
+ *    10 per hour is a whole team's worth of re-sends, and far below what a
+ *    compromised manager session could use to spam WhatsApp with.
+ *  - Peek/redeem are unauthenticated (they are how a session is obtained),
+ *    so per IP like the OTP routes: 30 per 10 minutes covers a venue's staff
+ *    signing in from one NAT on the same morning; a token is 256 random
+ *    bits, so this is about noise, not brute force.
+ */
+export const loginLinkIssueRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipFailedRequests: false,
+  keyGenerator: sessionKey,
+  handler: sendTooManyRequests,
+});
+
+export const loginLinkRedeemRateLimiter = makeOtpLimiter(30, otpIpKey);

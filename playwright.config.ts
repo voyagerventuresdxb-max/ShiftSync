@@ -27,7 +27,9 @@ export default defineConfig({
       // ALLOW_DEV_ERROR_INJECTION arms requireSession's sentinel-token throw
       // (see require-session-error-handling.spec.ts) — same dev-only-flag
       // shape as ALLOW_DEV_OTP_ECHO, inert for any real token.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_ERROR_INJECTION: 'true' },
+      // LOGIN_METHODS=otp: the onboarding/signup specs create accounts by
+      // phone code; login links work in either mode (see login-links.spec.ts).
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_ERROR_INJECTION: 'true', LOGIN_METHODS: 'otp' },
       timeout: 60_000,
     },
     {
