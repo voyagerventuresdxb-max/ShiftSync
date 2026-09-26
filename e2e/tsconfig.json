@@ -1,0 +1,25 @@
+{
+  // The Playwright specs are Node code that imports the generated Prisma
+  // client (e2e/helpers.ts). Keeping them out of the root tsconfig means the
+  // frontend build (`tsc -b && vite build`) no longer needs `prisma
+  // generate` to have run first — which is what broke the Vercel deploy on
+  // PR #42 (a stale cached client with no rotaLeave). Typecheck with
+  // `npm run typecheck:e2e`.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts", "../playwright.config.ts"]
+}

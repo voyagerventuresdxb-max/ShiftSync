@@ -4,14 +4,10 @@ import { createOtpCode, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { findPhoneMatches } from './identity.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
+import { otpRequestRateLimiters, otpVerifyRateLimiters } from '../middleware/rateLimit.js';
+import { devOtpEchoEnabled, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const signupRouter = Router();
-
-/**
- * Fail-closed, opt-in dev-OTP echo — see the matching comment in
- * `identity.ts`. Never keyed off `NODE_ENV`, which nothing in this repo sets.
- */
-const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /**
  * POST /api/signup/request-otp — body: { phone }
@@ -21,20 +17,19 @@ const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
  * `locationId` here because there is no location yet; that's the entire
  * point of this route.
  */
-signupRouter.post('/request-otp', async (req, res) => {
+signupRouter.post('/request-otp', ...otpRequestRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
 
     const { plainCode, expiresAt } = await createOtpCode(phone, 'SIGNUP');
     // No SMS integration exists; this is a stand-in until one is added.
-    if (DEV_OTP_ECHO) {
-      console.log(`[signup] OTP for ${phone} (SIGNUP): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
-    }
+    const echo = devOtpEchoEnabled();
+    if (echo) logDevOtpEcho('signup', phone, 'SIGNUP', plainCode);
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: DEV_OTP_ECHO ? plainCode : undefined,
+      devCode: echo ? plainCode : undefined,
     });
   } catch (err) {
     console.error('[signup.requestOtp] failed', err);
@@ -53,7 +48,7 @@ signupRouter.post('/request-otp', async (req, res) => {
  * collects the venue's real emirate/address/venueType right after this, so
  * only the bare minimum is collected here.
  */
-signupRouter.post('/verify-otp', async (req, res) => {
+signupRouter.post('/verify-otp', ...otpVerifyRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();

@@ -201,7 +201,10 @@ export function RadialDock({
   return (
     <nav
       aria-label="Primary"
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      // 0.5rem of breathing room ABOVE the home-indicator inset, not
+      // max()'d with it — on an iPhone the inset alone puts the dock's
+      // bottom edge exactly on the indicator's gesture strip.
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
     >
       <div
         onPointerDown={onPointerDown}

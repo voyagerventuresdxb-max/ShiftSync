@@ -12,6 +12,32 @@ export function isPushSupported(): boolean {
   return typeof navigator !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window;
 }
 
+/** True when running as an installed home-screen app (any platform). */
+export function isInstalledToHomeScreen(): boolean {
+  if (typeof window === 'undefined') return false;
+  // `navigator.standalone` is Safari's pre-standard flag and the only one
+  // iOS < 17 sets; the media query is the standard one every other browser uses.
+  const legacyStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  return legacyStandalone || window.matchMedia?.('(display-mode: standalone)').matches === true;
+}
+
+/** True on any iPhone/iPad browser — every one of them is WebKit, so Safari's rules apply. */
+export function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  // iPadOS 13+ reports itself as a Mac; the touch-point check tells them apart.
+  return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * iOS (16.4+) exposes PushManager ONLY inside a web app that was added to the
+ * Home Screen; in a Safari tab `isPushSupported()` is false. So on an
+ * iPhone that is not installed, "unsupported" really means "install first"
+ * — and the UI should say that instead of "not supported in this browser".
+ */
+export function needsHomeScreenInstallForPush(): boolean {
+  return isIOS() && !isInstalledToHomeScreen();
+}
+
 /**
  * Registers the service worker if the browser supports it. Idempotent —
  * calling this again (e.g. on every app load) just resolves to the

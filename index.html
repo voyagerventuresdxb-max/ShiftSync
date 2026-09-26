@@ -2,9 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      viewport-fit=cover is what makes env(safe-area-inset-*) non-zero on an
+      iPhone — without it every safe-area padding in the app is inert.
+      interactive-widget=resizes-content keeps the layout viewport above the
+      keyboard on Android Chrome; Safari ignores it (see src/lib/keyboardInset.ts).
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#0F0F12" />
     <title>ShiftSync — Hospitality Shift Scheduling</title>
+    <!--
+      Home-screen install. iOS only delivers Web Push to a web app that has
+      been added to the Home Screen from a manifest with display: standalone,
+      so these tags are what make notifications possible on an iPhone at
+      all (see src/components/shiftsync/NotificationSettings.tsx). Icons are
+      rendered from the existing logo mark by scripts/generate-icons.mjs.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="ShiftSync" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

@@ -50,22 +50,55 @@ history from scratch, which is exactly what `server:start` does on every boot.
    variables (Railway can reference it as `${{Postgres.DATABASE_URL}}`).
 3. Variables on the API service (names only — never paste values into chat or docs):
 
+   See "Required in production" and "Must be OFF in production" below for the full
+   lists — this table is the same content in setup order.
+
    | Variable | Value / note |
    |---|---|
+   | `NODE_ENV` | `production`. Nothing in the repo sets this; the host must. It is what arms the boot-time refusal of the dev flags below (`server/src/lib/productionGuards.ts`). |
    | `DATABASE_URL` | the Railway Postgres URL |
-   | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
+   | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the CORS allowlist and the only origin invite links are minted for (`server/src/lib/frontendOrigins.ts`); comma-separate to add a custom domain later. **The server refuses to start in production without it.** |
+   | `TRUST_PROXY` | `2` — number of reverse-proxy hops in front of the API (Railway's edge + the Vercel rewrite), so the per-IP login rate limits see the real client address instead of Vercel's. Set `1` if the API is ever called directly rather than through Vercel. |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice) |
-   | `ALLOW_DEV_OTP_ECHO` | **`true` for the MBRIF demo only** — there is no SMS integration, so this is the only way a code can be entered on the live site. It shows the real one-time code on screen to whoever requested it. Remove it right after the demo. |
    | `PORT` | injected by Railway; the server reads it |
+
+   There is still no SMS integration, so a one-time code cannot reach a real phone on
+   the live site. Do **not** work around that with `ALLOW_DEV_OTP_ECHO` (see below) —
+   it lets anyone who knows a phone number log in as that person. One-time login links
+   shared by a manager are the planned replacement.
+
+### Required in production
+
+The API refuses to start (`Refusing to start with NODE_ENV=production: …` in the deploy
+log, health check never goes green) unless all of these hold:
+
+- `NODE_ENV=production`
+- `FRONTEND_ORIGIN` set to the real frontend origin(s)
+- none of the "Must be OFF" flags below set to `true`
+
+Also needed for a working deployment, though the server will boot without them:
+`DATABASE_URL`, `TRUST_PROXY=2`, `GEMINI_API_KEY` (AI features), the three `VAPID_*`
+values (push).
+
+### Must be OFF in production
+
+Every one of these is opt-in (only the literal string `true` enables it) and exists for
+local development or tests only. Leave them unset on Railway.
+
+| Flag | What it does if on | In production |
+|---|---|---|
+| `ALLOW_DEV_OTP_BYPASS` | the fixed code `000000` verifies for **any** phone number | **server refuses to start** |
+| `ALLOW_DEV_ERROR_INJECTION` | a sentinel bearer token deliberately crashes session auth (test hook) | **server refuses to start** |
+| `ALLOW_DEV_OTP_ECHO` | returns the real one-time code to whoever requested it (`devCode` in the response and a plaintext log line) — i.e. anyone can log in as any phone number | boots, but logs a `[SECURITY]` warning at startup and beside every echoed code. Turn it off. |
+| `VLM_FALLBACK_MODE` | `off` disables the local text-layer parse when Gemini is unavailable. The old `sample` value (a canned demo roster shown in place of the manager's file) no longer exists and is treated as `auto`. | leave unset (`auto`) |
 
 4. Add a **Volume** mounted at `/app/server/uploads` so floor-plan images and policy
    documents survive redeploys. (Without it they are lost on every deploy — acceptable for
    a demo, not for real use.)
 5. Deploy. `railway.json` runs `npm install && prisma generate` to build and
    `prisma migrate deploy && tsx server/src/index.ts` to start, with `/api/health` as the
-   health check. (`npm install`, not `npm ci`: the committed lockfile does not pass `npm ci`
-   — see the readiness report.)
+   health check.
 6. Settings → Networking → *Generate Domain*. That `https://<service>.up.railway.app` is
    the `RAILWAY_API_HOST` below.
 

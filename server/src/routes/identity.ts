@@ -2,18 +2,10 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { createOtpCode, verifyOtpCode, issueSession, revokeSession, phoneDigits } from '../lib/identity.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
+import { otpRequestRateLimiters, otpVerifyRateLimiters } from '../middleware/rateLimit.js';
+import { devOtpEchoEnabled, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const identityRouter = Router();
-
-/**
- * The dev-OTP echo is FAIL-CLOSED and opt-in: it is only ever enabled when
- * `ALLOW_DEV_OTP_ECHO` is explicitly set to 'true'. It deliberately does NOT
- * key off `NODE_ENV`, because nothing in this repo's scripts, Dockerfile or
- * start command ever sets `NODE_ENV=production` — a `NODE_ENV !== 'production'`
- * check would therefore leak every real OTP by default. Gate both the HTTP
- * echo and the plaintext server-log line on this one flag.
- */
-const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /**
  * Finds active users anywhere in the system whose stored phone normalizes to
@@ -61,7 +53,7 @@ const AMBIGUOUS_MATCH_ERROR = 'Multiple staff members match this phone number �
  * logging back in is that the client doesn't necessarily know (or need to
  * know) which venue that is until after the phone resolves to a real account.
  */
-identityRouter.post('/request-otp', async (req, res) => {
+identityRouter.post('/request-otp', ...otpRequestRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
@@ -74,13 +66,12 @@ identityRouter.post('/request-otp', async (req, res) => {
 
     const { plainCode, expiresAt } = await createOtpCode(phone, 'LOGIN');
     // No SMS integration exists; this is a stand-in until one is added.
-    if (DEV_OTP_ECHO) {
-      console.log(`[identity] OTP for ${phone} (LOGIN): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
-    }
+    const echo = devOtpEchoEnabled();
+    if (echo) logDevOtpEcho('identity', phone, 'LOGIN', plainCode);
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: DEV_OTP_ECHO ? plainCode : undefined,
+      devCode: echo ? plainCode : undefined,
     });
   } catch (err) {
     console.error('[identity.requestOtp] failed', err);
@@ -89,7 +80,7 @@ identityRouter.post('/request-otp', async (req, res) => {
 });
 
 /** POST /api/identity/verify-otp — body: { phone, code } */
-identityRouter.post('/verify-otp', async (req, res) => {
+identityRouter.post('/verify-otp', ...otpVerifyRateLimiters, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();

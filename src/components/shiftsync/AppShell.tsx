@@ -312,8 +312,8 @@ export function AppShell() {
   const onMyShifts = useLocation().pathname === '/my-shifts';
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <header className="sticky top-0 z-20 px-3 pt-3 sm:px-4">
+    <div className="min-h-dvh bg-background pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <header className="sticky top-0 z-20 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-4">
         <div className="glass-bar mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-3 py-2.5 shadow-lux sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
