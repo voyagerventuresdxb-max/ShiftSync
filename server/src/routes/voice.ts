@@ -191,9 +191,19 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
     const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
     return res.status(200).json({ transcript });
   } catch (err) {
+    if (err instanceof VoiceTranscriptionError && err.kind === 'format_rejected') {
+      // Gemini refused the audio format itself — a bug in what this phone
+      // records vs what we send, not an outage. Say so, so it is never
+      // mistaken for quota, and keep the mimetype in the log line.
+      console.error(`[voice.transcribe] format rejected (mime=${req.file?.mimetype})`, err);
+      return res.status(415).json({
+        error: `Your phone's recording format (${req.file?.mimetype ?? 'unknown'}) wasn't accepted by the transcription service. This is a bug on our side rather than an outage — please tell us your phone model.`,
+        errorCode: 'voice_format_rejected',
+      });
+    }
     if (err instanceof VoiceTranscriptionError) {
       console.error('[voice.transcribe] unavailable', err);
-      return res.status(503).json({ error: VOICE_UNAVAILABLE });
+      return res.status(503).json({ error: VOICE_UNAVAILABLE, errorCode: 'voice_unavailable' });
     }
     console.error('[voice.transcribe] failed', err);
     return res.status(500).json({ error: 'Unexpected error while transcribing audio.' });
