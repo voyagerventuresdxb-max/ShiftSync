@@ -148,7 +148,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
         await markVisionFallbackUsed(locationId);
       } catch (err) {
         if (err instanceof VisionIngestionError) {
-          return res.status(422).json({ error: err.message });
+          return res.status(422).json({ error: err.message, errorCode: err.code });
         }
         throw err;
       }
@@ -226,7 +226,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
             await markVisionFallbackUsed(locationId);
           } catch (err) {
             if (err instanceof VisionIngestionError) {
-              return res.status(422).json({ error: err.message });
+              return res.status(422).json({ error: err.message, errorCode: err.code });
             }
             throw err;
           }
@@ -253,7 +253,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
             await markVisionFallbackUsed(locationId);
           } catch (err) {
             if (err instanceof VisionIngestionError) {
-              return res.status(422).json({ error: err.message });
+              return res.status(422).json({ error: err.message, errorCode: err.code });
             }
             throw err;
           }
@@ -319,7 +319,7 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
               legend = gridResult.legend;
             } catch (gridErr) {
               if (gridErr instanceof VisionIngestionError) {
-                return res.status(422).json({ error: gridErr.message });
+                return res.status(422).json({ error: gridErr.message, errorCode: gridErr.code });
               }
               if (gridErr instanceof TemplateDetectionError) {
                 return res.status(422).json({ error: gridErr.message });

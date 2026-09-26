@@ -20,14 +20,38 @@ function clampConfidence(value: number): number {
   return Math.min(CONFIDENCE_CLAMP.max, Math.max(CONFIDENCE_CLAMP.min, value));
 }
 
+/**
+ * Why AI roster reading produced no result — surfaced to the client as
+ * `errorCode` beside the message so a quota problem can be told apart from
+ * a bug without reading server logs:
+ *  - vision_busy         Gemini answered 429/503 on every retry (quota or overload).
+ *  - vision_unconfigured no Gemini/Vertex credentials on this server.
+ *  - vision_failed       any other failure (auth, bad response, unmappable output).
+ */
+export type VisionErrorCode = 'vision_busy' | 'vision_unconfigured' | 'vision_failed';
+
+/**
+ * Manager-facing copy. Every message names the way out (Excel/CSV, retry) —
+ * and none of them ever comes with data, because the only data a manager
+ * should see in the preview is what was read from their own file.
+ */
+export const VISION_ERROR_MESSAGES: Record<VisionErrorCode, string> = {
+  vision_busy: 'AI roster reading is busy right now. Try again in a few minutes, or upload an Excel/CSV export instead.',
+  vision_unconfigured: "AI roster reading isn't set up on this server. Upload an Excel/CSV export instead.",
+  vision_failed: "AI roster reading couldn't read this file. Try again in a few minutes, or upload an Excel/CSV export instead.",
+};
+
 export class VisionIngestionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
   cause?: unknown;
+  /** Machine-readable reason; the upload route returns it as `errorCode`. */
+  code: VisionErrorCode;
 
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, code: VisionErrorCode = 'vision_failed') {
     super(message);
     this.name = 'VisionIngestionError';
     this.cause = cause;
+    this.code = code;
     // Preserve the original stack so the server log shows the real failure
     // point instead of only the wrapper's message.
     if (cause instanceof Error && cause.stack) {
@@ -64,63 +88,31 @@ export interface VlmResponse {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Cached sample VLM response used as a deterministic fallback when the live
- * Gemini API is unavailable (429 rate-limit/quota, 503 overload, or no API
- * key). It mirrors the Il Gattopardo roster layout so UI development and
- * testing can continue without hitting live API limits. The rows are routed
- * through the same `mapVlmResponseToResult` mapping as a real model response,
- * so the preview/grid render real data.
+ * What happens when the live Gemini API can't be used (no credentials, a
+ * 429 quota/rate limit, a 503 overload, any other failure):
  *
- * Override the fallback behavior with VLM_FALLBACK_MODE:
- *   "auto"   (default) — try Gemini, fall back to this sample on 429/503/no-key
- *   "sample"           — always use this sample (skip the network entirely)
- *   "off"              — never fall back; surface the Gemini error
+ *  - a PDF that carries a text layer is parsed by the deterministic local
+ *    parser — that is still the manager's own file, just read without AI;
+ *  - a raster image, or a PDF with no text layer, FAILS with a
+ *    VisionIngestionError whose `code` says why (see VisionErrorCode).
+ *
+ * There is deliberately no canned sample roster any more. One used to live
+ * here and was returned to real managers whenever Gemini was rate-limited —
+ * a roster full of strangers, labelled only in a field the UI never showed.
+ * The old sample survives solely as a test fixture
+ * (__fixtures__/sampleVlmResponse.fixture.ts) for mapVlmResponseToResult.
+ *
+ * VLM_FALLBACK_MODE:
+ *   "auto" (default) — the behaviour above.
+ *   "off"            — never even try the local PDF parse; surface the error.
+ *   "sample"         — REMOVED. Logged and treated as "auto".
  */
-export const FALLBACK_SAMPLE_RESPONSE: VlmResponse = {
-  venueTemplateNotes: 'Fallback sample (Gemini unavailable) — Il Gattopardo layout with AM/PM sub-columns.',
-  legend: [
-    { code: 'AL', meaning: 'Annual Leave', category: 'leave' },
-    { code: 'DO', meaning: 'Day Off', category: 'day_off' },
-    { code: 'PH', meaning: 'Public Holiday', category: 'public_holiday' },
-  ],
-  employees: [
-    { rawName: 'Andrea', role: 'Manager', cells: [
-      { date: '2026-08-17', rawText: '11-17', period: 'AM', interpretation: 'worked_shift', startTime: '11:00', endTime: '17:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-      { date: '2026-08-17', rawText: '18-01', period: 'PM', interpretation: 'worked_shift', startTime: '18:00', endTime: '01:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Roberto', role: 'Manager', cells: [
-      { date: '2026-08-17', rawText: '09-17', period: 'AM', interpretation: 'worked_shift', startTime: '09:00', endTime: '17:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Alessandro', role: 'Manager', cells: [
-      { date: '2026-08-18', rawText: '10-18', period: 'AM', interpretation: 'worked_shift', startTime: '10:00', endTime: '18:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Tomas', role: 'Manager', cells: [
-      { date: '2026-08-18', rawText: 'DO', period: null, interpretation: 'day_off', startTime: null, endTime: null, leaveCode: 'DO', confidence: 0.95, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Sintia', role: 'Supervisor', cells: [
-      { date: '2026-08-17', rawText: '12-20', period: 'AM', interpretation: 'worked_shift', startTime: '12:00', endTime: '20:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Pratik', role: 'Supervisor', cells: [
-      { date: '2026-08-17', rawText: '14-22', period: 'PM', interpretation: 'worked_shift', startTime: '14:00', endTime: '22:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Rojina', role: 'Head Waiter', cells: [
-      { date: '2026-08-17', rawText: '09-17', period: 'AM', interpretation: 'worked_shift', startTime: '09:00', endTime: '17:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Hefny', role: 'Waiter', cells: [
-      { date: '2026-08-17', rawText: '10-18', period: 'AM', interpretation: 'worked_shift', startTime: '10:00', endTime: '18:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-      { date: '2026-08-17', rawText: '19-01', period: 'PM', interpretation: 'worked_shift', startTime: '19:00', endTime: '01:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-    { rawName: 'Bashkar', role: 'Runner', cells: [
-      { date: '2026-08-17', rawText: '11-19', period: 'AM', interpretation: 'worked_shift', startTime: '11:00', endTime: '19:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null },
-    ] },
-  ],
-  documentAnomalies: [],
-};
-
-/** Resolve the fallback mode from the VLM_FALLBACK_MODE env var. */
-function fallbackMode(): 'auto' | 'sample' | 'off' {
+function fallbackMode(): 'auto' | 'off' {
   const mode = (process.env.VLM_FALLBACK_MODE || 'auto').toLowerCase();
-  if (mode === 'sample' || mode === 'off') return mode;
+  if (mode === 'off') return 'off';
+  if (mode === 'sample') {
+    console.warn('[parseVision] VLM_FALLBACK_MODE=sample no longer exists (the sample roster was removed from production); behaving as "auto".');
+  }
   return 'auto';
 }
 
@@ -219,6 +211,15 @@ function getClient(): GoogleGenAI {
   }
   client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { timeout: GEMINI_HTTP_TIMEOUT_MS } });
   return client;
+}
+
+/**
+ * Test seam: swaps the memoized Gemini client so a 429/503 can be simulated
+ * without a network call (see parseVisionFallback.test.ts). Pass null to
+ * restore lazy creation. Never called from production code.
+ */
+export function __setGeminiClientForTests(fake: GoogleGenAI | null): void {
+  client = fake;
 }
 
 /**
@@ -364,14 +365,9 @@ export async function parseRosterGrid(
     .map((row) => row.map((cell) => (cell === null || cell === undefined ? '' : String(cell))).join('\t'))
     .join('\n');
 
-  if (mode === 'sample') {
-    console.warn('[parseVision] VLM_FALLBACK_MODE=sample — returning cached sample response (no Gemini call).');
-    return buildFallbackResult(weekStart, startTime, 'VLM_FALLBACK_MODE=sample');
-  }
-
   if (!isGeminiConfigured()) {
     if (mode === 'off') {
-      throw new VisionIngestionError('Vision API is not configured on the server (set GEMINI_VERTEX_PROJECT+GEMINI_VERTEX_LOCATION or GEMINI_API_KEY) — grid-format roster ingestion is unavailable.');
+      throw new VisionIngestionError(VISION_ERROR_MESSAGES.vision_unconfigured, undefined, 'vision_unconfigured');
     }
     console.warn('[parseVision] Vision API not configured — using deterministic local fallback for grid-format roster.');
     const result = processRowsIntoRoster(grid, weekStart);
@@ -464,22 +460,14 @@ export async function parseRosterImage(
   const startTime = Date.now();
   const mode = fallbackMode();
 
-  // "sample" mode: skip the network entirely and return the cached sample so
-  // UI development/testing never touches the live API.
-  if (mode === 'sample') {
-    console.warn('[parseVision] VLM_FALLBACK_MODE=sample — returning cached sample response (no Gemini call).');
-    return buildFallbackResult(weekStart, startTime, 'VLM_FALLBACK_MODE=sample');
-  }
-
-  // No API key configured. In "auto" mode, fall back to the deterministic
-  // local parser (for PDFs) or the cached sample (for images) so the upload
-  // flow still works for UI development; in "off" mode, surface the error.
+  // No API key configured. In "auto" mode a text-layer PDF still gets the
+  // deterministic local parser; anything else fails with a clear error.
   if (!isGeminiConfigured()) {
     if (mode === 'off') {
-      throw new VisionIngestionError('Vision API is not configured on the server (set GEMINI_VERTEX_PROJECT+GEMINI_VERTEX_LOCATION or GEMINI_API_KEY) — image/scanned roster ingestion is unavailable.');
+      throw new VisionIngestionError(VISION_ERROR_MESSAGES.vision_unconfigured, undefined, 'vision_unconfigured');
     }
-    console.warn('[parseVision] Vision API not configured — using deterministic local fallback.');
-    return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision API not configured');
+    console.warn('[parseVision] Vision API not configured — trying the deterministic local parser.');
+    return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision_unconfigured', undefined);
   }
 
   const genai = getClient();
@@ -514,29 +502,23 @@ export async function parseRosterImage(
         continue;
       }
       // Non-transient error (auth, invalid model, schema rejection, etc.) — no
-      // point retrying. In "auto" mode, still fall back to the sample so the
-      // upload flow doesn't hard-fail during development; in "off" mode,
-      // surface it immediately.
+      // point retrying. In "auto" mode a text-layer PDF still gets the local
+      // parser; in "off" mode, surface it immediately.
       console.error('[parseVision] Gemini request failed', err);
       if (mode === 'off') {
-        throw new VisionIngestionError(`Vision model request failed: ${(err as Error).message}`, err);
+        throw new VisionIngestionError(VISION_ERROR_MESSAGES.vision_failed, err, 'vision_failed');
       }
-      console.warn('[parseVision] Falling back to deterministic local parser after non-transient Gemini error.');
-      return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, `Gemini error: ${(err as Error).message}`);
+      return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision_failed', err);
     }
   }
 
   if (raw === null) {
-    // All attempts exhausted on 503/429s.
-    console.error('[parseVision] Gemini request failed after retries', lastError);
+    // All attempts exhausted on 503/429s — quota or overload, not a bug.
+    console.error('[parseVision] Gemini request failed after retries (rate limit/overload)', lastError);
     if (mode === 'off') {
-      throw new VisionIngestionError(
-        `Vision model request failed after retries: ${(lastError as Error)?.message ?? 'unknown error'}`,
-        lastError,
-      );
+      throw new VisionIngestionError(VISION_ERROR_MESSAGES.vision_busy, lastError, 'vision_busy');
     }
-    console.warn('[parseVision] Falling back to deterministic local parser after retries exhausted.');
-    return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, `Gemini rate limit/overload: ${(lastError as Error)?.message ?? 'unknown error'}`);
+    return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision_busy', lastError);
   }
 
   let parsed: VlmResponse;
@@ -564,40 +546,22 @@ export async function parseRosterImage(
   }
 }
 
-/**
- * Builds a ParsedVisionResult from the cached sample response, routed through
- * the same mapping as a real model response. `reason` is surfaced in the
- * template label so the UI/manager can see the data is a fallback sample.
- */
-function buildFallbackResult(
-  weekStart: string | undefined,
-  startTime: number,
-  reason: string,
-): ParsedVisionResult {
-  const result = mapVlmResponseToResult(FALLBACK_SAMPLE_RESPONSE, weekStart);
-  console.log(
-    `[parseVision] Fallback sample used in ${Date.now() - startTime}ms (${reason}) — ` +
-      `${result.rows.length} shifts, ${result.anomalies.length} anomalies, ${result.leaveRecords.length} leave records.`
-  );
-  return {
-    ...result,
-    templateLabel: `Fallback sample (${reason})`,
-  };
-}
 
 /**
- * Builds a fallback result when the live Gemini API is unavailable. For PDFs
- * (which may carry an extractable text layer) it runs the deterministic local
- * parser so the uploaded file is actually parsed rather than replaced with
- * sample data. For raster images (which have no text layer to parse locally)
- * it falls back to the cached sample response.
+ * What to do with the manager's file when the live Gemini API can't be
+ * used. A PDF that carries an extractable text layer is run through the
+ * deterministic local parser — still the manager's own data, just read
+ * without AI. A raster image, or a PDF with no text layer, has nothing to
+ * parse locally, so this FAILS with the code the caller passed in: never
+ * placeholder data.
  */
 async function buildLocalFallback(
   imageBuffer: Buffer,
   mimeType: string,
   weekStart: string | undefined,
   startTime: number,
-  reason: string,
+  code: VisionErrorCode,
+  cause: unknown,
 ): Promise<ParsedVisionResult> {
   const isPdf = mimeType === 'application/pdf' || /\.pdf$/i.test(mimeType);
   if (isPdf) {
@@ -613,20 +577,21 @@ async function buildLocalFallback(
       if (text) {
         const result = parseRotaFile(text, 'pdf-text', weekStart);
         console.log(
-          `[parseVision] Deterministic local parser used in ${Date.now() - startTime}ms (${reason}) — ` +
+          `[parseVision] Deterministic local parser used in ${Date.now() - startTime}ms (${code}) — ` +
             `${result.rows.length} shifts, ${result.anomalies.length} anomalies.`
         );
         return {
           ...result,
-          templateLabel: `Deterministic local parser (${reason})`,
+          templateLabel: `Deterministic local parser (${code})`,
         };
       }
     } catch (err) {
-      console.warn('[parseVision] Deterministic PDF fallback failed, using cached sample:', err);
+      console.warn('[parseVision] Deterministic PDF fallback failed:', err);
     }
   }
-  // Images (or PDFs with no text layer) — no local parse possible; use sample.
-  return buildFallbackResult(weekStart, startTime, reason);
+  // Images (or PDFs with no text layer) — nothing to parse locally. Fail
+  // clearly rather than show anything that didn't come from this file.
+  throw new VisionIngestionError(VISION_ERROR_MESSAGES[code], cause, code);
 }
 
 /** Pure mapping function (no network calls) — kept separate so it's unit-testable against fixture JSON. */
