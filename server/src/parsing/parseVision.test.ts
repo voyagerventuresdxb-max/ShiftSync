@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FALLBACK_SAMPLE_RESPONSE, mapVlmResponseToResult } from './parseVision.js';
+import { mapVlmResponseToResult } from './parseVision.js';
+import { SAMPLE_VLM_RESPONSE } from './__fixtures__/sampleVlmResponse.fixture.js';
 
 test('preserves AM/PM period labels on split shifts', () => {
   const parsed = {
@@ -88,9 +89,9 @@ test('emits a single shift when no AM/PM sub-columns (period null)', () => {
   assert.equal(result.rows[0].managerNotes, null, 'no period label when single column');
 });
 
-test('fallback sample response maps to a valid result (no Gemini call)', () => {
-  const result = mapVlmResponseToResult(FALLBACK_SAMPLE_RESPONSE, '2026-08-17');
-  assert.ok(result.rows.length > 0, 'fallback sample yields shifts');
+test('the fixture VLM response maps to a valid result (no Gemini call)', () => {
+  const result = mapVlmResponseToResult(SAMPLE_VLM_RESPONSE, '2026-08-17');
+  assert.ok(result.rows.length > 0, 'fixture yields shifts');
   assert.ok(result.anomalies.length === 0, 'clean sample has no anomalies');
 
   // No employee has more than 2 shifts on a single day (AM+PM split max).
@@ -105,7 +106,7 @@ test('fallback sample response maps to a valid result (no Gemini call)', () => {
 
   // Management rows are present and carry their management titles.
   const managers = result.rows.filter((r) => r.roleName === 'Manager');
-  assert.ok(managers.length >= 3, 'management staff present in fallback sample');
+  assert.ok(managers.length >= 3, 'management staff present in fixture');
 
   // AM/PM split shifts are preserved with their period labels.
   const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
