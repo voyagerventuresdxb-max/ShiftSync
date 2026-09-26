@@ -62,6 +62,11 @@ async function mintLink(target: TargetWithLocation, issuedById: string | null): 
   const now = new Date();
   const expiresAt = loginLinkExpiry(now);
   const link = await prisma.$transaction(async (tx) => {
+    // Serialise concurrent issuers for the same person (an owner and a
+    // manager re-sending at once): under READ COMMITTED both would see no
+    // live link and both would create one, leaving two redeemable links.
+    // Locking the user row makes the second issuer wait and then supersede.
+    await tx.$executeRaw`SELECT id FROM users WHERE id = ${target.id} FOR UPDATE`;
     const superseded = await tx.loginLink.updateMany({
       where: { userId: target.id, consumedAt: null, revokedAt: null },
       data: { revokedAt: now },
@@ -174,59 +179,72 @@ export function landingFor(user: Pick<User, 'systemRole'>, location: { emirate: 
 export async function redeemLoginLink(token: string, meta: { ip: string | null; userAgent: string | null }): Promise<RedeemResult> {
   const tokenHash = hashOtp(token);
   const now = new Date();
-  const claimed = await prisma.loginLink.updateMany({
-    where: { tokenHash, consumedAt: null, revokedAt: null, expiresAt: { gt: now }, user: { is: { isActive: true } } },
-    data: { consumedAt: now, redeemedIp: meta.ip, redeemedUserAgent: meta.userAgent?.slice(0, 512) ?? null },
+
+  // Claim, session and audit in ONE transaction: a failure after the claim
+  // must roll the claim back, or the person's only link is spent with no
+  // session to show for it.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.loginLink.updateMany({
+      where: { tokenHash, consumedAt: null, revokedAt: null, expiresAt: { gt: now }, user: { is: { isActive: true } } },
+      data: { consumedAt: now, redeemedIp: meta.ip, redeemedUserAgent: meta.userAgent?.slice(0, 512) ?? null },
+    });
+    if (claimed.count !== 1) return null;
+    const link = await tx.loginLink.findUniqueOrThrow({
+      where: { tokenHash },
+      include: { user: { include: { location: { select: { emirate: true, venueType: true } } } } },
+    });
+    const session = await issueSession(link.userId, tx);
+    await writeAuditLog(tx, {
+      locationId: link.locationId,
+      actorId: link.userId,
+      action: 'LOGIN_LINK_REDEEMED',
+      entityType: 'LoginLink',
+      entityId: link.id,
+      note: `Signed in via login link from ${meta.ip ?? 'unknown ip'}.`,
+    });
+    return { link, session };
   });
 
-  if (claimed.count !== 1) {
+  if (!outcome) {
     const link = await prisma.loginLink.findUnique({ where: { tokenHash }, include: { user: { select: { isActive: true } } } });
     if (!link) return { result: 'rejected', reason: 'unknown' };
     const reason = rejectionFor(link, now) ?? 'used';
-    await writeAuditLog(prisma, {
-      locationId: link.locationId,
-      actorId: null,
-      action: 'LOGIN_LINK_REJECTED',
-      entityType: 'LoginLink',
-      entityId: link.id,
-      note: `Redeem refused (${reason}) from ${meta.ip ?? 'unknown ip'}.`,
-    });
+    // One REJECTED row per link, ever — a holder of a spent token could
+    // otherwise grow the audit table at the rate limiter's pace forever.
+    const alreadyLogged = await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REJECTED', entityId: link.id }, select: { id: true } });
+    if (!alreadyLogged) {
+      await writeAuditLog(prisma, {
+        locationId: link.locationId,
+        actorId: null,
+        action: 'LOGIN_LINK_REJECTED',
+        entityType: 'LoginLink',
+        entityId: link.id,
+        note: `Redeem refused (${reason}) from ${meta.ip ?? 'unknown ip'}.`,
+      });
+    }
     return { result: 'rejected', reason };
   }
 
-  const link = await prisma.loginLink.findUniqueOrThrow({
-    where: { tokenHash },
-    include: { user: { include: { location: { select: { emirate: true, venueType: true } } } } },
-  });
-  const { plainToken, expiresAt } = await issueSession(link.userId);
-  await writeAuditLog(prisma, {
-    locationId: link.locationId,
-    actorId: link.userId,
-    action: 'LOGIN_LINK_REDEEMED',
-    entityType: 'LoginLink',
-    entityId: link.id,
-    note: `Signed in via login link from ${meta.ip ?? 'unknown ip'}.`,
-  });
-  const u = link.user;
+  const u = outcome.link.user;
   return {
     result: 'ok',
-    token: plainToken,
-    expiresAt,
+    token: outcome.session.plainToken,
+    expiresAt: outcome.session.expiresAt,
     user: { id: u.id, fullName: u.fullName, jobTitle: u.jobTitle, locationId: u.locationId, systemRole: u.systemRole },
     landing: landingFor(u, u.location),
   };
 }
 
 /**
- * Revokes one link. Allowed for whoever issued it, and for anyone who could
- * issue a link to that person today (a manager can kill a link their
- * colleague sent to their own staff member). Otherwise 404-shaped.
+ * Revokes one link. Allowed for anyone who could issue a link to that
+ * person TODAY (which includes the original issuer while they still hold
+ * that scope — a demoted or moved manager loses it along with everything
+ * else). Otherwise 404-shaped.
  */
 export async function revokeLoginLink(caller: Issuer, linkId: string): Promise<'ok' | 'not_found'> {
   const link = await prisma.loginLink.findUnique({ where: { id: linkId } });
   if (!link) return 'not_found';
-  const mayRevoke = link.issuedById === caller.id || (await findIssuableTarget(caller, link.userId)) !== null;
-  if (!mayRevoke) return 'not_found';
+  if ((await findIssuableTarget(caller, link.userId)) === null) return 'not_found';
   if (!link.revokedAt && !link.consumedAt) {
     await prisma.$transaction(async (tx) => {
       await tx.loginLink.update({ where: { id: link.id }, data: { revokedAt: new Date() } });

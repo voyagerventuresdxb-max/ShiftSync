@@ -587,12 +587,12 @@ function LoginLinkCell({ entry, sessionToken, disabled }: { entry: StaffDirector
 
   return (
     <div className="space-y-1">
-      <button className="btn btn-ghost" onClick={() => void send()} disabled={busy || disabled || !sessionToken} aria-label={`Send login link to ${entry.fullName}`}>
+      <button className="btn btn-ghost" onClick={() => void send()} disabled={busy || disabled || !sessionToken}>
         {busy ? 'Creating…' : issued ? 'New link' : 'Send login link'}
       </button>
       {issued && (
         <div className="space-y-1">
-          <button className="btn btn-primary" onClick={() => void share()} aria-label={`Share login link for ${entry.fullName}`}>
+          <button className="btn btn-primary" onClick={() => void share()}>
             {typeof navigator !== 'undefined' && typeof navigator.share === 'function' ? 'Share…' : 'Copy link'}
           </button>
           <code className="block max-w-[16rem] break-all text-[11px] text-muted-foreground" data-testid="login-link-url">

@@ -110,10 +110,13 @@ export async function verifyOtpCode(
 }
 
 /** Issues a new bearer session token for a real, already-verified User. */
-export async function issueSession(userId: string): Promise<{ plainToken: string; expiresAt: Date }> {
+export async function issueSession(
+  userId: string,
+  client: Pick<typeof prisma, 'session'> = prisma,
+): Promise<{ plainToken: string; expiresAt: Date }> {
   const plainToken = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await prisma.session.create({
+  await client.session.create({
     data: { userId, tokenHash: hashOtp(plainToken), expiresAt },
   });
   return { plainToken, expiresAt };

@@ -42,7 +42,14 @@ export function buildLoginLinkUrl(token: string): string {
   return `${getAllowedFrontendOrigins()[0]}${LOGIN_LINK_PATH}#${token}`;
 }
 
+/** "24 hours", "1 hour", "90 minutes" — never "0.5 hours". */
+export function formatLoginLinkTtl(hours: number = loginLinkTtlHours()): string {
+  if (hours < 1) return `${Math.round(hours * 60)} minutes`;
+  const rounded = Math.round(hours * 10) / 10;
+  return rounded === 1 ? '1 hour' : `${rounded} hours`;
+}
+
 /** The message that goes with the link in the share sheet / WhatsApp. */
 export function loginLinkShareText(venueName: string): string {
-  return `Tap to sign in to ShiftSync for ${venueName}. This link works once and expires in ${loginLinkTtlHours()} hours.`;
+  return `Tap to sign in to ShiftSync for ${venueName}. This link works once and expires in ${formatLoginLinkTtl()}.`;
 }

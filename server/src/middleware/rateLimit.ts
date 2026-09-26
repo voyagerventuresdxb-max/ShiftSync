@@ -190,3 +190,11 @@ export const loginLinkIssueRateLimiter = rateLimit({
 });
 
 export const loginLinkRedeemRateLimiter = makeOtpLimiter(30, otpIpKey);
+
+/**
+ * Separate bucket for peek: it is read-only, every sign-in costs one peek
+ * before its redeem, and a chat app's link-preview fetch from the same
+ * egress costs one too — sharing redeem's bucket would halve a venue's
+ * real sign-in capacity behind one NAT.
+ */
+export const loginLinkPeekRateLimiter = makeOtpLimiter(60, otpIpKey);
