@@ -2,26 +2,9 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { generateQrDataUrl } from '../lib/qrCode.js';
 import { requireSession, requireManager, assertOwnsLocation } from '../middleware/requireSession.js';
+import { getAllowedFrontendOrigins } from '../lib/frontendOrigins.js';
 
 export const onboardingRouter = Router();
-
-const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:5173';
-
-/**
- * Origins the server will ever mint an invite link against. `FRONTEND_ORIGIN`
- * (comma-separated for multiple environments, e.g. staging + prod) configures
- * the allowlist; unset, only the local dev origin is allowed. Read fresh on
- * every call (not memoized at module load) so it can be reconfigured — e.g.
- * per-test — without restarting the process.
- */
-function getAllowedFrontendOrigins(): string[] {
-  const configured = process.env.FRONTEND_ORIGIN?.trim();
-  if (!configured) return [DEFAULT_FRONTEND_ORIGIN];
-  return configured
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-}
 
 /**
  * The client-supplied `baseUrl` is only ever used as a display convenience

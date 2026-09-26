@@ -111,3 +111,60 @@ export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
  * per-call cost this limiter exists to cap.
  */
 export const rosterUploadRateLimiter = makeAiRouteLimiter(10, false);
+
+/**
+ * OTP routes are UNAUTHENTICATED (they are how a session is obtained), so
+ * the session-keyed factory above can't guard them. Two limiters run in
+ * sequence on each of the six request-otp / verify-otp routes:
+ *
+ *  - per PHONE (normalized via `phoneDigits`, the same key the OtpCode row
+ *    uses) — stops one number being hammered from many addresses, and caps
+ *    how many real codes (someday real SMS spend) one number can trigger;
+ *  - per IP — stops one address rotating phone numbers to enumerate which
+ *    ones have accounts (identity/request-otp answers 404 vs 200) or to
+ *    brute-force codes across many numbers.
+ *
+ * Both fail closed on a missing/blank phone by falling back to the IP key,
+ * so a body-less request still counts against something. Windows are 10
+ * minutes: long enough that a guess loop is slow, short enough that a real
+ * person who mistyped their number twice isn't locked out for the shift.
+ * Successful requests count too — a "success" here is a real code minted or
+ * a real session issued, exactly the thing to cap.
+ *
+ * Sizing: a legitimate login is request → (maybe re-request) → verify, once
+ * every 30 days per person (sessions are 30-day). 5 request-otp per phone
+ * covers a re-request or two; 10 verify-otp per phone is two full codes'
+ * worth of `MAX_OTP_ATTEMPTS`. Per IP, 30/60 leaves headroom for a venue
+ * where a whole team behind one NAT signs in on the same morning. Behind a
+ * reverse proxy (Railway, Vercel's rewrite) `req.ip` is only the real client
+ * when `app.set('trust proxy', …)` is configured — see app.ts / TRUST_PROXY.
+ */
+const OTP_WINDOW_MS = 10 * 60 * 1000;
+
+function otpPhoneKey(req: Request): string {
+  const raw = typeof req.body?.phone === 'string' ? req.body.phone : '';
+  const digits = raw.replace(/\D/g, '').replace(/^00/, '').replace(/^971/, '').replace(/^0/, '');
+  return digits ? `phone:${digits}` : `ip:${ipKeyGenerator(req.ip ?? '')}`;
+}
+
+function otpIpKey(req: Request): string {
+  return `ip:${ipKeyGenerator(req.ip ?? '')}`;
+}
+
+function makeOtpLimiter(limit: number, keyGenerator: (req: Request) => string) {
+  return rateLimit({
+    windowMs: OTP_WINDOW_MS,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipFailedRequests: false,
+    keyGenerator,
+    handler: sendTooManyRequests,
+  });
+}
+
+/** Mount on every POST …/request-otp: per IP first (cheapest key), then per phone. */
+export const otpRequestRateLimiters = [makeOtpLimiter(30, otpIpKey), makeOtpLimiter(5, otpPhoneKey)];
+
+/** Mount on every POST …/verify-otp. */
+export const otpVerifyRateLimiters = [makeOtpLimiter(60, otpIpKey), makeOtpLimiter(10, otpPhoneKey)];

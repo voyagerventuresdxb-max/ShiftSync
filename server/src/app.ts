@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler } from 'express';
-import cors from 'cors';
 import { join } from 'node:path';
+import { frontendCors } from './middleware/cors.js';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
 import { floorPlanRouter, floorPlanFilesRouter } from './routes/floorPlan.js';
@@ -28,7 +28,16 @@ import { voiceRouter } from './routes/voice.js';
 export function createApp() {
   const app = express();
 
-  app.use(cors());
+  // How many reverse-proxy hops sit in front of this process, so `req.ip`
+  // (which the per-IP OTP rate limiters key on) is the real client and not
+  // the last proxy. 0 locally. On Railway behind the Vercel rewrite it is 2
+  // (Railway's edge + Vercel) — see docs/deployment.md. Deliberately a hop
+  // COUNT rather than `true`: trusting every X-Forwarded-For entry would let
+  // a client pick its own IP by sending the header itself.
+  const trustProxy = Number(process.env.TRUST_PROXY ?? 0);
+  if (Number.isInteger(trustProxy) && trustProxy > 0) app.set('trust proxy', trustProxy);
+
+  app.use(frontendCors());
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
