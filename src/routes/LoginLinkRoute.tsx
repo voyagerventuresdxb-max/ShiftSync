@@ -26,9 +26,12 @@ export default function LoginLinkContent() {
   const { login } = useIdentity();
   const navigate = useNavigate();
   const [state, setState] = useState<State>({ phase: 'checking' });
+  // Read once, at mount, BEFORE the effect below scrubs the fragment — an
+  // effect that both read and scrubbed would see an empty hash on React's
+  // StrictMode re-run in development and wrongly report "no link".
+  const [token] = useState(() => extractLoginLinkToken(window.location.hash));
 
   useEffect(() => {
-    const token = extractLoginLinkToken(window.location.hash);
     // The token is in React state from here on; take it out of the address
     // bar and history straight away so a live link doesn't linger there if
     // the person navigates off without signing in.
@@ -50,7 +53,7 @@ export default function LoginLinkContent() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [token]);
 
   const handleSignIn = async () => {
     if (state.phase !== 'ready') return;
