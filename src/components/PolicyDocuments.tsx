@@ -138,12 +138,12 @@ export default function PolicyDocuments({ locationId, isManager }: { locationId:
                     <button
                       type="button"
                       onClick={() => void handleOpen(d)}
-                      className="flex min-w-0 items-center gap-2 text-left hover:text-accent"
+                      className="hit-44 flex min-w-0 items-center gap-2 text-left hover:text-accent"
                     >
                       <FileText className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{d.title}</span>
                     </button>
                     {isManager && (
-                      <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive">
+                      <button onClick={() => void handleDelete(d.id)} aria-label={`Delete ${d.title}`} className="hit-44 grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive">
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}

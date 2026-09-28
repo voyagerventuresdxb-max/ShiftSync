@@ -160,7 +160,7 @@ function ShiftEditorLink() {
   const { session } = useIdentity();
   if (session?.user.systemRole !== 'MANAGER' && session?.user.systemRole !== 'OWNER') return null;
   return (
-    <Link to="/schedule" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+    <Link to="/schedule" className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
       <Pencil className="h-3.5 w-3.5" />
       <span className="hidden sm:inline">Shift editor</span>
     </Link>
@@ -180,7 +180,7 @@ function OnboardingLink() {
   const { session } = useIdentity();
   if (session?.user.systemRole !== 'MANAGER' && session?.user.systemRole !== 'OWNER') return null;
   return (
-    <Link to="/onboarding" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+    <Link to="/onboarding" className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
       <Rocket className="h-3.5 w-3.5" />
       <span className="hidden sm:inline">Onboarding</span>
     </Link>

@@ -297,7 +297,7 @@ export default function SchedulingContent() {
             key={t.id}
             onClick={() => setMode(t.id)}
             className={cn(
-              'inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-300',
+              'hit-44 inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-300',
               mode === t.id ? 'bg-accent text-accent-foreground shadow-lux' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -387,7 +387,7 @@ export default function SchedulingContent() {
               return (
                 <div className="roster-section" key={section.key}>
                   <button
-                    className={`roster-section-head${section.flagged ? ' roster-section-head-warn' : ''}`}
+                    className={`hit-44 roster-section-head${section.flagged ? ' roster-section-head-warn' : ''}`}
                     onClick={() => setCollapsed((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
                     aria-expanded={!isCollapsed}
                   >

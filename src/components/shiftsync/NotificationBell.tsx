@@ -95,7 +95,7 @@ export function NotificationBell() {
         onClick={handleToggle}
         aria-label={unreadCount > 0 ? `${unreadCount} unread notifications` : 'Notifications'}
         className={cn(
-          'relative grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
+          'hit-44 relative grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
           unreadCount > 0
             ? 'glow-gold border-accent/50 bg-accent/15 text-accent'
             : 'border-border text-foreground/40 hover:text-foreground/70',

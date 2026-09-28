@@ -252,7 +252,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
       }
     >
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -8 }}>
-        <button onClick={() => setDone('skipped')} style={{ padding: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)', background: 'transparent', border: 0 }}>
+        <button className="hit-44" onClick={() => setDone('skipped')} style={{ padding: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)', background: 'transparent', border: 0 }}>
           Skip — invite later
         </button>
       </div>
@@ -273,6 +273,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                 </div>
               </div>
               <button
+                className="hit-44"
                 onClick={() => void handleCopy()}
                 style={{
                   flexShrink: 0,
@@ -330,7 +331,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="ob-serif" style={{ fontSize: 15, lineHeight: 1.2, color: 'var(--ob-bone)' }}>Or post the QR</div>
               <div style={{ font: "400 11px/1.45 'Manrope'", color: 'var(--ob-bronze)', marginTop: 3 }}>Print it for the pass or the staff room. Same link.</div>
-              <button onClick={handleSaveQr} style={{ marginTop: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--ob-champagne)', background: 'transparent', border: 0 }}>
+              <button className="hit-44" onClick={handleSaveQr} style={{ marginTop: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--ob-champagne)', background: 'transparent', border: 0 }}>
                 {qrSaved ? 'Saved' : 'Save as image'}
               </button>
             </div>

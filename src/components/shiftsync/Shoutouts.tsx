@@ -133,7 +133,7 @@ export function Shoutouts() {
         </div>
         <button
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/20"
+          className="hit-44 inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/20"
         >
           {open ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
           {open ? 'Close' : 'Tag a shift'}
@@ -189,7 +189,7 @@ export function Shoutouts() {
           <button
             onClick={() => void submit()}
             disabled={!employeeId || !shiftId || !note.trim() || saving}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            className="hit-44 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Award className="h-3.5 w-3.5" /> {saving ? 'Saving…' : 'Give shoutout'}
           </button>
@@ -225,7 +225,7 @@ export function Shoutouts() {
                   <button
                     onClick={() => void remove(s.id)}
                     aria-label="Delete shoutout"
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive"
+                    className="hit-44 grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-border transition-colors hover:border-destructive/50 hover:text-destructive"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>

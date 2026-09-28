@@ -149,3 +149,59 @@
     0 0 10px -2px color-mix(in oklab, var(--color-accent) 50%, transparent),
     0 0 20px -8px color-mix(in oklab, var(--color-accent) 35%, transparent);
 }
+
+/*
+ * Touch hit-area expansion (Fitts's law, mobile-first — 2026-09-28).
+ *
+ * `hit-44` grows an element's *tappable* area to at least 44x44 CSS px
+ * without changing its rendered size, layout, or paint: an invisible,
+ * absolutely positioned ::after is centred on the element and inset by
+ * `min(0, (100% - 44px) / 2)` per side — zero when the element is already
+ * 44px or larger on that axis, negative (outward) when it is smaller.
+ * `top`/`bottom` resolve their percentage against the element's height and
+ * `left`/`right` against its width, so one `inset` value handles both axes.
+ *
+ * This supersedes, for hit areas ONLY, the earlier "sub-44px targets are
+ * locked prototype values" decision (see MEMORY.md 2026-09-08 / Decisions.md):
+ * visuals stay exactly as designed; only the invisible tap region grows.
+ *
+ * Rules of use (see e2e/touch-targets.spec.ts + e2e/touch-targets.allowlist.ts):
+ *  - Only on elements whose 44px expansion can't overlap a neighbouring
+ *    target (those are a product decision, listed in the allowlist).
+ *  - Not on <input>/<select>/<textarea>: replaced elements don't render
+ *    ::after. Those need a real min-height change — a visual decision.
+ *  - Needs a positioned element. `position: relative` is applied only when
+ *    the element isn't already positioned by a Tailwind utility, so
+ *    `absolute`/`fixed`/`sticky` elements keep their own positioning.
+ *  - A clipping ancestor (overflow != visible) cuts the expansion; check
+ *    the parent before applying, or the audit's clip check will flag it.
+ *  - The pseudo-element is a sharp rectangle even on rounded buttons, so the
+ *    expanded area's corners are tappable; a rounded element that is already
+ *    ≥44px keeps its own rounded shape (no pseudo box beyond it).
+ */
+@utility hit-44 {
+  &:where(:not(.absolute, .fixed, .sticky, .relative)) {
+    position: relative;
+  }
+  &::after {
+    content: '';
+    position: absolute;
+    inset: min(0px, calc((100% - 44px) / 2));
+    pointer-events: auto;
+    /* Above later positioned siblings with z-index:auto (the onboarding
+       screens' inline-styled `position: relative` sections would otherwise
+       paint over the expansion strip); still below every z-indexed layer
+       (sticky header z-20, dock z-30, sheets z-50). */
+    z-index: 1;
+  }
+}
+
+/* The pre-Tailwind button/chip classes in global.css (.btn-primary /
+   .btn-ghost / .chip, all 28–41px tall) get the same expansion so every
+   legacy action button is covered by the one mechanism. */
+@layer components {
+  .btn,
+  .chip {
+    @apply hit-44;
+  }
+}

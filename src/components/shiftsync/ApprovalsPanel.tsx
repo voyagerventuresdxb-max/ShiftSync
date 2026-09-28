@@ -179,14 +179,14 @@ export function ApprovalsPanel({
                           <button
                             onClick={() => void decide(r.id, 'approve')}
                             disabled={!online}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                            className="hit-44 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <Check className="h-3.5 w-3.5" /> Approve
                           </button>
                           <button
                             onClick={() => void decide(r.id, 'deny')}
                             disabled={!online}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                            className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <X className="h-3.5 w-3.5" /> Decline
                           </button>

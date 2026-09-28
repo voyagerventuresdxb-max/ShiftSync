@@ -101,6 +101,7 @@ export default function OnboardingScreenShell({
 
         {onBack && (
           <button
+            className="hit-44"
             onClick={onBack}
             style={{
               position: 'absolute',

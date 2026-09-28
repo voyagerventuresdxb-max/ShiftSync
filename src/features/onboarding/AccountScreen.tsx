@@ -211,6 +211,7 @@ export default function AccountScreen({ onBack, onContinue }: { onBack: () => vo
           {devCode && (
             <button
               type="button"
+              className="hit-44"
               onClick={() => setCode(devCode)}
               style={{
                 alignSelf: 'flex-start',

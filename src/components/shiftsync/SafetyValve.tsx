@@ -101,7 +101,7 @@ export function SafetyValve() {
           <button
             disabled={!text.trim() || submitting}
             onClick={() => void handleSubmit()}
-            className="mt-3 inline-flex items-center gap-2 rounded-lg border border-signal/40 bg-signal/10 px-4 py-2 text-sm font-semibold text-signal transition-all duration-200 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-40"
+            className="hit-44 mt-3 inline-flex items-center gap-2 rounded-lg border border-signal/40 bg-signal/10 px-4 py-2 text-sm font-semibold text-signal transition-all duration-200 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Send className="h-3.5 w-3.5" /> {submitting ? 'Submitting…' : online ? 'Submit anonymously' : 'Queue for sending'}
           </button>

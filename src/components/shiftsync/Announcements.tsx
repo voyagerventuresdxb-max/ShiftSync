@@ -142,7 +142,7 @@ export function Announcements() {
         </div>
         <button
           onClick={() => setDraft({ id: null, body: '' })}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
+          className="hit-44 inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
         >
           <Plus className="h-3.5 w-3.5" /> Post
         </button>
@@ -163,14 +163,14 @@ export function Announcements() {
           <div className="mt-2 flex justify-end gap-2">
             <button
               onClick={() => setDraft(null)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" /> Cancel
             </button>
             <button
               onClick={() => void save()}
               disabled={!draft.body.trim() || saving}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              className="hit-44 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
               {saving ? 'Saving…' : draft.id ? 'Save edit' : 'Broadcast'}
             </button>

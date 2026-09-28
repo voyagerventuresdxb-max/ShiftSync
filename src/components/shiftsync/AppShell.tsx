@@ -319,7 +319,7 @@ export function AppShell() {
             <Link
               to="/profile"
               aria-label="Open your profile"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-sm font-bold text-accent transition-transform duration-200 hover:scale-105 active:scale-95"
+              className="hit-44 grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-sm font-bold text-accent transition-transform duration-200 hover:scale-105 active:scale-95"
             >
               {avatarInitial(venueName ?? 'ShiftSync')}
             </Link>
@@ -336,7 +336,7 @@ export function AppShell() {
               aria-label="Open My Shifts"
               aria-current={onMyShifts ? 'page' : undefined}
               className={cn(
-                'grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
+                'hit-44 grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
                 onMyShifts
                   ? 'glow-gold border-accent/50 bg-accent/15 text-accent'
                   : 'border-border text-foreground/40 hover:text-foreground/70',

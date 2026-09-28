@@ -349,6 +349,7 @@ export default function ReviewScreen({
           </span>
         </div>
         <button
+          className="hit-44"
           onClick={() => {
             if (flaggedCount > 0 || filterFlagged) setFilterFlagged((v) => !v);
           }}
