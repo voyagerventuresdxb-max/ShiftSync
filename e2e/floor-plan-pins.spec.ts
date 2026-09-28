@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { cleanupTestOrgs, signupNewVenue, testVenueName } from './helpers';
-import { BAR_DES_PRES_SECTIONS, seedBarDesPres } from './floorPlanFixture';
+import { BAR_DES_PRES_SECTIONS, Touch, planZoom, seedBarDesPres } from './floorPlanFixture';
 
 /**
  * Floor-plan section pins at phone width (2026-09-29 correctness fix).
@@ -66,6 +66,60 @@ test.describe('floor plan — section pins at phone width', () => {
         await page.getByRole('button', { name: 'Close' }).first().click();
         await expect(page.locator('.fp-picker')).toHaveCount(0);
       }
+    }
+  });
+
+  test('zooming into the crowded Sec 6/7/8 cluster separates pins that overlap at 1x', async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    await signupNewVenue(page, testVenueName('floor-plan-pins-zoom'));
+    await seedBarDesPres(page);
+
+    await page.goto('/floor-plan');
+    await page.waitForSelector('.fp-canvas-wrap img');
+    await page.locator('.fp-canvas-wrap').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    const wrapEl = page.locator('.fp-canvas-wrap');
+    const wrap = (await wrapEl.boundingBox())!;
+    const cluster = ['Section 6', 'Section 7', 'Section 8'];
+    const boxes = async () => Promise.all(cluster.map(async (l) => (await page.locator(`[data-section-pin="${l}"]`).boundingBox())!));
+    const overlapping = (b: Array<{ x: number; y: number; width: number; height: number }>) => {
+      const pairs: string[] = [];
+      for (let i = 0; i < b.length; i++)
+        for (let j = i + 1; j < b.length; j++) {
+          const [p, q] = [b[i]!, b[j]!];
+          if (p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height) pairs.push(`${cluster[i]}↔${cluster[j]}`);
+        }
+      return pairs;
+    };
+
+    // The problem this feature exists for: at 1x these pins overlap.
+    const at1x = await boxes();
+    expect(overlapping(at1x), 'Sec 6/7/8 pins overlap at 1x').not.toEqual([]);
+    await wrapEl.screenshot({ path: testInfo.outputPath('cluster-1x.png') });
+
+    // Pinch 2.5x with the fingers' midpoint travelling from the cluster to the centre of the plan.
+    const cx = at1x.reduce((n, b) => n + b.x + b.width / 2, 0) / at1x.length;
+    const cy = at1x.reduce((n, b) => n + b.y + b.height / 2, 0) / at1x.length;
+    const touch = await Touch.open(page);
+    await touch.pinch({ x: cx, y: cy }, 40, 100, { x: wrap.x + wrap.width / 2, y: wrap.y + wrap.height / 2 });
+    expect(await planZoom(page)).toBeCloseTo(2.5, 1);
+    await page.waitForTimeout(200);
+    await wrapEl.screenshot({ path: testInfo.outputPath('cluster-2.5x.png') });
+
+    // Zoomed: no two cluster pins overlap, each is fully in view, and each opens its own section.
+    const zoomed = await boxes();
+    expect(overlapping(zoomed), 'Sec 6/7/8 pins still overlap after zooming in').toEqual([]);
+    for (let i = 0; i < cluster.length; i++) {
+      const b = zoomed[i]!;
+      expect(b.width, `${cluster[i]} pin keeps its on-screen size`).toBeCloseTo(at1x[i]!.width, 0);
+      expect(b.x).toBeGreaterThanOrEqual(wrap.x - 0.5);
+      expect(b.y).toBeGreaterThanOrEqual(wrap.y - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(wrap.x + wrap.width + 0.5);
+      expect(b.y + b.height).toBeLessThanOrEqual(wrap.y + wrap.height + 0.5);
+      await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
+      await expect(page.locator('.fp-picker h3'), `${cluster[i]}: tap while zoomed`).toHaveText(cluster[i]!);
+      await page.getByRole('button', { name: 'Close' }).first().click();
+      await expect(page.locator('.fp-picker')).toHaveCount(0);
     }
   });
 });

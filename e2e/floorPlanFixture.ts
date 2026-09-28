@@ -77,6 +77,8 @@ export class Touch {
     };
     await this.send('touchStart', at(0));
     for (let i = 1; i <= steps; i++) await this.send('touchMove', at(i / steps));
+    await new Promise((r) => setTimeout(r, 150)); // settle before lifting — see drag()
+    await this.send('touchMove', at(1));
     await this.send('touchEnd', []);
   }
 
