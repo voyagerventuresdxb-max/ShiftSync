@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useCloseOnBack } from '@/lib/backNavigation';
 import { weekDates, weekdayOf } from '@/engine/rosterView';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
@@ -757,6 +758,8 @@ function AvailabilityBadge({ mark }: { mark: AvailabilityMarkDto }) {
 }
 
 function SheetShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  // Mounted means open: browser/hardware back closes the sheet (see backNavigation.ts).
+  useCloseOnBack(true, onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-background/70 p-3 backdrop-blur-sm sm:p-6">
       <div className="panel w-full max-w-lg shadow-lux">

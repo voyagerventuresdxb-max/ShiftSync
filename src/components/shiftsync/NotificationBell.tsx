@@ -4,6 +4,7 @@ import { Bell } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIdentity } from '@/state/IdentityContext';
 import { fetchNotifications, markNotificationRead, markAllNotificationsRead, type AppNotification } from '@/api/notifications';
+import { useCloseOnBack } from '@/lib/backNavigation';
 
 /** How often to re-poll while the panel is closed — there's no push-to-client channel for "a new notification landed", so this is a plain interval, same pattern as ConnectivityContext's reachability check. */
 const POLL_MS = 30_000;
@@ -30,6 +31,7 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [error, setError] = useState<string | null>(null);
+  useCloseOnBack(open, () => setOpen(false));
 
   const refresh = useCallback(async () => {
     if (!session) return;

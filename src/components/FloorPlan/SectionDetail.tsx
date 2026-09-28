@@ -3,6 +3,7 @@ import { BellRing, Check, UserPlus, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { AssignmentSectionDto } from '../../api/floorPlan';
 import { initials } from './staffFormat';
+import { useCloseOnBack } from '../../lib/backNavigation';
 
 interface Props {
   section: AssignmentSectionDto;
@@ -35,6 +36,7 @@ export default function SectionDetail({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState('');
   const [notifyingId, setNotifyingId] = useState<string | null>(null);
+  useCloseOnBack(true, onClose);
 
   return (
     <div className="fp-picker-backdrop" onClick={onClose}>
