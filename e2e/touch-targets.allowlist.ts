@@ -41,7 +41,7 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^(Log in|Join instead)$/, category: 'b', reason: 'two 16px inline text links side by side in the Account step footer' },
   { label: /^(Remove|Notify|Re-notify) /, route: '/floor-plan', category: 'b', reason: 'SectionDetail assignee row: 28x28 Remove sits above the 15px Notify text button' },
   { label: /^(Add duty…|Expo)$/, route: '/floor-plan', category: 'b', reason: 'duty-label button uses `truncate` (overflow hidden): its own ::after would be clipped; needs a wrapper' },
-  { label: /^Section \d+,/, route: '/floor-plan', category: 'b', reason: 'section pins: the tap target is the clipped polygon (21–64px tall at 390px) and neighbouring polygons\' 44px areas overlap — Phase 2 stop-and-ask' },
+  { label: /^Section \d+,/, route: '/floor-plan', category: 'b', reason: 'section polygons (21–64px tall at 390px) overlap each other\'s 44px areas; pins are tappable and kept inside the plan (e2e/floor-plan-pins.spec.ts), 44px sizing waits for the separately-scoped zoom/pan work' },
   { label: /^[A-Z]{2} /, route: '/floor-plan', category: 'b', reason: 'roster-strip staff chips (38px): the strip is overflow-x:auto so a vertical expansion is clipped; needs strip padding (layout)' },
   { label: /^(Fine Dining|Bar \/ Lounge|Nightclub|Rooftop \/ Beach Club|Hotel F&B Outlet|Café \/ Bakery)$/, route: '/onboarding', category: 'b', reason: 'venue-type chips (35px) wrap into rows 8px apart: expansions overlap; locked prototype spacing' },
   { label: /^(Fewer|More) sections$/, route: '/onboarding', category: 'b', reason: 'stepper pair 36x36 with a 6px gap: expansions overlap' },
@@ -52,8 +52,8 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^(COPY|SAVE AS IMAGE)$/i, route: '/onboarding/invite', category: 'b', reason: 'measured (a) in one capture and (b) in another depending on the wrapped layout; hit-44 applied, exception kept until confirmed on a device' },
 
   // ---- (c) needs visual confirmation ----
-  { label: /^(Templates \(\d+\)|Save as template)$/, category: 'c', reason: 'RotaBuilder header overflows its overflow-hidden panel at 390px (button visibly cut off) — pre-existing responsive layout issue, not a hit-area fix' },
-  { label: /^WEEKLY ROTA BUILDER/, category: 'c', reason: 'same overflowing RotaBuilder header (the card toggle spans the cut-off row)' },
+  { label: /^(Templates \(\d+\)|Save as template)$/, category: 'c', reason: 'RotaBuilder header overflows its overflow-hidden panel at 390px (button visibly cut off) — issue #45' },
+  { label: /^WEEKLY ROTA BUILDER/, category: 'c', reason: 'same overflowing RotaBuilder header (the card toggle spans the cut-off row) — issue #45' },
 ];
 
 /** Same shape for canvas hit regions we deliberately do not measure yet. */
