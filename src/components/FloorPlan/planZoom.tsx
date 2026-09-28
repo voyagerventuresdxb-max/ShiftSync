@@ -270,7 +270,14 @@ export function PlanZoomViewport({ className, children }: { className: string; c
   const { view, reset } = usePlanZoom(ref);
   const zoomed = view.scale > PLAN_MIN_SCALE || view.x !== 0 || view.y !== 0;
   return (
-    <div ref={ref} className={className} data-plan-zoom={view.scale.toFixed(3)} style={{ touchAction: planTouchAction(view) }}>
+    <div
+      ref={ref}
+      className={className}
+      data-plan-zoom={view.scale.toFixed(3)}
+      data-plan-x={view.x}
+      data-plan-y={view.y}
+      style={{ touchAction: planTouchAction(view) }}
+    >
       <div
         className="relative"
         style={zoomed ? { transformOrigin: '0 0', transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` } : undefined}

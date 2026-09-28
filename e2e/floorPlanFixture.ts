@@ -101,8 +101,28 @@ export async function planZoom(page: Page): Promise<number> {
   return Number(await page.locator('.fp-canvas-wrap').getAttribute('data-plan-zoom'));
 }
 
-/** Screen position of a plan-space fraction (0–1) under the current zoom/pan, via the zoom layer's own box. */
+/**
+ * Screen position of a plan-space fraction (0–1) under the current zoom/pan:
+ * screen = viewport content origin + (x, y) + fraction * plan size * scale.
+ * Works for both viewports (Daily Assignment's CSS layer and the setup
+ * editor's Konva Stage), which expose their view as data-plan-* attributes.
+ */
 export async function planPointOnScreen(page: Page, fx: number, fy: number): Promise<{ x: number; y: number }> {
-  const layer = (await page.locator('.fp-canvas-wrap > div').first().boundingBox())!;
-  return { x: layer.x + fx * layer.width, y: layer.y + fy * layer.height };
+  return page.locator('.fp-canvas-wrap').first().evaluate(
+    (el, [fx, fy]) => {
+      const r = el.getBoundingClientRect();
+      const scale = Number(el.getAttribute('data-plan-zoom'));
+      const x = Number(el.getAttribute('data-plan-x'));
+      const y = Number(el.getAttribute('data-plan-y'));
+      // getBoundingClientRect is layout-viewport-relative; Playwright's mouse
+      // and touch coordinates are visual-viewport-relative. They differ when
+      // the page overflows the device width and the visual viewport has
+      // scrolled sideways (the setup editor page does, see issue #47).
+      const vv = window.visualViewport;
+      const ox = vv?.offsetLeft ?? 0;
+      const oy = vv?.offsetTop ?? 0;
+      return { x: r.left + el.clientLeft + x + fx * el.clientWidth * scale - ox, y: r.top + el.clientTop + y + fy * el.clientHeight * scale - oy };
+    },
+    [fx, fy] as const,
+  );
 }

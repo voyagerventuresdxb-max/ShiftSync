@@ -15,6 +15,7 @@ import {
 import { useIdentity } from '../../state/IdentityContext';
 import { useAuthenticatedBlobUrl } from '../../hooks/useAuthenticatedBlobUrl';
 import { useCloseOnBack } from '../../lib/backNavigation';
+import { PLAN_MIN_SCALE, ResetZoomButton, planTouchAction, usePlanZoom } from './planZoom';
 
 interface Props {
   locationId: string;
@@ -136,6 +137,10 @@ function FloorPlanCanvas({
   const [saving, setSaving] = useState(false);
   // The "New section" label dialog is a modal: back closes it (the drawn points stay).
   useCloseOnBack(labeling, () => setLabeling(false));
+  // Zoom/pan the view (planZoom.tsx), applied as Stage scale/position. While
+  // drawing, one finger places points, so pan/double-tap need two fingers.
+  const zoom = usePlanZoom(containerRef, { oneFingerGestures: !isDrawing });
+  const { scale, x: viewX, y: viewY } = zoom.view;
 
   const startDrawing = () => {
     setDrawing([]);
@@ -156,14 +161,19 @@ function FloorPlanCanvas({
 
   const handleStagePoint = (evt: KonvaEventObject<MouseEvent | TouchEvent | PointerEvent>) => {
     if (!isDrawing || labeling) return;
+    // A pinch/pan that just ended is not a point.
+    if (zoom.gestureConsumedTap()) return;
     const stage = evt.target.getStage();
-    const pos = stage?.getPointerPosition();
+    // Plan (un-zoomed stage) coordinates, not screen coordinates — so a point
+    // lands in the same place on the plan whatever the zoom while drawing.
+    const pos = stage?.getRelativePointerPosition();
     if (!pos) return;
     if (drawing.length >= 3) {
       const first = drawing[0];
       const dx = pos.x - first.x;
       const dy = pos.y - first.y;
-      if (Math.sqrt(dx * dx + dy * dy) <= CLOSE_RADIUS) {
+      // CLOSE_RADIUS is on-screen px; in plan coordinates it shrinks with zoom.
+      if (Math.sqrt(dx * dx + dy * dy) <= CLOSE_RADIUS / scale) {
         setLabeling(true);
         return;
       }
@@ -266,10 +276,21 @@ function FloorPlanCanvas({
         </div>
       )}
 
-      <div ref={containerRef} className="fp-canvas-wrap fp-canvas-wrap-editor">
+      <div
+        ref={containerRef}
+        className="fp-canvas-wrap fp-canvas-wrap-editor"
+        data-plan-zoom={scale.toFixed(3)}
+        data-plan-x={viewX}
+        data-plan-y={viewY}
+        style={{ touchAction: planTouchAction(zoom.view) }}
+      >
         <Stage
           width={stageWidth}
           height={stageHeight}
+          scaleX={scale}
+          scaleY={scale}
+          x={viewX}
+          y={viewY}
           onClick={handleStagePoint}
           onTap={handleStagePoint}
           style={{ cursor: isDrawing ? 'crosshair' : 'default' }}
@@ -297,7 +318,7 @@ function FloorPlanCanvas({
                     key={idx}
                     x={p.x}
                     y={p.y}
-                    radius={idx === 0 ? CLOSE_RADIUS : 4}
+                    radius={(idx === 0 ? CLOSE_RADIUS : 4) / scale}
                     fill={idx === 0 ? 'rgba(229,169,60,0.25)' : '#e5a93c'}
                     stroke="#e5a93c"
                   />
@@ -306,6 +327,7 @@ function FloorPlanCanvas({
             )}
           </Layer>
         </Stage>
+        {scale > PLAN_MIN_SCALE && <ResetZoomButton onClick={zoom.reset} />}
       </div>
 
       {labeling && (
