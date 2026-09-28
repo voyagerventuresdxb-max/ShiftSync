@@ -12,10 +12,16 @@ Product/engineering decisions that later work must not silently reverse. Newest 
 - Pairs of targets whose expanded areas would overlap (Edit/Delete announcement, stepper ±, wrapped venue-type chips, rota-grid chips + add buttons, SectionDetail Remove/Notify, etc.).
 - Native `<input>`/`<select>`/`<textarea>` (a pseudo-element cannot apply; needs a min-height decision).
 - RadialDock tabs and keystone (transform-scaled; the keystone already touches the focused tab).
-- Floor-plan section pins at phone width (polygons 21–64px tall, neighbours overlap, and for short polygons the visible pin badge itself lies outside the tappable clipped shape) — needs a design call, not a mechanical fix.
-- The RotaBuilder header overflows its card at 390px (Templates / Save as template cut off) — a responsive layout bug, reported.
+- Floor-plan section pins at phone width: polygons are 21–64px tall and neighbours' 44px areas overlap; 44px sizing waits for the separately-scoped zoom/pan work. (The correctness half — pins clipped by their own polygon and untappable at their visual centre — was fixed 2026-09-29, see below.)
+- The RotaBuilder header overflows its card at 390px (Templates / Save as template cut off) — responsive layout bug, issue #45.
 
 **Enforced by.** `e2e/touch-targets.spec.ts` (real backend, 390×844 touch viewport, manager + staff sessions) with `e2e/touch-targets.allowlist.ts` as the only sanctioned exception list.
+
+## 2026-09-29 — Floor-plan pins: every rendered pin is painted, tappable, and inside the plan
+
+**Decision.** Correctness bug, not a design choice: a pin that renders must open its own section. The polygon `clip-path` now lives on an inner hit layer instead of the section's `role=button`, so a pin taller than its (short) polygon is no longer clipped; the pin itself is a tap surface above neighbouring polygons (what you see is what you tap); a layout-effect nudge keeps it inside the plan's clipping box. Pin visual size unchanged; no zoom/pan (scoped separately). Visible effect: pins that used to be partly or wholly cut off now render in full.
+
+**Enforced by.** `e2e/floor-plan-pins.spec.ts` — all 8 Bar des Prés polygons at 390px: pin fully inside the plan, topmost at its centre, and a real touch tap at the pin centre and at its "Sec N" badge centre opens that section's SectionDetail.
 
 ## 2026-09-28 — Back-navigation priority order (browser + Android hardware back)
 
