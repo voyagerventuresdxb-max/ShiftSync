@@ -4,6 +4,7 @@ import { useDroppable } from '@dnd-kit/react';
 import { cn } from '../../lib/utils';
 import type { AssignmentSectionDto, Point } from '../../api/floorPlan';
 import { firstName, sectionPinName } from './staffFormat';
+import { usePlanView, type PlanView } from './planZoom';
 
 interface Props {
   section: AssignmentSectionDto;
@@ -92,11 +93,21 @@ function truncateNote(note: string, maxLength = 80): string {
  * renders past the plan's clipping box (`.fp-canvas-wrap` is overflow:
  * hidden) — a section drawn at the edge of the plan would otherwise have its
  * pin cut off. Zero for every pin that already fits, so those don't move.
+ *
+ * Zoom-aware (2026-09-29, see planZoom.tsx): the nudge is applied inside the
+ * zoom layer, so it moves the pin by `nudge * scale` on screen — measured in
+ * screen px, stored divided by the scale. The clip box is the visible
+ * viewport; a pin whose anchor is panned out of view is left where it is
+ * (clipped away) rather than dragged to the viewport edge. At 1x the anchor
+ * is always inside the plan, so behaviour there is unchanged.
  */
-function useKeepInsidePlan(pinRef: RefObject<HTMLDivElement | null>): { x: number; y: number } {
+function useKeepInsidePlan(pinRef: RefObject<HTMLDivElement | null>, view: PlanView): { x: number; y: number } {
   const [nudge, setNudge] = useState({ x: 0, y: 0 });
   const nudgeRef = useRef(nudge);
   nudgeRef.current = nudge;
+  const scaleRef = useRef(view.scale);
+  scaleRef.current = view.scale;
+  const updateRef = useRef<(() => void) | null>(null);
   useLayoutEffect(() => {
     const pin = pinRef.current;
     const plan = pin?.closest('.fp-canvas-wrap');
@@ -107,16 +118,26 @@ function useKeepInsidePlan(pinRef: RefObject<HTMLDivElement | null>): { x: numbe
       const inner = { left: w.left + plan.clientLeft, top: w.top + plan.clientTop };
       const bounds = { ...inner, right: inner.left + plan.clientWidth, bottom: inner.top + plan.clientHeight };
       const { x: nx, y: ny } = nudgeRef.current;
-      const x = Math.max(bounds.left - (p.left - nx), 0) + Math.min(bounds.right - (p.right - nx), 0);
-      const y = Math.max(bounds.top - (p.top - ny), 0) + Math.min(bounds.bottom - (p.bottom - ny), 0);
+      const z = scaleRef.current;
+      const base = { left: p.left - nx * z, right: p.right - nx * z, top: p.top - ny * z, bottom: p.bottom - ny * z };
+      const ax = (base.left + base.right) / 2;
+      const ay = (base.top + base.bottom) / 2;
+      const anchorVisible = ax >= bounds.left && ax <= bounds.right && ay >= bounds.top && ay <= bounds.bottom;
+      const x = anchorVisible ? (Math.max(bounds.left - base.left, 0) + Math.min(bounds.right - base.right, 0)) / z : 0;
+      const y = anchorVisible ? (Math.max(bounds.top - base.top, 0) + Math.min(bounds.bottom - base.bottom, 0)) / z : 0;
       if (x !== nx || y !== ny) setNudge({ x, y });
     };
+    updateRef.current = update;
     update();
     const observer = new ResizeObserver(update);
     observer.observe(plan);
     observer.observe(pin);
     return () => observer.disconnect();
   }, [pinRef]);
+  // Transforms don't trigger ResizeObserver: re-check whenever the view moves.
+  useLayoutEffect(() => {
+    updateRef.current?.();
+  }, [view.scale, view.x, view.y]);
   return nudge;
 }
 
@@ -142,7 +163,8 @@ export default function SectionOverlay({ section, warn, onTap }: Props) {
   const { style, centroid } = boxGeometry(section.polygon);
   const { clipPath, ...boxStyle } = style;
   const pinRef = useRef<HTMLDivElement>(null);
-  const nudge = useKeepInsidePlan(pinRef);
+  const view = usePlanView();
+  const nudge = useKeepInsidePlan(pinRef, view);
 
   return (
     <div
@@ -164,7 +186,7 @@ export default function SectionOverlay({ section, warn, onTap }: Props) {
         ref={pinRef}
         data-section-pin={section.label}
         className="pointer-events-auto absolute z-[1] flex -translate-x-1/2 -translate-y-1/2 cursor-pointer flex-col items-center gap-0.5"
-        style={{ left: `${centroid.xPct}%`, top: `${centroid.yPct}%`, transform: `translate(${nudge.x}px, ${nudge.y}px)` }}
+        style={{ left: `${centroid.xPct}%`, top: `${centroid.yPct}%`, transform: `translate(${nudge.x}px, ${nudge.y}px)${view.scale !== 1 ? ` scale(${1 / view.scale})` : ''}` }}
       >
         <span
           className={cn(
