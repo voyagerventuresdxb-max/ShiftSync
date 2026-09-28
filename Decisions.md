@@ -17,6 +17,18 @@ Product/engineering decisions that later work must not silently reverse. Newest 
 
 **Enforced by.** `e2e/touch-targets.spec.ts` (real backend, 390×844 touch viewport, manager + staff sessions) with `e2e/touch-targets.allowlist.ts` as the only sanctioned exception list.
 
+## 2026-09-29 — Floor plan pinch-to-zoom + pan (Daily Assignment and Sections setup)
+
+**Decision.** Both floor-plan views zoom from fit (1x, can't zoom out past the whole plan) to 3x. Two fingers pinch (and pan via the midpoint). Once zoomed, one finger pans from anywhere on the plan — movement under 8px is still a tap, so pins and sections still open SectionDetail, and the click ending a pan is swallowed. "Pan only from empty space" was rejected because polygons cover most of the plan once zoomed. Ctrl+wheel / trackpad pinch works on desktop. Reset comes from a visible bottom-corner button, plus double-tap on empty plan. At 1x one finger still scrolls the page (`touch-action: pan-y`); once zoomed the plan takes every touch. In the setup editor, one finger places points while drawing and never pans. No gesture library.
+
+**Pins keep their on-screen size while zoomed** (each counter-scales by 1/zoom). Zooming them with the plan would scale the overlap too and fix nothing. So zoom spreads crowded pins apart; it doesn't enlarge them.
+
+**Persistence: none — zoom resets on every visit.** It's per-mount React state. A zoomed view restored on return would hide the rest of the plan with no hint why.
+
+**Coordinate system (for future work).** Plan space = the un-zoomed layout; section polygons stay stored as 0–1 fractions of it. View = `translate(x, y) scale(s)`, origin top-left: `screen = viewportOrigin + (x, y) + plan * s`. Daily Assignment applies it as one CSS transform (`PlanZoomViewport`); dnd-kit's `getBoundingClientRect`-based drop targets already include it, so drops need no maths. The Konva editor applies it as Stage scale/position and must read points with `getRelativePointerPosition()`, never `getPointerPosition()`. Anything drawn "at a fixed on-screen size" inside a zoomed view divides by `s` (pins, the close-loop radius, point dots). Code: `src/components/FloorPlan/planZoom.tsx`.
+
+**Enforced by.** `e2e/floor-plan-zoom.spec.ts` (clamps, pan, tap vs pan, reset, a chip drop at 2x checked in the DB), `e2e/floor-plan-zoom-editor.spec.ts` (the same triangle drawn at 1x and at 2x saves the same geometry), and `e2e/floor-plan-pins.spec.ts` (the Sec 6/7/8 pins overlap at 1x and don't at 2.5x).
+
 ## 2026-09-29 — Floor-plan pins: every rendered pin is painted, tappable, and inside the plan
 
 **Decision.** Correctness bug, not a design choice: a pin that renders must open its own section. The polygon `clip-path` now lives on an inner hit layer instead of the section's `role=button`, so a pin taller than its (short) polygon is no longer clipped; the pin itself is a tap surface above neighbouring polygons (what you see is what you tap); a layout-effect nudge keeps it inside the plan's clipping box. Pin visual size unchanged; no zoom/pan (scoped separately). Visible effect: pins that used to be partly or wholly cut off now render in full.
