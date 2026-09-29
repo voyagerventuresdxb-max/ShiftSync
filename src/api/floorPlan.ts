@@ -8,11 +8,6 @@ import { withAuth } from './identity';
 
 export { ApiError };
 
-export interface Point {
-  x: number;
-  y: number;
-}
-
 export interface FloorPlanImageDto {
   id: string;
   locationId: string;
@@ -27,7 +22,9 @@ export interface FloorSectionDto {
   locationId: string;
   floorPlanImageId: string;
   label: string;
-  polygon: Point[];
+  /** Pin position, as fractions (0-1) of the plan image's width/height. */
+  pinX: number;
+  pinY: number;
   paxCapacity: number;
   notes: string | null;
   sortOrder: number;
@@ -61,7 +58,8 @@ export type NestedAssignmentDto = Omit<AssignmentDto, 'sectionId'>;
 export interface AssignmentSectionDto {
   id: string;
   label: string;
-  polygon: Point[];
+  pinX: number;
+  pinY: number;
   paxCapacity: number;
   notes: string | null;
   assignments: NestedAssignmentDto[];
@@ -103,14 +101,15 @@ export async function uploadFloorPlanImage(
   return request('/api/floor-plan/upload', { method: 'POST', headers: withAuth(token), body: form });
 }
 
-/** POST /api/floor-plan/sections — save a drawn polygon section. */
+/** POST /api/floor-plan/sections — create a section as a named pin on the plan. */
 export async function createFloorSection(
   token: string,
   input: {
     locationId: string;
     floorPlanImageId: string;
     label: string;
-    polygon: Point[];
+    pinX: number;
+    pinY: number;
     paxCapacity: number;
     notes?: string | null;
   },
@@ -127,7 +126,7 @@ export async function createFloorSection(
 export async function updateFloorSection(
   token: string,
   sectionId: string,
-  updates: Partial<{ label: string; polygon: Point[]; paxCapacity: number; notes: string | null }>,
+  updates: Partial<{ label: string; pinX: number; pinY: number; paxCapacity: number; notes: string | null }>,
 ): Promise<FloorSectionDto> {
   const { section } = await request<{ section: FloorSectionDto }>(`/api/floor-plan/sections/${sectionId}`, {
     method: 'PATCH',

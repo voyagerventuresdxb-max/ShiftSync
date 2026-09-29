@@ -79,6 +79,8 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
   const g = useRef({
     pointers: new Map<number, Point>(),
     starts: new Map<number, Point>(),
+    /** Pointers that started on a `data-plan-drag-handle` (a draggable pin): they never one-finger pan, but still count toward a pinch. */
+    handles: new Set<number>(),
     start: IDENTITY,
     moved: false,
     multi: false,
@@ -111,6 +113,10 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
     const onDown = (e: PointerEvent) => {
       if ((e.target as Element | null)?.closest?.('[data-plan-zoom-control]')) return;
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      // A finger on a draggable pin drags the pin, not the plan — but if a
+      // second finger joins, the pinch wins: capturing the pointers below
+      // takes them from the pin, which cancels its drag (lostpointercapture).
+      if ((e.target as Element | null)?.closest?.('[data-plan-drag-handle]')) g.handles.add(e.pointerId);
       if (g.pointers.size === 0) {
         g.moved = false;
         g.multi = false;
@@ -148,7 +154,7 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
       const dx = p.x - p0.x;
       const dy = p.y - p0.y;
       if (!g.moved && Math.hypot(dx, dy) < TAP_SLOP) return;
-      if (!oneFingerRef.current || g.start.scale <= PLAN_MIN_SCALE) return;
+      if (!oneFingerRef.current || g.start.scale <= PLAN_MIN_SCALE || g.handles.has(e.pointerId)) return;
       g.moved = true;
       capture(e.pointerId);
       apply({ ...g.start, x: g.start.x + dx, y: g.start.y + dy });
@@ -158,6 +164,7 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
       if (!g.pointers.has(e.pointerId)) return;
       const p = local(e);
       g.pointers.delete(e.pointerId);
+      g.handles.delete(e.pointerId);
       if (g.pointers.size > 0) {
         rebase(); // pinch → one finger left: keep panning from where we are
         return;

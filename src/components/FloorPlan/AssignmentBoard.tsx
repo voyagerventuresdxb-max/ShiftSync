@@ -286,10 +286,10 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
   if (sections.length === 0) {
     return (
       <div className="status-block">
-        <p>Floor plan uploaded, but no sections drawn yet.</p>
+        <p>Floor plan uploaded, but no sections added yet.</p>
         {isManager && (
           <button className="btn btn-primary" onClick={onEditSections}>
-            Draw sections
+            Add sections
           </button>
         )}
       </div>
