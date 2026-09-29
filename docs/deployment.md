@@ -78,6 +78,13 @@ Replace `RAILWAY_API_HOST` in `vercel.json` with the Railway domain (host only, 
 — the file already carries `https://`), commit to `master`. Vercel builds every push as a
 *preview* until step 3.
 
+The frontend build is `prisma generate && tsc -b && vite build`. `tsc -b` type-checks the
+e2e specs, which import the generated Prisma client, and Vercel restores `node_modules`
+from its build cache — so `@prisma/client`'s own postinstall `generate` does not re-run and
+the client can be older than `prisma/schema.prisma`. That broke the #49 preview (new
+`FloorSection.pinX` "does not exist"). `prisma generate` needs no database connection.
+Railway already generates in its own build command.
+
 ### 3. Vercel Production Branch — last
 
 Vercel dashboard → the `shift-sync` project → Settings → Git → **Production Branch =
