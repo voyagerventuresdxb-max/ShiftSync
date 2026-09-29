@@ -14,7 +14,7 @@
  * their own namespace, so one branch's `prisma migrate dev` can no longer
  * see (let alone alter or drop) another branch's tables at all.
  *
- * Usage: node scripts/with-branch-schema.mjs <command...>
+ * Usage: node scripts/with-branch-schema.mjs [--connection-limit=N] [--confirm-reset=<schema>] <command...>
  *   e.g. node scripts/with-branch-schema.mjs npx prisma migrate dev
  *        node scripts/with-branch-schema.mjs "kill-port 4000 && tsx watch server/src/index.ts"
  *
@@ -81,6 +81,55 @@ export function withSchema(rawUrl, schema, connectionLimit) {
   return u.toString();
 }
 
+/**
+ * Safeguard (2026-09-30, after a real incident): refuses commands that would
+ * WIPE a live schema through this wrapper, and returns the reason.
+ *
+ * The incident: `with-branch-schema "prisma migrate diff ... --shadow-database-url
+ * \"$DATABASE_URL\""` — inside this wrapper $DATABASE_URL IS the branch's
+ * live schema, and Prisma RESETS whatever the shadow URL points at (drops
+ * every object in it, then replays the migrations). The branch's dev data was
+ * gone in one command. Nothing prompted: Prisma treats the shadow database
+ * as disposable by definition, and this wrapper passed the command through.
+ *
+ * Rules:
+ *  1. A --shadow-database-url must be a literal URL naming a disposable
+ *     schema (`shadow_*`) or a different database — never $DATABASE_URL, and
+ *     never `public` or a branch schema. (For a drift check, use
+ *     `npm run prisma:check-drift`, which does this safely.)
+ *  2. `prisma migrate reset` / `db push --force-reset` wipe the target schema
+ *     by design; they need an explicit `--confirm-reset=<schema>` naming the
+ *     schema they will wipe.
+ */
+export function destructiveCommandReason(command, scopedUrl, confirmedResetSchema) {
+  const target = new URL(scopedUrl);
+  const targetSchema = target.searchParams.get('schema') || 'public';
+
+  const shadow = command.match(/--shadow-database-url(?:=|\s+)("[^"]*"|'[^']*'|\S+)/);
+  if (shadow) {
+    const raw = shadow[1].replace(/^["']|["']$/g, '');
+    if (/\$\{?DATABASE_URL\b|%DATABASE_URL%/.test(raw)) {
+      return `--shadow-database-url is $DATABASE_URL, which inside this wrapper is the live "${targetSchema}" schema — Prisma resets the shadow database. Use \`npm run prisma:check-drift\` instead.`;
+    }
+    let url;
+    try {
+      url = new URL(raw);
+    } catch {
+      return `--shadow-database-url "${raw}" is not a literal URL, so it can't be checked — refusing rather than risk resetting a live schema.`;
+    }
+    const shadowSchema = url.searchParams.get('schema') || 'public';
+    const sameDatabase = url.host === target.host && url.pathname === target.pathname;
+    if (sameDatabase && !shadowSchema.startsWith('shadow_')) {
+      return `--shadow-database-url points at schema "${shadowSchema}" in the live database — Prisma resets the shadow database. Use a disposable "shadow_*" schema (see \`npm run prisma:check-drift\`).`;
+    }
+  }
+
+  if (/\bmigrate\s+reset\b|--force-reset\b/.test(command) && confirmedResetSchema !== targetSchema) {
+    return `this command wipes schema "${targetSchema}". Re-run with --confirm-reset=${targetSchema} if that is really what you want.`;
+  }
+  return null;
+}
+
 function main() {
   const baseUrl = process.env.DATABASE_URL;
   if (!baseUrl) {
@@ -90,8 +139,11 @@ function main() {
 
   const rest = process.argv.slice(2);
   let connectionLimit;
-  if (rest[0]?.startsWith('--connection-limit=')) {
-    connectionLimit = rest.shift().split('=')[1];
+  let confirmedResetSchema;
+  while (rest[0]?.startsWith('--connection-limit=') || rest[0]?.startsWith('--confirm-reset=')) {
+    const flag = rest.shift();
+    if (flag.startsWith('--connection-limit=')) connectionLimit = flag.split('=')[1];
+    else confirmedResetSchema = flag.split('=')[1];
   }
 
   const branch = currentBranch();
@@ -104,6 +156,12 @@ function main() {
   if (!command) {
     console.error('[with-branch-schema] usage: node scripts/with-branch-schema.mjs [--connection-limit=N] <command...>');
     process.exit(1);
+  }
+
+  const refusal = destructiveCommandReason(command, scopedUrl, confirmedResetSchema);
+  if (refusal) {
+    console.error(`[with-branch-schema] REFUSED: ${refusal}`);
+    process.exit(2);
   }
 
   const result = spawnSync('bash', ['-c', command], {

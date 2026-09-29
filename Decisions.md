@@ -34,6 +34,8 @@ Product/engineering decisions that later work must not silently reverse. Newest 
 
 **Open.** `konva`, `react-konva` and `use-image` have no importers left; removing them from `package.json` is pending a decision.
 
+**Dev-DB safeguard added alongside (2026-09-30).** While verifying this migration, a `prisma migrate diff --shadow-database-url "$DATABASE_URL"` run through `with-branch-schema.mjs` reset that branch's live dev schema (Prisma resets the shadow DB; inside the wrapper `$DATABASE_URL` is the live schema). The wrapper now refuses shadow URLs that aren't a disposable `shadow_*` schema or another database, and refuses `migrate reset`/`--force-reset` without `--confirm-reset=<schema>`. Use `npm run prisma:check-drift` for drift checks. See AGENTS.md §6.
+
 **Enforced by.** `e2e/floor-plan-section-editor.spec.ts` (tap-to-drop at 1x and 2x, drag at 1x and 2x, pinch-on-pin, arrow-key nudge, rename, two-step delete — all checked in the DB) and `server/src/routes/floorPlan.test.ts` (pin validation; no response carries `polygon`).
 
 ## 2026-09-29 — Floor plan pinch-to-zoom + pan (Daily Assignment and Sections setup)
