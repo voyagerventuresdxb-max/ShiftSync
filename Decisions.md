@@ -30,7 +30,9 @@ Product/engineering decisions that later work must not silently reverse. Newest 
 
 **Migration.** `20260929180000_floor_section_pin` backfilled every existing section's pin with its polygon's vertex average, exactly where the pin already rendered, so nothing moved on screen. Sections with no polygon points got the plan centre, reported in a NOTICE.
 
-**Deprecated, not dropped.** `FloorSection.polygon` stays in the DB (default `[]`), is never written by the app, and is never sent to clients (`omit`). This keeps the change revertible. Drop the column in a later cleanup once pin sections are confirmed in production.
+**Deploy order + one-release compat (2026-09-30).** The frontend (Vercel, auto-deploys master to production) and the API (Railway) deploy separately, and a mismatched pair breaks the Floor Plan. So the **API ships first**, and for one release it stays compatible with the old frontend: every section response still carries a `polygon` (the stored one, or a small square centred on a pin-only section's pin), and a POST with only a polygon is accepted, with the pin derived from its vertex average. Proven by running the pre-#49 frontend's floor-plan e2e (9 tests, including the polygon-drawing editor) against the new API. Everything is marked `COMPAT` in `server/src/routes/floorPlan.ts`; remove it once the new frontend is live (#50).
+
+**Deprecated, not dropped.** `FloorSection.polygon` stays in the DB (default `[]`). The new frontend never writes or reads it (only the compat POST writes it). This keeps the change revertible. Drop the column in a later cleanup once pin sections are confirmed in production.
 
 **Dependencies.** `konva`, `react-konva` and `use-image` were removed (2026-09-30, confirmed unused) — no canvas library remains in the app.
 
