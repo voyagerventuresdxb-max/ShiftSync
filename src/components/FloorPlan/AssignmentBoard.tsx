@@ -52,9 +52,8 @@ interface Props {
 
 /**
  * Phase 2 — daily assignment screen. Renders the floor plan as a static
- * `<img>` with each saved section as an absolutely-positioned DOM overlay
- * (the real dnd-kit drop target — Konva shapes are never drop targets, see
- * the kickoff brief). Drag-and-drop and tap-to-pick both write through the
+ * `<img>` with each saved section as an absolutely-positioned DOM pin (the
+ * dnd-kit drop target, see SectionOverlay). Drag-and-drop and tap-to-pick both write through the
  * same `assignStaff` call.
  */
 export default function AssignmentBoard({ locationId, onEditSections }: Props) {

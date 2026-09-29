@@ -8,18 +8,21 @@ import { Minimize2 } from 'lucide-react';
  * Coordinate system — read this before touching anything that maps a point
  * on the plan:
  *  - "plan space" is the un-zoomed layout: the plan fills the viewport at
- *    scale 1, so plan space == viewport CSS px at 1x. Section polygons are
- *    stored as fractions of it (0–1), exactly as before zoom existed.
+ *    scale 1, so plan space == viewport CSS px at 1x. Section pins
+ *    (FloorSection.pinX/pinY) are stored as fractions of it (0–1).
  *  - The view is `translate(x, y) scale(scale)` with origin top-left:
  *    screen = viewportOrigin + (x, y) + planPoint * scale.
  *    planPoint = (screen - viewportOrigin - (x, y)) / scale.
- *  - Daily Assignment applies the view as a CSS transform on one layer
- *    (`PlanZoomViewport`); dnd-kit measures drop targets with
- *    getBoundingClientRect, which already includes CSS transforms, so drops
- *    map to the right section with no extra maths.
- *  - The Konva setup editor applies the same view as Stage scale/position and
- *    reads points with `getRelativePointerPosition()` (plan space), never
- *    `getPointerPosition()` (screen space).
+ *  - Both the Daily Assignment board and the Sections setup editor apply the
+ *    view as one CSS transform on a layer (`PlanZoomViewport`). Anything
+ *    inside that layer is measured through the transform by
+ *    getBoundingClientRect — dnd-kit drop targets, and the editor's
+ *    "plan fraction under the finger" (`(client - rect.left) / rect.width`) —
+ *    so neither needs any zoom maths. Anything drawn at a fixed ON-SCREEN
+ *    size inside the layer counter-scales by 1/scale (SectionPin).
+ *  - Draggable things inside the layer (setup-editor pins) carry
+ *    `data-plan-drag-handle`: a pointer starting on one never one-finger
+ *    pans, but still counts toward a pinch.
  *
  * Gestures: two fingers pinch (and pan by moving their midpoint); one
  * finger/mouse drags to pan once zoomed in (a move under TAP_SLOP is still a
@@ -37,8 +40,8 @@ export interface PlanView {
   y: number;
 }
 
-export const PLAN_MIN_SCALE = 1; // fit-to-viewport: never zoom out past the whole plan
-export const PLAN_MAX_SCALE = 3;
+const PLAN_MIN_SCALE = 1; // fit-to-viewport: never zoom out past the whole plan
+const PLAN_MAX_SCALE = 3;
 const IDENTITY: PlanView = { scale: 1, x: 0, y: 0 };
 const TAP_SLOP = 8; // px a pointer may move and still count as a tap
 const DOUBLE_TAP_MS = 300;
@@ -58,24 +61,11 @@ interface Point {
   y: number;
 }
 
-export interface PlanZoom {
-  view: PlanView;
-  reset: () => void;
-  /** True while/after a gesture that pinched or panned — callers that act on a tap (Konva's click/tap) must ignore it. Cleared when the next gesture starts. */
-  gestureConsumedTap: () => boolean;
-}
-
-/**
- * Attaches the zoom/pan gestures to `viewportRef`. `oneFingerGestures`
- * (default true) enables one-finger pan and double-tap reset; the editor
- * turns it off while drawing, where one finger places points.
- */
-export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFingerGestures = true } = {}): PlanZoom {
+/** Attaches the zoom/pan gestures to `viewportRef`. */
+function usePlanZoom(viewportRef: RefObject<HTMLElement | null>): { view: PlanView; reset: () => void } {
   const [view, setView] = useState<PlanView>(IDENTITY);
   const viewRef = useRef(view);
   viewRef.current = view;
-  const oneFingerRef = useRef(oneFingerGestures);
-  oneFingerRef.current = oneFingerGestures;
   const g = useRef({
     pointers: new Map<number, Point>(),
     starts: new Map<number, Point>(),
@@ -154,7 +144,7 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
       const dx = p.x - p0.x;
       const dy = p.y - p0.y;
       if (!g.moved && Math.hypot(dx, dy) < TAP_SLOP) return;
-      if (!oneFingerRef.current || g.start.scale <= PLAN_MIN_SCALE || g.handles.has(e.pointerId)) return;
+      if (g.start.scale <= PLAN_MIN_SCALE || g.handles.has(e.pointerId)) return;
       g.moved = true;
       capture(e.pointerId);
       apply({ ...g.start, x: g.start.x + dx, y: g.start.y + dy });
@@ -175,7 +165,7 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
         return;
       }
       // A plain tap. Two on empty plan (not on a section/pin/button) = reset.
-      if (e.type === 'pointercancel' || !oneFingerRef.current) return;
+      if (e.type === 'pointercancel') return;
       if ((e.target as Element | null)?.closest?.('[role="button"], button')) {
         g.lastTap = null;
         return;
@@ -235,12 +225,11 @@ export function usePlanZoom(viewportRef: RefObject<HTMLElement | null>, { oneFin
     };
   }, [viewportRef, g]);
 
-  const gestureConsumedTap = useCallback(() => g.moved || g.multi, [g]);
-  return { view, reset, gestureConsumedTap };
+  return { view, reset };
 }
 
 /** `touch-action` for a plan viewport: let the page scroll at 1x, take every touch once zoomed in. */
-export function planTouchAction(view: PlanView): 'pan-y' | 'none' {
+function planTouchAction(view: PlanView): 'pan-y' | 'none' {
   return view.scale > PLAN_MIN_SCALE ? 'none' : 'pan-y';
 }
 
@@ -252,7 +241,7 @@ export function usePlanView(): PlanView {
 }
 
 /** Small bottom-corner "reset zoom" control, shown only while zoomed in. */
-export function ResetZoomButton({ onClick }: { onClick: () => void }) {
+function ResetZoomButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"

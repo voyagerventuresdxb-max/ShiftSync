@@ -62,11 +62,8 @@ async function createFixture(nameSuffix: string) {
       locationId: location.id,
       floorPlanImageId: image.id,
       label: '__floorplan-test__ Terrace',
-      polygon: [
-        { x: 0.1, y: 0.1 },
-        { x: 0.4, y: 0.1 },
-        { x: 0.4, y: 0.4 },
-      ],
+      pinX: 0.25,
+      pinY: 0.2,
       paxCapacity: 20,
       sortOrder: 0,
     },
@@ -179,6 +176,62 @@ test('AM and PM assignments for the same section/staff/date are independent rows
     await prisma.sectionAssignment
       .deleteMany({ where: { sectionId: section.id, shiftDate: new Date(`${shiftDate}T00:00:00.000Z`) } })
       .catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('sections are pins: create/update validate pinX/pinY (0-1, moved together), and no response ever carries the deprecated polygon', async () => {
+  const { location, manager, image, section } = await createFixture('pins');
+  try {
+    await withServer(async (baseUrl) => {
+      const token = await sessionFor(manager.id);
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const create = (body: Record<string, unknown>) =>
+        fetch(`${baseUrl}/api/floor-plan/sections`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ locationId: location.id, floorPlanImageId: image.id, label: '__floorplan-test__ Bar', paxCapacity: 6, ...body }),
+        });
+
+      // Missing / out-of-range / non-numeric pins are rejected; a polygon alone is no longer enough.
+      for (const bad of [{}, { pinX: 0.5 }, { pinX: 1.2, pinY: 0.5 }, { pinX: -0.1, pinY: 0.5 }, { pinX: '0.5', pinY: 0.5 }, { polygon: [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.1 }, { x: 0.2, y: 0.2 }] }]) {
+        const res = await create(bad);
+        assert.equal(res.status, 400, `create must reject ${JSON.stringify(bad)}`);
+      }
+
+      const ok = await create({ pinX: 0.62, pinY: 0.86 });
+      assert.equal(ok.status, 201);
+      const { section: created } = (await ok.json()) as { section: Record<string, unknown> };
+      assert.equal(created.pinX, 0.62);
+      assert.equal(created.pinY, 0.86);
+      assert.equal('polygon' in created, false, 'create response must not carry polygon');
+      const row = await prisma.floorSection.findUniqueOrThrow({ where: { id: String(created.id) } });
+      assert.deepEqual(row.polygon, [], 'a pin section stores no boundary');
+
+      const patch = (body: Record<string, unknown>) =>
+        fetch(`${baseUrl}/api/floor-plan/sections/${section.id}`, { method: 'PATCH', headers, body: JSON.stringify(body) });
+      assert.equal((await patch({ pinX: 0.3 })).status, 400, 'a pin is one point: never half-updated');
+      assert.equal((await patch({ pinX: 0.3, pinY: 2 })).status, 400);
+      const moved = await patch({ pinX: 0.3, pinY: 0.7 });
+      assert.equal(moved.status, 200);
+      const { section: updated } = (await moved.json()) as { section: Record<string, unknown> };
+      assert.equal(updated.pinX, 0.3);
+      assert.equal(updated.pinY, 0.7);
+      assert.equal('polygon' in updated, false, 'update response must not carry polygon');
+
+      for (const url of [`${baseUrl}/api/floor-plan/${location.id}`, `${baseUrl}/api/floor-plan/${location.id}/assignments?date=2026-10-01&period=AM`]) {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        assert.equal(res.status, 200);
+        const body = (await res.json()) as { sections: Record<string, unknown>[] };
+        assert.equal(body.sections.length, 2);
+        for (const s of body.sections) {
+          assert.equal(typeof s.pinX, 'number');
+          assert.equal(typeof s.pinY, 'number');
+          assert.equal('polygon' in s, false, `${url} must not carry polygon`);
+        }
+      }
+    });
+  } finally {
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });

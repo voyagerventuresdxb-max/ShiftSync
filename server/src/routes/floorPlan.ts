@@ -137,6 +137,13 @@ floorPlanRouter.post('/upload', requireSession, requireManager, upload.single('f
   }
 });
 
+/**
+ * `FloorSection.polygon` is deprecated (2026-09-29, pin-only sections) and
+ * kept in the DB only so the change can be reverted — it is never sent to
+ * clients. Every section a response carries is read with this omit.
+ */
+const OMIT_DEPRECATED = { polygon: true } as const;
+
 /** A pin coordinate: a fraction (0-1) of the plan image's width or height. */
 function isPinCoord(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
@@ -178,6 +185,7 @@ floorPlanRouter.post('/sections', requireSession, requireManager, async (req, re
     const sortOrder = await prisma.floorSection.count({ where: { floorPlanImageId } });
     const section = await prisma.floorSection.create({
       data: { locationId, floorPlanImageId, label, pinX, pinY, paxCapacity: Math.round(paxCapacity), notes, sortOrder },
+      omit: OMIT_DEPRECATED,
     });
     return res.status(201).json({ section });
   } catch (err) {
@@ -222,7 +230,7 @@ floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, as
       return res.status(400).json({ error: 'Nothing to update.' });
     }
 
-    const section = await prisma.floorSection.update({ where: { id: sectionId }, data });
+    const section = await prisma.floorSection.update({ where: { id: sectionId }, data, omit: OMIT_DEPRECATED });
     return res.status(200).json({ section });
   } catch (err) {
     console.error('[floorPlan.sections.update] failed', err);
@@ -263,6 +271,7 @@ floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
     const sections = await prisma.floorSection.findMany({
       where: { floorPlanImageId: image.id },
       orderBy: { sortOrder: 'asc' },
+      omit: OMIT_DEPRECATED,
     });
     return res.status(200).json({ image, sections });
   } catch (err) {
