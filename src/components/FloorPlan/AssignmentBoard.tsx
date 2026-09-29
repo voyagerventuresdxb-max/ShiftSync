@@ -18,6 +18,7 @@ import StaffChip from './StaffChip';
 import SectionOverlay from './SectionOverlay';
 import SectionDetail from './SectionDetail';
 import SectionPicker from './SectionPicker';
+import { PlanZoomViewport } from './planZoom';
 
 // Local calendar date, not UTC — `toISOString()` would show yesterday's
 // date for the first ~4 hours of the day in Dubai (UTC+4), which is exactly
@@ -364,7 +365,10 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
           {staff.length === 0 && <p className="hint">No staff in the directory yet.</p>}
         </div>
 
-        <div className="fp-canvas-wrap">
+        {/* Pinch-to-zoom + pan viewport (planZoom.tsx). dnd-kit drop targets
+            are measured through the zoom transform, so drops still land on
+            the section under the finger at any zoom. */}
+        <PlanZoomViewport className="fp-canvas-wrap">
           {imageBlobUrl && <img src={imageBlobUrl} alt="Venue floor plan" className="fp-image" draggable={false} />}
           {sections.map((section) => (
             <SectionOverlay
@@ -376,7 +380,7 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
               }}
             />
           ))}
-        </div>
+        </PlanZoomViewport>
       </DragDropProvider>
 
       {expandedSection && (

@@ -1,16 +1,13 @@
-import { test, expect, type Page } from '@playwright/test';
-import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { test, expect } from '@playwright/test';
 import { cleanupTestOrgs, signupNewVenue, testVenueName } from './helpers';
+import { BAR_DES_PRES_SECTIONS, Touch, planZoom, seedBarDesPres } from './floorPlanFixture';
 
 /**
  * Floor-plan section pins at phone width (2026-09-29 correctness fix).
  *
- * The 8 Bar des Prés sections, traced as irregular polygons (fractional
- * coords over the venue's 16:9 plan — e2e/fixtures/floor-plan.png has the
- * same 16:9 aspect, so the rendered geometry at 390px is identical to the
- * real 1440x810 plan). At 390px the whole plan is ~316x179px and several
- * polygons are only 21–28px tall, so the ~48px pin stack centred on the
+ * The 8 Bar des Prés sections (e2e/floorPlanFixture.ts). At 390px the
+ * whole plan is ~316x179px and several polygons are only 21–28px tall, so
+ * the ~48px pin stack centred on the
  * centroid used to spill outside its polygon: the part outside was clipped
  * by the polygon's clip-path (unpainted AND untappable) — 4 of these 8 pins
  * opened nothing when tapped at their own visual centre. Pins near the plan
@@ -22,39 +19,6 @@ import { cleanupTestOrgs, signupNewVenue, testVenueName } from './helpers';
  */
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-
-const API = 'http://localhost:4000';
-
-const BAR_DES_PRES_SECTIONS = [
-  { label: 'Section 1', paxCapacity: 18, notes: 'Shade after 17:00', polygon: [{ x: 0.03, y: 0.36 }, { x: 0.12, y: 0.30 }, { x: 0.16, y: 0.42 }, { x: 0.10, y: 0.66 }, { x: 0.03, y: 0.62 }] },
-  { label: 'Section 2', paxCapacity: 16, polygon: [{ x: 0.13, y: 0.22 }, { x: 0.29, y: 0.20 }, { x: 0.30, y: 0.40 }, { x: 0.15, y: 0.42 }] },
-  { label: 'Section 3', paxCapacity: 15, polygon: [{ x: 0.16, y: 0.44 }, { x: 0.35, y: 0.44 }, { x: 0.35, y: 0.55 }, { x: 0.20, y: 0.56 }] },
-  { label: 'Section 4', paxCapacity: 15, polygon: [{ x: 0.30, y: 0.22 }, { x: 0.48, y: 0.30 }, { x: 0.49, y: 0.44 }, { x: 0.31, y: 0.42 }] },
-  { label: 'Section 5', paxCapacity: 15, polygon: [{ x: 0.49, y: 0.30 }, { x: 0.63, y: 0.30 }, { x: 0.71, y: 0.38 }, { x: 0.62, y: 0.44 }, { x: 0.50, y: 0.44 }] },
-  { label: 'Section 6', paxCapacity: 16, polygon: [{ x: 0.71, y: 0.24 }, { x: 0.91, y: 0.22 }, { x: 0.93, y: 0.34 }, { x: 0.73, y: 0.36 }] },
-  { label: 'Section 7', paxCapacity: 16, polygon: [{ x: 0.88, y: 0.36 }, { x: 0.97, y: 0.36 }, { x: 0.97, y: 0.66 }, { x: 0.86, y: 0.64 }] },
-  { label: 'Section 8', paxCapacity: 14, polygon: [{ x: 0.73, y: 0.38 }, { x: 0.86, y: 0.38 }, { x: 0.87, y: 0.52 }, { x: 0.73, y: 0.54 }] },
-];
-
-async function seedBarDesPres(page: Page): Promise<void> {
-  const raw = await page.evaluate(() => localStorage.getItem('shiftsync.session'));
-  const session = JSON.parse(raw ?? 'null') as { token: string; user: { locationId: string } };
-  const auth = { Authorization: `Bearer ${session.token}` };
-  const fd = new FormData();
-  fd.append('locationId', session.user.locationId);
-  fd.append('file', new Blob([readFileSync(path.resolve('e2e/fixtures/floor-plan.png'))], { type: 'image/png' }), 'floor-plan.png');
-  const up = await fetch(`${API}/api/floor-plan/upload`, { method: 'POST', headers: auth, body: fd });
-  expect(up.ok, 'floor plan upload').toBeTruthy();
-  const { image } = (await up.json()) as { image: { id: string } };
-  for (const s of BAR_DES_PRES_SECTIONS) {
-    const res = await fetch(`${API}/api/floor-plan/sections`, {
-      method: 'POST',
-      headers: { ...auth, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locationId: session.user.locationId, floorPlanImageId: image.id, ...s }),
-    });
-    expect(res.ok, `create ${s.label}`).toBeTruthy();
-  }
-}
 
 test.describe('floor plan — section pins at phone width', () => {
   test.afterEach(async ({ page }) => {
@@ -102,6 +66,60 @@ test.describe('floor plan — section pins at phone width', () => {
         await page.getByRole('button', { name: 'Close' }).first().click();
         await expect(page.locator('.fp-picker')).toHaveCount(0);
       }
+    }
+  });
+
+  test('zooming into the crowded Sec 6/7/8 cluster separates pins that overlap at 1x', async ({ page }, testInfo) => {
+    test.setTimeout(180_000);
+    await signupNewVenue(page, testVenueName('floor-plan-pins-zoom'));
+    await seedBarDesPres(page);
+
+    await page.goto('/floor-plan');
+    await page.waitForSelector('.fp-canvas-wrap img');
+    await page.locator('.fp-canvas-wrap').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    const wrapEl = page.locator('.fp-canvas-wrap');
+    const wrap = (await wrapEl.boundingBox())!;
+    const cluster = ['Section 6', 'Section 7', 'Section 8'];
+    const boxes = async () => Promise.all(cluster.map(async (l) => (await page.locator(`[data-section-pin="${l}"]`).boundingBox())!));
+    const overlapping = (b: Array<{ x: number; y: number; width: number; height: number }>) => {
+      const pairs: string[] = [];
+      for (let i = 0; i < b.length; i++)
+        for (let j = i + 1; j < b.length; j++) {
+          const [p, q] = [b[i]!, b[j]!];
+          if (p.x < q.x + q.width && q.x < p.x + p.width && p.y < q.y + q.height && q.y < p.y + p.height) pairs.push(`${cluster[i]}↔${cluster[j]}`);
+        }
+      return pairs;
+    };
+
+    // The problem this feature exists for: at 1x these pins overlap.
+    const at1x = await boxes();
+    expect(overlapping(at1x), 'Sec 6/7/8 pins overlap at 1x').not.toEqual([]);
+    await wrapEl.screenshot({ path: testInfo.outputPath('cluster-1x.png') });
+
+    // Pinch 2.5x with the fingers' midpoint travelling from the cluster to the centre of the plan.
+    const cx = at1x.reduce((n, b) => n + b.x + b.width / 2, 0) / at1x.length;
+    const cy = at1x.reduce((n, b) => n + b.y + b.height / 2, 0) / at1x.length;
+    const touch = await Touch.open(page);
+    await touch.pinch({ x: cx, y: cy }, 40, 100, { x: wrap.x + wrap.width / 2, y: wrap.y + wrap.height / 2 });
+    expect(await planZoom(page)).toBeCloseTo(2.5, 1);
+    await page.waitForTimeout(200);
+    await wrapEl.screenshot({ path: testInfo.outputPath('cluster-2.5x.png') });
+
+    // Zoomed: no two cluster pins overlap, each is fully in view, and each opens its own section.
+    const zoomed = await boxes();
+    expect(overlapping(zoomed), 'Sec 6/7/8 pins still overlap after zooming in').toEqual([]);
+    for (let i = 0; i < cluster.length; i++) {
+      const b = zoomed[i]!;
+      expect(b.width, `${cluster[i]} pin keeps its on-screen size`).toBeCloseTo(at1x[i]!.width, 0);
+      expect(b.x).toBeGreaterThanOrEqual(wrap.x - 0.5);
+      expect(b.y).toBeGreaterThanOrEqual(wrap.y - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(wrap.x + wrap.width + 0.5);
+      expect(b.y + b.height).toBeLessThanOrEqual(wrap.y + wrap.height + 0.5);
+      await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
+      await expect(page.locator('.fp-picker h3'), `${cluster[i]}: tap while zoomed`).toHaveText(cluster[i]!);
+      await page.getByRole('button', { name: 'Close' }).first().click();
+      await expect(page.locator('.fp-picker')).toHaveCount(0);
     }
   });
 });
