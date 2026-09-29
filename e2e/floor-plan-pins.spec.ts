@@ -3,19 +3,20 @@ import { cleanupTestOrgs, signupNewVenue, testVenueName } from './helpers';
 import { BAR_DES_PRES_SECTIONS, Touch, planZoom, seedBarDesPres } from './floorPlanFixture';
 
 /**
- * Floor-plan section pins at phone width (2026-09-29 correctness fix).
+ * Floor-plan section pins at phone width, on the 8 Bar des Prés sections
+ * (e2e/floorPlanFixture.ts). At 390px the whole plan is ~316x179px.
  *
- * The 8 Bar des Prés sections (e2e/floorPlanFixture.ts). At 390px the
- * whole plan is ~316x179px and several polygons are only 21–28px tall, so
- * the ~48px pin stack centred on the
- * centroid used to spill outside its polygon: the part outside was clipped
- * by the polygon's clip-path (unpainted AND untappable) — 4 of these 8 pins
- * opened nothing when tapped at their own visual centre. Pins near the plan
- * edge were also cut off by the canvas wrap.
+ * History: sections were drawn polygons until 2026-09-29, and a pin taller
+ * than its short polygon was clipped by the polygon's clip-path (unpainted
+ * and untappable — 4 of these 8 pins opened nothing at their own centre),
+ * and pins at the plan edge were cut off by the canvas wrap. Sections are
+ * pin-only now, so the first cause is gone by construction; this spec keeps
+ * guarding the outcome.
  *
  * Every pin must render entirely inside the plan, be painted where it
  * renders, and open ITS OWN SectionDetail on a real touch tap at its visual
- * centre (and at the centre of its "Sec N" badge).
+ * centre (and at the centre of its "Sec N" badge). The second test proves
+ * zoom separates the crowded Sec 6/7/8 cluster.
  */
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
