@@ -446,7 +446,12 @@ model FloorSection {
   locationId       String  @map("location_id")
   floorPlanImageId String  @map("floor_plan_image_id")
   label            String
-  polygon          Json // [{x:number,y:number}, ...] fractional coords
+  /// A section is a named pin (2026-09-29): pinX/pinY are fractions (0-1) of the plan's width/height.
+  pinX             Float   @default(0.5) @map("pin_x")
+  pinY             Float   @default(0.5) @map("pin_y")
+  /// DEPRECATED (2026-09-29): polygon boundaries were replaced by pin-only sections. Nothing reads or writes
+  /// it any more; kept (default []) so the change can be reverted. Drop in a later cleanup.
+  polygon          Json    @default("[]")
   paxCapacity      Int     @map("pax_capacity")
   notes            String? // free-text venue note, e.g. "Shade after 17:00"
   sortOrder        Int     @default(0) @map("sort_order")
