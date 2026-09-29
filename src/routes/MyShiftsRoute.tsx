@@ -205,7 +205,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
                 disabled={busyDate === date}
                 aria-label={`${weekdayOf(date)} ${date} — ${state === 'UNAVAILABLE' ? 'unavailable' : state === 'PREFERRED_OFF' ? 'preferred off' : 'unmarked'}. Tap to change.`}
                 className={cn(
-                  'flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2 text-[11px] font-medium transition-colors disabled:opacity-50',
+                  'hit-44 flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2 text-[11px] font-medium transition-colors disabled:opacity-50',
                   state === 'UNAVAILABLE' && 'border-destructive/30 bg-destructive/10 text-destructive',
                   state === 'PREFERRED_OFF' && 'border-warning/30 bg-warning/10 text-warning',
                   state === 'UNMARKED' && 'border-border text-muted-foreground hover:border-accent/40 hover:text-foreground',

@@ -4,6 +4,7 @@ import { cn } from '../lib/utils';
 import { weekDates, weekdayOf } from '../engine/rosterView';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
+import { useCloseOnBack } from '../lib/backNavigation';
 import { ApiError } from '../api/schedules';
 import { fetchRoles } from '../api/roles';
 
@@ -30,6 +31,13 @@ export default function ScheduleEditorContent() {
   const [draft, setDraft] = useState<{ id?: string; userId: string | null; roleId: string; start: string; end: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The shift draft dialog is a modal: back dismisses it like its Cancel button
+  // (not mid-write, where Cancel is disabled too).
+  useCloseOnBack(draft !== null, () => {
+    if (busy) return;
+    setDraft(null);
+    setError(null);
+  });
 
   // Every mutation here goes through the same wrapper: a failed write leaves
   // the sheet open with the server's own message showing, instead of the

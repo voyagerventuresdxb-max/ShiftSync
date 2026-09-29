@@ -1,4 +1,5 @@
 import type { ParsedIntent } from '@/api/voice';
+import { useCloseOnBack } from '@/lib/backNavigation';
 
 /**
  * Confirm-before-execute sheet for the voice command pipeline. Mirrors the
@@ -27,6 +28,12 @@ export function VoiceCommandSheet({
   onCancel: () => void;
   executing: boolean;
 }) {
+  // Back dismisses the sheet exactly like its Cancel/Got it button — but not
+  // while the mutation is in flight, for the same reason the backdrop tap is
+  // disabled then (a cancel that cancels nothing).
+  useCloseOnBack(!!intent, () => {
+    if (!executing) onCancel();
+  });
   if (!intent) return null;
   const isUnrecognized = intent.intent === 'UNRECOGNIZED';
   // QUERY_MY_SCHEDULE is read-only — it never reaches /execute at all (see

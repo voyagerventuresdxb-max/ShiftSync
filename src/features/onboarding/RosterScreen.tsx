@@ -152,6 +152,7 @@ export default function RosterScreen({
     >
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -8 }}>
         <button
+          className="hit-44"
           onClick={handleSkip}
           style={{ padding: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)', background: 'transparent', border: 0 }}
         >
@@ -267,6 +268,7 @@ export default function RosterScreen({
             </div>
             <button
               type="button"
+              className="hit-44"
               aria-label="Remove file"
               onClick={(e) => {
                 e.stopPropagation();
@@ -335,6 +337,7 @@ export default function RosterScreen({
         {photoZoneFilled ? (
           <button
             type="button"
+            className="hit-44"
             aria-label="Remove photo"
             onClick={(e) => {
               e.stopPropagation();

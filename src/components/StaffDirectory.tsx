@@ -233,7 +233,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   return (
     <section className="staff-directory">
       <button
-        className="staff-directory-toggle"
+        className="hit-44 staff-directory-toggle"
         onClick={() => setCollapsed((c) => !c)}
         aria-expanded={!collapsed}
       >

@@ -156,6 +156,7 @@ export default function VenueScreen({
             <span style={{ font: "400 20px/1.2 'Instrument Serif'", color: 'var(--ob-bone)' }}>{name}</span>
             <button
               type="button"
+              className="hit-44"
               onClick={() => setEditingName(true)}
               disabled={disabled}
               style={{
@@ -216,6 +217,7 @@ export default function VenueScreen({
           {CITY_OPTIONS.map((label) => (
             <button
               key={label}
+              className="hit-44"
               disabled={disabled}
               onClick={() => {
                 setCityTouched(true);
@@ -322,6 +324,7 @@ export default function VenueScreen({
               </svg>
             </button>
             <button
+              className="hit-44"
               disabled={disabled}
               onClick={() => setLater((v) => !v)}
               style={{

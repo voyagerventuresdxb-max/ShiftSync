@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { MapPin, StickyNote } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/react';
 import { cn } from '../../lib/utils';
@@ -88,23 +88,67 @@ function truncateNote(note: string, maxLength = 80): string {
 }
 
 /**
+ * Nudges the pin (in px, on top of its centroid anchoring) so it never
+ * renders past the plan's clipping box (`.fp-canvas-wrap` is overflow:
+ * hidden) — a section drawn at the edge of the plan would otherwise have its
+ * pin cut off. Zero for every pin that already fits, so those don't move.
+ */
+function useKeepInsidePlan(pinRef: RefObject<HTMLDivElement | null>): { x: number; y: number } {
+  const [nudge, setNudge] = useState({ x: 0, y: 0 });
+  const nudgeRef = useRef(nudge);
+  nudgeRef.current = nudge;
+  useLayoutEffect(() => {
+    const pin = pinRef.current;
+    const plan = pin?.closest('.fp-canvas-wrap');
+    if (!pin || !plan) return;
+    const update = () => {
+      const p = pin.getBoundingClientRect();
+      const w = plan.getBoundingClientRect();
+      const inner = { left: w.left + plan.clientLeft, top: w.top + plan.clientTop };
+      const bounds = { ...inner, right: inner.left + plan.clientWidth, bottom: inner.top + plan.clientHeight };
+      const { x: nx, y: ny } = nudgeRef.current;
+      const x = Math.max(bounds.left - (p.left - nx), 0) + Math.min(bounds.right - (p.right - nx), 0);
+      const y = Math.max(bounds.top - (p.top - ny), 0) + Math.min(bounds.bottom - (p.bottom - ny), 0);
+      if (x !== nx || y !== ny) setNudge({ x, y });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(plan);
+    observer.observe(pin);
+    return () => observer.disconnect();
+  }, [pinRef]);
+  return nudge;
+}
+
+/**
  * A small pin-style marker (section number + primary assignee + pax ratio)
  * anchored to the drawn polygon's centroid. The polygon's own bounding box
  * — invisible here, just the drop target — still spans the full drawn
  * shape underneath, so drag-and-drop keeps its existing full-shape hit
- * area; only the *visual* changed to a compact pin. Tapping anywhere in
- * that area opens the full-detail panel (assignee list, notes, unassign,
+ * area; only the *visual* changed to a compact pin. Tapping the polygon or
+ * the pin opens the full-detail panel (assignee list, notes, unassign,
  * assign staff) rather than showing everything inline on the canvas.
+ *
+ * The polygon clip-path lives on an inner hit layer, NOT on the button
+ * itself (2026-09-29): at phone width a section can be ~21px tall while its
+ * pin stack is ~48px, and clipping the whole button cut the pin off —
+ * unpainted and untappable outside the shape (4 of Bar des Prés' 8 pins
+ * opened nothing when tapped at their own centre). The pin is now its own
+ * tap surface, above neighbouring polygons (what you see is what you tap),
+ * and kept inside the plan by `useKeepInsidePlan`.
  */
 export default function SectionOverlay({ section, warn, onTap }: Props) {
   const { ref, isDropTarget } = useDroppable({ id: section.id });
   const { style, centroid } = boxGeometry(section.polygon);
+  const { clipPath, ...boxStyle } = style;
+  const pinRef = useRef<HTMLDivElement>(null);
+  const nudge = useKeepInsidePlan(pinRef);
 
   return (
     <div
       ref={ref}
-      className="absolute cursor-pointer"
-      style={style}
+      className="pointer-events-none absolute"
+      style={boxStyle}
       onClick={onTap}
       role="button"
       tabIndex={0}
@@ -115,9 +159,12 @@ export default function SectionOverlay({ section, warn, onTap }: Props) {
         if (e.key === 'Enter' || e.key === ' ') onTap();
       }}
     >
+      <div aria-hidden className="pointer-events-auto absolute inset-0 cursor-pointer" style={{ clipPath }} />
       <div
-        className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5"
-        style={{ left: `${centroid.xPct}%`, top: `${centroid.yPct}%` }}
+        ref={pinRef}
+        data-section-pin={section.label}
+        className="pointer-events-auto absolute z-[1] flex -translate-x-1/2 -translate-y-1/2 cursor-pointer flex-col items-center gap-0.5"
+        style={{ left: `${centroid.xPct}%`, top: `${centroid.yPct}%`, transform: `translate(${nudge.x}px, ${nudge.y}px)` }}
       >
         <span
           className={cn(

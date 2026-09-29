@@ -18,7 +18,20 @@ export default defineConfig({
     baseURL: 'http://localhost:5173',
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // Opt-in system Chromium (e.g. a CI/container image that ships its own
+        // build under a different revision than this Playwright version
+        // bundles). Unset = Playwright's own managed browser, as before.
+        ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+          ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } }
+          : {}),
+      },
+    },
+  ],
   webServer: [
     {
       command: 'npm run server:dev',

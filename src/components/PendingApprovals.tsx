@@ -143,14 +143,14 @@ export default function PendingApprovals({ locationId }: { locationId: string })
                       <button
                         onClick={() => void handleDecide(r.id, 'approve')}
                         disabled={decidingId === r.id || !online}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                        className="hit-44 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Check className="h-3.5 w-3.5" /> Approve
                       </button>
                       <button
                         onClick={() => void handleDecide(r.id, 'decline')}
                         disabled={decidingId === r.id || !online}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                        className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <X className="h-3.5 w-3.5" /> Decline
                       </button>

@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useCloseOnBack } from '@/lib/backNavigation';
 import { weekDates, weekdayOf } from '@/engine/rosterView';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
@@ -467,7 +468,7 @@ export function RotaBuilder() {
         <>
           <header className="flex flex-wrap items-center gap-3 border-y border-border p-4">
             <div className="flex items-center gap-1.5">
-              <button onClick={() => setWeekStart(shiftWeek(weekStart, -1))} aria-label="Previous week" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
+              <button onClick={() => setWeekStart(shiftWeek(weekStart, -1))} aria-label="Previous week" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <span className="px-1 text-sm font-semibold tracking-tight">{weekdayOf(days[0])} {days[0].slice(8)} – {weekdayOf(days[6])} {days[6].slice(8)}</span>
@@ -720,8 +721,10 @@ function Cell({
       {shifts.map((s) => (
         <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
       ))}
+      {/* hit-44 only on an empty cell: with a chip 4px above, the expanded
+          area would overlap that chip (touch-target audit category b). */}
       {!locked && (
-        <button onClick={onAdd} aria-label={`Add shift on ${date}`} className="grid h-6 w-full place-items-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:border-accent hover:text-accent">
+        <button onClick={onAdd} aria-label={`Add shift on ${date}`} className={cn('grid h-6 w-full place-items-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:border-accent hover:text-accent', shifts.length === 0 && 'hit-44')}>
           <Plus className="h-3 w-3" />
         </button>
       )}
@@ -755,12 +758,14 @@ function AvailabilityBadge({ mark }: { mark: AvailabilityMarkDto }) {
 }
 
 function SheetShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  // Mounted means open: browser/hardware back closes the sheet (see backNavigation.ts).
+  useCloseOnBack(true, onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-background/70 p-3 backdrop-blur-sm sm:p-6">
       <div className="panel w-full max-w-lg shadow-lux">
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-2xl border-b border-border bg-surface/95 p-4 backdrop-blur">
           <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
-          <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
+          <button onClick={onClose} aria-label="Close" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </header>
@@ -884,8 +889,8 @@ function TemplateSheet({
                 <p className="text-[11px] text-muted-foreground">{t.entryCount} shifts</p>
               </div>
               <div className="flex shrink-0 gap-2">
-                <button onClick={() => onApply(t)} disabled={!online} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">Apply</button>
-                <button onClick={() => onDelete(t.id)} disabled={!online} aria-label="Delete template" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60">
+                <button onClick={() => onApply(t)} disabled={!online} className="hit-44 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">Apply</button>
+                <button onClick={() => onDelete(t.id)} disabled={!online} aria-label="Delete template" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>

@@ -14,6 +14,7 @@ import {
 } from '../../api/floorPlan';
 import { useIdentity } from '../../state/IdentityContext';
 import { useAuthenticatedBlobUrl } from '../../hooks/useAuthenticatedBlobUrl';
+import { useCloseOnBack } from '../../lib/backNavigation';
 
 interface Props {
   locationId: string;
@@ -133,6 +134,8 @@ function FloorPlanCanvas({
   const [paxText, setPaxText] = useState('');
   const [notesText, setNotesText] = useState('');
   const [saving, setSaving] = useState(false);
+  // The "New section" label dialog is a modal: back closes it (the drawn points stay).
+  useCloseOnBack(labeling, () => setLabeling(false));
 
   const startDrawing = () => {
     setDrawing([]);

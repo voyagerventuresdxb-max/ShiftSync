@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { UploadResponse } from '../api/schedules';
 
 /**
@@ -79,6 +79,17 @@ export function resolveEffectiveStep(requestedStep: OnboardingStep, unlocked: Re
   return unlocked.has(requestedStep) ? requestedStep : furthestUnlockedStep(unlocked);
 }
 
+/** The step a Back control / hardware back goes to from `step` (Welcome has none). Roster's Skip jumps to Invite, so Invite's previous step is whichever of Review/Roster was actually reached. */
+export function previousStep(step: OnboardingStep, unlocked: ReadonlySet<OnboardingStep>): OnboardingStep | null {
+  const index = STEPS.indexOf(step);
+  for (let i = index - 1; i >= 0; i--) {
+    const candidate = STEPS[i]!;
+    if (candidate === 'account') continue; // consumed once a session exists; never a back destination
+    if (unlocked.has(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function stepPath(step: OnboardingStep): string {
   return step === 'welcome' ? '/onboarding' : `/onboarding/${step}`;
 }
@@ -93,6 +104,8 @@ export interface UploadedFileMeta {
 interface OnboardingStateValue {
   step: OnboardingStep;
   setStep: (step: OnboardingStep) => void;
+  /** Where back goes from the current step, or null on Welcome. */
+  backStep: OnboardingStep | null;
   /** Roster's parsed-but-unconfirmed upload batch (batchId + preview rows), read by Review. Null when Roster was skipped, hasn't run yet, or didn't survive a reload. */
   uploadResult: UploadResponse | null;
   /** The file behind `uploadResult`; null whenever `uploadResult` is null. */
@@ -144,6 +157,7 @@ function loadUnlockedSteps(locationId: string | null): Set<OnboardingStep> {
 
 export function OnboardingStateProvider({ locationId, children }: { locationId: string | null; children: ReactNode }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { step: stepParam } = useParams<{ step?: string }>();
   const requestedStep: OnboardingStep = isOnboardingStep(stepParam) ? stepParam : 'welcome';
 
@@ -187,9 +201,29 @@ export function OnboardingStateProvider({ locationId, children }: { locationId: 
     }
   });
 
+  /**
+   * Step transitions and browser/hardware back (2026-09-28, see
+   * src/lib/backNavigation.ts): a FORWARD move pushes a history entry whose
+   * state remembers the step it came from (`obFrom`), so browser back lands on
+   * the previous step instead of leaving the flow. A BACKWARD move to exactly
+   * that step pops the entry (`navigate(-1)`) rather than pushing a second
+   * copy — otherwise venue → roster → Back → venue would leave browser back
+   * pointing forward at roster. Any other move (Account handing over to Venue
+   * once the session exists, Invite's Back to a Review that was skipped, a
+   * deep-linked step with no history behind it) replaces in place, carrying
+   * `obFrom` along so a later Back still knows what sits underneath.
+   */
   const setStep = (next: OnboardingStep) => {
     setUnlockedSteps((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
-    navigate(stepPath(next), { replace: true });
+    const from = (location.state as { obFrom?: OnboardingStep } | null)?.obFrom;
+    const forward = STEPS.indexOf(next) > STEPS.indexOf(step);
+    if (forward && step !== 'account') {
+      navigate(stepPath(next), { state: { obFrom: step } });
+    } else if (!forward && from === next) {
+      navigate(-1);
+    } else {
+      navigate(stepPath(next), { replace: true, state: from ? { obFrom: from } : undefined });
+    }
   };
 
   const setUploadResult = (result: UploadResponse | null, file?: UploadedFileMeta) => {
@@ -210,9 +244,9 @@ export function OnboardingStateProvider({ locationId, children }: { locationId: 
   };
 
   const value: OnboardingStateValue = useMemo(
-    () => ({ step, setStep, uploadResult, uploadFile, setUploadResult }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- setStep/setUploadResult close over navigate (stable) and locationId (listed)
-    [step, uploadResult, uploadFile, locationId],
+    () => ({ step, setStep, backStep: previousStep(step, unlockedSteps), uploadResult, uploadFile, setUploadResult }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setStep/setUploadResult close over navigate (stable), location.state and locationId (listed)
+    [step, uploadResult, uploadFile, locationId, location.state, unlockedSteps],
   );
 
   return <OnboardingStateCtx.Provider value={value}>{children}</OnboardingStateCtx.Provider>;
