@@ -691,6 +691,7 @@ model OtpCode {
   createdAt  DateTime   @default(now()) @map("created_at")
 
   @@index([phone, purpose])
+  @@index([createdAt]) // global OTP cap counts the last hour across all phones (requestOtpCode)
   @@map("otp_codes")
 }
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { createOtpCode, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
+import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
+import { sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { notifyUser } from '../lib/push.js';
@@ -20,7 +21,7 @@ joinRouter.post('/request-otp', async (req, res) => {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
 
-    const { plainCode, expiresAt } = await createOtpCode(phone, 'JOIN');
+    const { plainCode, expiresAt } = await requestOtpCode(phone, 'JOIN');
     // No SMS integration exists; this is a stand-in until one is added.
     if (DEV_OTP_ECHO) {
       console.log(`[join] OTP for ${phone} (JOIN): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
@@ -31,6 +32,7 @@ joinRouter.post('/request-otp', async (req, res) => {
       devCode: DEV_OTP_ECHO ? plainCode : undefined,
     });
   } catch (err) {
+    if (err instanceof OtpRateLimitError) return sendOtpRateLimited(res, err.scope, err.retryAfterSeconds);
     console.error('[join.requestOtp] failed', err);
     return res.status(500).json({ error: 'Unexpected error while requesting a code.' });
   }
