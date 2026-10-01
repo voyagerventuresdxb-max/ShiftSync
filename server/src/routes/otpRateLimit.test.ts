@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { otpPhoneRetryAfterSeconds, phoneDigits } from '../lib/identity.js';
+import { otpClientKey } from '../middleware/rateLimit.js';
 
 const prisma = new PrismaClient();
 
@@ -110,5 +111,50 @@ test('request-otp: simultaneous requests for one number mint exactly one code (p
     });
   } finally {
     await prisma.otpCode.deleteMany({ where: { phone: phoneDigits(phone) } });
+  }
+});
+
+test('otpClientKey: keys on the (Railway X-Real-IP, X-Vercel-Forwarded-For) pair; loopback with no proxy is not limited', () => {
+  const req = (headers: Record<string, string>, remote = '::ffff:100.64.0.3') =>
+    ({ get: (h: string) => headers[h.toLowerCase()], socket: { remoteAddress: remote } }) as unknown as import('express').Request;
+  // Through Vercel: connecting address is Vercel's, the client is in X-Vercel-Forwarded-For.
+  assert.equal(otpClientKey(req({ 'x-real-ip': '65.2.151.184', 'x-vercel-forwarded-for': '2.50.43.13' })), '65.2.151.184|2.50.43.13');
+  // Direct to Railway: just the (unforgeable) connecting address.
+  assert.equal(otpClientKey(req({ 'x-real-ip': '2.50.43.13' })), '2.50.43.13');
+  // A forged list keeps only its first entry; the real connecting half is untouched.
+  assert.equal(otpClientKey(req({ 'x-real-ip': '2.50.43.13', 'x-vercel-forwarded-for': '9.9.9.9, 8.8.8.8' })), '2.50.43.13|9.9.9.9');
+  // IPv6 clients are bucketed by subnet, like the rest of this codebase's limiters.
+  assert.ok(otpClientKey(req({ 'x-real-ip': '2001:db8:1:2:3:4:5:6' }))!.includes('2001:db8:1'));
+  assert.equal(otpClientKey(req({}, '::1')), null, 'local dev/e2e: no proxy, not limited');
+  assert.equal(otpClientKey(req({}, '::ffff:127.0.0.1')), null);
+  assert.equal(otpClientKey(req({}, '::ffff:10.0.0.5')), '10.0.0.5', 'no X-Real-IP but not loopback: still limited by socket address');
+});
+
+test('request-otp per-client cap: the 11th request in 15 min from one client is a 429; other clients behind the same Vercel address are unaffected', async () => {
+  const vercelEgress = `203.0.113.${Math.floor(Math.random() * 250) + 1}`; // TEST-NET-3, unique per run
+  const client = (n: number) => ({ 'x-real-ip': vercelEgress, 'x-vercel-forwarded-for': `198.51.100.${n}` });
+  const phones: string[] = [];
+  const ask = (route: 'signup' | 'join', headers: Record<string, string>, baseUrl: string) => {
+    const phone = testPhone(); // a fresh number each time, so only the per-client cap is in play
+    phones.push(phone);
+    return fetch(`${baseUrl}/api/${route}/request-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ phone }),
+    });
+  };
+  try {
+    await withServer(async (baseUrl) => {
+      for (let i = 0; i < 10; i++) {
+        // Alternating routes: the cap is shared across login/join/signup.
+        assert.equal((await ask(i % 2 ? 'join' : 'signup', client(1), baseUrl)).status, 200, `request ${i + 1}`);
+      }
+      const eleventh = await ask('signup', client(1), baseUrl);
+      assert.equal(eleventh.status, 429);
+      assert.ok(Number(eleventh.headers.get('retry-after')) > 0, 'Retry-After set');
+      assert.equal((await ask('signup', client(2), baseUrl)).status, 200, 'another client behind the same Vercel address has its own bucket');
+    });
+  } finally {
+    await prisma.otpCode.deleteMany({ where: { phone: { in: phones.map(phoneDigits) } } });
   }
 });

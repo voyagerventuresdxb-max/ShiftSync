@@ -132,3 +132,64 @@ export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
  * per-call cost this limiter exists to cap.
  */
 export const rosterUploadRateLimiter = makeAiRouteLimiter(10, false);
+
+/** One header value as an ipKeyGenerator-normalised key part (first entry of a list, length-capped). */
+function ipPart(value: string): string {
+  return ipKeyGenerator(value.split(',')[0]!.trim().slice(0, 64));
+}
+
+function isLoopback(addr: string): boolean {
+  return addr === '::1' || addr.startsWith('127.') || addr.startsWith('::ffff:127.');
+}
+
+/**
+ * Who is asking for a code, as measured on production on 2026-10-01 (#54),
+ * not as either vendor's docs describe it:
+ * - Railway's edge OVERWRITES `X-Real-IP` with the address that connected to
+ *   it (a forged value never survives), so that half can't be faked.
+ * - Through Vercel's `/api` rewrite, that connecting address is VERCEL's, the
+ *   same for many users. The real client is in `X-Vercel-Forwarded-For`,
+ *   which Vercel overwrites, so it can't be forged through Vercel. But the
+ *   Railway domain is public, and a caller going there directly can send any
+ *   `X-Vercel-Forwarded-For` they like (it passes through untouched).
+ * So the key is the PAIR. Real users through Vercel each get their own
+ * bucket, and nobody can land in someone else's, because a direct caller's
+ * first half is always their own real address. A direct caller can dodge
+ * this limit by rotating the second half; the per-phone and global caps in
+ * `requestOtpCode` still hold for them.
+ *
+ * `trust proxy` stays unset on purpose: nothing here reads `req.ip`, which
+ * would depend on Railway's internal hop count instead of one explicit header.
+ *
+ * Returns null for a loopback request with no `X-Real-IP` (local dev and e2e,
+ * no proxy in front). That can't happen on Railway, which always sets it.
+ */
+export function otpClientKey(req: Request): string | null {
+  const connecting = req.get('x-real-ip');
+  if (!connecting) {
+    const remote = req.socket.remoteAddress ?? '';
+    return isLoopback(remote) ? null : ipPart(remote);
+  }
+  const claimed = req.get('x-vercel-forwarded-for');
+  return claimed ? `${ipPart(connecting)}|${ipPart(claimed)}` : ipPart(connecting);
+}
+
+/**
+ * Per-client cap on the three request-otp routes (one shared instance, so
+ * the count is shared across login/join/signup): 10 per 15 minutes. Mostly
+ * slows enumeration (login answers 404 for a number with no account) and a
+ * single client spraying numbers; the per-phone and global caps stop SMS
+ * pumping. In-memory store, so it resets on deploy (the DB-backed caps don't).
+ */
+export const otpRequestIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => otpClientKey(req) === null,
+  keyGenerator: (req) => otpClientKey(req)!,
+  // We read X-Real-IP / X-Vercel-Forwarded-For ourselves, so express-rate-limit's
+  // "X-Forwarded-For present but trust proxy unset" warning doesn't apply.
+  validate: { xForwardedForHeader: false },
+  handler: sendTooManyRequests,
+});

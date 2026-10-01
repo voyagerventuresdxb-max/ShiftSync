@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeSession, phoneDigits } from '../lib/identity.js';
-import { sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
 
 export const identityRouter = Router();
@@ -62,7 +62,7 @@ const AMBIGUOUS_MATCH_ERROR = 'Multiple staff members match this phone number â€
  * logging back in is that the client doesn't necessarily know (or need to
  * know) which venue that is until after the phone resolves to a real account.
  */
-identityRouter.post('/request-otp', async (req, res) => {
+identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
