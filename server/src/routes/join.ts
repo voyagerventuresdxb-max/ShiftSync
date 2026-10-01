@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
-import { sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { notifyUser } from '../lib/push.js';
@@ -16,7 +16,7 @@ export const joinRouter = Router();
 const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
-joinRouter.post('/request-otp', async (req, res) => {
+joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
-import { sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { findPhoneMatches } from './identity.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
@@ -22,7 +22,7 @@ const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
  * `locationId` here because there is no location yet; that's the entire
  * point of this route.
  */
-signupRouter.post('/request-otp', async (req, res) => {
+signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   try {
     const phone = String(req.body?.phone ?? '').trim();
     if (!phone) return res.status(400).json({ error: 'phone is required.' });
