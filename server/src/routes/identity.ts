@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { createOtpCode, verifyOtpCode, issueSession, revokeSession, phoneDigits } from '../lib/identity.js';
+import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeSession, phoneDigits } from '../lib/identity.js';
+import { sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
 
 export const identityRouter = Router();
@@ -72,7 +73,7 @@ identityRouter.post('/request-otp', async (req, res) => {
     }
     if (matches.length > 1) return res.status(409).json({ error: AMBIGUOUS_MATCH_ERROR });
 
-    const { plainCode, expiresAt } = await createOtpCode(phone, 'LOGIN');
+    const { plainCode, expiresAt } = await requestOtpCode(phone, 'LOGIN');
     // No SMS integration exists; this is a stand-in until one is added.
     if (DEV_OTP_ECHO) {
       console.log(`[identity] OTP for ${phone} (LOGIN): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
@@ -83,6 +84,7 @@ identityRouter.post('/request-otp', async (req, res) => {
       devCode: DEV_OTP_ECHO ? plainCode : undefined,
     });
   } catch (err) {
+    if (err instanceof OtpRateLimitError) return sendOtpRateLimited(res, err.scope, err.retryAfterSeconds);
     console.error('[identity.requestOtp] failed', err);
     return res.status(500).json({ error: 'Unexpected error while requesting a code.' });
   }

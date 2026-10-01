@@ -29,6 +29,27 @@ function sendTooManyRequests(_req: Request, res: Response): void {
   res.status(429).json({ error: 'Too many requests — please wait a few minutes and try again.' });
 }
 
+function describeWait(seconds: number): string {
+  if (seconds < 90) return `${seconds} second${seconds === 1 ? '' : 's'}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 90) return `${minutes} minutes`;
+  return `${Math.ceil(minutes / 60)} hours`;
+}
+
+/**
+ * The request-otp routes' 429 for `OtpRateLimitError` (thrown by
+ * `requestOtpCode`): same JSON shape as `sendTooManyRequests`, plus
+ * `Retry-After`. The frontend shows `error` as-is, so the wait is in the text.
+ */
+export function sendOtpRateLimited(res: Response, scope: 'phone' | 'global', retryAfterSeconds: number): void {
+  res.set('Retry-After', String(retryAfterSeconds));
+  const error =
+    scope === 'phone'
+      ? `Too many code requests for this number — try again in ${describeWait(retryAfterSeconds)}.`
+      : 'Sign-in codes are temporarily unavailable — please try again in a few minutes.';
+  res.status(429).json({ error });
+}
+
 /**
  * Shared shape for every session-keyed, AI-provider-backed route limiter
  * (voice transcription/intent parsing, roster-upload vision extraction, and

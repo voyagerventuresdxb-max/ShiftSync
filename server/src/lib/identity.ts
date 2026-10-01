@@ -1,6 +1,6 @@
 import { randomInt, randomBytes, createHash } from 'node:crypto';
 import { prisma } from './prisma.js';
-import type { OtpPurpose, User } from '@prisma/client';
+import type { OtpPurpose, Prisma, User } from '@prisma/client';
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — long-lived, no refresh flow in this lightweight model
@@ -61,18 +61,97 @@ export function hashOtp(code: string): string {
 export async function createOtpCode(
   phone: string,
   purpose: OtpPurpose,
+  db: Prisma.TransactionClient = prisma,
 ): Promise<{ id: string; plainCode: string; expiresAt: Date }> {
   const normalizedPhone = phoneDigits(phone);
-  await prisma.otpCode.updateMany({
+  await db.otpCode.updateMany({
     where: { phone: normalizedPhone, purpose, consumedAt: null },
     data: { consumedAt: new Date() }, // invalidate — not a real "use," just supersession
   });
   const plainCode = generateOtp();
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
-  const created = await prisma.otpCode.create({
+  const created = await db.otpCode.create({
     data: { phone: normalizedPhone, purpose, codeHash: hashOtp(plainCode), expiresAt },
   });
   return { id: created.id, plainCode, expiresAt };
+}
+
+/**
+ * Caps on minting new codes, counted from `OtpCode` rows (so they survive
+ * restarts and deploys, unlike an in-memory limiter). Per phone, ACROSS all
+ * three purposes — otherwise one number could take 3x the cap by rotating
+ * login/join/signup. Once a real SMS provider exists (#51) every code is a
+ * paid message, so these are also the main defence against SMS pumping
+ * (strangers triggering texts to numbers they pick, at our cost).
+ */
+const OTP_PHONE_LIMITS = [
+  { windowMs: 30 * 1000, max: 1 }, // one resend per 30s
+  { windowMs: 60 * 60 * 1000, max: 5 },
+  { windowMs: 24 * 60 * 60 * 1000, max: 10 },
+];
+/** Circuit breaker across ALL phones: a distributed attack rotating numbers still stops here. */
+const OTP_GLOBAL_LIMIT = { windowMs: 60 * 60 * 1000, max: 500 };
+const OTP_GLOBAL_RETRY_SECONDS = 5 * 60;
+
+export class OtpRateLimitError extends Error {
+  constructor(
+    public readonly scope: 'phone' | 'global',
+    public readonly retryAfterSeconds: number,
+  ) {
+    super(`OTP rate limit (${scope})`);
+    this.name = 'OtpRateLimitError';
+  }
+}
+
+/**
+ * Seconds until `rows` (createdAt, newest first) is back under every limit,
+ * or 0 if it already is. For a rule with max N, the Nth-newest row in its
+ * window is the one that has to age out before another request fits.
+ */
+export function otpPhoneRetryAfterSeconds(createdAt: Date[], now: Date): number {
+  let waitMs = 0;
+  for (const { windowMs, max } of OTP_PHONE_LIMITS) {
+    const inWindow = createdAt.filter((t) => now.getTime() - t.getTime() < windowMs);
+    if (inWindow.length >= max) {
+      waitMs = Math.max(waitMs, inWindow[max - 1]!.getTime() + windowMs - now.getTime());
+    }
+  }
+  return Math.ceil(waitMs / 1000);
+}
+
+/**
+ * The ONLY way the request-otp routes may mint a code: enforces the caps
+ * above, then creates it. Throws `OtpRateLimitError` when over a cap.
+ * (`createOtpCode` itself stays unthrottled for tests that need a code.)
+ *
+ * Runs under a per-phone advisory lock, so two concurrent requests for the
+ * same number can't both read "under the cap" and both create a code.
+ */
+export async function requestOtpCode(
+  phone: string,
+  purpose: OtpPurpose,
+): Promise<{ id: string; plainCode: string; expiresAt: Date }> {
+  const normalizedPhone = phoneDigits(phone);
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:${normalizedPhone}`}))::text`;
+    const now = new Date();
+    const longestWindowMs = Math.max(...OTP_PHONE_LIMITS.map((l) => l.windowMs));
+    const recent = await tx.otpCode.findMany({
+      where: { phone: normalizedPhone, createdAt: { gt: new Date(now.getTime() - longestWindowMs) } },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+      take: Math.max(...OTP_PHONE_LIMITS.map((l) => l.max)),
+    });
+    const retryAfter = otpPhoneRetryAfterSeconds(recent.map((r) => r.createdAt), now);
+    if (retryAfter > 0) throw new OtpRateLimitError('phone', retryAfter);
+
+    const globalCount = await tx.otpCode.count({
+      where: { createdAt: { gt: new Date(now.getTime() - OTP_GLOBAL_LIMIT.windowMs) } },
+    });
+    if (globalCount >= OTP_GLOBAL_LIMIT.max) throw new OtpRateLimitError('global', OTP_GLOBAL_RETRY_SECONDS);
+
+    return createOtpCode(phone, purpose, tx);
+  });
 }
 
 /**
