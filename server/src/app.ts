@@ -1,6 +1,7 @@
 import express, { type ErrorRequestHandler } from 'express';
 import cors from 'cors';
 import { join } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
 import { floorPlanRouter, floorPlanFilesRouter } from './routes/floorPlan.js';
@@ -32,6 +33,26 @@ export function createApp() {
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  // TEMPORARY (#54): shows a caller how its own request reached the app, to
+  // measure the real Vercel → Railway proxy chain before choosing the per-IP
+  // limit's `trust proxy`. 404 unless the request carries DIAG_TOKEN (the repo
+  // is public, so the path alone is not a secret). Remove in the per-IP PR.
+  app.get('/api/_diag/forwarded', (req, res) => {
+    const token = process.env.DIAG_TOKEN;
+    const given = req.get('x-diag-token') ?? '';
+    if (!token || given.length !== token.length || !timingSafeEqual(Buffer.from(given), Buffer.from(token))) {
+      return res.status(404).json({ error: 'Not found.' });
+    }
+    return res.json({
+      remoteAddress: req.socket.remoteAddress,
+      xForwardedFor: req.get('x-forwarded-for') ?? null,
+      xRealIp: req.get('x-real-ip') ?? null,
+      xVercelForwardedFor: req.get('x-vercel-forwarded-for') ?? null,
+      forwarded: req.get('forwarded') ?? null,
+      xVercelId: req.get('x-vercel-id') ?? null,
+    });
+  });
 
   // Both uploaded-file subpaths are session-gated and location-scoped (see
   // policyDocuments.ts / floorPlan.ts), each mounted BEFORE the generic
