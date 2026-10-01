@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
-import { otpPhoneRetryAfterSeconds, phoneDigits } from '../lib/identity.js';
+import { otpPhoneRetryAfterSeconds } from '../lib/identity.js';
+import { toE164 } from '../lib/phone.js';
 import { otpClientKey } from '../middleware/rateLimit.js';
 
 const prisma = new PrismaClient();
@@ -24,7 +25,7 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
 
 /** Unique-enough test phone number per test run, so parallel/rerun tests never collide. */
 function testPhone(): string {
-  return `05${Math.floor(10_000_000 + Math.random() * 89_999_999)}`;
+  return `050${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
 }
 
 function requestOtp(baseUrl: string, route: 'signup' | 'join', phone: string) {
@@ -37,7 +38,7 @@ function requestOtp(baseUrl: string, route: 'signup' | 'join', phone: string) {
 
 /** Moves every code for `phone` back in time, as if it had been requested `ms` earlier. */
 async function age(phone: string, ms: number) {
-  await prisma.$executeRaw`UPDATE otp_codes SET created_at = created_at - (${ms} * interval '1 millisecond') WHERE phone = ${phoneDigits(phone)}`;
+  await prisma.$executeRaw`UPDATE otp_codes SET created_at = created_at - (${ms} * interval '1 millisecond') WHERE phone = ${toE164(phone)!}`;
 }
 
 test('otpPhoneRetryAfterSeconds: waits for the row that must age out of each violated window', () => {
@@ -74,10 +75,10 @@ test('request-otp: a second code for the same number within 30s is a 429 with Re
 
       await age(phone, 31_000);
       assert.equal((await requestOtp(baseUrl, 'join', phone)).status, 200, 'allowed again after 30s');
-      assert.equal(await prisma.otpCode.count({ where: { phone: phoneDigits(phone) } }), 2, 'rejected requests create no code');
+      assert.equal(await prisma.otpCode.count({ where: { phone: toE164(phone)! } }), 2, 'rejected requests create no code');
     });
   } finally {
-    await prisma.otpCode.deleteMany({ where: { phone: phoneDigits(phone) } });
+    await prisma.otpCode.deleteMany({ where: { phone: toE164(phone)! } });
   }
 });
 
@@ -97,7 +98,7 @@ test('request-otp: the 6th code in an hour is refused for minutes, not seconds',
       assert.match(((await sixth.json()) as { error: string }).error, /try again in \d+ minutes\./);
     });
   } finally {
-    await prisma.otpCode.deleteMany({ where: { phone: phoneDigits(phone) } });
+    await prisma.otpCode.deleteMany({ where: { phone: toE164(phone)! } });
   }
 });
 
@@ -107,10 +108,10 @@ test('request-otp: simultaneous requests for one number mint exactly one code (p
     await withServer(async (baseUrl) => {
       const statuses = (await Promise.all(Array.from({ length: 5 }, () => requestOtp(baseUrl, 'signup', phone)))).map((r) => r.status);
       assert.deepEqual([...statuses].sort(), [200, 429, 429, 429, 429]);
-      assert.equal(await prisma.otpCode.count({ where: { phone: phoneDigits(phone) } }), 1);
+      assert.equal(await prisma.otpCode.count({ where: { phone: toE164(phone)! } }), 1);
     });
   } finally {
-    await prisma.otpCode.deleteMany({ where: { phone: phoneDigits(phone) } });
+    await prisma.otpCode.deleteMany({ where: { phone: toE164(phone)! } });
   }
 });
 
@@ -155,6 +156,6 @@ test('request-otp per-client cap: the 11th request in 15 min from one client is 
       assert.equal((await ask('signup', client(2), baseUrl)).status, 200, 'another client behind the same Vercel address has its own bucket');
     });
   } finally {
-    await prisma.otpCode.deleteMany({ where: { phone: { in: phones.map(phoneDigits) } } });
+    await prisma.otpCode.deleteMany({ where: { phone: { in: phones.map((p) => toE164(p)!) } } });
   }
 });

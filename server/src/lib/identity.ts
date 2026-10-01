@@ -1,6 +1,7 @@
 import { randomInt, randomBytes, createHash } from 'node:crypto';
 import { prisma } from './prisma.js';
 import type { OtpPurpose, Prisma, User } from '@prisma/client';
+import { toE164 } from './phone.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — long-lived, no refresh flow in this lightweight model
@@ -25,16 +26,19 @@ const MAX_OTP_ATTEMPTS = 5;
 const DEV_OTP_BYPASS = process.env.ALLOW_DEV_OTP_BYPASS === 'true';
 export const DEV_OTP_BYPASS_CODE = '000000';
 
-/**
- * Digits only, dropping a leading international-dialing prefix so
- * "+971 50 123 4567", "00971501234567", and "0501234567" can all match the
- * same stored number. Shared by identity.ts (login) and join.ts
- * (self-registration) so phone matching stays consistent between the two.
- */
-export function phoneDigits(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
-  const withoutIntlPrefix = digits.replace(/^00/, '').replace(/^971/, '');
-  return withoutIntlPrefix.replace(/^0/, '');
+/** Thrown by the OTP functions below for a number `toE164` rejects. Routes check first and answer 400. */
+export class InvalidPhoneError extends Error {
+  constructor() {
+    super('Invalid phone number');
+    this.name = 'InvalidPhoneError';
+  }
+}
+
+/** The E.164 form every OTP row is keyed on, whatever format the caller passed. */
+function otpPhone(phone: string): string {
+  const e164 = toE164(phone);
+  if (!e164) throw new InvalidPhoneError();
+  return e164;
 }
 
 /** Real 6-digit numeric code. Never logged/returned in production (see the request-otp routes). */
@@ -52,18 +56,16 @@ export function hashOtp(code: string): string {
  * unconsumed code for the same (phone, purpose) pair so only the most
  * recently requested code is ever valid.
  *
- * `OtpCode.phone` is stored as NORMALIZED digits (via `phoneDigits`), not the
- * raw submitted string — so a code requested as "+971 50 123 4567" can be
- * verified as "0501234567", exactly like user-matching already treats phone
- * numbers. Keying on the raw string only worked by coincidence (the client
- * happening to send an identical string both times).
+ * `OtpCode.phone` is stored in E.164 (via `toE164`), not the raw submitted
+ * string, so a code requested as "+971 50 123 4567" can be verified as
+ * "0501234567", the same way `User.phone` is stored and matched.
  */
 export async function createOtpCode(
   phone: string,
   purpose: OtpPurpose,
   db: Prisma.TransactionClient = prisma,
 ): Promise<{ id: string; plainCode: string; expiresAt: Date }> {
-  const normalizedPhone = phoneDigits(phone);
+  const normalizedPhone = otpPhone(phone);
   await db.otpCode.updateMany({
     where: { phone: normalizedPhone, purpose, consumedAt: null },
     data: { consumedAt: new Date() }, // invalidate — not a real "use," just supersession
@@ -131,7 +133,7 @@ export async function requestOtpCode(
   phone: string,
   purpose: OtpPurpose,
 ): Promise<{ id: string; plainCode: string; expiresAt: Date }> {
-  const normalizedPhone = phoneDigits(phone);
+  const normalizedPhone = otpPhone(phone);
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`otp:${normalizedPhone}`}))::text`;
     const now = new Date();
@@ -168,7 +170,7 @@ export async function verifyOtpCode(
 
   // Look up on the same normalized digits `createOtpCode` stored (see there).
   const record = await prisma.otpCode.findFirst({
-    where: { phone: phoneDigits(phone), purpose, consumedAt: null },
+    where: { phone: otpPhone(phone), purpose, consumedAt: null },
     orderBy: { createdAt: 'desc' },
   });
   if (!record) return { ok: false, reason: 'No active code for this phone number — request a new one.' };

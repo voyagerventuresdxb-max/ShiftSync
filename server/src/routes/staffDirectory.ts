@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -30,6 +31,23 @@ export const staffDirectoryRouter = Router();
 class StaffRecordChangedConcurrentlyError extends Error {}
 
 /** The one place "does this caller get personal fields?" is decided — every route derives `redactPersonal` from this, never a literal. */
+const PHONE_TAKEN_ERROR = 'This phone number is already registered to another staff member.';
+
+/**
+ * `User.phone` is globally unique (it doubles as the login credential — see
+ * the schema's own comment on that column), deactivated users included.
+ * Saving a number another user holds hits Prisma's P2002, a real,
+ * anticipatable conflict (409), not a server fault. Exact `meta.target`
+ * match (not just the P2002 code), mirroring attendance.ts: a loose check
+ * would also swallow a P2002 from some unrelated future unique constraint
+ * on this table and misreport it as a phone conflict.
+ */
+function isPhoneConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') return false;
+  const target = err.meta?.target as unknown;
+  return Array.isArray(target) && target.length === 1 && target[0] === 'phone';
+}
+
 function redactPersonalFor(req: Request): boolean {
   return req.user!.systemRole === 'STAFF';
 }
@@ -115,10 +133,12 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
     const locationId = req.user!.locationId;
     const fullName = String(req.body?.fullName ?? '').trim();
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
-    const phone = req.body?.phone ? String(req.body.phone).trim() : null;
+    const rawPhone = req.body?.phone ? String(req.body.phone).trim() : '';
+    const phone = rawPhone ? toE164(rawPhone) : null;
     const preferredLanguage = req.body?.preferredLanguage ? String(req.body.preferredLanguage).trim() : null;
     const hiredAtStr = req.body?.hiredAt ? String(req.body.hiredAt).trim() : null;
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
+    if (rawPhone && !phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
     if (hiredAtStr && !/^\d{4}-\d{2}-\d{2}$/.test(hiredAtStr)) {
       return res.status(400).json({ error: 'hiredAt must be formatted as YYYY-MM-DD.' });
     }
@@ -146,6 +166,7 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
     );
     return res.status(201).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
+    if (isPhoneConflict(err)) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
     console.error('[staffDirectory.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while adding the staff member.' });
   }
@@ -185,8 +206,10 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data.jobTitle = jobTitle || null;
     }
     if (req.body?.phone !== undefined) {
-      const phone = req.body.phone === null ? null : String(req.body.phone).trim();
-      data.phone = phone || null;
+      const rawPhone = req.body.phone === null ? '' : String(req.body.phone).trim();
+      const phone = rawPhone ? toE164(rawPhone) : null;
+      if (rawPhone && !phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
+      data.phone = phone;
     }
     if (req.body?.preferredLanguage !== undefined) {
       const preferredLanguage = req.body.preferredLanguage === null ? null : String(req.body.preferredLanguage).trim();
@@ -277,26 +300,7 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
         throw err;
       });
     } catch (err) {
-      // `User.phone` is globally unique (it doubles as the login credential —
-      // see the schema's own comment on that column). Setting it to a number
-      // already claimed by a different user hits Prisma's P2002 here; this
-      // used to fall through to the generic 500 handler below with an
-      // "Unexpected error" message, which is both the wrong status (this is
-      // a real, anticipatable conflict, not a server fault) and unhelpful to
-      // whoever's looking at it. Exact `meta.target` match (not just the
-      // P2002 code), mirroring attendance.ts's identical reasoning: a loose
-      // check would also swallow a P2002 from some unrelated future unique
-      // constraint on this table and misreport it as a phone conflict.
-      const target = err instanceof Prisma.PrismaClientKnownRequestError ? (err.meta?.target as unknown) : undefined;
-      const isPhoneConflict =
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002' &&
-        Array.isArray(target) &&
-        target.length === 1 &&
-        target[0] === 'phone';
-      if (isPhoneConflict) {
-        return res.status(409).json({ error: 'This phone number is already registered to another staff member.' });
-      }
+      if (isPhoneConflict(err)) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
       throw err;
     }
     if (!user) {

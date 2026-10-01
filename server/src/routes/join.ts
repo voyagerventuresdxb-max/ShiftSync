@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, phoneDigits } from '../lib/identity.js';
+import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
+import { findUserByPhone } from './identity.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
@@ -18,8 +20,10 @@ const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
 joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
-    if (!phone) return res.status(400).json({ error: 'phone is required.' });
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'JOIN');
     // No SMS integration exists; this is a stand-in until one is added.
@@ -50,11 +54,13 @@ joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
 joinRouter.post('/verify-otp', async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
-    const phone = String(req.body?.phone ?? '').trim();
+    const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();
     const fullName = req.body?.fullName ? String(req.body.fullName).trim() : null;
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
-    if (!phone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    if (!rawPhone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
@@ -62,16 +68,19 @@ joinRouter.post('/verify-otp', async (req, res) => {
     const result = await verifyOtpCode(phone, 'JOIN', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
-    // ALL normalized-digit matches, not the first: `phoneDigits` is lossy and
-    // `User.phone` isn't unique, so two different real numbers can collide.
-    // Auto-matching one of them would issue a session for the wrong person.
-    const digits = phoneDigits(phone);
-    const users = await prisma.user.findMany({ where: { locationId, isActive: true } });
-    const matches = users.filter((u) => u.phone && phoneDigits(u.phone) === digits);
-    if (matches.length > 1) {
-      return res.status(409).json({ error: 'Multiple staff members match this phone number — contact support.' });
+    // `User.phone` is E.164 and globally unique (deactivated users included),
+    // so this is the one possible match. A number held at ANOTHER venue, or by
+    // a deactivated record here, can't join: approving the request would
+    // collide on that unique phone. Say so now instead of filing a request
+    // that can never be approved.
+    const existing = await findUserByPhone(phone);
+    if (existing && existing.locationId !== locationId) {
+      return res.status(409).json({ error: 'This phone number is already registered at another venue.' });
     }
-    const match = matches[0];
+    if (existing && !existing.isActive) {
+      return res.status(409).json({ error: 'This phone number belongs to a deactivated staff record — ask a manager to reactivate it.' });
+    }
+    const match = existing;
 
     if (match) {
       const { plainToken, expiresAt } = await issueSession(match.id);
