@@ -114,6 +114,9 @@ model User {
   // allows unlimited NULLs alongside a unique index, so users with no phone
   // set are unaffected.
   phone             String?    @unique
+  // The phone as stored before the 2026-10 move to E.164 (server/src/lib/phoneBackfill.ts).
+  // Written only by that backfill, never read by the app: it exists so the move can be reverted.
+  phoneBeforeE164   String?    @map("phone_before_e164")
   preferredLanguage String?    @map("preferred_language")
   emiratesIdNumber  String?    @map("emirates_id_number")
   laborCardNumber   String?    @map("labor_card_number")
