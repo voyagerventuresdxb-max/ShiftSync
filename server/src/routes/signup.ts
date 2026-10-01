@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
-import { findPhoneMatches } from './identity.js';
+import { findUserByPhone } from './identity.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
 
@@ -24,8 +25,10 @@ const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
  */
 signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
-    if (!phone) return res.status(400).json({ error: 'phone is required.' });
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'SIGNUP');
     // No SMS integration exists; this is a stand-in until one is added.
@@ -57,27 +60,23 @@ signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  */
 signupRouter.post('/verify-otp', async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
+    const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();
     const fullName = String(req.body?.fullName ?? '').trim();
     const venueName = String(req.body?.venueName ?? '').trim();
-    if (!phone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    if (!rawPhone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
     if (!venueName) return res.status(400).json({ error: 'venueName is required.' });
 
     const result = await verifyOtpCode(phone, 'SIGNUP', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
-    // Global check — no location scope exists yet. Reuses identity.ts's own
-    // lookup rather than re-implementing the same lossy phoneDigits filter a
-    // second time — one lookup, one place to fix if normalization ever
-    // changes. Returns ALL matches, not just the first, because two
-    // genuinely different numbers can normalize to the same digits and
-    // User.phone has no unique constraint (yet — a pending migration will
-    // eventually enforce this at the DB level too; this is the
-    // application-layer enforcement in the meantime).
-    const existingMatches = await findPhoneMatches(phone);
-    if (existingMatches.length > 0) {
+    // Global check (no location exists yet), reusing identity.ts's lookup.
+    // `User.phone` is E.164 and unique, deactivated users included, so any
+    // holder of this number would make the create below collide.
+    if (await findUserByPhone(phone)) {
       return res.status(409).json({ error: 'An account already exists for this phone number — log in instead.' });
     }
 

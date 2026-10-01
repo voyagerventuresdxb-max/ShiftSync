@@ -63,8 +63,11 @@ history from scratch, which is exactly what `server:start` does on every boot.
    documents survive redeploys. (Without it they are lost on every deploy — acceptable for
    a demo, not for real use.)
 5. Deploy. `railway.json` runs `npm install && prisma generate` to build and
-   `prisma migrate deploy && tsx server/src/index.ts` to start, with `/api/health` as the
-   health check. (`npm install`, not `npm ci`: the committed lockfile does not pass `npm ci`
+   `npm run server:start` to start (`prisma migrate deploy`, then the idempotent phone
+   backfill `server/scripts/backfill-phone-e164.ts`, then `tsx server/src/index.ts`), with
+   `/api/health` as the health check. The backfill never blocks a start, and its one log line
+   (`[phone-e164] …`) says how many stored phones it moved to E.164 and which user ids
+   it left as stored. Search the deploy log for it after any deploy that touches phones. (`npm install`, not `npm ci`: the committed lockfile does not pass `npm ci`
    — see the readiness report.)
 6. Settings → Networking → *Generate Domain*. That `https://<service>.up.railway.app` is
    the `RAILWAY_API_HOST` below.

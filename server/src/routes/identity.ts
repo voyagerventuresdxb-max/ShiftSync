@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeSession, phoneDigits } from '../lib/identity.js';
+import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeSession } from '../lib/identity.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
 
@@ -17,43 +18,33 @@ export const identityRouter = Router();
 const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /**
- * Finds active users anywhere in the system whose stored phone normalizes to
- * the same digits as `phone`. Returns ALL matches, because `phoneDigits` is
- * lossy (it strips leading `971`/`0`) and `User.phone` has no unique
- * constraint at the DB level yet — two genuinely different numbers can
- * normalize to the same digits, and silently picking the first would hand
- * one person another person's session.
+ * The active User with this phone, or null. `e164` must come from `toE164`:
+ * `User.phone` is stored in E.164 and is unique, so this is one indexed lookup
+ * (it used to scan every phone-bearing user and compare lossy digits).
  *
- * Deliberately GLOBAL, not location-scoped: login no longer requires knowing
- * which venue you belong to before you can even request a code — you don't
- * know that up front from a bare `/join?mode=login` redirect (see
- * `RequireSession` in `router.tsx`, and the real bug this fixed: it redirects
- * a signed-out visit with no location context at all, so a login flow that
- * required one couldn't be reached). Matches `server/src/routes/signup.ts`'s
- * own global, unscoped phone lookup — both now treat phone as the real
- * cross-venue identity key, consistent with Decision A1 (one User, one
- * Location, phone intended to be globally unique — a DB-level unique
- * constraint on `User.phone` is a separate, still-pending, explicitly
- * user-gated migration; this is the application-layer half of that same
- * model, already necessary regardless of when that migration lands).
+ * Deliberately GLOBAL, not location-scoped: login doesn't require knowing
+ * which venue you belong to before you can request a code. You don't know
+ * that up front from a bare `/join?mode=login` redirect (see
+ * `RequireSession` in `router.tsx`). Under Decision A1 (one User, one
+ * Location) phone is the cross-venue identity key. signup.ts reuses this
+ * for its "does this phone already have an account" check.
  */
-// Exported so signup.ts's own global "does this phone already have an
-// account" check reuses this instead of re-implementing the same lossy
-// digits-filter a second time — one lookup, one place to fix if phone
-// normalization ever changes. Selects only the fields either caller actually
-// needs (not full rows) — this scans every active phone-bearing User in the
-// system on every login attempt now that it's global, not location-scoped,
-// so keeping each row cheap matters more than it did before.
-export async function findPhoneMatches(phone: string) {
-  const digits = phoneDigits(phone);
-  const users = await prisma.user.findMany({
-    where: { isActive: true, phone: { not: null } },
-    select: { id: true, phone: true, fullName: true, jobTitle: true, locationId: true, systemRole: true },
-  });
-  return users.filter((u) => u.phone && phoneDigits(u.phone) === digits);
+export async function findActiveUserByPhone(e164: string) {
+  const user = await findUserByPhone(e164);
+  return user?.isActive ? user : null;
 }
 
-const AMBIGUOUS_MATCH_ERROR = 'Multiple staff members match this phone number — contact support.';
+/**
+ * The User holding this phone, active or not. The unique index covers
+ * deactivated users too, so signup and join must check this one before
+ * creating anything with the number, or the insert collides.
+ */
+export async function findUserByPhone(e164: string) {
+  return prisma.user.findUnique({
+    where: { phone: e164 },
+    select: { id: true, phone: true, fullName: true, jobTitle: true, locationId: true, systemRole: true, isActive: true },
+  });
+}
 
 /**
  * POST /api/identity/request-otp — body: { phone }
@@ -64,14 +55,14 @@ const AMBIGUOUS_MATCH_ERROR = 'Multiple staff members match this phone number �
  */
 identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
-    if (!phone) return res.status(400).json({ error: 'phone is required.' });
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
-    const matches = await findPhoneMatches(phone);
-    if (matches.length === 0) {
+    if (!(await findActiveUserByPhone(phone))) {
       return res.status(404).json({ error: 'No active account found with that phone number.' });
     }
-    if (matches.length > 1) return res.status(409).json({ error: AMBIGUOUS_MATCH_ERROR });
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'LOGIN');
     // No SMS integration exists; this is a stand-in until one is added.
@@ -93,19 +84,19 @@ identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
 /** POST /api/identity/verify-otp — body: { phone, code } */
 identityRouter.post('/verify-otp', async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
+    const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();
-    if (!phone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    if (!rawPhone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const result = await verifyOtpCode(phone, 'LOGIN', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
-    const matches = await findPhoneMatches(phone);
-    if (matches.length === 0) {
+    const match = await findActiveUserByPhone(phone);
+    if (!match) {
       return res.status(404).json({ error: 'No active account found with that phone number.' });
     }
-    if (matches.length > 1) return res.status(409).json({ error: AMBIGUOUS_MATCH_ERROR });
-    const match = matches[0]!;
 
     const { plainToken, expiresAt } = await issueSession(match.id);
     return res.status(200).json({

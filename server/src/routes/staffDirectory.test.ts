@@ -218,7 +218,7 @@ test('PATCH /api/staff-directory/:userId: PATCHing a phone already taken by anot
       timezone: 'Asia/Dubai',
     },
   });
-  const takenPhone = `+9715${Date.now().toString().slice(-8)}`;
+  const takenPhone = `+97150${Date.now().toString().slice(-7)}`; // 050: an assigned UAE mobile range
   await prisma.user.create({
     data: { locationId: location.id, fullName: '__staffdirectory-test__ Phone Owner', systemRole: 'STAFF', phone: takenPhone },
   });
@@ -242,7 +242,7 @@ test('PATCH /api/staff-directory/:userId: PATCHing a phone already taken by anot
       assert.equal(conflictBody.error, 'This phone number is already registered to another staff member.');
 
       // Sanity: a PATCH to a genuinely free number still succeeds normally.
-      const freePhone = `+9715${(Date.now() + 1).toString().slice(-8)}`;
+      const freePhone = `+97150${(Date.now() + 1).toString().slice(-7)}`;
       const okRes = await fetch(`${baseUrl}/api/staff-directory/${other.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
