@@ -45,7 +45,8 @@ async function seedFloorPlan(page: Page): Promise<void> {
       floorPlanImageId: image.id,
       label: 'Area 1',
       paxCapacity: 12,
-      polygon: [{ x: 0.05, y: 0.09 }, { x: 0.32, y: 0.09 }, { x: 0.32, y: 0.44 }, { x: 0.05, y: 0.44 }],
+      pinX: 0.185,
+      pinY: 0.265,
     }),
   });
   expect(sec.ok).toBeTruthy();

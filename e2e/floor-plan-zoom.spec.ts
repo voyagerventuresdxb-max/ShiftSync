@@ -98,7 +98,7 @@ test.describe('floor plan — pinch-to-zoom + pan (Daily Assignment)', () => {
     const wrap = await openBoard(page);
     const touch = await Touch.open(page);
 
-    // A point inside Section 4 only (not inside any other section's box).
+    // A point on Section 4's pin (pin at 0.395, 0.345), clear of every other pin.
     const target1x = await planPointOnScreen(page, 0.4, 0.36);
     // Zoom 2x while moving the pinch midpoint, so the section is both scaled and panned away from its 1x spot.
     const from = centre(wrap);

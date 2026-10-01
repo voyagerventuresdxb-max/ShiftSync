@@ -41,7 +41,7 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^(Log in|Join instead)$/, category: 'b', reason: 'two 16px inline text links side by side in the Account step footer' },
   { label: /^(Remove|Notify|Re-notify) /, route: '/floor-plan', category: 'b', reason: 'SectionDetail assignee row: 28x28 Remove sits above the 15px Notify text button' },
   { label: /^(Add duty…|Expo)$/, route: '/floor-plan', category: 'b', reason: 'duty-label button uses `truncate` (overflow hidden): its own ::after would be clipped; needs a wrapper' },
-  { label: /^Section \d+,/, route: '/floor-plan', category: 'b', reason: 'section polygons (21–64px tall at 390px) overlap each other\'s 44px areas; pins are tappable and kept inside the plan (e2e/floor-plan-pins.spec.ts), 44px sizing waits for the separately-scoped zoom/pan work' },
+  { label: /^Section \d+,/, route: '/floor-plan', category: 'b', reason: 'section pins (~57x44 at 390px) overlap their neighbours in dense clusters at 1x; zoom separates them (e2e/floor-plan-pins.spec.ts crowding test)' },
   { label: /^[A-Z]{2} /, route: '/floor-plan', category: 'b', reason: 'roster-strip staff chips (38px): the strip is overflow-x:auto so a vertical expansion is clipped; needs strip padding (layout)' },
   { label: /^(Fine Dining|Bar \/ Lounge|Nightclub|Rooftop \/ Beach Club|Hotel F&B Outlet|Café \/ Bakery)$/, route: '/onboarding', category: 'b', reason: 'venue-type chips (35px) wrap into rows 8px apart: expansions overlap; locked prototype spacing' },
   { label: /^(Fewer|More) sections$/, route: '/onboarding', category: 'b', reason: 'stepper pair 36x36 with a 6px gap: expansions overlap' },

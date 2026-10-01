@@ -213,14 +213,16 @@ async function seedVenueContent(page: Page): Promise<{ staffPhone: string }> {
     floorPlanImageId: image.id,
     label: 'Area 1',
     paxCapacity: 12,
-    polygon: [{ x: 0.05, y: 0.09 }, { x: 0.32, y: 0.09 }, { x: 0.32, y: 0.44 }, { x: 0.05, y: 0.44 }],
+    pinX: 0.185,
+    pinY: 0.265,
   });
   await api(token, 'POST', '/api/floor-plan/sections', {
     locationId,
     floorPlanImageId: image.id,
     label: 'Area 5',
     paxCapacity: 10,
-    polygon: [{ x: 0.38, y: 0.56 }, { x: 0.65, y: 0.56 }, { x: 0.65, y: 0.91 }, { x: 0.38, y: 0.91 }],
+    pinX: 0.515,
+    pinY: 0.735,
   });
   // A real staff member (with a phone, so they can log in through /join).
   const staffPhone = `+97155${Date.now().toString().slice(-7)}`;

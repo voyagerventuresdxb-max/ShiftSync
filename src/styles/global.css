@@ -831,6 +831,13 @@ body {
   overflow: hidden;
 }
 
+/* .staff-directory-input's `flex: 1 1 12rem` is meant for row layouts; in
+   this column flexbox it made each field ~12rem TALL and pushed the dialog's
+   actions out of reach at phone size (#47). */
+.fp-picker > .staff-directory-input {
+  flex: 0 0 auto;
+}
+
 .fp-picker-head {
   display: flex;
   align-items: center;

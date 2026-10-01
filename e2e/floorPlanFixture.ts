@@ -6,23 +6,25 @@ import { readFileSync } from 'node:fs';
  * Shared floor-plan fixtures for the floor-plan specs: the 8 Bar des Prés
  * sections and real multi-touch helpers.
  *
- * The 8 Bar des Prés sections are traced as irregular polygons (fractional
- * coords over the venue's 16:9 plan). e2e/fixtures/floor-plan.png has the
- * same 16:9 aspect, so the rendered geometry at 390px is identical to the
- * real 1440x810 plan.
+ * The 8 Bar des Prés sections are pins at the venue's real section spots,
+ * as fractions of its 16:9 plan (e2e/fixtures/floor-plan.png has the same
+ * aspect, so the rendered geometry at 390px matches the real 1440x810 plan).
+ * They are the exact values the 2026-09-29 polygon → pin migration computed
+ * from the old traced polygons (each polygon's vertex average), so every pin
+ * sits where it did before sections lost their boundaries.
  */
 
 const API = 'http://localhost:4000';
 
 export const BAR_DES_PRES_SECTIONS = [
-  { label: 'Section 1', paxCapacity: 18, notes: 'Shade after 17:00', polygon: [{ x: 0.03, y: 0.36 }, { x: 0.12, y: 0.30 }, { x: 0.16, y: 0.42 }, { x: 0.10, y: 0.66 }, { x: 0.03, y: 0.62 }] },
-  { label: 'Section 2', paxCapacity: 16, polygon: [{ x: 0.13, y: 0.22 }, { x: 0.29, y: 0.20 }, { x: 0.30, y: 0.40 }, { x: 0.15, y: 0.42 }] },
-  { label: 'Section 3', paxCapacity: 15, polygon: [{ x: 0.16, y: 0.44 }, { x: 0.35, y: 0.44 }, { x: 0.35, y: 0.55 }, { x: 0.20, y: 0.56 }] },
-  { label: 'Section 4', paxCapacity: 15, polygon: [{ x: 0.30, y: 0.22 }, { x: 0.48, y: 0.30 }, { x: 0.49, y: 0.44 }, { x: 0.31, y: 0.42 }] },
-  { label: 'Section 5', paxCapacity: 15, polygon: [{ x: 0.49, y: 0.30 }, { x: 0.63, y: 0.30 }, { x: 0.71, y: 0.38 }, { x: 0.62, y: 0.44 }, { x: 0.50, y: 0.44 }] },
-  { label: 'Section 6', paxCapacity: 16, polygon: [{ x: 0.71, y: 0.24 }, { x: 0.91, y: 0.22 }, { x: 0.93, y: 0.34 }, { x: 0.73, y: 0.36 }] },
-  { label: 'Section 7', paxCapacity: 16, polygon: [{ x: 0.88, y: 0.36 }, { x: 0.97, y: 0.36 }, { x: 0.97, y: 0.66 }, { x: 0.86, y: 0.64 }] },
-  { label: 'Section 8', paxCapacity: 14, polygon: [{ x: 0.73, y: 0.38 }, { x: 0.86, y: 0.38 }, { x: 0.87, y: 0.52 }, { x: 0.73, y: 0.54 }] },
+  { label: 'Section 1', paxCapacity: 18, notes: 'Shade after 17:00', pinX: 0.088, pinY: 0.472 },
+  { label: 'Section 2', paxCapacity: 16, pinX: 0.2175, pinY: 0.31 },
+  { label: 'Section 3', paxCapacity: 15, pinX: 0.265, pinY: 0.4975 },
+  { label: 'Section 4', paxCapacity: 15, pinX: 0.395, pinY: 0.345 },
+  { label: 'Section 5', paxCapacity: 15, pinX: 0.59, pinY: 0.372 },
+  { label: 'Section 6', paxCapacity: 16, pinX: 0.82, pinY: 0.29 },
+  { label: 'Section 7', paxCapacity: 16, pinX: 0.92, pinY: 0.505 },
+  { label: 'Section 8', paxCapacity: 14, pinX: 0.7975, pinY: 0.455 },
 ];
 
 export async function sessionFromPage(page: Page): Promise<{ token: string; locationId: string }> {
