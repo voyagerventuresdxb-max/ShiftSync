@@ -16,7 +16,7 @@ function runWithVapid(vapid: Record<string, string>, extraEnv: Record<string, st
   const script = `
     let unhandled = 0;
     process.on('unhandledRejection', () => { unhandled += 1; });
-    const out = {};
+    const out = { error: '' };
     try {
       const { createApp } = await import(${JSON.stringify(appUrl)});
       const { notifyUser } = await import(${JSON.stringify(pushUrl)});
@@ -44,16 +44,20 @@ function runWithVapid(vapid: Record<string, string>, extraEnv: Record<string, st
   const line = res.stdout.split('\n').find((l) => l.startsWith('RESULT '));
   assert.ok(line, `child produced no result. stderr:\n${res.stderr}`);
   return { ...JSON.parse(line.slice('RESULT '.length)), stderr: res.stderr } as {
-    booted: boolean; error?: string; keyStatus: number; publicKey: string; subscribeStatus: number;
+    booted: boolean; error: string; keyStatus: number; publicKey: string; subscribeStatus: number;
     notifyThrew: boolean; unhandled: number; stderr: string;
   };
 }
 
 test('VAPID unset: API boots, public-key route says push is off, notifyUser still records the in-app notification', async () => {
-  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
-  assert.ok(location, 'seed data (a location) must exist to run this test');
+  const seed = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seed, 'seed data (a location) must exist to run this test');
+  // Own location: other test files broadcast to the seed location's staff concurrently.
+  const location = await prisma.location.create({
+    data: { organizationId: seed!.organizationId, name: '__push-test__ vapid-off', timezone: 'Asia/Dubai' },
+  });
   const user = await prisma.user.create({
-    data: { locationId: location!.id, fullName: '__push-test__ vapid-off', systemRole: 'STAFF' },
+    data: { locationId: location.id, fullName: '__push-test__ vapid-off', systemRole: 'STAFF' },
   });
   try {
     const r = runWithVapid({}, { NOTIFY_USER_ID: user.id });
@@ -68,6 +72,7 @@ test('VAPID unset: API boots, public-key route says push is off, notifyUser stil
   } finally {
     await prisma.notification.deleteMany({ where: { userId: user.id } });
     await prisma.user.delete({ where: { id: user.id } });
+    await prisma.location.delete({ where: { id: location.id } });
   }
 });
 
