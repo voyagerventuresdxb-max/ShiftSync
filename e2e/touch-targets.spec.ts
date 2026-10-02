@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { cleanupTestOrgs, prisma, signupNewVenue, testVenueName } from './helpers';
+import { cleanupTestOrgs, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
 import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.allowlist';
 
 /**
@@ -225,7 +225,7 @@ async function seedVenueContent(page: Page): Promise<{ staffPhone: string }> {
     pinY: 0.735,
   });
   // A real staff member (with a phone, so they can log in through /join).
-  const staffPhone = `+97155${Date.now().toString().slice(-7)}`;
+  const staffPhone = nextEchoPhone();
   const role = await prisma.role.findFirst({ where: { locationId } });
   const staff = await prisma.user.create({
     data: { locationId, systemRole: 'STAFF', fullName: 'E2E Staff Member', jobTitle: 'Waiter', phone: staffPhone, roleId: role?.id ?? null },
