@@ -17,7 +17,15 @@ Orchestrated multi-phase run against `origin/master @ 32edfc5` (= production). S
 | 0 Setup | done | `chore/auto-baseline` (local only, removed after) | — | master @ 32edfc5: typecheck ✔, server:typecheck ✔, lint ✔ (0 errors), unit 62/62, server 283 pass / 0 fail / 1 skip (284), build ✔, e2e 20 passed + 1 flaky (policy-documents upload hit ENOSPC, passed on retry) |
 | 1 Security | done | `feat/otp-echo-allowlist` (base master) | [#62](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/62) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 301 pass / 1 skip (302; 18 new incl. a real `index.ts` boot-refusal spawn), build ✔, e2e full 21/21 (0 flaky) |
 | 2 Housekeeping | done | `chore/housekeeping-staff-phone` (base master) | [#61](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/61) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 284 pass / 1 skip (285), build ✔, e2e full 23/23 |
+| 3 /login + role routing | done | `feat/login-route-role-routing` (stacked on #62) | [#64](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/64) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 68/68, server 301 pass / 1 skip, build ✔, e2e `login.spec` 10/10 (`--retries=0`), full 31/31 |
 | 8 Deploy-safety prep | done | `chore/railway-config-as-code-vapid` (base master) | [#63](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/63) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 66/66, server 287 pass / 1 skip, build ✔, e2e full 21/21 |
+
+### Phase 3 notes
+- New `/login` (phone → code) for every role; `src/lib/postLoginDestination.ts`: safe `returnTo` wins, else OWNER/MANAGER → `/`, anything else → `/my-shifts` (positive check, fails closed). JoinFlow is join-only now; its auto-claim branch also routes by role (a manager claiming via a join link lands on `/`), and still ignores `returnTo`.
+- `/join?mode=login[&returnTo=…]` redirects to `/login`, carrying `returnTo` only if safe. All producers (`RequireSession`, `OnboardingRoute`, `AccountScreen`) now emit `/login?returnTo=…`. `MyShiftsRoute.tsx` deliberately untouched (PR #61 owns it; the redirect covers its link).
+- `isSafeReturnTo` hardened: must start with `/`, same origin after WHATWG resolution, and rejects `/join`/`/login` after decoding + dot-segment resolution (`/%6Cogin`, `/./login`), case-insensitive.
+- Server behavior unchanged (OTP caps + E.164 untouched). Fixed a pre-existing race in `touch-targets.spec.ts` (sheet close does `navigate(-1)` a macrotask later; the spec's `goto` raced it).
+- Known: a token revoked server-side but unexpired in the browser is bounced off `/login` to its destination (way out: Profile → Sign out; part of #20). Login still 404s unknown numbers (existing enumeration surface, IP-limited).
 
 ### Phase 8 notes (deploy-safety prep — nothing deployed, no Railway/Vercel command run against any project)
 - PR #63 "Refs #52" (does not close it). `railway.json` unchanged, so today's GitHub-source deploys behave exactly as before.
