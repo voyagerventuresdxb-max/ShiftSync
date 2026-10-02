@@ -63,7 +63,7 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | `DATABASE_URL` | the Railway Postgres URL |
    | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
-   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice) |
+   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice). To switch push on, follow [`push-go-live.md`](push-go-live.md). |
    | `ALLOW_DEV_OTP_ECHO` | **`true` for the MBRIF demo only** — there is no SMS integration, so this is the only way a code can be entered on the live site. It shows the real one-time code on screen to whoever requested it. Remove it right after the demo. |
    | `PORT` | injected by Railway; the server reads it |
 
