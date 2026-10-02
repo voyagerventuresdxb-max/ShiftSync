@@ -15,7 +15,15 @@ Orchestrated multi-phase run against `origin/master @ 32edfc5` (= production). S
 | Phase | Status | Branch | PR | Tests |
 |---|---|---|---|---|
 | 0 Setup | done | `chore/auto-baseline` (local only, removed after) | — | master @ 32edfc5: typecheck ✔, server:typecheck ✔, lint ✔ (0 errors), unit 62/62, server 283 pass / 0 fail / 1 skip (284), build ✔, e2e 20 passed + 1 flaky (policy-documents upload hit ENOSPC, passed on retry) |
+| 1 Security | done | `feat/otp-echo-allowlist` (base master) | [#62](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/62) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 301 pass / 1 skip (302; 18 new incl. a real `index.ts` boot-refusal spawn), build ✔, e2e full 21/21 (0 flaky) |
 | 2 Housekeeping | done | `chore/housekeeping-staff-phone` (base master) | [#61](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/61) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 284 pass / 1 skip (285), build ✔, e2e full 23/23 |
+
+### Phase 1 notes
+- `server/src/lib/devOtpEcho.ts` (`devOtpEchoFor(e164)`, env read per call, list entries normalized with `toE164`) replaces the three per-route `DEV_OTP_ECHO` constants; unlisted numbers get neither `devCode` nor the plaintext log line.
+- `server/src/lib/productionGuards.ts` `checkProductionEnv()` runs in `index.ts` before the app is built. Production = `NODE_ENV=production` **or** `RAILWAY_ENVIRONMENT_NAME=production`. Fatal: echo on with no valid allowlist entry; `ALLOW_DEV_OTP_BYPASS=true`; `ALLOW_DEV_ERROR_INJECTION=true`. File/export names deliberately match open PR #43's versions so the two converge; behavior is this run's decisions (allowlist, Railway signal, no FRONTEND_ORIGIN rule).
+- e2e: `playwright.config.ts` builds a per-run 300-number `+97156…` pool passed as `ECHO_ALLOWED_PHONES`; `nextEchoPhone()` hands them out via a tmpdir counter so retried workers never reuse a number (OTP resend caps, unique `User.phone`).
+- Known gaps: `.env.example` not updated (permission-denied to agents) — local devs must add `ECHO_ALLOWED_PHONES` or echo silently stops (startup warns). A refused boot happens after `prisma migrate deploy` has already run (migrations are additive, so harmless). Allowlisted numbers remain password-less in prod by design — keep the list to demo accounts.
+- Observed once in e2e API log: `Inconsistent query result: Field user is required` in `resolveSession` during teardown (`cleanupTestOrgs` deleting users while a request is in flight). No test failed; pre-existing race, not chased.
 
 ### Phase 2 notes
 - Closed #12, #13, #14, #15 with a comment citing #16 (each verified fixed on master first).
