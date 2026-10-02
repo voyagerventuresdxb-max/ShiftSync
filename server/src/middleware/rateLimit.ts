@@ -205,3 +205,33 @@ export const invitePeekLimiter = rateLimit({
   validate: { xForwardedForHeader: false },
   handler: sendTooManyRequests,
 });
+
+/** Per-client limiter keyed and loopback-skipped like `otpRequestIpLimiter`. */
+function clientKeyedLimiter(windowMs: number, limit: number) {
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => otpClientKey(req) === null,
+    keyGenerator: (req) => otpClientKey(req)!,
+    validate: { xForwardedForHeader: false },
+    handler: sendTooManyRequests,
+  });
+}
+
+/** POST /api/login-links (issue): 10 per hour per session. Mount after `requireSession`. */
+export const loginLinkIssueRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: sessionKey,
+  handler: sendTooManyRequests,
+});
+
+/** POST /api/login-links/redeem: 30 per 10 minutes per client. */
+export const loginLinkRedeemRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 30);
+
+/** POST /api/login-links/peek: its own bucket (60 per 10 minutes) so every sign-in's peek doesn't halve redeem capacity. */
+export const loginLinkPeekRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 60);
