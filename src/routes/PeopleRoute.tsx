@@ -1,5 +1,6 @@
 import StaffDirectory from '../components/StaffDirectory';
 import PendingApprovals from '../components/PendingApprovals';
+import InviteLinkPanel from '../components/InviteLinkPanel';
 import PolicyDocuments from '../components/PolicyDocuments';
 import FloorFeedbackReview from '../components/shiftsync/FloorFeedbackReview';
 import { NotificationSettings } from '../components/shiftsync/NotificationSettings';
@@ -28,6 +29,7 @@ export default function PeopleContent() {
       {isManager && (
         <>
           <PendingApprovals locationId={locationId} />
+          <InviteLinkPanel locationId={locationId} />
           <FloorFeedbackReview />
         </>
       )}

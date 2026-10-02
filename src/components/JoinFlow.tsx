@@ -8,9 +8,11 @@ type Phase = 'phone' | 'otp' | 'pending' | 'error';
 /**
  * Self-registration: auto-matches an existing roster row by phone, otherwise
  * files a JoinRequest for manual approval ('pending'). Logging back in to an
- * existing account lives at `/login` (`LoginRoute.tsx`).
+ * existing account lives at `/login` (`LoginRoute.tsx`). Joins through an
+ * invite link's `inviteToken`, or an old link's `locationId` (the server
+ * decides whether that is still honoured).
  */
-export default function JoinFlow({ locationId }: { locationId: string }) {
+export default function JoinFlow({ inviteToken, locationId, venueName }: { inviteToken?: string; locationId?: string; venueName?: string }) {
   const { login } = useIdentity();
   const [phase, setPhase] = useState<Phase>('phone');
   const [phone, setPhone] = useState('');
@@ -39,7 +41,8 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await verifyJoinOtp({ locationId, phone, code, fullName: fullName.trim() || undefined });
+      const link = inviteToken ? { inviteToken } : { locationId };
+      const result = await verifyJoinOtp({ ...link, phone, code, fullName: fullName.trim() || undefined });
       if (result.pending) {
         setWaitingOn({ venueName: result.venueName, managerName: result.managerName });
         setPhase('pending');
@@ -58,7 +61,7 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
 
   return (
     <section className="panel mx-auto max-w-md p-6">
-      <h2 className="text-lg font-semibold">Join ShiftSync</h2>
+      <h2 className="text-lg font-semibold">{venueName ? `Join ${venueName} on ShiftSync` : 'Join ShiftSync'}</h2>
       <p className="hint mt-1">New here? We'll match your number against your venue's roster.</p>
 
       {error && (
