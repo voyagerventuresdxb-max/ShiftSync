@@ -1,11 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { apiUrl } from '../lib/apiUrl';
 
 /**
  * Reuses the existing, unauthenticated health-check route (server/src/app.ts)
  * rather than adding a new endpoint just for this — it's already the
  * cheapest real round trip to the backend.
  */
-const REACHABILITY_URL = '/api/health';
+const REACHABILITY_URL = apiUrl('/api/health');
 const REACHABILITY_INTERVAL_MS = 15_000;
 const REACHABILITY_TIMEOUT_MS = 5_000;
 

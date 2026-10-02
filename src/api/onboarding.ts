@@ -3,6 +3,7 @@
  */
 import { withAuth } from './identity';
 import type { ActiveInvite } from './invites';
+import { apiUrl } from '../lib/apiUrl';
 
 export type MintedInvite = ActiveInvite;
 
@@ -17,7 +18,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
