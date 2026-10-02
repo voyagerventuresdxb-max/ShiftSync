@@ -13,7 +13,13 @@ import {
   isLegacyJoinLinkAccepted,
   type InviteRejection,
 } from '../lib/inviteLinks.js';
-import { decideJoinRequest, joinDeclinedMessage, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
+import {
+  decideJoinRequest,
+  fileJoinRequest,
+  joinAttemptsExhaustedMessage,
+  joinDeclinedMessage,
+  JOIN_PHONE_TAKEN_ERROR,
+} from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { notifyUser } from '../lib/push.js';
@@ -25,9 +31,6 @@ export const joinRouter = Router();
 function sendInviteRejected(res: Response, reason: InviteRejection) {
   return res.status(410).json({ reason, error: INVITE_REJECTION_MESSAGES[reason] });
 }
-
-/** Thrown inside the join-request transaction when the invite link has no use left, rolling it back. */
-class InviteLinkUnusableError extends Error {}
 
 /** GET /api/join/invite/:token — public peek: 200 { venueName, expiresAt } or 410 { reason, error }. */
 joinRouter.get('/invite/:token', invitePeekLimiter, async (req, res) => {
@@ -83,8 +86,10 @@ joinRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (r
  * describes. Otherwise creates a real PENDING JoinRequest (fullName
  * required in this branch) and returns `pending: true` with no session —
  * the "fallback to manual entry landing in Pending Approvals" path. A
- * request already PENDING here is returned as-is (200); a DECLINED one is a 403.
- * Only a new request or a session counts as a use of the invite link.
+ * request already PENDING here is returned as-is (200). A declined applicant
+ * may apply again, up to `MAX_JOIN_ATTEMPTS` requests per phone per venue;
+ * past that it's a 403. Only a new request or a session counts as a use of
+ * the invite link.
  */
 joinRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
@@ -144,50 +149,37 @@ joinRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
     }
 
     // A returning applicant gets their current status back, never a duplicate request or a second manager ping.
-    const open = await prisma.joinRequest.findFirst({ where: { locationId, phone, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
-    if (open) {
-      return res.status(200).json({
-        pending: true,
-        joinRequestId: open.id,
-        venueName: location.name,
-        managerName: await getApproverNameForLocation(locationId),
-      });
+    const filing = await fileJoinRequest({ locationId, phone, fullName, inviteLinkId: link?.id ?? null });
+    if (filing.kind === 'link_unusable') return sendInviteRejected(res, await currentInviteRejection(link!.id));
+    if (filing.kind === 'exhausted') {
+      return res.status(403).json({ status: 'attempts_exhausted', venueName: location.name, error: joinAttemptsExhaustedMessage(location.name) });
     }
-    const latest = await prisma.joinRequest.findFirst({ where: { locationId, phone }, orderBy: { createdAt: 'desc' } });
-    if (latest?.status === 'DECLINED') {
-      return res.status(403).json({ status: 'declined', venueName: location.name, error: joinDeclinedMessage(location.name) });
-    }
-
-    if (!fullName) {
-      return res.status(400).json({ error: 'No existing match — fullName is required to submit a join request for manual review.' });
-    }
-    let joinRequest;
-    try {
-      joinRequest = await prisma.$transaction(async (tx) => {
-        if (link && !(await consumeInviteUse(tx, link.id))) throw new InviteLinkUnusableError();
-        return tx.joinRequest.create({ data: { locationId, phone, fullName, status: 'PENDING' } });
-      });
-    } catch (err) {
-      if (link && err instanceof InviteLinkUnusableError) return sendInviteRejected(res, await currentInviteRejection(link.id));
-      throw err;
+    if (filing.kind === 'needs_name') {
+      return res.status(400).json(
+        filing.declined
+          ? { status: 'declined', venueName: location.name, error: joinDeclinedMessage(location.name, true) }
+          : { error: 'No existing match — fullName is required to submit a join request for manual review.' },
+      );
     }
 
-    // Real delivery on top of the write above (never blocking the response
-    // — a push failure must not stop the applicant's request from going
-    // through). The applicant has no User to notify until approval, where
-    // `decideJoinRequest` leaves them an in-app notice for their first sign-in.
-    const managerIds = await getManagerIdsForLocation(locationId);
-    for (const managerId of managerIds) {
-      void notifyUser(managerId, {
-        title: 'New join request',
-        body: `${fullName} wants to join — review their request.`,
-        url: '/people',
-      });
+    if (filing.kind === 'created') {
+      // Real delivery on top of the write above (never blocking the response
+      // — a push failure must not stop the applicant's request from going
+      // through). The applicant has no User to notify until approval, where
+      // `decideJoinRequest` leaves them an in-app notice for their first sign-in.
+      const managerIds = await getManagerIdsForLocation(locationId);
+      for (const managerId of managerIds) {
+        void notifyUser(managerId, {
+          title: 'New join request',
+          body: `${filing.fullName} wants to join — review their request.`,
+          url: '/people',
+        });
+      }
     }
 
-    return res.status(201).json({
+    return res.status(filing.kind === 'created' ? 201 : 200).json({
       pending: true,
-      joinRequestId: joinRequest.id,
+      joinRequestId: filing.requestId,
       venueName: location.name,
       managerName: await getApproverNameForLocation(locationId),
     });
@@ -206,13 +198,28 @@ joinRouter.get('/:locationId/pending', requireSession, requireManager, async (re
       where: { locationId, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
     });
+    // This venue's declines only: another venue's history isn't this manager's to see.
+    const declines = requests.length
+      ? await prisma.joinRequest.groupBy({
+          by: ['phone'],
+          where: { locationId, status: 'DECLINED', phone: { in: requests.map((r) => r.phone) } },
+          _count: { _all: true },
+          _max: { reviewedAt: true, createdAt: true },
+        })
+      : [];
+    const declinesByPhone = new Map(declines.map((d) => [d.phone, d]));
     return res.status(200).json({
-      requests: requests.map((r) => ({
-        id: r.id,
-        phone: r.phone,
-        fullName: r.fullName,
-        createdAt: r.createdAt.toISOString(),
-      })),
+      requests: requests.map((r) => {
+        const d = declinesByPhone.get(r.phone);
+        return {
+          id: r.id,
+          phone: r.phone,
+          fullName: r.fullName,
+          createdAt: r.createdAt.toISOString(),
+          previousDeclines: d?._count._all ?? 0,
+          lastDeclinedAt: (d?._max.reviewedAt ?? d?._max.createdAt)?.toISOString() ?? null,
+        };
+      }),
     });
   } catch (err) {
     console.error('[join.pending.list] failed', err);

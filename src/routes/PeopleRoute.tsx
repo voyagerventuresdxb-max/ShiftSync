@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import StaffDirectory from '../components/StaffDirectory';
 import PendingApprovals from '../components/PendingApprovals';
 import InviteLinkPanel from '../components/InviteLinkPanel';
@@ -6,6 +7,7 @@ import FloorFeedbackReview from '../components/shiftsync/FloorFeedbackReview';
 import { NotificationSettings } from '../components/shiftsync/NotificationSettings';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
+import { useRefreshOnFocus } from '../hooks/useLiveRefresh';
 
 /**
  * `RequireSession` (see router.tsx) already guarantees a session exists by
@@ -16,6 +18,10 @@ import { useIdentity } from '../state/IdentityContext';
 export default function PeopleContent() {
   const { setStaffDirectory } = useAppState();
   const { session } = useIdentity();
+  // Bumped on window focus and after a join decision; each panel below reloads in place when it changes.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  useRefreshOnFocus(refresh);
   if (!session) return null;
   const locationId = session.user.locationId;
   // Positive check (same rationale as StaffDirectory.tsx/router.tsx) — People
@@ -28,12 +34,12 @@ export default function PeopleContent() {
     <div className="space-y-5">
       {isManager && (
         <>
-          <PendingApprovals locationId={locationId} />
-          <InviteLinkPanel locationId={locationId} />
+          <PendingApprovals locationId={locationId} refreshKey={refreshKey} onDecided={refresh} />
+          <InviteLinkPanel locationId={locationId} refreshKey={refreshKey} />
           <FloorFeedbackReview />
         </>
       )}
-      <StaffDirectory locationId={locationId} onChanged={setStaffDirectory} />
+      <StaffDirectory locationId={locationId} onChanged={setStaffDirectory} refreshKey={refreshKey} />
       <PolicyDocuments locationId={locationId} isManager={isManager} />
       <NotificationSettings />
     </div>

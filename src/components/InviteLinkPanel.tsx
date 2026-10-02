@@ -1,27 +1,52 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError, fetchInviteLink, type ActiveInvite } from '../api/invites';
 import { useIdentity } from '../state/IdentityContext';
+import { useSingleFlight } from '../hooks/useLiveRefresh';
 import InviteLinkActions from './InviteLinkActions';
 
-/** People › the venue's join link: copy / WhatsApp / QR, plus regenerate and revoke. Manager-only. */
-export default function InviteLinkPanel({ locationId }: { locationId: string }) {
+/**
+ * People › the venue's join link: copy / WhatsApp / QR, plus regenerate and
+ * revoke. Manager-only. Reloads in place (e.g. the use count) whenever
+ * `refreshKey` changes.
+ */
+export default function InviteLinkPanel({ locationId, refreshKey }: { locationId: string; refreshKey: number }) {
   const { session } = useIdentity();
   const [active, setActive] = useState<ActiveInvite | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Counts regenerates/revokes made here, so a reload that started before one can't show the old link again.
+  const changes = useRef(0);
+  const loaded = useRef(false);
+
+  const load: () => void = useSingleFlight(async () => {
+    if (!session) return;
+    const changesAtStart = changes.current;
+    try {
+      const link = await fetchInviteLink(session.token, locationId);
+      if (changes.current !== changesAtStart) {
+        load();
+        return;
+      }
+      loaded.current = true;
+      setActive(link);
+      setError(null);
+    } catch (err) {
+      // Once the link is on screen a failed reload keeps it there, rather than swapping the panel for an error.
+      if (!loaded.current) setError(err instanceof ApiError ? err.message : 'Could not load the join link.');
+    } finally {
+      setLoading(false);
+    }
+  });
 
   useEffect(() => {
-    if (!session) return;
-    let cancelled = false;
-    fetchInviteLink(session.token, locationId)
-      .then((link) => !cancelled && setActive(link))
-      .catch((err) => !cancelled && setError(err instanceof ApiError ? err.message : 'Could not load the join link.'))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [session, locationId]);
+    load();
+  }, [load, session, locationId, refreshKey]);
+
+  const onChange = (next: ActiveInvite | null) => {
+    changes.current += 1;
+    setActive(next);
+  };
 
   const copy = async () => {
     if (!active) return;
@@ -82,7 +107,7 @@ export default function InviteLinkPanel({ locationId }: { locationId: string }) 
               </div>
             </div>
           )}
-          <InviteLinkActions locationId={locationId} active={active} onChange={setActive} look="panel" />
+          <InviteLinkActions locationId={locationId} active={active} onChange={onChange} look="panel" />
         </>
       )}
     </section>
