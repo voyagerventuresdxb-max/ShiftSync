@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchStaffDirectory,
   addStaffMember,
@@ -11,11 +11,14 @@ import { issueLoginLink, LoginLinkApiError, type IssuedLoginLink } from '../api/
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice, OfflineActionNotice } from './shiftsync/OfflineNotice';
+import { useSingleFlight } from '../hooks/useLiveRefresh';
 
 interface StaffDirectoryProps {
   locationId: string;
   /** Fires whenever the directory changes (add/edit), so the roster grid can re-derive the Management tier. */
   onChanged?: (staff: StaffDirectoryEntry[]) => void;
+  /** Changing it reloads the list in place (People: window focus, or a join request approved). */
+  refreshKey?: number;
 }
 
 type EditableFieldUpdates = Partial<
@@ -33,7 +36,7 @@ type EditableFieldUpdates = Partial<
  * employment status (isActive) — all editable here — plus a read-only
  * venue column (joined server-side from Location.name).
  */
-export default function StaffDirectory({ locationId, onChanged }: StaffDirectoryProps) {
+export default function StaffDirectory({ locationId, onChanged, refreshKey }: StaffDirectoryProps) {
   const { session } = useIdentity();
   const { online } = useConnectivity();
   // Positive check (render editable only for a confirmed MANAGER/OWNER), not
@@ -46,8 +49,14 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   // renders) is reachable by every session, not just managers.
   const isManager = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const [staff, setStaff] = useState<StaffDirectoryEntry[]>([]);
+  // The list as of the last write, read by handlers that finish after a reload replaced it.
+  const staffRef = useRef<StaffDirectoryEntry[]>([]);
+  // Counts completed writes, so a reload that started before one can't put older data back.
+  const writes = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Kept apart from `error` so a later successful reload clears it without hiding a failed save's message.
+  const [loadError, setLoadError] = useState<string | null>(null);
   // True when the most recent load attempt failed — distinguishes an
   // offline cold-load empty state from a genuine "no staff yet" one.
   const [loadFailed, setLoadFailed] = useState(false);
@@ -87,8 +96,15 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
 
   /** Local list + parent notification, computed first so no parent state is set inside an updater. */
   const replaceStaff = (next: StaffDirectoryEntry[]) => {
+    staffRef.current = next;
     setStaff(next);
     onChanged?.(next);
+  };
+
+  /** Applies a completed write's result to the latest list. */
+  const applyWrite = (next: (current: StaffDirectoryEntry[]) => StaffDirectoryEntry[]) => {
+    writes.current += 1;
+    replaceStaff(next(staffRef.current));
   };
 
   const handleAddRole = async () => {
@@ -115,7 +131,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
       const renamed = await renameRole(session.token, role.id, name);
       setRoles((prev) => prev.map((r) => (r.id === renamed.id ? renamed : r)).sort((a, b) => a.name.localeCompare(b.name)));
       // Staff on this role show the new name straight away — they hold the id.
-      replaceStaff(staff.map((s) => (s.roleId === renamed.id ? { ...s, roleName: renamed.name } : s)));
+      applyWrite((current) => current.map((s) => (s.roleId === renamed.id ? { ...s, roleName: renamed.name } : s)));
       setError(null);
     } catch (err) {
       setRoleDrafts((prev) => ({ ...prev, [role.id]: role.name }));
@@ -132,7 +148,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
       await removeRole(session.token, role.id);
       setRoles((prev) => prev.filter((r) => r.id !== role.id));
       // The server unassigns everyone on the role; mirror that locally.
-      replaceStaff(staff.map((s) => (s.roleId === role.id ? { ...s, roleId: null, roleName: null } : s)));
+      applyWrite((current) => current.map((s) => (s.roleId === role.id ? { ...s, roleId: null, roleName: null } : s)));
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not remove that role.');
@@ -141,7 +157,9 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     }
   };
 
-  useEffect(() => {
+  // Only the first load shows the spinner; reloads replace the list in place,
+  // so rows stay mounted and an unsaved inline edit keeps its draft.
+  const load: () => void = useSingleFlight(async () => {
     // Reads are session-gated server-side now — with no session yet (e.g. a
     // fresh load before login resolves) there is no token to send, so skip
     // the call rather than firing a request that can only 401. Resolve the
@@ -150,30 +168,29 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
       setLoading(false);
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    fetchStaffDirectory(session.token, locationId)
-      .then((list) => {
-        if (cancelled) return;
-        setStaff(list);
-        onChanged?.(list);
-        setError(null);
-        setLoadFailed(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        // `staff` itself is left untouched (Phase 2 of the offline-support
-        // pass: a failed reload must not blank out data already on screen).
-        setError(err instanceof ApiError ? err.message : 'Could not load the staff directory.');
-        setLoadFailed(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [locationId, onChanged, session]);
+    const writesAtStart = writes.current;
+    try {
+      const list = await fetchStaffDirectory(session.token, locationId);
+      if (writes.current !== writesAtStart) {
+        load();
+        return;
+      }
+      replaceStaff(list);
+      setLoadError(null);
+      setLoadFailed(false);
+    } catch (err) {
+      // `staff` itself is left untouched (Phase 2 of the offline-support
+      // pass: a failed reload must not blank out data already on screen).
+      setLoadError(err instanceof ApiError ? err.message : 'Could not load the staff directory.');
+      setLoadFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  useEffect(() => {
+    load();
+  }, [load, locationId, session, refreshKey]);
 
   // Previously-seen preferred languages, for the datalist autocomplete —
   // same idea as the 86 List's station autocomplete (EightySixBoard.tsx).
@@ -197,9 +214,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
       // setState updater runs it during THIS component's render, which React
       // flags ("Cannot update a component while rendering a different
       // component"). Compute the next list first, then notify.
-      const next = staff.map((s) => (s.id === entry.id ? updated : s));
-      setStaff(next);
-      onChanged?.(next);
+      applyWrite((current) => current.map((s) => (s.id === entry.id ? updated : s)));
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : errorMessage);
@@ -223,9 +238,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
         phone: newPhone.trim() || null,
       });
       // Same as handleFieldSave: notify outside the updater, never during render.
-      const next = [...staff, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
-      setStaff(next);
-      onChanged?.(next);
+      applyWrite((current) => [...current.filter((s) => s.id !== created.id), created].sort((a, b) => a.fullName.localeCompare(b.fullName)));
       setNewName('');
       setNewTitle('');
       setNewPhone('');
@@ -258,9 +271,9 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
             schedules against.
           </p>
 
-          {error && (
+          {(error ?? loadError) && (
             <div className="error-block" role="alert">
-              <p>{error}</p>
+              <p>{error ?? loadError}</p>
             </div>
           )}
 

@@ -1,13 +1,69 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import { prisma } from '../prisma.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
+import { consumeInviteUse } from '../inviteLinks.js';
 
 export const JOIN_PHONE_TAKEN_ERROR = "This phone number already belongs to another staff account, so this request can't be approved. Decline it instead.";
 
+/** Join requests one phone may ever file at one venue, whatever became of them; past this only a manager can add them. */
+export const MAX_JOIN_ATTEMPTS = 3;
+
 /** What a declined applicant sees, from /login or from the venue's join link. */
-export function joinDeclinedMessage(venueName: string): string {
-  return `Your request to join ${venueName} was declined. If that's a mistake, ask a manager there to add you to the staff list, then sign in with this number.`;
+export function joinDeclinedMessage(venueName: string, canReapply: boolean): string {
+  return canReapply
+    ? `Your request to join ${venueName} was declined. You can apply again with your full name through ${venueName}'s invite link, or ask a manager there to add you to the staff list.`
+    : `Your request to join ${venueName} was declined. Ask a manager there to add you to the staff list, then sign in with this number.`;
+}
+
+/** The join link's answer once a phone has used up its attempts at a venue. */
+export function joinAttemptsExhaustedMessage(venueName: string): string {
+  return `You've already applied to ${venueName} ${MAX_JOIN_ATTEMPTS} times. Ask a manager there to add you.`;
+}
+
+/** Whether this phone may still file a join request at this venue. */
+export async function canReapplyToJoin(locationId: string, phone: string): Promise<boolean> {
+  return (await prisma.joinRequest.count({ where: { locationId, phone } })) < MAX_JOIN_ATTEMPTS;
+}
+
+export type JoinFiling =
+  | { kind: 'open'; requestId: string }
+  | { kind: 'created'; requestId: string; fullName: string }
+  | { kind: 'exhausted' }
+  | { kind: 'needs_name'; declined: boolean }
+  | { kind: 'link_unusable' };
+
+class InviteLinkUnusableError extends Error {}
+
+/**
+ * Files a PENDING join request for a phone with no account at this venue —
+ * or reports why not. An open request is returned as-is (no duplicate, no
+ * invite use); a phone that has filed `MAX_JOIN_ATTEMPTS` here is refused.
+ * Only a new request consumes a use of `inviteLinkId`. Runs under a
+ * per-(phone, venue) advisory lock, so concurrent verifies can neither file
+ * two requests nor pass the cap together.
+ */
+export async function fileJoinRequest(
+  input: { locationId: string; phone: string; fullName: string | null; inviteLinkId: string | null },
+  client: PrismaClient = prisma,
+): Promise<JoinFiling> {
+  const { locationId, phone, fullName, inviteLinkId } = input;
+  try {
+    return await client.$transaction(async (tx): Promise<JoinFiling> => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`join:${locationId}:${phone}`}))::text`;
+      const history = await tx.joinRequest.findMany({ where: { locationId, phone }, orderBy: { createdAt: 'desc' }, select: { id: true, status: true } });
+      const open = history.find((r) => r.status === 'PENDING');
+      if (open) return { kind: 'open', requestId: open.id };
+      if (history.length >= MAX_JOIN_ATTEMPTS) return { kind: 'exhausted' };
+      if (!fullName) return { kind: 'needs_name', declined: history[0]?.status === 'DECLINED' };
+      if (inviteLinkId && !(await consumeInviteUse(tx, inviteLinkId))) throw new InviteLinkUnusableError();
+      const created = await tx.joinRequest.create({ data: { locationId, phone, fullName, status: 'PENDING' } });
+      return { kind: 'created', requestId: created.id, fullName: created.fullName };
+    });
+  } catch (err) {
+    if (err instanceof InviteLinkUnusableError) return { kind: 'link_unusable' };
+    throw err;
+  }
 }
 
 /** Exact-target P2002 on `User.phone`, same check as staffDirectory.ts's `isPhoneConflict`. */

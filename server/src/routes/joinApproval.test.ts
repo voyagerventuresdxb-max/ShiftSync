@@ -5,6 +5,7 @@ import { PrismaClient, type User } from '@prisma/client';
 import { createApp } from '../app.js';
 import { createOtpCode, issueSession } from '../lib/identity.js';
 import { generateInviteToken } from '../lib/inviteLinks.js';
+import { joinDeclinedMessage, MAX_JOIN_ATTEMPTS } from '../lib/actions/joinActions.js';
 
 const prisma = new PrismaClient();
 const TAG = '__join-approval-test__';
@@ -226,17 +227,115 @@ test('join/verify-otp: re-verifying while PENDING returns the same request, file
   }
 });
 
-test('join/verify-otp: after a decline the join link says so and files nothing new; another venue is unaffected', async () => {
+test('join/verify-otp: a declined applicant may re-apply up to the cap; the next attempt is refused, files nothing and uses no invite', async () => {
+  const { location, users } = await makeVenue('re-apply', [{ fullName: `${TAG} Owner`, systemRole: 'OWNER' }]);
+  const { plainToken } = await issueSession(users[0]!.id);
+  const p = phone();
+  const where = { locationId: location.id, phone: p };
+  const uses = async () => (await prisma.inviteLink.findUniqueOrThrow({ where: { token: await inviteTokenFor(location.id) } })).useCount;
+  try {
+    await withServer(async (baseUrl) => {
+      const decline = async (id: unknown) => assert.equal((await send(baseUrl, 'PATCH', `/api/join/${id}`, { decision: 'decline' }, plainToken)).status, 200);
+      const first = await verifyJoin(baseUrl, location.id, p, `${TAG} Applicant`);
+      assert.equal(first.status, 201);
+      await decline(first.body.joinRequestId);
+
+      // Re-applying needs a name, as a first request does; the answer says why.
+      const nameless = await verifyJoin(baseUrl, location.id, p);
+      assert.equal(nameless.status, 400);
+      assert.equal(nameless.body.status, 'declined');
+      assert.equal(nameless.body.error, joinDeclinedMessage(location.name, true));
+      assert.equal(await prisma.joinRequest.count({ where }), 1);
+      assert.equal(await uses(), 1);
+
+      const second = await verifyJoin(baseUrl, location.id, p, `${TAG} Applicant`);
+      assert.equal(second.status, 201);
+      assert.notEqual(second.body.joinRequestId, first.body.joinRequestId);
+      assert.equal(await uses(), 2);
+      // Re-verifying while the new request is open still files no duplicate.
+      const again = await verifyJoin(baseUrl, location.id, p);
+      assert.equal(again.status, 200);
+      assert.equal(again.body.joinRequestId, second.body.joinRequestId);
+      assert.equal(await prisma.joinRequest.count({ where }), 2);
+      await decline(second.body.joinRequestId);
+
+      const third = await verifyJoin(baseUrl, location.id, p, `${TAG} Applicant`);
+      assert.equal(third.status, 201);
+      await decline(third.body.joinRequestId);
+
+      const fourth = await verifyJoin(baseUrl, location.id, p, `${TAG} Applicant`);
+      assert.equal(fourth.status, 403);
+      assert.deepEqual(fourth.body, {
+        status: 'attempts_exhausted',
+        venueName: location.name,
+        error: `You've already applied to ${location.name} 3 times. Ask a manager there to add you.`,
+      });
+      assert.equal(await prisma.joinRequest.count({ where }), MAX_JOIN_ATTEMPTS);
+      assert.equal(await prisma.joinRequest.count({ where: { ...where, status: 'PENDING' } }), 0);
+      assert.equal(await uses(), 3);
+
+      // /login no longer offers another try.
+      const login = await verifyLogin(baseUrl, p);
+      assert.equal(login.status, 403);
+      assert.equal(login.body.status, 'declined');
+      assert.equal(login.body.error, joinDeclinedMessage(location.name, false));
+      assert.doesNotMatch(String(login.body.error), /apply again/);
+    });
+  } finally {
+    await prisma.session.deleteMany({ where: { userId: users[0]!.id } });
+    await cleanup([location.id], [p]);
+  }
+});
+
+test('GET /api/join/:locationId/pending: previousDeclines and lastDeclinedAt count this venue only', async () => {
+  const { location, users } = await makeVenue('pending history', [{ fullName: `${TAG} Owner`, systemRole: 'OWNER' }]);
+  const elsewhere = await makeVenue('pending history elsewhere');
+  const { plainToken } = await issueSession(users[0]!.id);
+  const [returning, fresh] = [phone(), phone()];
+  const declinedOn = (iso: string) => ({ status: 'DECLINED' as const, reviewedAt: new Date(iso), createdAt: new Date(iso) });
+  await prisma.joinRequest.createMany({
+    data: [
+      { locationId: location.id, phone: returning, fullName: `${TAG} R`, ...declinedOn('2026-09-01T10:00:00.000Z') },
+      { locationId: location.id, phone: returning, fullName: `${TAG} R`, ...declinedOn('2026-09-20T10:00:00.000Z') },
+      { locationId: location.id, phone: returning, fullName: `${TAG} R`, status: 'PENDING' },
+      // Declined elsewhere: none of this venue's business.
+      { locationId: elsewhere.location.id, phone: returning, fullName: `${TAG} R`, ...declinedOn('2026-09-25T10:00:00.000Z') },
+      { locationId: elsewhere.location.id, phone: fresh, fullName: `${TAG} F`, ...declinedOn('2026-09-25T10:00:00.000Z') },
+      { locationId: location.id, phone: fresh, fullName: `${TAG} F`, status: 'PENDING' },
+    ],
+  });
+  try {
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/join/${location.id}/pending`, { headers: { Authorization: `Bearer ${plainToken}` } });
+      assert.equal(res.status, 200);
+      const { requests } = (await res.json()) as { requests: { phone: string; previousDeclines: number; lastDeclinedAt: string | null }[] };
+      const byPhone = new Map(requests.map((r) => [r.phone, r]));
+      assert.equal(requests.length, 2);
+      assert.equal(byPhone.get(returning)!.previousDeclines, 2);
+      assert.equal(byPhone.get(returning)!.lastDeclinedAt, '2026-09-20T10:00:00.000Z');
+      assert.equal(byPhone.get(fresh)!.previousDeclines, 0);
+      assert.equal(byPhone.get(fresh)!.lastDeclinedAt, null);
+    });
+  } finally {
+    await prisma.session.deleteMany({ where: { userId: users[0]!.id } });
+    await cleanup([location.id, elsewhere.location.id], [returning, fresh]);
+  }
+});
+
+test('join/verify-otp: after a decline /login says they may apply again; another venue is unaffected', async () => {
   const declinedAt = await makeVenue('declined here');
   const elsewhere = await makeVenue('other venue', [{ fullName: `${TAG} Other Owner`, systemRole: 'OWNER' }]);
   const p = phone();
   await prisma.joinRequest.create({ data: { locationId: declinedAt.location.id, phone: p, fullName: `${TAG} declined`, status: 'DECLINED' } });
   try {
     await withServer(async (baseUrl) => {
-      const res = await verifyJoin(baseUrl, declinedAt.location.id, p, `${TAG} declined`);
-      assert.equal(res.status, 403);
-      assert.equal(res.body.status, 'declined');
-      assert.match(String(res.body.error), /ask a manager there to add you/);
+      const declined = await verifyLogin(baseUrl, p);
+      assert.equal(declined.status, 403);
+      assert.equal(declined.body.status, 'declined');
+      assert.equal(
+        declined.body.error,
+        `Your request to join ${declinedAt.location.name} was declined. You can apply again with your full name through ${declinedAt.location.name}'s invite link, or ask a manager there to add you to the staff list.`,
+      );
       assert.equal(await prisma.joinRequest.count({ where: { phone: p } }), 1);
 
       // A different venue's link still files a request there, and says nothing about the first venue.
