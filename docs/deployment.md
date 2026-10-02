@@ -5,6 +5,14 @@ How the live site is put together, why, and the order to do it in. Written
 never had a live production deployment and deployed the frontend only
 (`docs/mvp-readiness-report.md`, item 3.5).
 
+> **Deploying the API: follow [`railway-deploy-procedure.md`](railway-deploy-procedure.md)**
+> (pre-flight checks, the build-log lines to look for, rollback, and the move off
+> `railway.json` before Railway stops reading it on 2026-12-01).
+> **Never run `railway up` against the production `shiftsync-api` service.** On 2026-09-29
+> it skipped `railway.json` and replaced the API with the frontend's `index.html` for about
+> 7 minutes (#52). Deploy from the GitHub source only. Remove this warning only after both
+> paths are proven (procedure §3).
+
 ## Shape
 
 ```
