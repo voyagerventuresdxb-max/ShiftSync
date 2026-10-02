@@ -5,30 +5,24 @@ import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
+import { getApproverNameForLocation } from '../lib/managers.js';
+import { joinDeclinedMessage } from '../lib/actions/joinActions.js';
 
 export const identityRouter = Router();
 
-/**
- * The active User with this phone, or null. `e164` must come from `toE164`:
- * `User.phone` is stored in E.164 and is unique, so this is one indexed lookup
- * (it used to scan every phone-bearing user and compare lossy digits).
- *
- * Deliberately GLOBAL, not location-scoped: login doesn't require knowing
- * which venue you belong to before you can request a code. You don't know
- * that up front from a `/login` redirect (see
- * `RequireSession` in `router.tsx`). Under Decision A1 (one User, one
- * Location) phone is the cross-venue identity key. signup.ts reuses this
- * for its "does this phone already have an account" check.
- */
-export async function findActiveUserByPhone(e164: string) {
-  const user = await findUserByPhone(e164);
-  return user?.isActive ? user : null;
-}
+const NO_ACCOUNT_ERROR = 'No active account found with that phone number.';
 
 /**
  * The User holding this phone, active or not. The unique index covers
  * deactivated users too, so signup and join must check this one before
  * creating anything with the number, or the insert collides.
+ *
+ * Deliberately GLOBAL, not location-scoped: login doesn't require knowing
+ * which venue you belong to before you can request a code. You don't know
+ * that up front from a `/login` redirect (see
+ * `RequireSession` in `router.tsx`). Under Decision A1 (one User, one
+ * Location) phone is the cross-venue identity key. `e164` must come from
+ * `toE164`: `User.phone` is stored in E.164, so this is one indexed lookup.
  */
 export async function findUserByPhone(e164: string) {
   return prisma.user.findUnique({
@@ -39,8 +33,8 @@ export async function findUserByPhone(e164: string) {
 
 /**
  * POST /api/identity/request-otp — body: { phone }
- * Login path: the phone must already match exactly one active User anywhere
- * in the system — no `locationId` needed up front, since the whole point of
+ * Login path: the phone must already match a User (active or deactivated) or
+ * a PENDING/DECLINED JoinRequest — no `locationId` needed up front, since the whole point of
  * logging back in is that the client doesn't necessarily know (or need to
  * know) which venue that is until after the phone resolves to a real account.
  */
@@ -51,8 +45,12 @@ identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
     const phone = toE164(rawPhone);
     if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
-    if (!(await findActiveUserByPhone(phone))) {
-      return res.status(404).json({ error: 'No active account found with that phone number.' });
+    // Deactivated staff and pending/declined applicants get a code too; their status is only revealed after verify.
+    const known =
+      (await findUserByPhone(phone)) ??
+      (await prisma.joinRequest.findFirst({ where: { phone, status: { in: ['PENDING', 'DECLINED'] } }, select: { id: true } }));
+    if (!known) {
+      return res.status(404).json({ error: NO_ACCOUNT_ERROR });
     }
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'LOGIN');
@@ -71,7 +69,12 @@ identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   }
 });
 
-/** POST /api/identity/verify-otp — body: { phone, code } */
+/**
+ * POST /api/identity/verify-otp — body: { phone, code }
+ * Active user → session. Otherwise, only after the code checks out: pending
+ * applicant → 200 `{ pending: true, status, venueName, managerName }` (no
+ * token); deactivated or declined → 403 `{ status, venueName, error }`.
+ */
 identityRouter.post('/verify-otp', async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
@@ -83,9 +86,32 @@ identityRouter.post('/verify-otp', async (req, res) => {
     const result = await verifyOtpCode(phone, 'LOGIN', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
-    const match = await findActiveUserByPhone(phone);
+    const match = await findUserByPhone(phone);
+    if (match && !match.isActive) {
+      const { name: venueName } = await prisma.location.findUniqueOrThrow({ where: { id: match.locationId }, select: { name: true } });
+      return res.status(403).json({
+        status: 'deactivated',
+        venueName,
+        error: `Your staff account at ${venueName} has been deactivated. Ask a manager there to reactivate it.`,
+      });
+    }
     if (!match) {
-      return res.status(404).json({ error: 'No active account found with that phone number.' });
+      // An open application wins over an old declined one (e.g. declined at one venue, applied to another).
+      const include = { location: { select: { name: true } } } as const;
+      const pending = await prisma.joinRequest.findFirst({ where: { phone, status: 'PENDING' }, orderBy: { createdAt: 'desc' }, include });
+      if (pending) {
+        return res.status(200).json({
+          pending: true,
+          status: 'pending',
+          venueName: pending.location.name,
+          managerName: await getApproverNameForLocation(pending.locationId),
+        });
+      }
+      const declined = await prisma.joinRequest.findFirst({ where: { phone, status: 'DECLINED' }, orderBy: { createdAt: 'desc' }, include });
+      if (declined) {
+        return res.status(403).json({ status: 'declined', venueName: declined.location.name, error: joinDeclinedMessage(declined.location.name) });
+      }
+      return res.status(404).json({ error: NO_ACCOUNT_ERROR });
     }
 
     const { plainToken, expiresAt } = await issueSession(match.id);

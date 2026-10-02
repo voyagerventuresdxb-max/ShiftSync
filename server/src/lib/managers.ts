@@ -13,3 +13,16 @@ export async function getManagerIdsForLocation(locationId: string): Promise<stri
   });
   return managers.map((m) => m.id);
 }
+
+/** Who an applicant is waiting on: the venue's earliest active OWNER, else its earliest active MANAGER, else null. */
+export async function getApproverNameForLocation(locationId: string): Promise<string | null> {
+  for (const systemRole of ['OWNER', 'MANAGER'] as const) {
+    const user = await prisma.user.findFirst({
+      where: { locationId, systemRole, isActive: true },
+      orderBy: { createdAt: 'asc' },
+      select: { fullName: true },
+    });
+    if (user) return user.fullName;
+  }
+  return null;
+}

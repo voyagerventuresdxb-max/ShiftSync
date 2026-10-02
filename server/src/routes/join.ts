@@ -4,10 +4,10 @@ import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { findUserByPhone } from './identity.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
-import { decideJoinRequest } from '../lib/actions/joinActions.js';
+import { decideJoinRequest, joinDeclinedMessage, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { notifyUser } from '../lib/push.js';
-import { getManagerIdsForLocation } from '../lib/managers.js';
+import { getManagerIdsForLocation, getApproverNameForLocation } from '../lib/managers.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const joinRouter = Router();
@@ -43,7 +43,8 @@ joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  * a real session immediately — this IS the auto-match the directive
  * describes. Otherwise creates a real PENDING JoinRequest (fullName
  * required in this branch) and returns `pending: true` with no session —
- * the "fallback to manual entry landing in Pending Approvals" path.
+ * the "fallback to manual entry landing in Pending Approvals" path. A
+ * request already PENDING here is returned as-is (200); a DECLINED one is a 403.
  */
 joinRouter.post('/verify-otp', async (req, res) => {
   try {
@@ -92,6 +93,21 @@ joinRouter.post('/verify-otp', async (req, res) => {
       });
     }
 
+    // A returning applicant gets their current status back, never a duplicate request or a second manager ping.
+    const open = await prisma.joinRequest.findFirst({ where: { locationId, phone, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
+    if (open) {
+      return res.status(200).json({
+        pending: true,
+        joinRequestId: open.id,
+        venueName: location.name,
+        managerName: await getApproverNameForLocation(locationId),
+      });
+    }
+    const latest = await prisma.joinRequest.findFirst({ where: { locationId, phone }, orderBy: { createdAt: 'desc' } });
+    if (latest?.status === 'DECLINED') {
+      return res.status(403).json({ status: 'declined', venueName: location.name, error: joinDeclinedMessage(location.name) });
+    }
+
     if (!fullName) {
       return res.status(400).json({ error: 'No existing match — fullName is required to submit a join request for manual review.' });
     }
@@ -101,9 +117,8 @@ joinRouter.post('/verify-otp', async (req, res) => {
 
     // Real delivery on top of the write above (never blocking the response
     // — a push failure must not stop the applicant's request from going
-    // through). The applicant themselves cannot be notified here or on
-    // decision — they have no User/session/push subscription until a
-    // manager approves them, a separate deferred infra gap.
+    // through). The applicant has no User to notify until approval, where
+    // `decideJoinRequest` leaves them an in-app notice for their first sign-in.
     const managerIds = await getManagerIdsForLocation(locationId);
     for (const managerId of managerIds) {
       void notifyUser(managerId, {
@@ -113,7 +128,12 @@ joinRouter.post('/verify-otp', async (req, res) => {
       });
     }
 
-    return res.status(201).json({ pending: true, joinRequestId: joinRequest.id });
+    return res.status(201).json({
+      pending: true,
+      joinRequestId: joinRequest.id,
+      venueName: location.name,
+      managerName: await getApproverNameForLocation(locationId),
+    });
   } catch (err) {
     console.error('[join.verifyOtp] failed', err);
     return res.status(500).json({ error: 'Unexpected error while verifying the code.' });
@@ -170,6 +190,7 @@ joinRouter.patch('/:requestId', requireSession, requireManager, async (req, res)
     if (outcome.result === 'already_reviewed') {
       return res.status(409).json({ error: 'This request has already been reviewed.' });
     }
+    if (outcome.result === 'phone_taken') return res.status(409).json({ error: JOIN_PHONE_TAKEN_ERROR });
 
     return res.status(200).json({ status: outcome.status, userId: outcome.userId });
   } catch (err) {
