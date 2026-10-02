@@ -3,6 +3,7 @@
  * Plan's "Publish & notify" is the first caller, but any future feature
  * that needs to reach a user's device calls sendPushToUser(s) the same way.
  */
+import { createECDH } from 'node:crypto';
 import webpush from 'web-push';
 import { prisma } from './prisma.js';
 
@@ -14,10 +15,19 @@ let pushEnabled = false;
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   try {
     webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    // Halves of two different pairs pass web-push's format checks, but every push service rejects the signature.
+    const ecdh = createECDH('prime256v1');
+    ecdh.setPrivateKey(Buffer.from(VAPID_PRIVATE_KEY, 'base64url'));
+    if (ecdh.getPublicKey().toString('base64url') !== VAPID_PUBLIC_KEY) {
+      throw new Error('VAPID_PUBLIC_KEY is not the public half of VAPID_PRIVATE_KEY');
+    }
     pushEnabled = true;
   } catch (err) {
-    // A typo in a deploy variable must not crash-loop the API (web-push's messages carry no key material).
-    console.error(`[push] VAPID config rejected (${err instanceof Error ? err.message : String(err)}) — push notifications are disabled.`);
+    // A typo in a deploy variable must not crash-loop the API. web-push echoes a bad subject verbatim, and that
+    // variable may hold a mis-pasted private key, so the subject's value never reaches the log.
+    const reason = err instanceof Error ? err.message : String(err);
+    const safeReason = VAPID_SUBJECT ? reason.split(VAPID_SUBJECT).join('<VAPID_SUBJECT>') : reason;
+    console.error(`[push] VAPID config rejected (${safeReason}) — push notifications are disabled.`);
   }
 } else {
   // Fail soft, not silent: a misconfigured deploy still boots (push is an
