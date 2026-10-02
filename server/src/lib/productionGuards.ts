@@ -1,7 +1,7 @@
 import { devOtpEchoEnabled, echoAllowedPhones } from './devOtpEcho.js';
 
-/** Flags that must never be on in production — a login bypass and a deliberate crash trigger. */
-export const FORBIDDEN_IN_PRODUCTION = ['ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION'] as const;
+/** Settings that must never be on in production — a login bypass, a deliberate crash trigger, and a redirect of voice AI traffic. */
+export const FORBIDDEN_IN_PRODUCTION = ['ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION', 'GEMINI_BASE_URL'] as const;
 
 /**
  * NODE_ENV=production, or Railway's own environment name: this repo's start
@@ -35,11 +35,14 @@ export function checkProductionEnv(env: NodeJS.ProcessEnv = process.env): { warn
     fatal.push('ALLOW_DEV_OTP_ECHO=true needs at least one valid mobile number in ECHO_ALLOWED_PHONES (comma-separated).');
   }
   for (const flag of FORBIDDEN_IN_PRODUCTION) {
-    if (!isFlagOn(flag, env)) continue;
+    // GEMINI_BASE_URL is a URL, not a boolean flag: any value at all is on.
+    if (flag === 'GEMINI_BASE_URL' ? !env[flag]?.trim() : !isFlagOn(flag, env)) continue;
     fatal.push(
       flag === 'ALLOW_DEV_OTP_BYPASS'
         ? `${flag}=true makes the fixed code 000000 log in as ANY phone number.`
-        : `${flag}=true lets a sentinel bearer token crash session auth on demand.`,
+        : flag === 'ALLOW_DEV_ERROR_INJECTION'
+          ? `${flag}=true lets a sentinel bearer token crash session auth on demand.`
+          : `${flag} is set — voice audio and transcripts would go to that URL instead of Gemini (it exists only for the e2e fake).`,
     );
   }
   if (fatal.length > 0) {
