@@ -25,6 +25,7 @@ import { invitesRouter } from './routes/invites.js';
 import { locationsRouter } from './routes/locations.js';
 import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
+import { loginLinksRouter } from './routes/loginLinks.js';
 
 export function createApp() {
   const app = express();
@@ -75,6 +76,7 @@ export function createApp() {
   app.use('/api/locations', locationsRouter);
   app.use('/api/roles', rolesRouter);
   app.use('/api/voice', voiceRouter);
+  app.use('/api/login-links', loginLinksRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {

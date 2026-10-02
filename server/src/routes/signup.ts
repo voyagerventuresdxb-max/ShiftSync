@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { findUserByPhone } from './identity.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { writeAuditLog } from '../lib/auditLog.js';
@@ -18,7 +19,7 @@ export const signupRouter = Router();
  * `locationId` here because there is no location yet; that's the entire
  * point of this route.
  */
-signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
+signupRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
@@ -52,7 +53,7 @@ signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  * collects the venue's real emirate/address/venueType right after this, so
  * only the bare minimum is collected here.
  */
-signupRouter.post('/verify-otp', async (req, res) => {
+signupRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();

@@ -15,6 +15,7 @@ import {
 } from '../lib/inviteLinks.js';
 import { decideJoinRequest, joinDeclinedMessage, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { notifyUser } from '../lib/push.js';
 import { getManagerIdsForLocation, getApproverNameForLocation } from '../lib/managers.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
@@ -46,7 +47,7 @@ joinRouter.get('/invite/:token', invitePeekLimiter, async (req, res) => {
 });
 
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
-joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
+joinRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
@@ -85,7 +86,7 @@ joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  * request already PENDING here is returned as-is (200); a DECLINED one is a 403.
  * Only a new request or a session counts as a use of the invite link.
  */
-joinRouter.post('/verify-otp', async (req, res) => {
+joinRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
     const inviteToken = String(req.body?.inviteToken ?? '').trim();
     const legacyLocationId = inviteToken ? '' : String(req.body?.locationId ?? '').trim();

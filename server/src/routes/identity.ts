@@ -4,11 +4,18 @@ import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeS
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
+import { loginMethods } from '../lib/loginLinks.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 import { getApproverNameForLocation } from '../lib/managers.js';
 import { joinDeclinedMessage } from '../lib/actions/joinActions.js';
 
 export const identityRouter = Router();
+
+/** GET /api/identity/config — public: which sign-in methods are on (lib/loginLinks.ts `loginMethods`). */
+identityRouter.get('/config', (_req, res) => {
+  return res.status(200).json({ loginMethods: loginMethods() });
+});
 
 const NO_ACCOUNT_ERROR = 'No active account found with that phone number.';
 
@@ -38,7 +45,7 @@ export async function findUserByPhone(e164: string) {
  * logging back in is that the client doesn't necessarily know (or need to
  * know) which venue that is until after the phone resolves to a real account.
  */
-identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
+identityRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
@@ -75,7 +82,7 @@ identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  * applicant → 200 `{ pending: true, status, venueName, managerName }` (no
  * token); deactivated or declined → 403 `{ status, venueName, error }`.
  */
-identityRouter.post('/verify-otp', async (req, res) => {
+identityRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();

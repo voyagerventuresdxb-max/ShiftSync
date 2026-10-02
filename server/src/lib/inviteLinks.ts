@@ -16,7 +16,7 @@ const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:5173';
  * every call (not memoized at module load) so it can be reconfigured — e.g.
  * per-test — without restarting the process.
  */
-function getAllowedFrontendOrigins(): string[] {
+export function getAllowedFrontendOrigins(): string[] {
   const configured = process.env.FRONTEND_ORIGIN?.trim();
   if (!configured) return [DEFAULT_FRONTEND_ORIGIN];
   return configured
