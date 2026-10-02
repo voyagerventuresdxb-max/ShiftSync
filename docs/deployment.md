@@ -58,6 +58,8 @@ history from scratch, which is exactly what `server:start` does on every boot.
    variables (Railway can reference it as `${{Postgres.DATABASE_URL}}`).
 3. Variables on the API service (names only — never paste values into chat or docs):
 
+   Every variable the app reads, with defaults and a production checklist: [`ENV_VARS.md`](ENV_VARS.md).
+
    | Variable | Value / note |
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL |
