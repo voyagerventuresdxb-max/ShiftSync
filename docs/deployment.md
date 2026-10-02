@@ -56,8 +56,19 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice) |
-   | `ALLOW_DEV_OTP_ECHO` | **`true` for the MBRIF demo only** — there is no SMS integration, so this is the only way a code can be entered on the live site. It shows the real one-time code on screen to whoever requested it. Remove it right after the demo. |
+   | `NODE_ENV` | `production`. Turns on the boot-time safety checks below. (Railway's own `RAILWAY_ENVIRONMENT_NAME=production` turns them on too, but don't rely on that alone.) It also makes the build's `npm install` skip devDependencies, which is fine: everything the server runs is in `dependencies`. |
+   | `ALLOW_DEV_OTP_ECHO` | `true` only while there is no SMS integration (#51) — it is the only way a code can be entered on the live site. It shows the real one-time code on screen (and in the server log), **but only for the numbers in `ECHO_ALLOWED_PHONES`**; every other number gets a code it can never see. |
+   | `ECHO_ALLOWED_PHONES` | **Required when `ALLOW_DEV_OTP_ECHO=true` in production.** Comma-separated mobile numbers whose code may be echoed, e.g. `+971501234567,050 765 4321` (any format the app accepts; each is normalized to E.164). Invalid entries are ignored with a `[startup]` warning. Anyone who knows a listed number can sign in as it — list only demo/test numbers you control. |
+   | `ALLOW_DEV_OTP_BYPASS`, `ALLOW_DEV_ERROR_INJECTION` | **Never set in production.** Local/e2e only. |
    | `PORT` | injected by Railway; the server reads it |
+
+   **The API refuses to boot in production** (`NODE_ENV=production` or
+   `RAILWAY_ENVIRONMENT_NAME=production`) — it logs `[startup] Refusing to start in production …`
+   naming every offending setting and exits 1 before listening, so the deploy fails its health
+   check instead of serving traffic — when any of these hold:
+   - `ALLOW_DEV_OTP_ECHO=true` and `ECHO_ALLOWED_PHONES` has no valid mobile number;
+   - `ALLOW_DEV_OTP_BYPASS=true` (the fixed code `000000` would sign in as any number);
+   - `ALLOW_DEV_ERROR_INJECTION=true` (a sentinel token crashes session auth on demand).
 
 4. Add a **Volume** mounted at `/app/server/uploads` so floor-plan images and policy
    documents survive redeploys. (Without it they are lost on every deploy — acceptable for

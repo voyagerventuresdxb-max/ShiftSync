@@ -8,14 +8,9 @@ import { decideJoinRequest } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { notifyUser } from '../lib/push.js';
 import { getManagerIdsForLocation } from '../lib/managers.js';
+import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const joinRouter = Router();
-
-/**
- * Fail-closed, opt-in dev-OTP echo — see the matching comment in
- * `identity.ts`. Never keyed off `NODE_ENV`, which nothing in this repo sets.
- */
-const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
 joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
@@ -27,13 +22,12 @@ joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'JOIN');
     // No SMS integration exists; this is a stand-in until one is added.
-    if (DEV_OTP_ECHO) {
-      console.log(`[join] OTP for ${phone} (JOIN): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
-    }
+    const echo = devOtpEchoFor(phone);
+    if (echo) logDevOtpEcho('join', phone, 'JOIN', plainCode);
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: DEV_OTP_ECHO ? plainCode : undefined,
+      devCode: echo ? plainCode : undefined,
     });
   } catch (err) {
     if (err instanceof OtpRateLimitError) return sendOtpRateLimited(res, err.scope, err.retryAfterSeconds);
