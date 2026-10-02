@@ -53,7 +53,7 @@ export default defineConfig({
       // (see require-session-error-handling.spec.ts) — same dev-only-flag
       // shape as ALLOW_DEV_OTP_ECHO, inert for any real token.
       // A reused (already running) API won't have this run's ECHO_ALLOWED_PHONES.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones,ALLOW_DEV_ERROR_INJECTION: 'true' },
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true' },
       timeout: 60_000,
     },
     {
