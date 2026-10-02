@@ -466,3 +466,22 @@ Same rules as run 1 (worktree + branch + PR per phase, nothing merged or deploye
   - remaining client items of #20;
   - join form "send a new code";
   - xlsx decision.
+
+---
+
+# Merge + deploy run (2026-10-02 evening / 2026-10-03)
+
+Authorized by the owner: merge commits only, the documented source redeploy, read-only Railway commands, and two named production variables. No values are recorded here.
+
+## Deploy log
+
+| Time (UTC) | What | Deployment id | Code | Health |
+|---|---|---|---|---|
+| before | starting point (ROLLBACK_ID for step 0) | `7aef7d11-85a5-41ab-9ea3-1dd75bbf5cde` | `32edfc5` | `/api/health` 200 `{"ok":true}` on the Railway domain and through Vercel |
+| 2026-10-02 20:04–20:06 | variables `ECHO_ALLOWED_PHONES` (staged with `--skip-deploys`) + `NODE_ENV=production` set; one redeploy of the same code | `031e638f-fa76-4e0b-9692-34103abacf5f` | `32edfc5` | SUCCESS; `/api/health` 200 ×2; becomes ROLLBACK_ID for Stage A |
+
+Pre-checks for `NODE_ENV=production`:
+- Everything the API build/start needs (`prisma`, `@prisma/client`, `tsx`, `dotenv`, `express`, and all runtime imports under `server/src`) is a regular dependency, so omitting devDependencies can't break it.
+- `server/src/lib/prisma.ts` only uses `NODE_ENV` to skip a git-derived dev schema that already falls back to `DATABASE_URL` in production. Same behavior.
+
+Rollback note: CLI 5.63.1 has no "roll back to deployment id". The documented rollback is the dashboard (Deployments → ⋯ → Rollback). Railway's healthcheck gate keeps the serving deployment if a new one fails its healthcheck.
