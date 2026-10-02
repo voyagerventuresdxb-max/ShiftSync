@@ -15,7 +15,7 @@ export const identityRouter = Router();
  *
  * Deliberately GLOBAL, not location-scoped: login doesn't require knowing
  * which venue you belong to before you can request a code. You don't know
- * that up front from a bare `/join?mode=login` redirect (see
+ * that up front from a `/login` redirect (see
  * `RequireSession` in `router.tsx`). Under Decision A1 (one User, one
  * Location) phone is the cross-venue identity key. signup.ts reuses this
  * for its "does this phone already have an account" check.

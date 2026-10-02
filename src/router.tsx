@@ -11,6 +11,7 @@ import FloorPlanContent from './routes/FloorPlanRoute';
 import PeopleContent from './routes/PeopleRoute';
 import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
+import LoginContent from './routes/LoginRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
 import OnboardingContent from './routes/OnboardingRoute';
 
@@ -20,15 +21,12 @@ import OnboardingContent from './routes/OnboardingRoute';
  * a real session instead of letting them render and silently show nothing or
  * dead-end on an unactionable error — those pages' own backend routes have
  * required a session since the actor-identity-enforcement phase, so an
- * unauthenticated visit could previously only ever fail. Sends straight to
- * `/join`'s existing login mode rather than its default join/self-
- * registration mode.
+ * unauthenticated visit could previously only ever fail. Sends to `/login`.
  *
  * When redirecting a signed-out visit, the current path (pathname + search)
- * travels along as a `returnTo` query param so `JoinFlow`'s login success
- * path can send the visitor back to where they were headed instead of
- * always landing on `/my-shifts` (see MEMORY.md's open follow-up, now
- * closed). `managerOnly`'s redirect below is unrelated and deliberately
+ * travels along as a `returnTo` query param so `/login`'s success path can
+ * send the visitor back to where they were headed instead of their role's
+ * default landing (see MEMORY.md's open follow-up, now closed). `managerOnly`'s redirect below is unrelated and deliberately
  * left untouched — it sends a real, valid STAFF session away from a page
  * it never had access to, not an unauthenticated visitor.
  *
@@ -60,8 +58,7 @@ import OnboardingContent from './routes/OnboardingRoute';
  * `/scheduling`/`/floor-plan`, which genuinely do mix staff-readable/
  * staff-usable content with manager-only sub-actions that fail
  * informatively per-action rather than page-wide. Redirects to
- * `/my-shifts`, the same landing spot `JoinFlow`'s login success path
- * already uses for a STAFF session.
+ * `/my-shifts`, the same landing spot `/login` uses for a STAFF session.
  *
  * **`/schedule` moved from the "mixed" group above into the `managerOnly`
  * one on 2026-09-05 — this comment previously claimed the opposite, and
@@ -95,7 +92,7 @@ function RequireSession({ children, managerOnly }: { children: ReactNode; manage
     // `/floor-plan#table-12`) doesn't silently lose its fragment across a
     // sign-in round trip the day one gets added.
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-    return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
+    return <Navigate to={`/login?returnTo=${returnTo}`} replace />;
   }
   // Positive check (redirect unless confirmed MANAGER/OWNER), not a negative
   // one (redirect only if STAFF) — matching `ShiftEditorLink`'s fix below
@@ -154,7 +151,7 @@ function RootRoute() {
  * commit, and `<Navigate>` fires its actual navigation in an effect, one
  * tick after that first render) — so a negative check would have let a
  * signed-out visitor's very first paint include a manager-only link before
- * the redirect to `/join` took over.
+ * the redirect to `/login` took over.
  */
 function ShiftEditorLink() {
   const { session } = useIdentity();
@@ -194,6 +191,7 @@ const handles = {
   profile: { title: 'Profile' },
   scheduleEditor: { title: 'Shift Editor' },
   join: { title: 'Join' },
+  login: { title: 'Log in' },
   signup: { title: 'Sign up' },
   myShifts: { title: 'My Shifts' },
   onboarding: { title: 'Onboarding' },
@@ -264,6 +262,7 @@ export const router = createBrowserRouter([
       },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
+      { path: '/login', element: <LoginContent />, handle: handles.login },
       // Account creation moved INTO the onboarding wizard as its first step
       // (2026-09-16, see OnboardingRoute.tsx/AccountScreen.tsx); kept as a
       // redirect so the "Sign up your restaurant" links and any old bookmark

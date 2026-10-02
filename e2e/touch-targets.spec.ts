@@ -17,7 +17,7 @@ import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.all
  * touch-targets.allowlist.ts with a one-line reason each.
  *
  * Real backend, real DB, real sessions: the manager session comes from the
- * actual onboarding signup; the staff session from the real /join login
+ * actual onboarding signup; the staff session from the real /login
  * (phone + dev OTP echo), the same way a real staff member signs in.
  */
 
@@ -224,7 +224,7 @@ async function seedVenueContent(page: Page): Promise<{ staffPhone: string }> {
     pinX: 0.515,
     pinY: 0.735,
   });
-  // A real staff member (with a phone, so they can log in through /join).
+  // A real staff member (with a phone, so they can log in through /login).
   const staffPhone = nextEchoPhone();
   const role = await prisma.role.findFirst({ where: { locationId } });
   const staff = await prisma.user.create({
@@ -295,7 +295,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await assertTouchTargets(page, 'My Shifts');
   });
 
-  test('staff session — real /join login', async ({ page }) => {
+  test('staff session — real /login', async ({ page }) => {
     test.setTimeout(240_000);
     await signupNewVenue(page, testVenueName('touch-targets-staff'));
     await page.waitForSelector('text=Tell us about the room.');
@@ -303,10 +303,10 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
 
     // Sign out of the manager session and log in as the staff member through the real UI.
     await page.evaluate(() => localStorage.removeItem('shiftsync.session'));
-    await page.goto('/join?mode=login');
+    await page.goto('/login');
     await page.getByPlaceholder('Phone number').fill(staffPhone);
     await page.getByRole('button', { name: 'Send code' }).click();
-    // JoinFlow prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").
+    // /login prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").
     const devCode = (await page.locator('p.hint .font-mono').innerText()).trim();
     await page.getByPlaceholder('6-digit code').fill(devCode);
     await page.getByRole('button', { name: /Verify & log in/ }).click();
