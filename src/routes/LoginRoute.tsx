@@ -149,70 +149,68 @@ export default function LoginContent() {
         </div>
       )}
 
-      {otpEnabled && (
-        <form className="mt-4 space-y-3" onSubmit={onSubmit}>
-          {phase === 'phone' && (
-            <>
-              <input
-                className="staff-directory-input w-full"
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                aria-label="Phone number"
-                placeholder="Phone number"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                disabled={submitting}
-                autoFocus
-              />
-              <button type="submit" className="btn btn-primary w-full" disabled={submitting || !phone.trim()}>
-                {submitting ? 'Sending…' : 'Send code'}
-              </button>
-            </>
-          )}
+      <form className="mt-4 space-y-3" onSubmit={onSubmit}>
+        {otpEnabled && phase === 'phone' && (
+          <>
+            <input
+              className="staff-directory-input w-full"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              aria-label="Phone number"
+              placeholder="Phone number"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              disabled={submitting}
+              autoFocus
+            />
+            <button type="submit" className="btn btn-primary w-full" disabled={submitting || !phone.trim()}>
+              {submitting ? 'Sending…' : 'Send code'}
+            </button>
+          </>
+        )}
 
-          {phase === 'code' && (
-            <>
-              {devCode && (
-                <p className="hint">Dev mode — your code is <span className="font-mono font-semibold">{devCode}</span> (no SMS is sent in this environment).</p>
-              )}
-              <input
-                className="staff-directory-input w-full"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                aria-label="6-digit code"
-                placeholder="6-digit code"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+        {phase === 'code' && (
+          <>
+            {devCode && (
+              <p className="hint">Dev mode — your code is <span className="font-mono font-semibold">{devCode}</span> (no SMS is sent in this environment).</p>
+            )}
+            <input
+              className="staff-directory-input w-full"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              aria-label="6-digit code"
+              placeholder="6-digit code"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              disabled={submitting}
+              autoFocus
+            />
+            <button type="submit" className="btn btn-primary w-full" disabled={submitting || !code.trim()}>
+              {submitting ? 'Verifying…' : 'Verify & log in'}
+            </button>
+            <div className="flex justify-between gap-3">
+              <button
+                type="button"
+                className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                onClick={changeNumber}
                 disabled={submitting}
-                autoFocus
-              />
-              <button type="submit" className="btn btn-primary w-full" disabled={submitting || !code.trim()}>
-                {submitting ? 'Verifying…' : 'Verify & log in'}
+              >
+                Use a different number
               </button>
-              <div className="flex justify-between gap-3">
-                <button
-                  type="button"
-                  className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-                  onClick={changeNumber}
-                  disabled={submitting}
-                >
-                  Use a different number
-                </button>
-                <button
-                  type="button"
-                  className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-                  onClick={() => void requestCode()}
-                  disabled={submitting}
-                >
-                  Send a new code
-                </button>
-              </div>
-            </>
-          )}
-        </form>
-      )}
+              <button
+                type="button"
+                className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                onClick={() => void requestCode()}
+                disabled={submitting}
+              >
+                Send a new code
+              </button>
+            </div>
+          </>
+        )}
+      </form>
 
       {phase === 'phone' && (
         <form
