@@ -2,6 +2,7 @@ import { randomInt, randomBytes, createHash } from 'node:crypto';
 import { prisma } from './prisma.js';
 import type { OtpPurpose, Prisma, User } from '@prisma/client';
 import { toE164 } from './phone.js';
+import { writeAuditLog } from './auditLog.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — long-lived, no refresh flow in this lightweight model
@@ -213,12 +214,43 @@ export async function revokeSession(plainToken: string): Promise<void> {
   await prisma.session.deleteMany({ where: { tokenHash: hashOtp(plainToken) } });
 }
 
-/** Resolves a bearer token to its real User, or null if missing/expired/unknown. */
+/**
+ * Ends every way back in short of a fresh sign-in: deletes all of the user's
+ * sessions and revokes their unspent login links (audited like a reissue's
+ * supersession). Runs inside the transaction that changes their employment
+ * status, so the change and the revocation commit together.
+ */
+export async function revokeUserAccess(
+  tx: Prisma.TransactionClient,
+  user: { id: string; locationId: string },
+  actorId: string | null,
+): Promise<void> {
+  // Links first: this waits out an in-flight redeem holding a link row, so the
+  // delete below (a fresh snapshot) also catches the session it created.
+  const links = await tx.loginLink.updateMany({
+    where: { userId: user.id, consumedAt: null, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  await tx.session.deleteMany({ where: { userId: user.id } });
+  if (links.count > 0) {
+    await writeAuditLog(tx, {
+      locationId: user.locationId,
+      actorId,
+      action: 'LOGIN_LINK_REVOKED',
+      entityType: 'User',
+      entityId: user.id,
+      note: `${links.count} login link(s) revoked: employment status changed.`,
+    });
+  }
+}
+
+/** Resolves a bearer token to its real, active User, or null if missing/expired/unknown/deactivated. */
 export async function resolveSession(plainToken: string): Promise<User | null> {
   const session = await prisma.session.findUnique({
     where: { tokenHash: hashOtp(plainToken) },
     include: { user: true },
   });
-  if (!session || session.expiresAt < new Date()) return null;
+  // isActive too: a login that raced a deactivation can leave a session row behind.
+  if (!session || session.expiresAt < new Date() || !session.user.isActive) return null;
   return session.user;
 }
