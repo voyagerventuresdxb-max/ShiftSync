@@ -1,92 +1,206 @@
 # Autonomous run — 2026-10-02
 
-Orchestrated multi-phase run against `origin/master @ 32edfc5` (= production). Source of truth: gap audit of 2026-10-01. Each phase = own worktree + branch + PR; nothing merged, nothing deployed.
+Multi-phase run against `origin/master @ 32edfc5` (= production), using the gap audit of 2026-10-01 as the source of truth. Each phase got its own worktree, branch and PR. **Nothing was merged or deployed.** No Railway, Vercel, Supabase or production env var was touched. The main checkout (`C:\dev\ShiftSync`) was never edited.
 
-## Run setup (Phase 0)
+## Final report
 
-- Worktrees (siblings of the main checkout, which was never edited): `C:\dev\ShiftSync-auto-{baseline,p1,p2,...,report}`. Each phase branch had its upstream unset so a bare `git push` can never target `master`.
-- DB: local Docker `shiftsync-dev-postgres` (localhost:5432) via `npm run db:setup`; per-branch `dev_<branch>` schemas (AGENTS.md §6). No Supabase/Railway DB touched.
-- e2e serialization: every worktree's Playwright config binds API :4000 and Vite :5173 with `reuseExistingServer`, and `server:dev` runs `kill-port 4000` — parallel e2e runs would kill/reuse each other's servers and test the wrong code. All e2e runs went through a lock wrapper (`e2e-run.mjs`: atomic mkdir lock at `C:\dev\.shiftsync-e2e.lock`, frees the ports, runs with `CI=1` so Playwright refuses to reuse a stray server).
-- Not used: `npm run swarm` / `sparc` / `local` (AGENTS.md §4) — claude-flow MCP failed to connect at session start, and nested swarms are outside this run's scope rules.
-- Stacking plan: P1 (security) is the base of the auth chain because its echo allowlist changes how every e2e spec obtains an OTP. Chain: P1 → P3 → P4 → P5 → P6 → P7. P2 and P8 are independent (base `master`). P9 only if 1–8 finish.
+### 1. Results
 
-## Phase log
+Every phase passed typecheck (client + server), lint (0 errors) and build.
 
-| Phase | Status | Branch | PR | Tests |
-|---|---|---|---|---|
-| 0 Setup | done | `chore/auto-baseline` (local only, removed after) | — | master @ 32edfc5: typecheck ✔, server:typecheck ✔, lint ✔ (0 errors), unit 62/62, server 283 pass / 0 fail / 1 skip (284), build ✔, e2e 20 passed + 1 flaky (policy-documents upload hit ENOSPC, passed on retry) |
-| 1 Security | done | `feat/otp-echo-allowlist` (base master) | [#62](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/62) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 301 pass / 1 skip (302; 18 new incl. a real `index.ts` boot-refusal spawn), build ✔, e2e full 21/21 (0 flaky) |
-| 2 Housekeeping | done | `chore/housekeeping-staff-phone` (base master) | [#61](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/61) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 284 pass / 1 skip (285), build ✔, e2e full 23/23 |
-| 3 /login + role routing | done | `feat/login-route-role-routing` (stacked on #62) | [#64](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/64) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 68/68, server 301 pass / 1 skip, build ✔, e2e `login.spec` 10/10 (`--retries=0`), full 31/31 |
-| 4 Approval → staff in | done | `feat/pending-applicant-status` (stacked on #64) | [#65](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/65) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 68/68, server 309 pass / 1 skip (310), build ✔, e2e `join-approval` 3/3, related 16/16, full 34/34 (`--retries=0`) |
-| 5 Invite tokens | done | `feat/invite-tokens` (stacked on #65) | [#66](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/66) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 70/70, server 320 pass / 1 skip (11 new), build ✔, e2e `invite-links` 5/5, related 16/16, full 39/39 (`--retries=0`); `prisma:check-drift` clean |
-| 6 #44 login links | done | `feat/login-links-on-otp` (stacked on #66) | [#67](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/67) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 70/70, server 345 pass / 1 skip (346; incl. OTP-on-by-default and `LOGIN_METHODS=links` 403 tests), build ✔, e2e `login-links` 2/2, related 19/19, full 41/41 (`--retries=0`); `prisma:check-drift` clean |
-| 7 Golden-path e2e | done | `test/golden-path-e2e` (stacked on #67) | [#68](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/68) | `golden-path.spec` **3/3 consecutive separate runs** `--retries=0` (55s cold, 22s, 23s); full 42/42; typecheck ✔ ×2, lint 0 errors, unit 70/70, server 345 pass / 1 skip, build ✔ |
-| 8 Deploy-safety prep | done | `chore/railway-config-as-code-vapid` (base master) | [#63](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/63) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 66/66, server 287 pass / 1 skip, build ✔, e2e full 21/21 |
+| Phase | Status | PR | Tests (unit · server · e2e) |
+|---|---|---|---|
+| 0 Setup / baseline | done | — | master: 62/62 · 283 pass, 1 skip · 20 passed + 1 flaky (disk-full upload, passed on retry) |
+| 1 Security: echo allowlist + prod boot guards | done | [#62](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/62) | 62/62 · 301 pass, 1 skip · full 21/21 |
+| 2 Housekeeping | done | [#61](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/61) | 62/62 · 284 pass, 1 skip · full 23/23 |
+| 3 `/login` + role routing | done | [#64](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/64) (on #62) | 68/68 · 301 pass, 1 skip · `login` 10/10, full 31/31 |
+| 4 Approval → staff in | done | [#65](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/65) (on #64) | 68/68 · 309 pass, 1 skip · full 34/34 |
+| 5 Invite tokens | done | [#66](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/66) (on #65) | 70/70 · 320 pass, 1 skip · `invite-links` 5/5, full 39/39 |
+| 6 #44 login links (adapted) | done | [#67](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/67) (on #66) | 70/70 · 345 pass, 1 skip · `login-links` 2/2, full 41/41 |
+| 7 Golden-path e2e | done | [#68](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/68) (on #67) | golden path **3/3 consecutive** runs · full 42/42 |
+| 8 Deploy-safety prep (#52, VAPID) | done | [#63](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/63) | 66/66 · 287 pass, 1 skip · full 21/21 |
+| 9 Rebase of #42 (rota v0) | done, **draft** | [#69](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/69) | 72/72 · 308 pass, 1 skip · full 22/22 |
+| Integration: #61–#68 merged together locally | done | — (local only) | 74/74 · 350 pass, 1 skip · 43/44; the one failure was fixed on #61 and re-verified |
 
-### Phase 3 notes
-- New `/login` (phone → code) for every role; `src/lib/postLoginDestination.ts`: safe `returnTo` wins, else OWNER/MANAGER → `/`, anything else → `/my-shifts` (positive check, fails closed). JoinFlow is join-only now; its auto-claim branch also routes by role (a manager claiming via a join link lands on `/`), and still ignores `returnTo`.
-- `/join?mode=login[&returnTo=…]` redirects to `/login`, carrying `returnTo` only if safe. All producers (`RequireSession`, `OnboardingRoute`, `AccountScreen`) now emit `/login?returnTo=…`. `MyShiftsRoute.tsx` deliberately untouched (PR #61 owns it; the redirect covers its link).
-- `isSafeReturnTo` hardened: must start with `/`, same origin after WHATWG resolution, and rejects `/join`/`/login` after decoding + dot-segment resolution (`/%6Cogin`, `/./login`), case-insensitive.
-- Server behavior unchanged (OTP caps + E.164 untouched). Fixed a pre-existing race in `touch-targets.spec.ts` (sheet close does `navigate(-1)` a macrotask later; the spec's `goto` raced it).
-- Known: a token revoked server-side but unexpired in the browser is bounced off `/login` to its destination (way out: Profile → Sign out; part of #20). Login still 404s unknown numbers (existing enumeration surface, IP-limited).
+e2e runs from Phase 3 on used `--retries=0`.
 
-### Phase 4 notes
-- `identity/request-otp` now also mints a code for deactivated users and PENDING/DECLINED applicants; their status is revealed only after the code verifies. `identity/verify-otp`: active → session (unchanged shape); deactivated → 403; newest PENDING → 200 `{ pending, venueName, managerName }` with no token (an open application wins over an older decline elsewhere); DECLINED → 403 with a clear "ask a manager to add you" message.
-- `join/verify-otp`: an existing PENDING request at that venue is returned as-is (no duplicate, no second manager push); a DECLINED one → 403. Responses carry `venueName`/`managerName` (earliest active OWNER, else MANAGER, else "a manager").
-- Approve when the phone already belongs to a user → 409 `phone_taken` (was a 500 on the unique index); race-safe (P2002 caught, status re-read so a double-approve still reads "already reviewed"). Voice approvals handle it too. Approval leaves an in-app "You're in" notification for the new user's first sign-in.
-- Known: duplicate PENDING requests created before this fix remain in queues (approving the 2nd → 409; decline it). No DB constraint prevents two simultaneous first-time verifies both filing (pre-existing race). `/login` 200-vs-404 now also covers pending/declined numbers (IP-limited). Old frontend + new API: a pending answer without a token degrades to today's signed-out state.
+### 2. Merge order
 
-### Phase 5 notes
-- Links are now `/join?invite=<token>` (32 random bytes, base64url). `InviteLink` table: expiry (default 30 days, 1–90), optional max uses, revoke; at most one unrevoked link per venue (per-venue advisory lock). Token stored as-is so the manager UI can re-display it — a broadcast link whose real control is the approval gate; expiry/revoke/max-uses bound exposure.
-- Manager API `/api/invites/:locationId` (GET, `/regenerate`, `/revoke`) — `requireManager` + `assertOwnsLocation`, audit-logged (`INVITE_LINK_CREATED/REVOKED`). Onboarding's invite endpoint returns the active link (creates one only if none). Shared `InviteLinkPanel` on `/people` and in the onboarding Invite step (copy, WhatsApp, QR, expiry, uses, Regenerate with 7/30/90 days + optional max uses, Revoke with confirm).
-- Public peek `GET /api/join/invite/:token` (rate-limited) → venue name or 410 with a human message (expired / no longer active / used up / not valid). Verify-otp checks the link after the code and before anything is filed; a use is consumed only when a new request is filed or an existing user is signed in, by one conditional `UPDATE … WHERE use_count < max_uses` inside the same transaction (mutation-tested). Returning pending applicants don't consume a use.
-- **Migration `20261002112104_invite_links` (additive):** `invite_links` table, nullable `locations.legacy_join_links_until`, two `AuditAction` values, and a backfill setting every existing venue's `legacy_join_links_until = now (UTC) + 7 days`.
-- **Legacy window:** old `/join?location=<id>` links keep working per venue until 7 days after `prisma migrate deploy` applies this migration in that environment (on Railway: the deploy that ships it). After that the form still renders but verifying returns 410 "This invite link has expired — ask your manager for a new one." and files nothing. Venues created after the migration never accept `?location=`. Follow-up: delete the legacy branch once every environment is past its window.
-- Deploy order: API first (old frontend can't open new links during the gap; old `?location=` links keep working throughout).
-- Known: People shows "No active join link" without saying whether the last one expired or was used up; use count doesn't live-refresh; peek reveals whether a token ever existed (256-bit, rate-limited). A teardown race in `review-persistence.spec` can leave an in-flight invite creation hitting a deleted venue (500 caught; test passed).
+**Set these before merging anything:**
+- Railway API service: set **`ECHO_ALLOWED_PHONES`** to your demo numbers, comma-separated, in E.164 (e.g. `+9715xxxxxxxx`). Production runs `ALLOW_DEV_OTP_ECHO=true`. Once #62 deploys, a production API with echo on and an empty list **refuses to boot**; the healthcheck then fails and the previous deploy keeps serving.
+- Railway API service: confirm `NODE_ENV=production` is set. Also confirm `ALLOW_DEV_OTP_BYPASS` and `ALLOW_DEV_ERROR_INJECTION` are **not** set; either one makes production refuse to boot.
+- Vercel needs nothing. In your local `.env`, add `ECHO_ALLOWED_PHONES`, or the dev code stops showing.
 
-### Phase 6 notes
-- PR #44 itself is untouched and still open (no push, comment or close on #44/#43). PR #67 carries its 7 commits, cherry-picked in order on the first attempt (`cherry-pick -n`, each resolution described in its commit), plus 6 follow-ups.
-- **Behavior flip (the human's decision):** `LOGIN_METHODS` unset/empty/anything but `links` = phone codes AND login links. Only an explicit `LOGIN_METHODS=links` closes the six phone-code routes (403 `otp_disabled`). Server tests assert both directions.
-- Conflict rule "master wins on behavior unless #44 adds a capability": base won in identity/join/signup/rateLimit/JoinFlow/playwright config/package.json; #44's `phoneDigits`/`findPhoneMatches` → `toE164` + `findUserByPhone`; #44's #43-era limiters → `otpClientKey`-keyed limiters (issue 10/h per session; peek 60 and redeem 30 per 10 min per client); `getAllowedFrontendOrigins` exported from `lib/inviteLinks.ts` instead of #43's separate file; #44's paste-a-link box moved into `/login`. #44's 2026-09-26 migration dropped in favor of a fresh **`20261002120036_login_links`** (additive: 4 audit values, `users.is_platform_admin` default false, `login_links` table).
-- Kept from #44: sha256-only token storage, fragment-borne tokens scrubbed from history, redeem only on tap, single conditional claim + session + audit in one transaction, issuer scope matrix (cross-venue → 404), uniform 410 for dead links, Staff Directory "Send login link" for active staff, `/login/link`, CLI `admin:grant` / `org:create` (platform-admin flag is CLI-only, no HTTP writer). Added: a deactivated issuer with a surviving session gets 404 on issue/revoke.
-- Known: with `LOGIN_METHODS=links`, `/join` still renders its phone form (then 403s) and no e2e covers links-only UI; cross-location/platform-admin issuing is API-only (Staff Directory lists own location); deactivation still doesn't end existing sessions generally (#20); iPhone Home-Screen-app storage separation unverified.
+**How to merge:** the repo usually squash-merges and does not delete branches after a merge. For #62 and the stack #64–#68, use **"Create a merge commit"**. If you squash a parent, every child PR re-applies the parent's commits and conflicts. After each parent merges, edit the child PR's base to `master` before merging it. Otherwise it merges into the parent's branch and never reaches master.
 
-### Integration check (orchestrator, local only — never pushed)
-- Branch `integration/auto-run-local` = #68's tip (whole chain) + `--no-ff` merges of #61 and #63. Textual merge: clean (also confirmed with `git merge-tree` for every pair). Migrations sort correctly (`…112104_invite_links` → `…120036_login_links`).
-- Gate on the combined build: typecheck ✔ ×2, lint ✔, unit 74/74, server 350 pass / 1 skip (351), build ✔, e2e **43/44** — the one failure was #61's new `my-shifts-signin.spec.ts`, which pinned the intermediate URL `/join?mode=login` that the chain now redirects to `/login`. App behavior was correct.
-- Fixed on #61 (`082db94`): the spec now accepts either URL and asserts the outcome (login screen, `returnTo=/my-shifts`). Verified passing on #61's own base and on the integration build.
+**Order:**
+1. **#62 (security).** Most urgent: today any phone number gets its code echoed in production, so anyone can sign in as anyone. After merging, redeploy the API from source and check `/api/health`. Then confirm an allowlisted number shows a code and any other number doesn't.
+2. **#63 (deploy safety).** Independent of everything else. `railway.json` is unchanged, so today's deploys behave the same. It adds the `start` script and `railpack.json` (protection against the static-site fallback) and makes a bad VAPID key fail soft.
+3. **#61 (housekeeping).** Independent; merges cleanly with everything.
+4. **#64 → #65 → #66 → #67 → #68**, in one sitting, retargeting each to `master`. Then **redeploy the API straight away**: Vercel ships the frontend from master, but the API does not auto-deploy. Until the API is redeployed, the new invite panel and login-link pages error.
+   - #66 runs migration `invite_links`. Its deploy starts the **7-day window** for old `/join?location=` links, so post the new invite link in staff WhatsApp groups that week.
+   - #67 runs migration `login_links`. Leave `LOGIN_METHODS` unset (that means phone codes and links both work). `LOGIN_LINK_TTL_HOURS` is optional (default 24).
+5. **#69 (draft) is not part of this order.** It needs the #42 author's review first. If it lands after the stack:
+   - Rename its `e2e/golden-path.spec.ts` to `golden-path-rota.spec.ts`.
+   - Keep both sides of the `AuditAction` enum.
+   - Switch its staff login to `nextEchoPhone()` + `/login`.
 
-### Phase 7 notes
-- `e2e/golden-path.spec.ts`: one test, five steps, real UI only (prisma for teardown/assertions and the documented OTP resend-window helper). (1) owner signs up through onboarding, sees the invite link on the Invite step, then copies the same token from `/people`; (2) claim path: owner adds a hire + phone in the Staff Directory, the hire opens the link → code → auto-claimed → `/my-shifts`; (3) pending path: second number → "Waiting for <owner> to approve you at <venue>" → owner approves in Pending Approvals → applicant gets a fresh code on `/login` → `/my-shifts`, "You're in" notice visible in the bell; (4) returning staff via `/login` → `/my-shifts`; (5) returning owner via `/login` → `/`.
-- No app bug found. Follow-up recorded: `/people` doesn't live-refresh (new join requests / newly approved staff appear only after reload).
-- Windows note: `npm run build` can fail with EPERM renaming the Prisma engine DLL while an e2e API server still holds it — stop the servers first.
+Once those land, it's your call whether to close #44 (superseded by #67), #43 (overlaps #62 and is on an old base) and #42 (if #69 is accepted).
 
-### Phase 8 notes (deploy-safety prep — nothing deployed, no Railway/Vercel command run against any project)
-- PR #63 "Refs #52" (does not close it). `railway.json` unchanged, so today's GitHub-source deploys behave exactly as before.
-- Added `"start": "npm run server:start"` + `railpack.json` (build `npx prisma generate`, start `npm run server:start`). Reproduced the 2026-09-29 incident locally with Railpack v0.40.1 in Docker: master → "Deploying as vite static site"; this branch → our build/start. High confidence.
-- `.railway/railway.ts`: DRAFT Infrastructure-as-Code for `shiftsync-api` only (named partial so an apply can't delete Postgres). Per Railway docs it is never read at deploy time — only by `railway config plan/apply`, run by a person. Typechecked against `railway@3.12.0` in a scratch dir (not a repo dependency). Medium confidence until tried on a non-prod environment.
-- `docs/railway-deploy-procedure.md`: pre-flight env list, production procedure until #52 closes, non-production proof of #52's "Done when" list, cutover, rollback, and what the docs do/don't say (flags `railway redeploy --from-source` as undocumented — check `--help` before relying on it).
-- VAPID: absent keys were already safe. Fixed real gaps: a malformed key / bad `VAPID_SUBJECT` crashed the API at boot (now push off + log line); one-key-only served an unusable public key (now empty); a DB error inside `notifyUser` could become an unhandled rejection (now caught). `npm run vapid:generate` prints a pair + instructions to stdout only.
-- Discovered: `server/src/lib/prisma.ts` only uses `DATABASE_URL` verbatim when `NODE_ENV=production` (else it may derive a `dev_<branch>` schema), and Railpack's plan sets `NODE_ENV=production` — so production very likely already has `NODE_ENV=production`, i.e. PR #62's boot guard will be active on its first deploy.
-- Risk: `npm start` (new) runs `prisma migrate deploy` + backfill against whatever `.env` points at, without the per-branch wrapper — same as `npm run server:start` already did. Don't run it locally.
+### 3. Check on a real phone (iPhone Safari and Android Chrome)
 
-### Phase 1 notes
-- `server/src/lib/devOtpEcho.ts` (`devOtpEchoFor(e164)`, env read per call, list entries normalized with `toE164`) replaces the three per-route `DEV_OTP_ECHO` constants; unlisted numbers get neither `devCode` nor the plaintext log line.
-- `server/src/lib/productionGuards.ts` `checkProductionEnv()` runs in `index.ts` before the app is built. Production = `NODE_ENV=production` **or** `RAILWAY_ENVIRONMENT_NAME=production`. Fatal: echo on with no valid allowlist entry; `ALLOW_DEV_OTP_BYPASS=true`; `ALLOW_DEV_ERROR_INJECTION=true`. File/export names deliberately match open PR #43's versions so the two converge; behavior is this run's decisions (allowlist, Railway signal, no FRONTEND_ORIGIN rule).
-- e2e: `playwright.config.ts` builds a per-run 300-number `+97156…` pool passed as `ECHO_ALLOWED_PHONES`; `nextEchoPhone()` hands them out via a tmpdir counter so retried workers never reuse a number (OTP resend caps, unique `User.phone`).
-- Known gaps: `.env.example` not updated (permission-denied to agents) — local devs must add `ECHO_ALLOWED_PHONES` or echo silently stops (startup warns). A refused boot happens after `prisma migrate deploy` has already run (migrations are additive, so harmless). Allowlisted numbers remain password-less in prod by design — keep the list to demo accounts.
-- Observed once in e2e API log: `Inconsistent query result: Field user is required` in `resolveSession` during teardown (`cleanupTestOrgs` deleting users while a request is in flight). No test failed; pre-existing race, not chased.
+1. On `/login`, an allowlisted number shows the dev code. Any other number gets no code and can't sign in; that's expected until SMS (#51).
+2. Role landing: owner/manager goes to Home (`/`), staff goes to My Shifts. The phone and code fields bring up the numeric keyboard.
+3. Paste the invite link into a WhatsApp group and check the preview. Tap it: "Join <venue>" → join → "Waiting for <manager>". Approve on the manager's phone. The applicant signs in again, lands on My Shifts, and sees "You're in" in the bell.
+4. Scan the QR from the onboarding Invite step with the phone camera.
+5. On the manager's phone, Regenerate and then Revoke the invite link. The old link must then say "no longer active".
+6. Staff Directory → **Send login link** → share sheet → WhatsApp. Tap it on the staff phone and sign in once; a second tap must be refused. On iPhone, check the installed Home Screen app: a link tapped in WhatsApp may sign in Safari only. If so, "Paste your login link" inside the app is the way in.
+7. At phone width, check layout and tap targets on `/login`, `/login/link`, the invite panel on People, and Pending Approvals.
+8. An old `/join?location=…` link still works during the week after #66 deploys.
 
-### Phase 2 notes
-- Closed #12, #13, #14, #15 with a comment citing #16 (each verified fixed on master first).
-- `docs/Deferred.md`, `docs/Home.md`, `docs/CLAUDE_HANDOFF.md` copied verbatim from the main checkout (read-only); secret scan clean (agent + orchestrator regex pass).
-- Add-staff phone: server already validated with `toE164` + P2002→409; the form just never sent it. Added the input and an up-front `findUserByPhone` 409 (covers deactivated / other-venue holders). Known: a mistyped phone on an active record lets that number's owner claim the account after OTP — inherent to phone-match claim.
-- My Shifts signed-out button → `/join?mode=login&returnTo=%2Fmy-shifts` (Phase 3 redirects this to `/login`). AccountScreen's bare `/join` "Join instead" left as is (intentional "ask your manager for an invite" page).
-- **Gap:** the repo `MEMORY.md` entry (AGENTS.md §3) was refused by the permission classifier; not retried. Human to add, or accept the PR body as the record.
+### 4. Blocked, skipped, risky; open questions
 
-### Phase 0 notes
-- **Disk:** C: had ~7 GB free; the baseline e2e hit `ENOSPC` writing an upload. Each worktree's own `node_modules` (AGENTS.md §6 forbids symlinking) costs ~1 GB+. Mitigation: baseline worktree removed once green; npm cache (11.6 GB, regenerable) cleared once no install was running; each finished phase's worktree is removed after its PR exists (the branch stays on GitHub). Note for the human: 15+ older `C:\dev\ShiftSync-*` worktrees from earlier sessions each hold a `node_modules` — not touched, but they are where the disk went.
-- **PR #43 / #44 base:** #44 (login links) is stacked on #43 (iOS hardening), and #43 branches from 7bad1f9 — before master's E.164 phone model (#59) and OTP caps (#56/#58). Literal rebase is not viable; Phase 6 ports #44's feature onto the auth chain with master's behavior winning, on a new branch (no force-push allowed, so #44's own branch is left untouched).
-- **NODE_ENV:** comments in `identity.ts`/`join.ts`/`signup.ts` state nothing in this repo or its start command sets `NODE_ENV=production`. Phase 1 therefore also treats `RAILWAY_ENVIRONMENT_NAME=production` (injected by Railway) as production, so the boot guard can't be silently inert.
+**Nothing blocked.** All nine phases delivered. #44, #43 and #42 were not pushed to, commented on or closed.
+
+**Risks:**
+- **After #62, non-allowlisted users can't get a code in production.** Until SMS (#51), staff need login links from #67.
+- **Merge mechanics** for the stack (see §2). Squash-merging, or not retargeting each PR to master, is the main way to get this wrong.
+- **#52 is still open.** `.railway/railway.ts` in #63 is a draft that hasn't been tried on Railway. `railway.json` stops working on 2026-12-01. Run the non-production proof in `docs/railway-deploy-procedure.md` in early November.
+- **NODE_ENV:** production very likely already has `NODE_ENV=production` (`server/src/lib/prisma.ts` depends on it), so #62's boot guard will be live on its first deploy.
+
+**Gaps:**
+- `.env.example` was not updated; agents aren't allowed to read it. Add `ECHO_ALLOWED_PHONES` by hand.
+- #61 has no `MEMORY.md` entry; the permission classifier refused that edit.
+- `/people` doesn't live-refresh.
+- Deactivating a user doesn't end their sessions (#20).
+- PENDING duplicates filed before #65 stay in the queue; decline them.
+- e2e logs show benign teardown races (caught 500s).
+
+**Housekeeping:**
+- C: was full at start, and an install hit "no space left on device". I cleared the npm cache (11.6 GB; it rebuilds itself).
+- The 15+ older `C:\dev\ShiftSync-*` worktrees from earlier sessions each hold a `node_modules`. That's where the space went.
+- The main checkout still has uncommitted edits on `fix/onboarding-followups-12-15`, plus dozens of junk untracked files named like `$resp`, `({`, `200`. They look like shell-redirect accidents. I didn't touch them.
+- Local Docker now has a `dev_<branch>` schema for each run branch. They're safe to drop.
+
+**Open questions:**
+- Which numbers go in `ECHO_ALLOWED_PHONES`?
+- Close #43/#44 once #62/#67 land?
+- Are the defaults right: 30-day invite links and 24-hour login links?
+- Should a declined applicant be able to re-apply through the link? Today a manager has to add them.
+
+### 5. Remaining roadmap (not started)
+
+- Rota builder: split shifts.
+- Voice v2 + its e2e. #69's `@live` voice spec was not run, to avoid spending the shared Gemini quota.
+- Capacitor Android.
+- Real SMS OTP (#51), the launch blocker. Afterwards, empty `ECHO_ALLOWED_PHONES` and turn the echo off.
+- VAPID go-live: run `npm run vapid:generate` and set the 3 variables on Railway.
+- xlsx CVE: #23 / PR #30 (exceljs).
+- Follow-ups from this run:
+  - live refresh on `/people`;
+  - end sessions on deactivation (#20);
+  - delete the legacy `?location=` code once every environment is past its window;
+  - #52's non-production proof.
+
+---
+
+## Appendix — how the run worked and per-phase notes
+
+### Setup (Phase 0)
+- Worktrees `C:\dev\ShiftSync-auto-*` sat next to the main checkout. Each phase branch had its upstream unset, so a bare `git push` could never target `master`. Each worktree was removed once its PR existed.
+- DB: the local Docker `shiftsync-dev-postgres` via `npm run db:setup`, with a per-branch `dev_<branch>` schema (AGENTS.md §6).
+- **Serialized e2e:** every worktree's Playwright config binds :4000 and :5173 with `reuseExistingServer`, and `server:dev` runs `kill-port 4000`. Parallel runs would have killed or reused each other's servers. All e2e runs went through a lock wrapper: an atomic mkdir lock that frees the ports and runs with `CI=1`.
+- Not used: `npm run swarm`, `sparc` and `local` (AGENTS.md §4). The claude-flow MCP failed to connect, and these are outside this run's scope.
+- **Stacking:** #62 is the base of the auth chain because its echo allowlist changes how every e2e spec gets a code. #61 and #63 are independent.
+- #44 sits on #43, which branches from 7bad1f9, before master's E.164 phones (#59) and OTP caps (#56/#58). So Phase 6 ported #44 onto the chain on a new branch, rather than rebasing #44 itself. No force-push was allowed.
+
+### Phase 1 — #62
+- `server/src/lib/devOtpEcho.ts` replaces the three per-route echo constants. `devOtpEchoFor(e164)` reads the env on every call and normalizes each list entry with `toE164`. Unlisted numbers get neither `devCode` nor the plaintext log line.
+- `server/src/lib/productionGuards.ts` `checkProductionEnv()` runs in `index.ts` before the app is built.
+  - Production means `NODE_ENV=production` **or** `RAILWAY_ENVIRONMENT_NAME=production`.
+  - Fatal: echo on with no valid allowlist entry; `ALLOW_DEV_OTP_BYPASS=true`; `ALLOW_DEV_ERROR_INJECTION=true`.
+  - File and export names match #43's, so the two converge.
+- e2e: a per-run pool of 300 `+97156…` numbers is passed as `ECHO_ALLOWED_PHONES`. `nextEchoPhone()` hands them out through a tmpdir counter, so a retried worker never reuses a number.
+- Known: a refused boot happens after `prisma migrate deploy` has already run (harmless, the migrations are additive). Allowlisted numbers are password-less in production by design, so keep the list to demo accounts.
+
+### Phase 2 — #61
+- Closed #12–#15, citing #16 (each verified fixed on master first).
+- Imported `docs/Deferred.md`, `Home.md` and `CLAUDE_HANDOFF.md` verbatim. The secret scan was clean.
+- Phone on Add staff: the server already validated it; the form never sent it. Added an up-front 409 that also covers deactivated and other-venue holders.
+- My Shifts' signed-out button now points to login instead of bare `/join`.
+- Later fix `082db94`: the new spec accepts either login URL. The integration run found it pinned `/join?mode=login`, which the chain redirects.
+
+### Phase 3 — #64
+- `/login` (phone → code) for every role.
+- `postLoginDestination`: a safe `returnTo` wins. Otherwise OWNER/MANAGER go to `/` and anything else to `/my-shifts`; it fails closed.
+- `/join?mode=login` redirects to `/login`, keeping `returnTo` only if it's safe. Every link that pointed at `/join?mode=login` now points at `/login`.
+- `isSafeReturnTo` is hardened: same origin after URL resolution, and `/join` and `/login` are rejected after decoding and dot-segment resolution, case-insensitive.
+- Server unchanged. Also fixed a pre-existing race in `touch-targets.spec`.
+
+### Phase 4 — #65
+- Login codes now also go to deactivated users and pending/declined applicants. Their status is revealed only after the code verifies:
+  - pending → "Waiting for <manager> to approve you at <venue>", with no token;
+  - declined or deactivated → 403 with a clear message.
+- A join re-verify with a PENDING request already filed doesn't create a duplicate or ping managers again.
+- Approving a phone that already belongs to a user now returns 409 instead of a 500. It's race-safe, and voice approvals handle it too.
+- Approval leaves a "You're in" in-app notice.
+
+### Phase 5 — #66
+- Join links are now `/join?invite=<token>` (32 random bytes). They have an expiry (default 30 days, range 1–90), optional max uses, revoke and regenerate. Each venue has at most one unrevoked link (per-venue advisory lock).
+- The token is stored as-is so the panel can show it again. It's a broadcast link; the approval gate is the real control.
+- Manager API: `/api/invites/:locationId` (requireManager + assertOwnsLocation, audit-logged). `InviteLinkPanel` appears on `/people` and on the onboarding Invite step.
+- Public peek returns 410 with a human message.
+- A use is consumed only when a request is filed or a user is signed in. It's one conditional UPDATE inside the same transaction, and mutation-tested.
+- Migration `20261002112104_invite_links` (additive): the `invite_links` table, nullable `locations.legacy_join_links_until`, 2 audit values, and a backfill of `now() + 7 days`.
+  - **Legacy window:** for each venue, it closes 7 days after that environment applies the migration. After that, old links return 410 and file nothing. Venues created later never accept `?location=`.
+
+### Phase 6 — #67
+- #44's 7 commits were cherry-picked in order on the first attempt, plus 6 follow-ups.
+- **`LOGIN_METHODS` unset means phone codes and links both work.** Only an explicit `links` turns phone codes off (403). Tests cover both.
+- Master won on behavior:
+  - E.164 `findUserByPhone`;
+  - `otpClientKey` limiters (issue 10/h per session; peek 60 and redeem 30 per 10 min);
+  - the paste box moved to `/login`;
+  - #44's old migration replaced by a fresh `20261002120036_login_links` (additive: `login_links` table, `users.is_platform_admin`, 4 audit values).
+- Kept from #44:
+  - only the sha256 of each token is stored;
+  - the token travels in the URL fragment, which is scrubbed;
+  - a link is redeemed only when tapped;
+  - claim, session and audit happen in one atomic transaction;
+  - the issuer scope matrix;
+  - "Send login link" in the Staff Directory;
+  - the CLI `admin:grant` and `org:create` (the platform-admin flag is CLI-only).
+- Added: a deactivated issuer gets 404.
+
+### Phase 7 — #68
+- `e2e/golden-path.spec.ts` drives the real UI with three browser contexts:
+  1. owner onboarding gets the invite link;
+  2. claim by phone match → My Shifts;
+  3. pending → "Waiting for <owner>" → approve in Pending Approvals → fresh code on `/login` → My Shifts, with "You're in" in the bell;
+  4. returning staff signs in via `/login`;
+  5. returning owner signs in via `/login` and lands on `/`.
+- It passed 3 consecutive separate runs with retries off (55s cold, then 22s and 23s). No app bug was found.
+
+### Phase 8 — #63 (refs #52, does not close it)
+- Added a `start` script and `railpack.json`. The 2026-09-29 incident was reproduced locally with Railpack v0.40.1: master gave "vite static site"; this branch gave our build and start.
+- `.railway/railway.ts` is a draft, scoped to `shiftsync-api` only. Railway reads it only through `railway config plan` / `apply`, never at deploy time.
+- `docs/railway-deploy-procedure.md` covers pre-flight, the production procedure, a non-production proof of #52's "Done when" list, cutover and rollback, with cited Railway docs.
+- VAPID: absent keys were already safe. Fixed:
+  - a malformed key crashed the API at boot;
+  - with only one key set, the server handed out an unusable public key;
+  - an unhandled rejection in `notifyUser`.
+- `npm run vapid:generate` prints a key pair to stdout only.
+
+### Phase 9 — #69 (draft, base master)
+- 13 of #42's 14 commits were cherry-picked with `-x`. One came out empty because master already has it.
+- Conflicts:
+  - `RotaBuilder.tsx`: kept the leave chip and master's `hit-44` overlap rule;
+  - `NotificationBell.tsx` imports: kept both;
+  - `MEMORY.md`: kept both;
+  - touch-target gate: "Copy last week" now gets `hit-44`, and the department toggles get an allowlist entry.
+- Both 2026-09-25 migrations are additive and keep their names. They apply cleanly out of order, and the drift check is clean.
+- Against the auth chain, 3 files conflict: `e2e/golden-path.spec.ts` (same filename, different specs), the `AuditAction` enum tail, and `MEMORY.md`. Semantic overlap: #42's spec needs `nextEchoPhone()` and `/login` once the chain lands.
+- Risks:
+  - the leave-vs-shift rule is enforced only in app code (concurrent writes can both pass);
+  - leave UI isn't covered by the touch-target spec;
+  - the `@live` voice spec was not run.
