@@ -485,3 +485,16 @@ Pre-checks for `NODE_ENV=production`:
 - `server/src/lib/prisma.ts` only uses `NODE_ENV` to skip a git-derived dev schema that already falls back to `DATABASE_URL` in production. Same behavior.
 
 Rollback note: CLI 5.63.1 has no "roll back to deployment id". The documented rollback is the dashboard (Deployments → ⋯ → Rollback). Railway's healthcheck gate keeps the serving deployment if a new one fails its healthcheck.
+
+## Stage A
+| Step | Result |
+|---|---|
+| merge #62 → `ad47aa2` | typecheck ×2 ✔, lint ✔, unit 62/62, server 301 pass / 1 skip, e2e (onboarding, staff-directory, touch-targets, error-handling) 5/5, build ✔ |
+| merge #63 → `adff799` | typecheck ×2 ✔, lint ✔, unit 66/66, server 305 pass / 1 skip, e2e 2/2, build ✔ |
+| merge #61 → `5f19081` | typecheck ×2 ✔, lint ✔, unit 66/66, server 306 pass / 1 skip, build ✔, **full e2e 22 passed / 1 failed** |
+
+**STOPPED before the Stage A API deploy** (stop rule: any red test after a merge).
+- The failure is the known flaky `touch-targets.spec.ts` race: closing a sheet pops history a macrotask later and races `page.goto('/people')`, giving `net::ERR_ABORTED`.
+- It isn't caused by the merges: the spec passed 2/2 twice when re-run alone on the same master.
+- Fix PR [#79](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/79) cherry-picks the existing fix `ed7f386` from #64 (verified 2/2). Not merged.
+- The API was **not** deployed. It still serves `031e638f-fa76-4e0b-9692-34103abacf5f` (code `32edfc5`). The frontend auto-deployed from master via Vercel.
