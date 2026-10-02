@@ -55,8 +55,9 @@ export default function MyShiftsContent() {
     return (
       <div className="status-block space-y-3">
         <p>You're not signed in. Sign in with your phone number to see your shifts.</p>
-        <Link to="/join" className="btn btn-primary inline-flex">
-          Join or log in
+        {/* Bare /join (no ?location=) is the missing-venue dead end; login needs no venue. */}
+        <Link to="/join?mode=login&returnTo=%2Fmy-shifts" className="btn btn-primary inline-flex">
+          Log in
         </Link>
         <p className="text-xs text-muted-foreground">
           Setting up a brand-new venue?{' '}

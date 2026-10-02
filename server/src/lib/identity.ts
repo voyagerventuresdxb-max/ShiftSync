@@ -14,7 +14,7 @@ const MAX_OTP_ATTEMPTS = 5;
  * provider) just to click through login/join/signup locally.
  *
  * Fail-closed and explicitly opt-in, same rationale as `ALLOW_DEV_OTP_ECHO`
- * (see routes/identity.ts): deliberately NOT keyed off `NODE_ENV`, because
+ * (see lib/devOtpEcho.ts): deliberately NOT keyed off `NODE_ENV`, because
  * nothing in this repo's scripts, Dockerfile or start command ever sets
  * `NODE_ENV=production` — that check would silently accept the fixed code in
  * every real deployment. Kept as its OWN flag rather than folded into
@@ -41,7 +41,7 @@ function otpPhone(phone: string): string {
   return e164;
 }
 
-/** Real 6-digit numeric code. Never logged/returned in production (see the request-otp routes). */
+/** Real 6-digit numeric code. Only ever logged/returned for allowlisted numbers (lib/devOtpEcho.ts). */
 export function generateOtp(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
@@ -191,10 +191,13 @@ export async function verifyOtpCode(
 }
 
 /** Issues a new bearer session token for a real, already-verified User. */
-export async function issueSession(userId: string): Promise<{ plainToken: string; expiresAt: Date }> {
+export async function issueSession(
+  userId: string,
+  client: Pick<typeof prisma, 'session'> = prisma,
+): Promise<{ plainToken: string; expiresAt: Date }> {
   const plainToken = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await prisma.session.create({
+  await client.session.create({
     data: { userId, tokenHash: hashOtp(plainToken), expiresAt },
   });
   return { plainToken, expiresAt };

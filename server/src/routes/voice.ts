@@ -8,7 +8,7 @@ import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
-import { decideJoinRequest } from '../lib/actions/joinActions.js';
+import { decideJoinRequest, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { createShift, updateShift } from '../lib/actions/shiftActions.js';
@@ -435,6 +435,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         if (result.result === 'already_reviewed') {
           const msg = 'That join request was already reviewed.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        if (result.result === 'phone_taken') {
+          return respond(409, { error: JOIN_PHONE_TAKEN_ERROR }, 'REJECTED_VALIDATION', JOIN_PHONE_TAKEN_ERROR);
         }
         await writeAuditLog(prisma, {
           locationId: jr.locationId,

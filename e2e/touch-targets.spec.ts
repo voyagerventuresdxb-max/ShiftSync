@@ -1,7 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
-import { cleanupTestOrgs, prisma, signupNewVenue, testVenueName } from './helpers';
+import { createHash, randomBytes } from 'node:crypto';
+import { cleanupTestOrgs, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
 import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.allowlist';
 
 /**
@@ -17,7 +18,7 @@ import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.all
  * touch-targets.allowlist.ts with a one-line reason each.
  *
  * Real backend, real DB, real sessions: the manager session comes from the
- * actual onboarding signup; the staff session from the real /join login
+ * actual onboarding signup; the staff session from the real /login
  * (phone + dev OTP echo), the same way a real staff member signs in.
  */
 
@@ -181,6 +182,11 @@ async function assertTouchTargets(page: Page, screen: string): Promise<void> {
   expect(failures, `${failures.length} touch-target failure(s):\n${failures.join('\n')}`).toEqual([]);
 }
 
+/** A sheet closed by button pops its history sentinel a macrotask later (src/lib/backNavigation.ts); a page.goto racing that pop gets ERR_ABORTED. */
+async function settleOverlayHistory(page: Page): Promise<void> {
+  await page.waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 }).catch(() => {});
+}
+
 /** Reads the real session the UI stored after signup, for seeding via the API. */
 async function sessionToken(page: Page): Promise<{ token: string; locationId: string; userId: string }> {
   const raw = await page.evaluate(() => localStorage.getItem('shiftsync.session'));
@@ -224,8 +230,8 @@ async function seedVenueContent(page: Page): Promise<{ staffPhone: string }> {
     pinX: 0.515,
     pinY: 0.735,
   });
-  // A real staff member (with a phone, so they can log in through /join).
-  const staffPhone = `+97155${Date.now().toString().slice(-7)}`;
+  // A real staff member (with a phone, so they can log in through /login).
+  const staffPhone = nextEchoPhone();
   const role = await prisma.role.findFirst({ where: { locationId } });
   const staff = await prisma.user.create({
     data: { locationId, systemRole: 'STAFF', fullName: 'E2E Staff Member', jobTitle: 'Waiter', phone: staffPhone, roleId: role?.id ?? null },
@@ -270,6 +276,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Save week as template');
     await assertTouchTargets(page, 'Scheduling › RotaBuilder sheet');
     await page.getByRole('button', { name: 'Close' }).first().click();
+    await settleOverlayHistory(page);
 
     await page.goto('/floor-plan');
     await page.waitForSelector('.fp-canvas-wrap img');
@@ -281,10 +288,23 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Assign to Area 1');
     await assertTouchTargets(page, 'Floor plan › SectionPicker');
     await page.getByRole('button', { name: 'Close' }).first().click();
+    await settleOverlayHistory(page);
 
     await page.goto('/people');
     await page.waitForSelector('text=Staff Directory');
     await assertTouchTargets(page, 'People');
+    await page.getByRole('button', { name: 'Generate link' }).click();
+    await page.waitForSelector('text=Copy link');
+    await assertTouchTargets(page, 'People › Join link');
+    await page.getByRole('button', { name: 'Revoke', exact: true }).click();
+    await page.waitForSelector('text=Yes, revoke');
+    await assertTouchTargets(page, 'People › Join link revoke confirm');
+
+    await page.getByRole('button', { name: /Staff Directory/ }).click();
+    const staffRow = page.getByRole('row').filter({ hasText: 'E2E Staff Member' });
+    await staffRow.getByRole('button', { name: 'Send login link' }).click();
+    await staffRow.getByTestId('login-link-url').waitFor();
+    await assertTouchTargets(page, 'People › Staff Directory › login link');
 
     await page.goto('/profile');
     await page.waitForSelector('text=Sign out');
@@ -293,9 +313,20 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.goto('/my-shifts');
     await page.waitForSelector('text=Tap to change', { timeout: 15000 }).catch(() => {});
     await assertTouchTargets(page, 'My Shifts');
+
+    // /login/link before the tap (minted like the CLI does; the page never spends it on load).
+    const { locationId } = await sessionToken(page);
+    const linkStaff = await prisma.user.findFirstOrThrow({ where: { locationId, fullName: 'E2E Staff Member' } });
+    const linkToken = randomBytes(32).toString('base64url');
+    await prisma.loginLink.create({
+      data: { tokenHash: createHash('sha256').update(linkToken).digest('hex'), userId: linkStaff.id, locationId, expiresAt: new Date(Date.now() + 3_600_000) },
+    });
+    await page.goto(`/login/link#${linkToken}`);
+    await page.waitForSelector('text=Sign in as E2E Staff Member');
+    await assertTouchTargets(page, 'Login link');
   });
 
-  test('staff session — real /join login', async ({ page }) => {
+  test('staff session — real /login', async ({ page }) => {
     test.setTimeout(240_000);
     await signupNewVenue(page, testVenueName('touch-targets-staff'));
     await page.waitForSelector('text=Tell us about the room.');
@@ -303,10 +334,12 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
 
     // Sign out of the manager session and log in as the staff member through the real UI.
     await page.evaluate(() => localStorage.removeItem('shiftsync.session'));
-    await page.goto('/join?mode=login');
+    await page.goto('/login');
+    await page.waitForSelector('text=Have a login link? Paste it here');
+    await assertTouchTargets(page, 'Login');
     await page.getByPlaceholder('Phone number').fill(staffPhone);
     await page.getByRole('button', { name: 'Send code' }).click();
-    // JoinFlow prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").
+    // /login prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").
     const devCode = (await page.locator('p.hint .font-mono').innerText()).trim();
     await page.getByPlaceholder('6-digit code').fill(devCode);
     await page.getByRole('button', { name: /Verify & log in/ }).click();

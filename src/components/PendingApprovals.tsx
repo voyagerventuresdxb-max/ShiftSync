@@ -5,6 +5,7 @@ import { fetchPendingJoinRequests, decideJoinRequest, ApiError, type JoinRequest
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice, OfflineEmptyState, OfflineActionNotice } from './shiftsync/OfflineNotice';
+import { useSingleFlight } from '../hooks/useLiveRefresh';
 
 function PendingApprovalRowSkeleton() {
   return (
@@ -21,6 +22,8 @@ function PendingApprovalRowSkeleton() {
   );
 }
 
+const formatDeclinedOn = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
 /**
  * Pending Approvals — the review queue for JoinRequest rows raised by the
  * phone/OTP join flow (src/api/join.ts) when no existing User auto-matches.
@@ -28,8 +31,12 @@ function PendingApprovalRowSkeleton() {
  * but simpler: a JoinRequestDto has no decided state of its own — once
  * approved/declined it disappears from the pending list entirely, so
  * there's nothing to render in a "decided" section.
+ *
+ * Reloads whenever `refreshKey` changes (People bumps it on window focus);
+ * a decision calls `onDecided` so People refreshes this list and the Staff
+ * Directory together.
  */
-export default function PendingApprovals({ locationId }: { locationId: string }) {
+export default function PendingApprovals({ locationId, refreshKey, onDecided }: { locationId: string; refreshKey: number; onDecided: () => void }) {
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [requests, setRequests] = useState<JoinRequestDto[]>([]);
@@ -42,11 +49,11 @@ export default function PendingApprovals({ locationId }: { locationId: string })
   const [decidingId, setDecidingId] = useState<string | null>(null);
   // True until the first load (success or failure) settles, then false
   // forever after — `load()` is also called to silently refresh the list
-  // after a decide succeeds, and that in-flight refresh must not re-trigger
-  // the skeleton (setLoading(false) when already false is a no-op).
+  // (focus, or after a decide), and that in-flight refresh must not
+  // re-trigger the skeleton (setLoading(false) when already false is a no-op).
   const [loading, setLoading] = useState(true);
 
-  const load = () => {
+  const load = useSingleFlight(async () => {
     // No session (or a staff session) means this can only ever 401/403 — the
     // route is manager-only now. Skip the request rather than firing one that
     // can't succeed; the list simply stays empty, same as the "nothing
@@ -55,25 +62,24 @@ export default function PendingApprovals({ locationId }: { locationId: string })
       setLoading(false);
       return;
     }
-    fetchPendingJoinRequests(session.token, locationId)
-      .then((list) => {
-        setRequests(list);
-        setError(null);
-        setLoadFailed(false);
-      })
-      .catch((err) => {
-        // The list itself is left untouched (Phase 2 of the offline-support
-        // pass: a failed refresh must not blank out data already on screen).
-        setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.');
-        setLoadFailed(true);
-      })
-      .finally(() => setLoading(false));
-  };
+    try {
+      const list = await fetchPendingJoinRequests(session.token, locationId);
+      setRequests(list);
+      setError(null);
+      setLoadFailed(false);
+    } catch (err) {
+      // The list itself is left untouched (Phase 2 of the offline-support
+      // pass: a failed refresh must not blank out data already on screen).
+      setError(err instanceof ApiError ? err.message : 'Could not load pending approvals.');
+      setLoadFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  });
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationId, session]);
+  }, [load, locationId, session, refreshKey]);
 
   const handleDecide = async (id: string, decision: 'approve' | 'decline') => {
     if (!session) return;
@@ -83,7 +89,7 @@ export default function PendingApprovals({ locationId }: { locationId: string })
     setDecidingId(id);
     try {
       await decideJoinRequest(session.token, id, decision);
-      load();
+      onDecided();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not process that request.');
     } finally {
@@ -138,6 +144,11 @@ export default function PendingApprovals({ locationId }: { locationId: string })
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{r.fullName}</p>
                       <p className="text-xs text-muted-foreground">{r.phone}</p>
+                      {r.previousDeclines > 0 && (
+                        <p className="mt-0.5 text-xs text-warning">
+                          Previously declined {r.previousDeclines}×{r.lastDeclinedAt && ` (last on ${formatDeclinedOn(r.lastDeclinedAt)})`}
+                        </p>
+                      )}
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button

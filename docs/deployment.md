@@ -58,14 +58,29 @@ history from scratch, which is exactly what `server:start` does on every boot.
    variables (Railway can reference it as `${{Postgres.DATABASE_URL}}`).
 3. Variables on the API service (names only — never paste values into chat or docs):
 
+   Every variable the app reads, with defaults and a production checklist: [`ENV_VARS.md`](ENV_VARS.md).
+
    | Variable | Value / note |
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL |
    | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice). To switch push on, follow [`push-go-live.md`](push-go-live.md). |
-   | `ALLOW_DEV_OTP_ECHO` | **`true` for the MBRIF demo only** — there is no SMS integration, so this is the only way a code can be entered on the live site. It shows the real one-time code on screen to whoever requested it. Remove it right after the demo. |
+   | `NODE_ENV` | `production`. Turns on the boot-time safety checks below. (Railway's own `RAILWAY_ENVIRONMENT_NAME=production` turns them on too, but don't rely on that alone.) It also makes the build's `npm install` skip devDependencies, which is fine: everything the server runs is in `dependencies`. |
+   | `ALLOW_DEV_OTP_ECHO` | `true` only while there is no SMS integration (#51) — it is the only way a code can be entered on the live site. It shows the real one-time code on screen (and in the server log), **but only for the numbers in `ECHO_ALLOWED_PHONES`**; every other number gets a code it can never see. |
+   | `ECHO_ALLOWED_PHONES` | **Required when `ALLOW_DEV_OTP_ECHO=true` in production.** Comma-separated mobile numbers whose code may be echoed, e.g. `+971501234567,050 765 4321` (any format the app accepts; each is normalized to E.164). Invalid entries are ignored with a `[startup]` warning. Anyone who knows a listed number can sign in as it — list only demo/test numbers you control. |
+   | `ALLOW_DEV_OTP_BYPASS`, `ALLOW_DEV_ERROR_INJECTION` | **Never set in production.** Local/e2e only. |
+   | `LOGIN_METHODS` | optional. Unset (the default, and any value other than `links`) = phone codes **and** one-time login links. `links` = login links only: the six phone-code routes (join/login/signup `request-otp` and `verify-otp`) answer `403 otp_disabled` and the app hides the phone forms. |
+   | `LOGIN_LINK_TTL_HOURS` | optional, default `24` — how long an issued login link stays redeemable. Also quoted in the share text. Links are minted for the first `FRONTEND_ORIGIN`. |
    | `PORT` | injected by Railway; the server reads it |
+
+   **The API refuses to boot in production** (`NODE_ENV=production` or
+   `RAILWAY_ENVIRONMENT_NAME=production`) — it logs `[startup] Refusing to start in production …`
+   naming every offending setting and exits 1 before listening, so the deploy fails its health
+   check instead of serving traffic — when any of these hold:
+   - `ALLOW_DEV_OTP_ECHO=true` and `ECHO_ALLOWED_PHONES` has no valid mobile number;
+   - `ALLOW_DEV_OTP_BYPASS=true` (the fixed code `000000` would sign in as any number);
+   - `ALLOW_DEV_ERROR_INJECTION=true` (a sentinel token crashes session auth on demand).
 
 4. Add a **Volume** mounted at `/app/server/uploads` so floor-plan images and policy
    documents survive redeploys. (Without it they are lost on every deploy — acceptable for
@@ -112,6 +127,22 @@ open  https://shift-sync-shift-sync1.vercel.app/onboarding       → Welcome int
 sign up a throwaway venue end to end (Account → Venue → Roster upload → Review → Invite)
 open  https://shift-sync-shift-sync1.vercel.app/onboarding/venue → reload survives (SPA fallback)
 ```
+
+## Login links (operator scripts)
+
+Managers and owners send one-time login links from People → Staff Directory → "Send login
+link" (share sheet, or copy). Two operator-only scripts cover what no route does, by design.
+Run them on the API host (`tsx` is installed there); phones in any format the app accepts:
+
+```
+tsx server/scripts/create-org-shell.ts --venue "Il Gattopardo" --owner "Layla Haddad" --phone +971501234567
+    → venue shell (Organization + Location + OWNER + default roles) and the owner's first
+      login link, printed once. Their tap lands in the onboarding wizard at Venue.
+tsx server/scripts/grant-platform-admin.ts +971501234567
+    → flags that active user as platform admin (may issue links to any venue's owners/managers).
+```
+
+Locally: `npm run org:create -- …` and `npm run admin:grant -- …` (against the branch schema).
 
 ## Rollback
 

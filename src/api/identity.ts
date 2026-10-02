@@ -34,7 +34,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * matches the phone globally across every venue (it's the real cross-venue
  * identity key under this app's one-user-one-location model), which is what
  * lets login work from contexts that don't know a venue yet, like
- * `RequireSession`'s redirect to `/join?mode=login`. `devCode` is only
+ * `RequireSession`'s redirect to `/login`. `devCode` is only
  * present when the server has the opt-in ALLOW_DEV_OTP_ECHO flag set.
  */
 export async function requestLoginOtp(phone: string): Promise<{ expiresAt: string; devCode?: string }> {
@@ -45,11 +45,16 @@ export async function requestLoginOtp(phone: string): Promise<{ expiresAt: strin
   });
 }
 
+/**
+ * A pending applicant gets no token, only who they're waiting on. Declined
+ * and deactivated numbers are a 403 whose message lands in `ApiError`.
+ */
+export type LoginVerifyResult =
+  | { pending?: false; token: string; expiresAt: string; user: SessionUser }
+  | { pending: true; status: 'pending'; venueName: string; managerName: string | null };
+
 /** POST /api/identity/verify-otp */
-export async function verifyLoginOtp(
-  phone: string,
-  code: string,
-): Promise<{ token: string; expiresAt: string; user: SessionUser }> {
+export async function verifyLoginOtp(phone: string, code: string): Promise<LoginVerifyResult> {
   return request('/api/identity/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

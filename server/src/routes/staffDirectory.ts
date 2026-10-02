@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
+import { findUserByPhone } from './identity.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -146,6 +147,8 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
+    // Any holder counts (deactivated too); the P2002 catch below covers the race.
+    if (phone && (await findUserByPhone(phone))) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
 
     const user = await withAuditedTransaction(
       prisma,

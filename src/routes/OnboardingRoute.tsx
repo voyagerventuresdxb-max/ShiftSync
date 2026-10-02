@@ -74,7 +74,7 @@ function OnboardingFlow({ locationId }: { locationId: string | null }) {
     // it's reachable if/when token expiry or a forced-logout event is
     // added (tracked as a follow-up, see issue #20).
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-    return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
+    return <Navigate to={`/login?returnTo=${returnTo}`} replace />;
   }
 
   if (step === 'welcome') {
