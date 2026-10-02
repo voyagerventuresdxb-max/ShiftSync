@@ -71,8 +71,8 @@ export async function peekLoginLink(linkToken: string): Promise<LoginLinkPreview
   });
 }
 
-/** POST /api/login-links/redeem — spends the link. Call from the Sign in tap only. */
-export async function redeemLoginLink(linkToken: string): Promise<{ token: string; expiresAt: string; user: SessionUser; landing: string }> {
+/** POST /api/login-links/redeem — spends the link. Call from the Sign in tap only. `landing` null = use postLoginDestination. */
+export async function redeemLoginLink(linkToken: string): Promise<{ token: string; expiresAt: string; user: SessionUser; landing: string | null }> {
   return request('/api/login-links/redeem', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

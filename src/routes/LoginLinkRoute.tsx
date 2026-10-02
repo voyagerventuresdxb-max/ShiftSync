@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { LogIn } from 'lucide-react';
 import { useIdentity } from '../state/IdentityContext';
 import { peekLoginLink, redeemLoginLink, LoginLinkApiError, type LoginLinkPreview } from '../api/loginLinks';
 import { extractLoginLinkToken } from '../../shared/loginLinks';
+import { postLoginDestination } from '../lib/postLoginDestination';
 
 /**
  * /login/link#<token> — where a one-time login link lands.
@@ -25,14 +26,19 @@ const NO_TOKEN = "This page needs a login link. Open the link your manager sent 
 export default function LoginLinkContent() {
   const { login } = useIdentity();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnTo = searchParams.get('returnTo');
   const [state, setState] = useState<State>({ phase: 'checking' });
+  // Read once, at mount, BEFORE the effect below scrubs the fragment — an
+  // effect that both read and scrubbed would see an empty hash on React's
+  // StrictMode re-run in development and wrongly report "no link".
+  const [token] = useState(() => extractLoginLinkToken(window.location.hash));
 
   useEffect(() => {
-    const token = extractLoginLinkToken(window.location.hash);
     // The token is in React state from here on; take it out of the address
     // bar and history straight away so a live link doesn't linger there if
     // the person navigates off without signing in.
-    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
+    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname + window.location.search);
     if (!token) {
       setState({ phase: 'invalid', message: NO_TOKEN });
       return;
@@ -50,7 +56,7 @@ export default function LoginLinkContent() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [token]);
 
   const handleSignIn = async () => {
     if (state.phase !== 'ready') return;
@@ -58,7 +64,7 @@ export default function LoginLinkContent() {
     try {
       const result = await redeemLoginLink(state.token);
       login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
-      navigate(result.landing, { replace: true });
+      navigate(result.landing ?? postLoginDestination(result.user.systemRole, returnTo), { replace: true });
     } catch (err) {
       const message = err instanceof LoginLinkApiError ? err.message : 'Could not sign you in. Please try again.';
       setState({ phase: 'invalid', message });
@@ -92,7 +98,7 @@ export default function LoginLinkContent() {
           <div className="error-block" role="alert">
             <p>{state.message}</p>
           </div>
-          <Link to="/join?mode=login" className="btn btn-ghost mt-4 w-full">
+          <Link to="/login" className="btn btn-ghost mt-4 w-full">
             Go to the login screen
           </Link>
         </>
