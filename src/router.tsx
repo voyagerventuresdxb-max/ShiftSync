@@ -26,9 +26,10 @@ import OnboardingContent from './routes/OnboardingRoute';
  * When redirecting a signed-out visit, the current path (pathname + search)
  * travels along as a `returnTo` query param so `/login`'s success path can
  * send the visitor back to where they were headed instead of their role's
- * default landing (see MEMORY.md's open follow-up, now closed). `managerOnly`'s redirect below is unrelated and deliberately
- * left untouched — it sends a real, valid STAFF session away from a page
- * it never had access to, not an unauthenticated visitor.
+ * default landing (see MEMORY.md's open follow-up, now closed).
+ * `managerOnly`'s redirect below is unrelated and deliberately left
+ * untouched — it sends a real, valid STAFF session away from a page it
+ * never had access to, not an unauthenticated visitor.
  *
  * `/onboarding` was originally left off this list on the reasoning that it
  * "doesn't touch the four hardened routes" — wrong: its venue-setup step
