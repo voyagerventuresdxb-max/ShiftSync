@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import { cleanupTestOrgs, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
 import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.allowlist';
 
@@ -299,6 +300,12 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Yes, revoke');
     await assertTouchTargets(page, 'People › Join link revoke confirm');
 
+    await page.getByRole('button', { name: /Staff Directory/ }).click();
+    const staffRow = page.getByRole('row').filter({ hasText: 'E2E Staff Member' });
+    await staffRow.getByRole('button', { name: 'Send login link' }).click();
+    await staffRow.getByTestId('login-link-url').waitFor();
+    await assertTouchTargets(page, 'People › Staff Directory › login link');
+
     await page.goto('/profile');
     await page.waitForSelector('text=Sign out');
     await assertTouchTargets(page, 'Profile');
@@ -306,6 +313,17 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.goto('/my-shifts');
     await page.waitForSelector('text=Tap to change', { timeout: 15000 }).catch(() => {});
     await assertTouchTargets(page, 'My Shifts');
+
+    // /login/link before the tap (minted like the CLI does; the page never spends it on load).
+    const { locationId } = await sessionToken(page);
+    const linkStaff = await prisma.user.findFirstOrThrow({ where: { locationId, fullName: 'E2E Staff Member' } });
+    const linkToken = randomBytes(32).toString('base64url');
+    await prisma.loginLink.create({
+      data: { tokenHash: createHash('sha256').update(linkToken).digest('hex'), userId: linkStaff.id, locationId, expiresAt: new Date(Date.now() + 3_600_000) },
+    });
+    await page.goto(`/login/link#${linkToken}`);
+    await page.waitForSelector('text=Sign in as E2E Staff Member');
+    await assertTouchTargets(page, 'Login link');
   });
 
   test('staff session — real /login', async ({ page }) => {
@@ -317,6 +335,8 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     // Sign out of the manager session and log in as the staff member through the real UI.
     await page.evaluate(() => localStorage.removeItem('shiftsync.session'));
     await page.goto('/login');
+    await page.waitForSelector('text=Have a login link? Paste it here');
+    await assertTouchTargets(page, 'Login');
     await page.getByPlaceholder('Phone number').fill(staffPhone);
     await page.getByRole('button', { name: 'Send code' }).click();
     // /login prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").

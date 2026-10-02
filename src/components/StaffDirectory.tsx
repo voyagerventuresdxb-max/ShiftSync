@@ -586,7 +586,7 @@ function LoginLinkCell({ entry, sessionToken, disabled }: { entry: StaffDirector
   if (!entry.isActive) return <span className="hint">—</span>;
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       <button className="btn btn-ghost" onClick={() => void send()} disabled={busy || disabled || !sessionToken}>
         {busy ? 'Creating…' : issued ? 'New link' : 'Send login link'}
       </button>
