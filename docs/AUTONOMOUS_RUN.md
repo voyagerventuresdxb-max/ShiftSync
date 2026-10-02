@@ -523,3 +523,25 @@ Rollback note: CLI 5.63.1 has no "roll back to deployment id". The documented ro
 - Smoke test (no sign-in): `/login` 200 and renders; an unknown number gets only the generic response; the allowlisted number still gets a code via signup; a different number gets none.
 - **The 7-day window for old `/join?location=` links started with this deploy** (2026-10-02 ~21:30 UTC → ~2026-10-09).
 - #44 closed with the comment "superseded by merged work in #66-#67". #43 left open.
+
+## Stage C
+| Step | Result |
+|---|---|
+| retarget + merge #71 → `887c1f3` | unit 74/74, server 350 pass / 1 skip, e2e 10/10, build ✔ |
+| retarget, merge master into the branch (`MEMORY.md`: kept both sides), merge #73 → `0760bab` | unit 74/74, server 353 pass / 1 skip, e2e 15/15 (incl. people refresh/re-apply, golden path), build ✔ |
+| retarget, merge master into the branch (`MEMORY.md`: kept both sides), merge #74 → `1ad482d` | unit 74/74, server 363 pass / 1 skip, e2e 12/12, build ✔ |
+| retarget, merge master into the branch (`docs/deployment.md`, `playwright.config.ts`: kept both sides), merge #77 → `7b858dd` | unit 74/74, server 363 pass / 1 skip, **full e2e 47/47**, build ✔ |
+
+| Time (UTC) | What | Deployment id | Code | Health |
+|---|---|---|---|---|
+| 2026-10-02 21:57–22:00 | Stage C API deploy (`railway redeploy --from-source`) | `8b6073d6-54b0-4531-9975-c133b44bd74c` | `7b858dd` | SUCCESS; nixpacks + our start; no pending migrations; API listening; `/api/health` 200 JSON ×2 on the Railway domain and through Vercel; smoke test (no sign-in) passed |
+
+- Skipped (not merged), owner to review:
+  - #72 and #76: their bodies contain security specifics;
+  - #70: contains security specifics;
+  - voice PR: doesn't exist (branch only);
+  - #69, #78: waiting for the #42 author;
+  - #75: draft;
+  - #79: owner decision; #64 brought the same fix in.
+- Stage D: no run-3 PRs, so nothing merged and no deploy.
+- Railway variables: only `ECHO_ALLOWED_PHONES` and `NODE_ENV` were added; nothing else changed or was removed. No rollback happened in this run.
