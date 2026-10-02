@@ -574,7 +574,7 @@ export function RotaBuilder() {
               <button onClick={() => void publish()} disabled={!online} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
                 <Send className="h-3.5 w-3.5" /> {publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
               </button>
-              <button onClick={() => void copyLastWeek()} disabled={!online || copying} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60">
+              <button onClick={() => void copyLastWeek()} disabled={!online || copying} className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60">
                 <Copy className="h-3.5 w-3.5" /> {copying ? 'Copying…' : 'Copy last week'}
               </button>
               <button onClick={() => setSheet({ kind: 'templates' })} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground">

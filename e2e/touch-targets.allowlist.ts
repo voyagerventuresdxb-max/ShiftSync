@@ -37,6 +37,7 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^Publish (& notify|changes)$/, route: '/scheduling', category: 'b', reason: 'same wrapped-row overlap with "Next week" in the RotaBuilder header' },
   { label: /^Add shift on /, category: 'b', reason: 'rota grid cell with a shift chip 4px above: expansion would steal the chip\'s bottom edge (hit-44 IS applied on empty cells)' },
   { label: /^\d{2}:\d{2}–\d{2}:\d{2}$/, category: 'b', reason: 'rota grid shift chips (87x23) stack 4px apart above the add button: dense grid, needs a row-height decision' },
+  { label: /^.+ \d+ · \d+ shifts?$/, route: '/scheduling', category: 'b', reason: 'RotaBuilder department toggles (#42, 30px) sit 6px above the first row\'s empty-cell add buttons, whose hit-44 reaches into the toggle: z-order/row-height decision' },
   { label: /^Mark all read$/, category: 'b', reason: '78x16 text link 8px above the first notification row' },
   { label: /^(Log in|Join instead)$/, category: 'b', reason: 'two 16px inline text links side by side in the Account step footer' },
   { label: /^(Remove|Notify|Re-notify) /, route: '/floor-plan', category: 'b', reason: 'SectionDetail assignee row: 28x28 Remove sits above the 15px Notify text button' },
