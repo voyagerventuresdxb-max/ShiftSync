@@ -5,9 +5,10 @@
  */
 import { ApiError } from './schedules';
 import { withAuth, type SessionUser } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     let errorCode: string | undefined;

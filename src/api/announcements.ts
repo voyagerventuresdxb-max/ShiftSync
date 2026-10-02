@@ -1,6 +1,7 @@
 /** Client for the Announcements API (server/src/routes/announcements.ts). */
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export interface AnnouncementDto {
   id: string;
@@ -12,7 +13,7 @@ export interface AnnouncementDto {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

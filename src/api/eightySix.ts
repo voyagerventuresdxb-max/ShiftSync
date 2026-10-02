@@ -1,6 +1,7 @@
 /** Client for the 86 List API (server/src/routes/eightySix.ts). */
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export { ApiError };
 
@@ -15,7 +16,7 @@ export interface EightySixItemDto {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

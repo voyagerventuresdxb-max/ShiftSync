@@ -5,6 +5,7 @@
  */
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 export interface PolicyDocumentDto {
@@ -17,7 +18,7 @@ export interface PolicyDocumentDto {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -62,7 +63,7 @@ export async function deletePolicyDocument(token: string, id: string): Promise<v
  * fetch the blob here and open/download it themselves instead.
  */
 export async function fetchPolicyDocumentFile(token: string, fileUrl: string): Promise<Blob> {
-  const res = await fetch(fileUrl, { headers: withAuth(token) });
+  const res = await fetch(apiUrl(fileUrl), { headers: withAuth(token) });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
