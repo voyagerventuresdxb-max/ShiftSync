@@ -37,12 +37,12 @@ that.
 - `npm audit --omit=dev` went from 13 vulnerabilities (6 high, with xlsx
   listed as "No fix available") to 12 (5 high). npm audit doesn't check URL
   dependencies at all. So xlsx disappears from the report because it is no
-  longer audited, not because audit confirmed it clean. The fixed-in
-  versions above are what show it is clean.
+  longer audited, not because audit confirmed it clean. What shows both
+  advisories are fixed is that 0.20.3 is past both fixed-in versions above.
 
 ## How the regression check was run
 
-Two inputs sets, run with 0.18.5 and with 0.20.3, in four host timezones
+Two input sets, run with 0.18.5 and with 0.20.3, in four host timezones
 (UTC, Asia/Dubai, America/Los_Angeles, Asia/Kolkata):
 
 - **All 21 committed spreadsheet fixtures** (`server/test-fixtures/**/*.xlsx`).
@@ -52,10 +52,12 @@ Two inputs sets, run with 0.18.5 and with 0.20.3, in four host timezones
     values, `t="d"` ISO cells, and typed date and time cells
   - an Excel-style grid with date-cell headers, horizontal and vertical
     merges, and an empty-string legend separator
+  - xlsx files written by SheetJS with `cellDates` and with shared strings
   - legacy BIFF8 `.xls` and XML-2003 `.xls`
   - HTML saved as `.xls`
-  - 13 CSV variants (comma, semicolon, `sep=`, tab, BOM, UTF-16, CRLF and
-    quoting, month-name dates, `9-17`-style ranges)
+  - 16 CSV files (comma, semicolon, `sep=`, tab, BOM, UTF-16, CRLF and
+    quoting, month-name dates, `9-17`-style ranges, an empty file, a
+    whitespace-only file)
   - corrupt, truncated and wrong-format files
 
 Every entry point that consumes xlsx was captured as normalized JSON:
@@ -87,7 +89,7 @@ one-row long-format file per spelling, run through `parseWorkbookBuffer`.
 | Input | 0.18.5 (today) | 0.20.3 | |
 |---|---|---|---|
 | CSV / HTML date `20-Aug-2026`, `20-Aug-26`, `Aug 20, 2026` | parsed (2026-08-20) | row rejected: "Could not parse date value" | **regression** |
-| HTML `.xls` time `9:00 AM`, `5:00 PM`, `9:00:00 PM` | `9:00 AM` parsed | row rejected: `Could not parse start time "Invalid Date"` | **regression** |
+| HTML `.xls` time in `h:mm AM/PM` form (`9:00 AM`, `5:00 PM`) | parsed | row rejected: `Could not parse start time "Invalid Date"` | **regression** |
 | CSV time `9 AM`, `21:00:00`, `9:00:00 PM`; HTML `21:00:00` | rejected | parsed | improvement |
 | Every other probed date/time spelling | same | same | — |
 
@@ -97,18 +99,19 @@ time strings now come back as Date objects, where 0.18.5 left them as text.
 `normalize.ts` reads those Dates as UTC. On an Asia/Dubai host, every CSV and
 HTML shift time is silently shifted: `09:00` becomes `05:18` and `17:00`
 becomes `13:18` (the 1899 Dubai offset is +3:41:12). Dates can also move back
-a day. Under 0.18.5 these stayed strings and parsed correctly. The API's
+a day. Under 0.18.5, time strings stayed text and parsed correctly on any
+host. The API's
 production timezone hasn't been checked. Railway defaults to UTC, but
 `TZ=Asia/Dubai` would be an easy setting for a Dubai product to pick.
 
-Causes in 0.20.3:
+Causes in 0.20.3 (line numbers are in the tarball's `xlsx.js`):
 
 - **Month-name dates.** `fuzzydate` rejects any string containing a letter
   (xlsx.js:3496). `20-Aug-2026` therefore stays a string, and
   `normalize.ts` `DATE_FORMATS` doesn't accept that spelling. 0.18.5 handed
   it to V8's lenient `Date` parser instead.
 - **HTML AM/PM times.** `html_to_sheet` checks the cell with `fuzzydate` but
-  stores `parseDate(m)` (xlsx.js:22549). `parseDate` can't read `9:00 AM`, so
+  stores `parseDate(m)` (xlsx.js:22550). `parseDate` can't read `9:00 AM`, so
   the cell becomes an Invalid Date.
 - **Non-UTC hosts.** These are the local-time Dates from `sheet_to_json`
   described above.
