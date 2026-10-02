@@ -157,7 +157,7 @@ export default function AccountScreen({ onBack, onContinue }: { onBack: () => vo
             </button>
           )}
           {phase === 'exists' && (
-            <Link to="/join?mode=login&returnTo=%2Fonboarding%2Fvenue" style={primaryStyle}>
+            <Link to="/login?returnTo=%2Fonboarding%2Fvenue" style={primaryStyle}>
               Log in
             </Link>
           )}
@@ -167,7 +167,7 @@ export default function AccountScreen({ onBack, onContinue }: { onBack: () => vo
           {phase !== 'exists' && (
             <div style={{ marginTop: 26, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', font: "400 12px/1.4 'Manrope'", color: 'var(--ob-dim)' }}>
               <span>
-                Already have an account? <SecondaryLink to="/join?mode=login&returnTo=%2Fonboarding%2Fvenue">Log in</SecondaryLink>
+                Already have an account? <SecondaryLink to="/login?returnTo=%2Fonboarding%2Fvenue">Log in</SecondaryLink>
               </span>
               <span>
                 Joining a team that already uses ShiftSync? <SecondaryLink to="/join">Join instead</SecondaryLink>

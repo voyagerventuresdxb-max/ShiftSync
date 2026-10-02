@@ -34,7 +34,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * matches the phone globally across every venue (it's the real cross-venue
  * identity key under this app's one-user-one-location model), which is what
  * lets login work from contexts that don't know a venue yet, like
- * `RequireSession`'s redirect to `/join?mode=login`. `devCode` is only
+ * `RequireSession`'s redirect to `/login`. `devCode` is only
  * present when the server has the opt-in ALLOW_DEV_OTP_ECHO flag set.
  */
 export async function requestLoginOtp(phone: string): Promise<{ expiresAt: string; devCode?: string }> {

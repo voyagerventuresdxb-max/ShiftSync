@@ -17,7 +17,7 @@ import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.all
  * touch-targets.allowlist.ts with a one-line reason each.
  *
  * Real backend, real DB, real sessions: the manager session comes from the
- * actual onboarding signup; the staff session from the real /join login
+ * actual onboarding signup; the staff session from the real /login
  * (phone + dev OTP echo), the same way a real staff member signs in.
  */
 
@@ -181,6 +181,11 @@ async function assertTouchTargets(page: Page, screen: string): Promise<void> {
   expect(failures, `${failures.length} touch-target failure(s):\n${failures.join('\n')}`).toEqual([]);
 }
 
+/** A sheet closed by button pops its history sentinel a macrotask later (src/lib/backNavigation.ts); a page.goto racing that pop gets ERR_ABORTED. */
+async function settleOverlayHistory(page: Page): Promise<void> {
+  await page.waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 }).catch(() => {});
+}
+
 /** Reads the real session the UI stored after signup, for seeding via the API. */
 async function sessionToken(page: Page): Promise<{ token: string; locationId: string; userId: string }> {
   const raw = await page.evaluate(() => localStorage.getItem('shiftsync.session'));
@@ -224,7 +229,7 @@ async function seedVenueContent(page: Page): Promise<{ staffPhone: string }> {
     pinX: 0.515,
     pinY: 0.735,
   });
-  // A real staff member (with a phone, so they can log in through /join).
+  // A real staff member (with a phone, so they can log in through /login).
   const staffPhone = nextEchoPhone();
   const role = await prisma.role.findFirst({ where: { locationId } });
   const staff = await prisma.user.create({
@@ -270,6 +275,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Save week as template');
     await assertTouchTargets(page, 'Scheduling › RotaBuilder sheet');
     await page.getByRole('button', { name: 'Close' }).first().click();
+    await settleOverlayHistory(page);
 
     await page.goto('/floor-plan');
     await page.waitForSelector('.fp-canvas-wrap img');
@@ -281,6 +287,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Assign to Area 1');
     await assertTouchTargets(page, 'Floor plan › SectionPicker');
     await page.getByRole('button', { name: 'Close' }).first().click();
+    await settleOverlayHistory(page);
 
     await page.goto('/people');
     await page.waitForSelector('text=Staff Directory');
@@ -295,7 +302,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await assertTouchTargets(page, 'My Shifts');
   });
 
-  test('staff session — real /join login', async ({ page }) => {
+  test('staff session — real /login', async ({ page }) => {
     test.setTimeout(240_000);
     await signupNewVenue(page, testVenueName('touch-targets-staff'));
     await page.waitForSelector('text=Tell us about the room.');
@@ -303,10 +310,10 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
 
     // Sign out of the manager session and log in as the staff member through the real UI.
     await page.evaluate(() => localStorage.removeItem('shiftsync.session'));
-    await page.goto('/join?mode=login');
+    await page.goto('/login');
     await page.getByPlaceholder('Phone number').fill(staffPhone);
     await page.getByRole('button', { name: 'Send code' }).click();
-    // JoinFlow prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").
+    // /login prints the echoed dev OTP inline ("Dev mode — your code is 123456 …").
     const devCode = (await page.locator('p.hint .font-mono').innerText()).trim();
     await page.getByPlaceholder('6-digit code').fill(devCode);
     await page.getByRole('button', { name: /Verify & log in/ }).click();

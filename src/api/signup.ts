@@ -42,7 +42,7 @@ export async function requestSignupOtp(phone: string): Promise<{ expiresAt: stri
  *
  * A phone that already has an account fails with a 409 `ApiError` — callers
  * should catch that specifically (`err instanceof ApiError && err.status === 409`)
- * and point the user at `/join?mode=login` rather than treating it as a
+ * and point the user at `/login` rather than treating it as a
  * generic failure.
  */
 export async function verifySignupOtp(input: {
