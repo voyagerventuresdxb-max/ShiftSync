@@ -10,8 +10,15 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? 'mailto:ops@example.com';
 
+let pushEnabled = false;
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    pushEnabled = true;
+  } catch (err) {
+    // A typo in a deploy variable must not crash-loop the API (web-push's messages carry no key material).
+    console.error(`[push] VAPID config rejected (${err instanceof Error ? err.message : String(err)}) — push notifications are disabled.`);
+  }
 } else {
   // Fail soft, not silent: a misconfigured deploy still boots (push is an
   // enhancement, not a hard dependency), but every send attempt logs why
@@ -20,7 +27,7 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 export function getVapidPublicKey(): string {
-  return VAPID_PUBLIC_KEY;
+  return pushEnabled ? VAPID_PUBLIC_KEY : '';
 }
 
 export interface PushPayload {
@@ -39,7 +46,7 @@ export interface PushPayload {
  * user with none, must not block delivery to anyone else in a batch call.
  */
 export async function sendPushToUser(userId: string, payload: PushPayload): Promise<{ sent: number; removed: number }> {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return { sent: 0, removed: 0 };
+  if (!pushEnabled) return { sent: 0, removed: 0 };
 
   const subscriptions = await prisma.pushSubscription.findMany({ where: { userId } });
   let sent = 0;
@@ -93,7 +100,11 @@ export async function notifyUser(userId: string, payload: PushPayload): Promise<
   } catch (err) {
     console.error('[push.notifyUser] failed to record notification', userId, err);
   }
-  await sendPushToUser(userId, payload);
+  try {
+    await sendPushToUser(userId, payload);
+  } catch (err) {
+    console.error('[push.notifyUser] push delivery failed', userId, err);
+  }
 }
 
 /**
