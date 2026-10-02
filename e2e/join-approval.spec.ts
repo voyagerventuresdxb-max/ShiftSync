@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { test, expect, type Page } from '@playwright/test';
 import { cleanupTestOrgs, nextEchoPhone, prisma, skipOtpResendWait, testVenueName } from './helpers';
 
@@ -21,13 +22,16 @@ function freshPhone(): string {
   return phone;
 }
 
-async function createVenue(): Promise<{ locationId: string; venueName: string; ownerPhone: string }> {
+async function createVenue(): Promise<{ inviteToken: string; venueName: string; ownerPhone: string }> {
   const venueName = testVenueName('join-approval');
   const org = await prisma.organization.create({ data: { name: venueName } });
   const location = await prisma.location.create({ data: { organizationId: org.id, name: venueName } });
   const ownerPhone = freshPhone();
   await prisma.user.create({ data: { locationId: location.id, systemRole: 'OWNER', fullName: OWNER_NAME, phone: ownerPhone } });
-  return { locationId: location.id, venueName, ownerPhone };
+  const { token: inviteToken } = await prisma.inviteLink.create({
+    data: { locationId: location.id, token: randomBytes(32).toString('base64url'), expiresAt: new Date(Date.now() + 86_400_000) },
+  });
+  return { inviteToken, venueName, ownerPhone };
 }
 
 /** Same one-retry cold-Vite guard as helpers.ts `signupNewVenue`. */
@@ -53,8 +57,8 @@ async function logIn(page: Page, phone: string): Promise<void> {
   await page.getByRole('button', { name: 'Verify & log in' }).click();
 }
 
-async function joinViaLink(page: Page, locationId: string, phone: string): Promise<void> {
-  await open(page, `/join?location=${locationId}`);
+async function joinViaLink(page: Page, inviteToken: string, phone: string): Promise<void> {
+  await open(page, `/join?invite=${inviteToken}`);
   const code = await requestCode(page, phone);
   await page.getByPlaceholder('6-digit code').fill(code);
   await page.getByPlaceholder('Full name (if this is your first time)').fill(APPLICANT_NAME);
@@ -88,10 +92,10 @@ test.describe('join link → manager approval → staff in', () => {
   });
 
   test('a pending applicant sees who they are waiting on, at join and again on /login, with no session', async ({ page }) => {
-    const { locationId, venueName } = await createVenue();
+    const { inviteToken, venueName } = await createVenue();
     const phone = freshPhone();
 
-    await joinViaLink(page, locationId, phone);
+    await joinViaLink(page, inviteToken, phone);
     await expect(page.getByText(waitingText(venueName))).toBeVisible();
 
     await skipOtpResendWait(phone);
@@ -104,10 +108,10 @@ test.describe('join link → manager approval → staff in', () => {
   });
 
   test('once the owner approves on /people, the next sign-in lands on /my-shifts', async ({ page, browser }) => {
-    const { locationId, venueName, ownerPhone } = await createVenue();
+    const { inviteToken, venueName, ownerPhone } = await createVenue();
     const phone = freshPhone();
 
-    await joinViaLink(page, locationId, phone);
+    await joinViaLink(page, inviteToken, phone);
     await expect(page.getByText(waitingText(venueName))).toBeVisible();
 
     const ownerContext = await browser.newContext();
@@ -125,10 +129,10 @@ test.describe('join link → manager approval → staff in', () => {
   });
 
   test('a declined applicant is told so on /login, and the join link files no new request', async ({ page, browser }) => {
-    const { locationId, venueName, ownerPhone } = await createVenue();
+    const { inviteToken, venueName, ownerPhone } = await createVenue();
     const phone = freshPhone();
 
-    await joinViaLink(page, locationId, phone);
+    await joinViaLink(page, inviteToken, phone);
     await expect(page.getByText(waitingText(venueName))).toBeVisible();
 
     const ownerContext = await browser.newContext();
@@ -144,7 +148,7 @@ test.describe('join link → manager approval → staff in', () => {
     expect(await storedSession(page)).toBeNull();
 
     await skipOtpResendWait(phone);
-    await joinViaLink(page, locationId, phone);
+    await joinViaLink(page, inviteToken, phone);
     await expect(page.locator('.error-block')).toContainText(`Your request to join ${venueName} was declined.`);
     expect(await prisma.joinRequest.count({ where: { phone } })).toBe(1);
   });

@@ -16,7 +16,7 @@ const PANEL: Record<Part, { className: string; style?: CSSProperties }> = {
   field: { className: 'staff-directory-input' },
   button: { className: 'btn btn-ghost' },
   primary: { className: 'btn btn-primary' },
-  danger: { className: 'btn btn-ghost text-destructive' },
+  danger: { className: 'btn btn-ghost', style: { color: 'var(--danger)' } },
 };
 
 const obButton: CSSProperties = {
