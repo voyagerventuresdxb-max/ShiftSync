@@ -38,7 +38,6 @@ test('checkDatabaseHost: localhost/127.0.0.1 only; anything else refused with th
     ['postgresql://u:hunter2@aws-0-eu.pooler.supabase.com:6543/postgres', 'aws-0-eu.pooler.supabase.com'],
     ['postgresql://u:hunter2@localhost.evil.example/db', 'localhost.evil.example'],
     ['postgresql://localhost:hunter2@evil.example/db', 'evil.example'],
-    ['postgresql://u:hunter2@evil.example/db?host=localhost', 'evil.example'],
     ['postgresql://u:hunter2@[::1]:5432/db', '[::1]'],
     ['postgresql://u:hunter2@10.0.0.5/db', '10.0.0.5'],
   ] as const) {
@@ -52,6 +51,11 @@ test('checkDatabaseHost: localhost/127.0.0.1 only; anything else refused with th
   assert.deepEqual(checkDatabaseHost(undefined), { ok: false, reason: 'DATABASE_URL is not set.' });
   assert.deepEqual(checkDatabaseHost(''), { ok: false, reason: 'DATABASE_URL is not set.' });
   assert.deepEqual(checkDatabaseHost('not a url'), { ok: false, reason: 'DATABASE_URL is not a valid URL.' });
+  // Prisma connects to ?host= rather than the URL host, either way round.
+  for (const url of ['postgresql://u:hunter2@localhost/db?host=evil.example', 'postgresql://u:hunter2@evil.example/db?host=localhost', 'postgresql://u@localhost/db?host=/var/run/postgresql']) {
+    assert.deepEqual(checkDatabaseHost(url), { ok: false, reason: 'DATABASE_URL has a host= query parameter, which overrides its host; refusing.' }, url);
+  }
+  assert.equal(checkDatabaseHost('postgresql://u:hunter2@postgres.railway.internal/db?host=postgres.railway.internal', 'postgres.railway.internal').ok, false);
 });
 
 test('checkDatabaseHost: the production override must name the URL host exactly (no port, no partial, not empty)', () => {

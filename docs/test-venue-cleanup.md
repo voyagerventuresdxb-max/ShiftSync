@@ -8,8 +8,9 @@ tests are in `server/src/lib/testVenueCleanup.ts`.
 - **It's a dry run by default.** Without `--confirm` it prints what it would delete (each
   org, its locations and users, row counts per table, file paths) and changes nothing.
 - **It only runs on localhost.** If `DATABASE_URL`'s host isn't `localhost` or `127.0.0.1`,
-  it exits with code 2 before it builds a database client, so no query runs. The one way
-  past this check is `--i-am-running-against-production=<host>` (see
+  it exits with code 2 before it builds a database client, so no query runs. It also refuses
+  a URL with a `?host=` parameter, because Prisma would connect to that host instead. The
+  one way past this check is `--i-am-running-against-production=<host>` (see
   [Production](#production-issue-53)).
 
 ## What it matches

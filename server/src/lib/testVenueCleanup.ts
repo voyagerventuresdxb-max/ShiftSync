@@ -35,12 +35,15 @@ export type HostCheck = { ok: true; host: string; production: boolean } | { ok: 
  */
 export function checkDatabaseHost(databaseUrl: string | undefined, productionHost?: string): HostCheck {
   if (!databaseUrl) return { ok: false, reason: 'DATABASE_URL is not set.' };
-  let host: string;
+  let url: URL;
   try {
-    host = new URL(databaseUrl).hostname;
+    url = new URL(databaseUrl);
   } catch {
     return { ok: false, reason: 'DATABASE_URL is not a valid URL.' };
   }
+  // Prisma connects to a `?host=` query parameter instead of the URL's host, so the host below wouldn't be the real one.
+  if (url.searchParams.has('host')) return { ok: false, reason: 'DATABASE_URL has a host= query parameter, which overrides its host; refusing.' };
+  const host = url.hostname;
   if (productionHost !== undefined) {
     if (host !== '' && productionHost === host) return { ok: true, host, production: true };
     return { ok: false, reason: `--${PRODUCTION_FLAG}=${productionHost} does not match DATABASE_URL's host "${host}".` };
