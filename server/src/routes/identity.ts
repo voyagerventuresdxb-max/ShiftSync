@@ -8,7 +8,7 @@ import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { loginMethods } from '../lib/loginLinks.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 import { getApproverNameForLocation } from '../lib/managers.js';
-import { joinDeclinedMessage } from '../lib/actions/joinActions.js';
+import { canReapplyToJoin, joinDeclinedMessage } from '../lib/actions/joinActions.js';
 
 export const identityRouter = Router();
 
@@ -116,7 +116,8 @@ identityRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
       }
       const declined = await prisma.joinRequest.findFirst({ where: { phone, status: 'DECLINED' }, orderBy: { createdAt: 'desc' }, include });
       if (declined) {
-        return res.status(403).json({ status: 'declined', venueName: declined.location.name, error: joinDeclinedMessage(declined.location.name) });
+        const canReapply = await canReapplyToJoin(declined.locationId, phone);
+        return res.status(403).json({ status: 'declined', venueName: declined.location.name, error: joinDeclinedMessage(declined.location.name, canReapply) });
       }
       return res.status(404).json({ error: NO_ACCOUNT_ERROR });
     }

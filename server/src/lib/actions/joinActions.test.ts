@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
-import { decideJoinRequest } from './joinActions.js';
+import { decideJoinRequest, fileJoinRequest, MAX_JOIN_ATTEMPTS } from './joinActions.js';
 
 const prisma = new PrismaClient();
 
@@ -98,6 +98,33 @@ test('decideJoinRequest(decline) guards against a second decision after the requ
     const persisted = await prisma.joinRequest.findUnique({ where: { id: joinRequest.id } });
     assert.equal(persisted!.status, 'APPROVED', 'the losing decline must not have overwritten the real APPROVED status');
   } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('fileJoinRequest: concurrent re-applies on separate connections file one request, and none get past the cap', async () => {
+  assert.equal(MAX_JOIN_ATTEMPTS, 3);
+  const { location } = await createFixture('concurrent re-apply');
+  const phone = '+971500000098';
+  const where = { locationId: location.id, phone };
+  await prisma.joinRequest.createMany({
+    data: [1, 2].map((i) => ({ ...where, fullName: `__joinactions-test__ Declined ${i}`, status: 'DECLINED' as const, createdAt: new Date(Date.now() - i * 60_000) })),
+  });
+  const other = new PrismaClient();
+  try {
+    const input = { ...where, fullName: '__joinactions-test__ Re-applicant', inviteLinkId: null };
+    const filings = await Promise.all([fileJoinRequest(input, prisma), fileJoinRequest(input, other), fileJoinRequest(input, prisma), fileJoinRequest(input, other)]);
+    assert.deepEqual(filings.map((f) => f.kind).sort(), ['created', 'open', 'open', 'open']);
+    const created = filings.find((f) => f.kind === 'created') as { requestId: string };
+    assert.ok(filings.every((f) => f.kind !== 'open' || f.requestId === created.requestId), 'the others see the one new request');
+    assert.equal(await prisma.joinRequest.count({ where }), MAX_JOIN_ATTEMPTS);
+
+    await prisma.joinRequest.update({ where: { id: created.requestId }, data: { status: 'DECLINED' } });
+    const capped = await Promise.all([fileJoinRequest(input, prisma), fileJoinRequest(input, other)]);
+    assert.deepEqual(capped, [{ kind: 'exhausted' }, { kind: 'exhausted' }]);
+    assert.equal(await prisma.joinRequest.count({ where }), MAX_JOIN_ATTEMPTS);
+  } finally {
+    await other.$disconnect();
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
