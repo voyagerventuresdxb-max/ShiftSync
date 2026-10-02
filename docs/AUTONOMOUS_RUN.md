@@ -15,6 +15,14 @@ Orchestrated multi-phase run against `origin/master @ 32edfc5` (= production). S
 | Phase | Status | Branch | PR | Tests |
 |---|---|---|---|---|
 | 0 Setup | done | `chore/auto-baseline` (local only, removed after) | — | master @ 32edfc5: typecheck ✔, server:typecheck ✔, lint ✔ (0 errors), unit 62/62, server 283 pass / 0 fail / 1 skip (284), build ✔, e2e 20 passed + 1 flaky (policy-documents upload hit ENOSPC, passed on retry) |
+| 2 Housekeeping | done | `chore/housekeeping-staff-phone` (base master) | [#61](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/61) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 284 pass / 1 skip (285), build ✔, e2e full 23/23 |
+
+### Phase 2 notes
+- Closed #12, #13, #14, #15 with a comment citing #16 (each verified fixed on master first).
+- `docs/Deferred.md`, `docs/Home.md`, `docs/CLAUDE_HANDOFF.md` copied verbatim from the main checkout (read-only); secret scan clean (agent + orchestrator regex pass).
+- Add-staff phone: server already validated with `toE164` + P2002→409; the form just never sent it. Added the input and an up-front `findUserByPhone` 409 (covers deactivated / other-venue holders). Known: a mistyped phone on an active record lets that number's owner claim the account after OTP — inherent to phone-match claim.
+- My Shifts signed-out button → `/join?mode=login&returnTo=%2Fmy-shifts` (Phase 3 redirects this to `/login`). AccountScreen's bare `/join` "Join instead" left as is (intentional "ask your manager for an invite" page).
+- **Gap:** the repo `MEMORY.md` entry (AGENTS.md §3) was refused by the permission classifier; not retried. Human to add, or accept the PR body as the record.
 
 ### Phase 0 notes
 - **Disk:** C: had ~7 GB free; the baseline e2e hit `ENOSPC` writing an upload. Each worktree's own `node_modules` (AGENTS.md §6 forbids symlinking) costs ~1 GB+. Mitigation: baseline worktree removed once green; npm cache (11.6 GB, regenerable) cleared once no install was running; each finished phase's worktree is removed after its PR exists (the branch stays on GitHub). Note for the human: 15+ older `C:\dev\ShiftSync-*` worktrees from earlier sessions each hold a `node_modules` — not touched, but they are where the disk went.
