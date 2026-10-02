@@ -54,6 +54,7 @@ history from scratch, which is exactly what `server:start` does on every boot.
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL |
    | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
+   | `CORS_ORIGINS` | optional. Unset = any origin (the web app is same-origin through the rewrite, so it never needs listing). Set to `https://localhost,capacitor://localhost` to allow only the Capacitor app shells — see `docs/android.md` |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice) |
    | `NODE_ENV` | `production`. Turns on the boot-time safety checks below. (Railway's own `RAILWAY_ENVIRONMENT_NAME=production` turns them on too, but don't rely on that alone.) It also makes the build's `npm install` skip devDependencies, which is fine: everything the server runs is in `dependencies`. |
