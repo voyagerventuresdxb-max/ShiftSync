@@ -506,3 +506,20 @@ Rollback note: CLI 5.63.1 has no "roll back to deployment id". The documented ro
 
 - Stage A verification on production (no numbers or codes recorded): the sign-in code echo now follows the allowlist. The allowlisted number gets a code; other numbers get none.
 - **Stopped before Stage B.** The allowlisted number has no active account, so the owner's "sign in as the allowlisted manager" precondition for the Stage B smoke test isn't met. No account was created or changed.
+
+## Stage B (owner decision: no production sign-in; smoke test without sign-in)
+| Step | Result |
+|---|---|
+| retarget + merge #64 → `7029086` | unit 72/72, server 306 pass / 1 skip, e2e 17/17 (login, touch-targets, onboarding ×2, my-shifts sign-in), build ✔ |
+| retarget + merge #65 → `43cab60` | unit 72/72, server 314 pass / 1 skip, e2e 15/15, build ✔ |
+| retarget + merge #66 → `2d26d76` | migration applied locally; unit 74/74, server 325 pass / 1 skip, e2e 10/10, build ✔ |
+| retarget + merge #67 → `5405e71` | migration applied locally; unit 74/74, server 350 pass / 1 skip, e2e 16/16, build ✔ |
+| retarget + merge #68 → `88664cf` | unit 74/74, server 350 pass / 1 skip, **full e2e 44/44** (golden path included), build ✔ |
+
+| Time (UTC) | What | Deployment id | Code | Health |
+|---|---|---|---|---|
+| 2026-10-02 21:28–21:31 | Stage B API deploy (`railway redeploy --from-source`) | `1670c3a5-c3d4-4d00-ad82-eb246f96c969` | `88664cf` (#64–#68) | SUCCESS; nixpacks + our start; 29 migrations found, the 2 new additive ones applied (`invite_links`, `login_links`); API listening; `/api/health` 200 JSON ×2 on the Railway domain and through Vercel |
+
+- Smoke test (no sign-in): `/login` 200 and renders; an unknown number gets only the generic response; the allowlisted number still gets a code via signup; a different number gets none.
+- **The 7-day window for old `/join?location=` links started with this deploy** (2026-10-02 ~21:30 UTC → ~2026-10-09).
+- #44 closed with the comment "superseded by merged work in #66-#67". #43 left open.
