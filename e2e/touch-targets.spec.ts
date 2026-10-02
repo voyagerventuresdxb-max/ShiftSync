@@ -181,6 +181,11 @@ async function assertTouchTargets(page: Page, screen: string): Promise<void> {
   expect(failures, `${failures.length} touch-target failure(s):\n${failures.join('\n')}`).toEqual([]);
 }
 
+/** A sheet closed by button pops its history sentinel a macrotask later (src/lib/backNavigation.ts); a page.goto racing that pop gets ERR_ABORTED. */
+async function settleOverlayHistory(page: Page): Promise<void> {
+  await page.waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 }).catch(() => {});
+}
+
 /** Reads the real session the UI stored after signup, for seeding via the API. */
 async function sessionToken(page: Page): Promise<{ token: string; locationId: string; userId: string }> {
   const raw = await page.evaluate(() => localStorage.getItem('shiftsync.session'));
@@ -270,6 +275,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Save week as template');
     await assertTouchTargets(page, 'Scheduling › RotaBuilder sheet');
     await page.getByRole('button', { name: 'Close' }).first().click();
+    await settleOverlayHistory(page);
 
     await page.goto('/floor-plan');
     await page.waitForSelector('.fp-canvas-wrap img');
@@ -281,6 +287,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Assign to Area 1');
     await assertTouchTargets(page, 'Floor plan › SectionPicker');
     await page.getByRole('button', { name: 'Close' }).first().click();
+    await settleOverlayHistory(page);
 
     await page.goto('/people');
     await page.waitForSelector('text=Staff Directory');
