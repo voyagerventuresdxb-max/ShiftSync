@@ -27,6 +27,12 @@ async function sessionFor(userId: string): Promise<string> {
   return plainToken;
 }
 
+/** Asserts `url` is exactly `<origin>/join?invite=<43-char token>`. */
+function assertInviteUrl(url: string, origin: string): void {
+  assert.ok(url.startsWith(`${origin}/join?invite=`), url);
+  assert.match(url.slice(`${origin}/join?invite=`.length), /^[A-Za-z0-9_-]{43}$/);
+}
+
 /** Creates a throwaway Location + MANAGER for one test, and tears both down afterward. */
 async function withOnboardingTestManager<T>(nameSuffix: string, fn: (location: { id: string }, manager: { id: string }) => Promise<T>): Promise<T> {
   const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
@@ -75,7 +81,7 @@ test("GET /api/onboarding/:locationId/invite builds the invite link from the cal
         assert.equal(res.status, 200);
         const body = (await res.json()) as { inviteUrl: string; qrDataUrl: string; whatsappUrl: string };
 
-        assert.equal(body.inviteUrl, `${frontendOrigin}/join?location=${location.id}`);
+        assertInviteUrl(body.inviteUrl, frontendOrigin);
         assert.ok(!body.inviteUrl.startsWith(apiBaseUrl), "invite link must not point at the API server's own origin");
         assert.ok(body.whatsappUrl.includes(encodeURIComponent(body.inviteUrl)), 'the WhatsApp share text must carry the same frontend-origin link');
         assert.ok(body.qrDataUrl.startsWith('data:image/'), 'QR code must be a real inline data URL');
@@ -104,7 +110,7 @@ test('GET /api/onboarding/:locationId/invite ignores a client-supplied baseUrl t
         assert.equal(res.status, 200);
         const body = (await res.json()) as { inviteUrl: string; whatsappUrl: string };
 
-        assert.equal(body.inviteUrl, `${trustedOrigin}/join?location=${location.id}`);
+        assertInviteUrl(body.inviteUrl, trustedOrigin);
         assert.ok(!body.inviteUrl.startsWith(attackerOrigin), 'invite link must never point at an unlisted, client-supplied origin');
         assert.ok(!body.whatsappUrl.includes(encodeURIComponent(attackerOrigin)), 'WhatsApp share text must never carry the unlisted origin');
       } finally {
@@ -129,7 +135,7 @@ test('GET /api/onboarding/:locationId/invite falls back to the default frontend 
         const body = (await res.json()) as { inviteUrl: string };
 
         // Must never fall back to the API server's own host/port.
-        assert.equal(body.inviteUrl, `http://localhost:5173/join?location=${location.id}`);
+        assertInviteUrl(body.inviteUrl, 'http://localhost:5173');
         assert.ok(!body.inviteUrl.startsWith(apiBaseUrl), "invite link must not default to the API server's own origin");
       } finally {
         if (previousEnv === undefined) delete process.env.FRONTEND_ORIGIN;

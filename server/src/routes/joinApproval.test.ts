@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { PrismaClient, type User } from '@prisma/client';
 import { createApp } from '../app.js';
 import { createOtpCode, issueSession } from '../lib/identity.js';
+import { generateInviteToken } from '../lib/inviteLinks.js';
 
 const prisma = new PrismaClient();
 const TAG = '__join-approval-test__';
@@ -56,9 +57,22 @@ async function verifyLogin(baseUrl: string, p: string) {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
+const inviteTokens = new Map<string, string>();
+
+/** One live invite link per test venue, created on first use. */
+async function inviteTokenFor(locationId: string): Promise<string> {
+  let token = inviteTokens.get(locationId);
+  if (!token) {
+    token = generateInviteToken();
+    await prisma.inviteLink.create({ data: { locationId, token, expiresAt: new Date(Date.now() + 86_400_000) } });
+    inviteTokens.set(locationId, token);
+  }
+  return token;
+}
+
 async function verifyJoin(baseUrl: string, locationId: string, p: string, fullName?: string) {
   const { plainCode } = await createOtpCode(p, 'JOIN');
-  const res = await send(baseUrl, 'POST', '/api/join/verify-otp', { locationId, phone: p, code: plainCode, fullName });
+  const res = await send(baseUrl, 'POST', '/api/join/verify-otp', { inviteToken: await inviteTokenFor(locationId), phone: p, code: plainCode, fullName });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 

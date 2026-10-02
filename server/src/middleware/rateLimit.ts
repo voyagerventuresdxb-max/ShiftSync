@@ -193,3 +193,15 @@ export const otpRequestIpLimiter = rateLimit({
   validate: { xForwardedForHeader: false },
   handler: sendTooManyRequests,
 });
+
+/** GET /api/join/invite/:token: 60 per 15 minutes per client, keyed and loopback-skipped like `otpRequestIpLimiter`. */
+export const invitePeekLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => otpClientKey(req) === null,
+  keyGenerator: (req) => otpClientKey(req)!,
+  validate: { xForwardedForHeader: false },
+  handler: sendTooManyRequests,
+});
