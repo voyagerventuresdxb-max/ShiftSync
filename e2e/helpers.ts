@@ -1,8 +1,28 @@
 import type { Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Shared Prisma client for e2e fixture teardown — real DB, no mocking.
 export const prisma = new PrismaClient();
+
+/**
+ * Next never-used number from this run's echo pool (playwright.config.ts), the
+ * only numbers the API echoes a code for. The counter lives in a file so a
+ * worker restarted for a retry doesn't hand out a number again (OTP resend caps,
+ * unique User.phone).
+ */
+export function nextEchoPhone(): string {
+  const { E2E_RUN_ID: runId, E2E_ECHO_PHONES: pool } = process.env;
+  if (!runId || !pool) throw new Error('E2E_RUN_ID / E2E_ECHO_PHONES unset — run through playwright.config.ts.');
+  const phones = pool.split(',');
+  const counter = join(tmpdir(), `shiftsync-e2e-echo-phones-${runId}`);
+  const used = existsSync(counter) ? Number(readFileSync(counter, 'utf8')) : 0;
+  if (used >= phones.length) throw new Error(`Echo phone pool exhausted (${phones.length}) — raise ECHO_POOL_SIZE in playwright.config.ts.`);
+  writeFileSync(counter, String(used + 1));
+  return phones[used]!;
+}
 
 export const TEST_ORG_PREFIX = '__e2e-test__';
 
@@ -51,7 +71,8 @@ export async function passWelcomeIntro(page: Page): Promise<void> {
 
 /**
  * Real signup via the dev-OTP echo path (requires the server started with
- * ALLOW_DEV_OTP_ECHO=true, which playwright.config.ts sets automatically).
+ * ALLOW_DEV_OTP_ECHO=true and this run's ECHO_ALLOWED_PHONES, which
+ * playwright.config.ts sets automatically).
  * Drives the actual UI — no API shortcuts — so it also exercises the real
  * phone->OTP->venue-creation path the way a real owner would: the Welcome
  * intro, then the wizard's Account step (2026-09-16: account creation is
@@ -59,7 +80,7 @@ export async function passWelcomeIntro(page: Page): Promise<void> {
  * Lands on /onboarding/venue when done.
  */
 export async function signupNewVenue(page: Page, venueName: string): Promise<{ phone: string }> {
-  const phone = `+97150${Date.now().toString().slice(-7)}`;
+  const phone = nextEchoPhone();
 
   // A cold Vite dev server can auto-reload mid-navigation the very first
   // time it hits a new route (dependency pre-bundling) — Playwright sees
