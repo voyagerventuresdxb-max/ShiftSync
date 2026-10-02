@@ -76,18 +76,23 @@ test('VAPID unset: API boots, public-key route says push is off, notifyUser stil
   }
 });
 
-test('malformed VAPID config (subject without mailto:, bad keys) disables push instead of crashing the API', () => {
+test('malformed VAPID config (bad subject, bad keys, mismatched pair) disables push instead of crashing the API', () => {
   const keys = webpush.generateVAPIDKeys();
+  const other = webpush.generateVAPIDKeys();
   for (const vapid of [
     { VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: 'ops@example.com' },
     { VAPID_PUBLIC_KEY: 'not-a-key', VAPID_PRIVATE_KEY: 'also-not', VAPID_SUBJECT: 'mailto:ops@example.com' },
+    { VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: other.privateKey, VAPID_SUBJECT: 'mailto:ops@example.com' },
+    // The private key pasted into the subject field: web-push quotes a bad subject in its error.
+    { VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: keys.privateKey },
   ]) {
     const r = runWithVapid(vapid);
     assert.equal(r.booted, true, r.error);
     assert.equal(r.publicKey, '', 'clients must not subscribe with a key the server cannot sign for');
     assert.equal(r.notifyThrew, false);
     assert.equal(r.unhandled, 0);
-    assert.match(r.stderr, /push notifications are disabled/);
+    assert.match(r.stderr, /\[push\] VAPID config rejected \(.+\) — push notifications are disabled\./);
+    assert.ok(!r.stderr.includes(vapid.VAPID_PRIVATE_KEY), 'the private key must never reach the log');
   }
 });
 
