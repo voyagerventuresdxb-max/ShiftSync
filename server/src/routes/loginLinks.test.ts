@@ -219,8 +219,11 @@ test('redeem (the tap): issues a real session once, records ip + audit, then the
 
     const again = await postToken(baseUrl, 'redeem', tokenOf(link.url));
     assert.equal(again.status, 410);
-    assert.equal((await body(again)).errorCode, 'link_used');
-    assert.ok(await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REJECTED', entityId: link.id } }), 'a refused redeem is audited');
+    assert.equal((await body(again)).errorCode, 'link_invalid');
+    assert.ok(await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REJECTED', entityId: link.id, note: { contains: '(used)' } } }), 'a refused redeem is audited');
+    await postToken(baseUrl, 'redeem', tokenOf(link.url));
+    await postToken(baseUrl, 'redeem', tokenOf(link.url));
+    assert.equal(await prisma.auditLog.count({ where: { action: 'LOGIN_LINK_REJECTED', entityId: link.id } }), 1, 'only ONE rejection row per link, however often a spent token is replayed');
     const peek = await postToken(baseUrl, 'peek', tokenOf(link.url));
     assert.equal(peek.status, 410);
   });
@@ -236,7 +239,7 @@ test('single use under concurrent redeem: six simultaneous taps, exactly one ses
   });
 });
 
-test('expiry: an expired link is 410 link_expired for peek and redeem; LOGIN_LINK_TTL_HOURS sets the window', async () => {
+test('expiry: an expired link is 410 for peek and redeem (reason audited server-side); LOGIN_LINK_TTL_HOURS sets the window', async () => {
   const plain = randomBytes(32).toString('base64url');
   const expired = await prisma.loginLink.create({
     data: { tokenHash: hashOtp(plain), userId: staffA1.id, issuedById: managerA1.id, locationId: A.location.id, expiresAt: new Date(Date.now() - 1000) },
@@ -244,11 +247,12 @@ test('expiry: an expired link is 410 link_expired for peek and redeem; LOGIN_LIN
   await withServer(async (baseUrl) => {
     const peek = await postToken(baseUrl, 'peek', plain);
     assert.equal(peek.status, 410);
-    assert.equal((await body(peek)).errorCode, 'link_expired');
+    assert.equal((await body(peek)).errorCode, 'link_invalid');
     const redeem = await postToken(baseUrl, 'redeem', plain);
     assert.equal(redeem.status, 410);
-    assert.equal((await body(redeem)).errorCode, 'link_expired');
+    assert.equal((await body(redeem)).errorCode, 'link_invalid');
     assert.equal((await prisma.loginLink.findUniqueOrThrow({ where: { id: expired.id } })).consumedAt, null);
+    assert.ok(await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REJECTED', entityId: expired.id, note: { contains: '(expired)' } } }), 'the reason lives in the audit note, not the response');
 
     const previous = process.env.LOGIN_LINK_TTL_HOURS;
     process.env.LOGIN_LINK_TTL_HOURS = '2';
@@ -273,7 +277,8 @@ test('reissue revokes the earlier link for the same person (audited); only the n
     assert.ok(firstRow.revokedAt, 'the earlier link is revoked on reissue');
     const dead = await postToken(baseUrl, 'redeem', tokenOf(first.url));
     assert.equal(dead.status, 410);
-    assert.equal((await body(dead)).errorCode, 'link_revoked');
+    assert.equal((await body(dead)).errorCode, 'link_invalid');
+    assert.ok(await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REJECTED', entityId: first.id, note: { contains: '(revoked)' } } }));
     assert.ok(await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REVOKED', entityId: staffA1.id, note: { contains: 'superseded' } } }));
     assert.equal((await postToken(baseUrl, 'redeem', tokenOf(second.url))).status, 200);
   });
@@ -290,8 +295,37 @@ test('DELETE revokes: by the issuer or anyone in scope; a manager from another o
     assert.equal(own.status, 204, 'the owner (in scope for this staff member) may revoke');
     const dead = await postToken(baseUrl, 'redeem', tokenOf(link.url));
     assert.equal(dead.status, 410);
-    assert.equal((await body(dead)).errorCode, 'link_revoked');
+    assert.equal((await body(dead)).errorCode, 'link_invalid');
     assert.equal((await fetch(`${baseUrl}/api/login-links/does-not-exist`, { method: 'DELETE', headers: { Authorization: `Bearer ${tokens.ownerA}` } })).status, 404);
+    assert.equal((await fetch(`${baseUrl}/api/login-links/${link.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${tokens.staffA1}` } })).status, 403, 'a STAFF session cannot revoke at all');
+  });
+});
+
+test('a demoted issuer loses the power to revoke a link they issued (scope is checked today, not at issue time)', async () => {
+  const demotable = await makeUser(A.location.id, 'MANAGER', 'Manager to demote');
+  const demotableToken = await sessionFor(demotable.id);
+  await withServer(async (baseUrl) => {
+    const link = await issueOk(baseUrl, demotableToken, staffA1.id);
+    await prisma.user.update({ where: { id: demotable.id }, data: { systemRole: 'STAFF' } });
+    const res = await fetch(`${baseUrl}/api/login-links/${link.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${demotableToken}` } });
+    assert.equal(res.status, 403);
+    assert.equal((await postToken(baseUrl, 'peek', tokenOf(link.url))).status, 200, 'the link is untouched');
+  });
+});
+
+test('concurrent issue for the same person leaves exactly ONE live link', async () => {
+  await withServer(async (baseUrl) => {
+    await loginLinkIssueRateLimiter.resetKey(managerA1.id);
+    await loginLinkIssueRateLimiter.resetKey(ownerA.id);
+    const results = await Promise.all([
+      issue(baseUrl, tokens.managerA1, staffA1.id),
+      issue(baseUrl, tokens.ownerA, staffA1.id),
+      issue(baseUrl, tokens.managerA1, staffA1.id),
+      issue(baseUrl, tokens.ownerA, staffA1.id),
+    ]);
+    assert.deepEqual(results.map((r) => r.status), [201, 201, 201, 201]);
+    const live = await prisma.loginLink.count({ where: { userId: staffA1.id, consumedAt: null, revokedAt: null } });
+    assert.equal(live, 1, 'every issue but the last must have been superseded, even when they raced');
   });
 });
 
@@ -317,17 +351,17 @@ test('a link for someone deactivated after it was issued cannot be redeemed', as
     await prisma.user.update({ where: { id: leaver.id }, data: { isActive: false } });
     const res = await postToken(baseUrl, 'redeem', tokenOf(link.url));
     assert.equal(res.status, 410);
-    assert.equal((await body(res)).errorCode, 'link_inactive');
+    assert.equal((await body(res)).errorCode, 'link_invalid');
   });
 });
 
-test('malformed and unknown tokens: 400 for junk, 404 link_unknown for a well-formed token nobody minted', async () => {
+test('malformed and unknown tokens: 400 for junk, 410 link_invalid for a well-formed token nobody minted', async () => {
   await withServer(async (baseUrl) => {
     assert.equal((await postToken(baseUrl, 'redeem', 'nope')).status, 400);
     assert.equal((await postToken(baseUrl, 'peek', '')).status, 400);
     const ghost = await postToken(baseUrl, 'redeem', randomBytes(32).toString('base64url'));
-    assert.equal(ghost.status, 404);
-    assert.equal((await body(ghost)).errorCode, 'link_unknown');
+    assert.equal(ghost.status, 410, 'an unknown token gets the same answer as a dead one — no oracle for which tokens exist');
+    assert.equal((await body(ghost)).errorCode, 'link_invalid');
     // A pasted full URL is accepted too — the route extracts the fragment.
     const link = await issueOk(baseUrl, tokens.managerA1, staffA1.id);
     assert.equal((await postToken(baseUrl, 'peek', link.url)).status, 200);

@@ -45,9 +45,14 @@ test.describe('login links', () => {
     const toggle = page.getByRole('button', { name: /Staff Directory/ });
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
     const row = page.getByRole('row').filter({ hasText: 'Link Staff' });
-    await row.getByRole('button', { name: 'Send login link to Link Staff' }).click();
+    await row.getByRole('button', { name: 'Send login link' }).click();
     const url = (await row.getByTestId('login-link-url').innerText()).trim();
-    expect(url).toMatch(/^http:\/\/localhost:5173\/login\/link#[A-Za-z0-9_-]{43}$/);
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe('/login/link');
+    expect(parsed.hash).toMatch(/^#[A-Za-z0-9_-]{43}$/);
+    // Navigate by path + fragment against Playwright's baseURL, so the spec
+    // holds whether or not the dev .env sets FRONTEND_ORIGIN.
+    const linkPath = `${parsed.pathname}${parsed.hash}`;
     const staffLink = await prisma.loginLink.findFirstOrThrow({ where: { userId: staff.id }, orderBy: { createdAt: 'desc' } });
     expect(staffLink.issuedById).toBe(manager.id);
 
@@ -55,7 +60,7 @@ test.describe('login links', () => {
     const staffContext = await browser.newContext();
     try {
       const staffPage = await staffContext.newPage();
-      await staffPage.goto(url);
+      await staffPage.goto(linkPath);
       await expect(staffPage.getByRole('heading', { name: 'Sign in as Link Staff — Link Test Venue' })).toBeVisible();
       // Opening the page (a link scanner, a preview fetch, a curious tap) spends nothing.
       expect((await prisma.loginLink.findUniqueOrThrow({ where: { id: staffLink.id } })).consumedAt).toBeNull();
@@ -65,7 +70,7 @@ test.describe('login links', () => {
       const spent = await prisma.loginLink.findUniqueOrThrow({ where: { id: staffLink.id } });
       expect(spent.consumedAt).not.toBeNull();
       expect(spent.redeemedIp).toBeTruthy();
-      await expect(staffPage.getByText('Link Staff')).toBeVisible();
+      await expect(staffPage.getByText('Link Staff').first()).toBeVisible();
     } finally {
       await staffContext.close();
     }
@@ -74,7 +79,7 @@ test.describe('login links', () => {
     const secondContext = await browser.newContext();
     try {
       const again = await secondContext.newPage();
-      await again.goto(url);
+      await again.goto(linkPath);
       await expect(again.getByRole('alert')).toContainText('already been used');
       await expect(again.getByTestId('login-link-sign-in')).toHaveCount(0);
     } finally {

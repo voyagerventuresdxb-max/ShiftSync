@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { requireSession } from './requireSession.js';
-import { loginLinkIssueRateLimiter, loginLinkRedeemRateLimiter } from './rateLimit.js';
+import { loginLinkIssueRateLimiter, loginLinkPeekRateLimiter, loginLinkRedeemRateLimiter } from './rateLimit.js';
 import { issueSession } from '../lib/identity.js';
 
 /**
@@ -51,17 +51,23 @@ test('issuing is limited to 10 per hour per SESSION; another session is unaffect
   }
 });
 
-test('peek/redeem share one per-IP bucket of 30 per 10 minutes', async () => {
+test('redeem is 30 per 10 minutes per IP and peek has its own 60 — a sign-in (one peek + one redeem) never halves capacity', async () => {
   const app = express();
   app.set('trust proxy', true);
   app.use(express.json());
-  app.post('/peek', loginLinkRedeemRateLimiter, (_req, res) => res.status(200).json({ ok: true }));
+  app.post('/peek', loginLinkPeekRateLimiter, (_req, res) => res.status(200).json({ ok: true }));
   app.post('/redeem', loginLinkRedeemRateLimiter, (_req, res) => res.status(200).json({ ok: true }));
   await withServer(app, async (baseUrl) => {
     const post = (path: string, ip: string) =>
       fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: '{"token":"x"}' });
-    for (let i = 0; i < 30; i++) assert.equal((await post(i % 2 ? '/peek' : '/redeem', '10.9.9.1')).status, 200, `request #${i + 1} allowed`);
-    assert.equal((await post('/redeem', '10.9.9.1')).status, 429, 'the 31st from the same IP is limited');
+    for (let i = 0; i < 30; i++) {
+      assert.equal((await post('/peek', '10.9.9.1')).status, 200, `peek #${i + 1} allowed`);
+      assert.equal((await post('/redeem', '10.9.9.1')).status, 200, `redeem #${i + 1} allowed`);
+    }
+    assert.equal((await post('/redeem', '10.9.9.1')).status, 429, 'the 31st redeem from one IP is limited');
+    assert.equal((await post('/peek', '10.9.9.1')).status, 200, 'peek has its own, larger bucket');
+    for (let i = 31; i < 60; i++) assert.equal((await post('/peek', '10.9.9.1')).status, 200, `peek #${i + 1} allowed`);
+    assert.equal((await post('/peek', '10.9.9.1')).status, 429, 'the 61st peek from one IP is limited');
     assert.equal((await post('/redeem', '10.9.9.2')).status, 200, 'a different IP is unaffected');
   });
 });

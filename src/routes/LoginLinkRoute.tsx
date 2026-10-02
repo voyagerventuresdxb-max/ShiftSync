@@ -29,6 +29,10 @@ export default function LoginLinkContent() {
 
   useEffect(() => {
     const token = extractLoginLinkToken(window.location.hash);
+    // The token is in React state from here on; take it out of the address
+    // bar and history straight away so a live link doesn't linger there if
+    // the person navigates off without signing in.
+    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
     if (!token) {
       setState({ phase: 'invalid', message: NO_TOKEN });
       return;
@@ -54,8 +58,6 @@ export default function LoginLinkContent() {
     try {
       const result = await redeemLoginLink(state.token);
       login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
-      // Drop the token from the address bar/history before leaving the page.
-      window.history.replaceState(null, '', '/login/link');
       navigate(result.landing, { replace: true });
     } catch (err) {
       const message = err instanceof LoginLinkApiError ? err.message : 'Could not sign you in. Please try again.';
