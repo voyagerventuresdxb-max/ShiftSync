@@ -257,6 +257,58 @@ test('PATCH /api/staff-directory/:userId: PATCHing a phone already taken by anot
   }
 });
 
+test('POST /api/staff-directory: optional phone is stored as E.164, invalid is a 400, a number any User holds is a 409, blank creates with no phone', async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__staffdirectory-test__ add phone', timezone: 'Asia/Dubai' },
+  });
+  const other = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__staffdirectory-test__ add phone other', timezone: 'Asia/Dubai' },
+  });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager P', systemRole: 'MANAGER' } });
+  const digits = Date.now().toString().slice(-7);
+  const freeLocal = `056 ${digits.slice(0, 3)} ${digits.slice(3)}`;
+  const freeE164 = `+97156${digits}`;
+  const takenDigits = ((Number(digits) + 1) % 10_000_000).toString().padStart(7, '0');
+  // Deactivated and at another venue: the unique index still covers it.
+  await prisma.user.create({
+    data: { locationId: other.id, fullName: '__staffdirectory-test__ Holder', systemRole: 'STAFF', phone: `+97156${takenDigits}`, isActive: false },
+  });
+  try {
+    await withServer(async (baseUrl) => {
+      const token = await sessionFor(manager.id);
+      const post = (body: Record<string, unknown>) =>
+        fetch(`${baseUrl}/api/staff-directory`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(body),
+        });
+
+      const ok = await post({ fullName: '__staffdirectory-test__ With Phone', phone: freeLocal });
+      assert.equal(ok.status, 201);
+      assert.equal(((await ok.json()) as { phone: string | null }).phone, freeE164);
+      assert.equal((await prisma.user.findUnique({ where: { phone: freeE164 } }))?.locationId, location.id);
+
+      const invalid = await post({ fullName: '__staffdirectory-test__ Bad Phone', phone: '12345' });
+      assert.equal(invalid.status, 400);
+      assert.equal(((await invalid.json()) as { error: string }).error, 'Enter a valid mobile number, e.g. 050 123 4567 or +971 50 123 4567.');
+
+      const dup = await post({ fullName: '__staffdirectory-test__ Dup Phone', phone: `056${takenDigits}` });
+      assert.equal(dup.status, 409);
+      assert.equal(((await dup.json()) as { error: string }).error, 'This phone number is already registered to another staff member.');
+      assert.equal(await prisma.user.count({ where: { fullName: '__staffdirectory-test__ Dup Phone' } }), 0, 'the refused add must not have created anyone');
+
+      const blank = await post({ fullName: '__staffdirectory-test__ No Phone', phone: '' });
+      assert.equal(blank.status, 201);
+      assert.equal(((await blank.json()) as { phone: string | null }).phone, null);
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+    await prisma.location.delete({ where: { id: other.id } }).catch(() => {});
+  }
+});
+
 test('PATCH /api/staff-directory/:userId: roleId assigns one of the venue\'s active roles, null unassigns, another venue\'s role is a 404', async () => {
   const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
