@@ -60,6 +60,8 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | `ALLOW_DEV_OTP_ECHO` | `true` only while there is no SMS integration (#51) — it is the only way a code can be entered on the live site. It shows the real one-time code on screen (and in the server log), **but only for the numbers in `ECHO_ALLOWED_PHONES`**; every other number gets a code it can never see. |
    | `ECHO_ALLOWED_PHONES` | **Required when `ALLOW_DEV_OTP_ECHO=true` in production.** Comma-separated mobile numbers whose code may be echoed, e.g. `+971501234567,050 765 4321` (any format the app accepts; each is normalized to E.164). Invalid entries are ignored with a `[startup]` warning. Anyone who knows a listed number can sign in as it — list only demo/test numbers you control. |
    | `ALLOW_DEV_OTP_BYPASS`, `ALLOW_DEV_ERROR_INJECTION` | **Never set in production.** Local/e2e only. |
+   | `LOGIN_METHODS` | optional. Unset (the default, and any value other than `links`) = phone codes **and** one-time login links. `links` = login links only: the six phone-code routes (join/login/signup `request-otp` and `verify-otp`) answer `403 otp_disabled` and the app hides the phone forms. |
+   | `LOGIN_LINK_TTL_HOURS` | optional, default `24` — how long an issued login link stays redeemable. Also quoted in the share text. Links are minted for the first `FRONTEND_ORIGIN`. |
    | `PORT` | injected by Railway; the server reads it |
 
    **The API refuses to boot in production** (`NODE_ENV=production` or
@@ -115,6 +117,22 @@ open  https://shift-sync-shift-sync1.vercel.app/onboarding       → Welcome int
 sign up a throwaway venue end to end (Account → Venue → Roster upload → Review → Invite)
 open  https://shift-sync-shift-sync1.vercel.app/onboarding/venue → reload survives (SPA fallback)
 ```
+
+## Login links (operator scripts)
+
+Managers and owners send one-time login links from People → Staff Directory → "Send login
+link" (share sheet, or copy). Two operator-only scripts cover what no route does, by design.
+Run them on the API host (`tsx` is installed there); phones in any format the app accepts:
+
+```
+tsx server/scripts/create-org-shell.ts --venue "Il Gattopardo" --owner "Layla Haddad" --phone +971501234567
+    → venue shell (Organization + Location + OWNER + default roles) and the owner's first
+      login link, printed once. Their tap lands in the onboarding wizard at Venue.
+tsx server/scripts/grant-platform-admin.ts +971501234567
+    → flags that active user as platform admin (may issue links to any venue's owners/managers).
+```
+
+Locally: `npm run org:create -- …` and `npm run admin:grant -- …` (against the branch schema).
 
 ## Rollback
 
