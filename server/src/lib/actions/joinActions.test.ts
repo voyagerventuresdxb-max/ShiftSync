@@ -67,6 +67,21 @@ test('decideJoinRequest(approve) guards against a second decision on an already-
   }
 });
 
+test('decideJoinRequest(approve) racing itself: one approval wins, the other is already_reviewed (not phone_taken), one User', async () => {
+  const { location, manager, joinRequest } = await createFixture('concurrent approve');
+
+  try {
+    const results = await Promise.all([
+      decideJoinRequest({ requestId: joinRequest.id, decision: 'approve', reviewedById: manager.id }),
+      decideJoinRequest({ requestId: joinRequest.id, decision: 'approve', reviewedById: manager.id }),
+    ]);
+    assert.deepEqual(results.map((r) => r.result).sort(), ['already_reviewed', 'ok']);
+    assert.equal(await prisma.user.count({ where: { locationId: location.id, fullName: '__joinactions-test__ Applicant' } }), 1);
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
 test('decideJoinRequest(decline) guards against a second decision after the request was already approved', async () => {
   const { location, manager, joinRequest } = await createFixture('approve then decline');
 
