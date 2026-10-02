@@ -292,6 +292,12 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.goto('/people');
     await page.waitForSelector('text=Staff Directory');
     await assertTouchTargets(page, 'People');
+    await page.getByRole('button', { name: 'Generate link' }).click();
+    await page.waitForSelector('text=Copy link');
+    await assertTouchTargets(page, 'People › Join link');
+    await page.getByRole('button', { name: 'Revoke', exact: true }).click();
+    await page.waitForSelector('text=Yes, revoke');
+    await assertTouchTargets(page, 'People › Join link revoke confirm');
 
     await page.goto('/profile');
     await page.waitForSelector('text=Sign out');

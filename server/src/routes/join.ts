@@ -1,9 +1,18 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { findUserByPhone } from './identity.js';
-import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { otpRequestIpLimiter, sendOtpRateLimited, invitePeekLimiter } from '../middleware/rateLimit.js';
+import {
+  INVITE_REJECTION_MESSAGES,
+  INVITE_TOKEN_SHAPE,
+  consumeInviteUse,
+  currentInviteRejection,
+  inviteLinkRejection,
+  isLegacyJoinLinkAccepted,
+  type InviteRejection,
+} from '../lib/inviteLinks.js';
 import { decideJoinRequest, joinDeclinedMessage, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { notifyUser } from '../lib/push.js';
@@ -11,6 +20,30 @@ import { getManagerIdsForLocation, getApproverNameForLocation } from '../lib/man
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const joinRouter = Router();
+
+function sendInviteRejected(res: Response, reason: InviteRejection) {
+  return res.status(410).json({ reason, error: INVITE_REJECTION_MESSAGES[reason] });
+}
+
+/** Thrown inside the join-request transaction when the invite link has no use left, rolling it back. */
+class InviteLinkUnusableError extends Error {}
+
+/** GET /api/join/invite/:token — public peek: 200 { venueName, expiresAt } or 410 { reason, error }. */
+joinRouter.get('/invite/:token', invitePeekLimiter, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const { token } = req.params;
+    const link = INVITE_TOKEN_SHAPE.test(token)
+      ? await prisma.inviteLink.findUnique({ where: { token }, include: { location: { select: { name: true } } } })
+      : null;
+    const rejection = inviteLinkRejection(link);
+    if (rejection || !link) return sendInviteRejected(res, rejection ?? 'not_found');
+    return res.status(200).json({ venueName: link.location.name, expiresAt: link.expiresAt.toISOString() });
+  } catch (err) {
+    console.error('[join.invitePeek] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while checking the invite link.' });
+  }
+});
 
 /** POST /api/join/request-otp — body: { phone } — join path, no existing-match requirement. */
 joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
@@ -37,7 +70,12 @@ joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
 });
 
 /**
- * POST /api/join/verify-otp — body: { locationId, phone, code, fullName? }
+ * POST /api/join/verify-otp — body: { inviteToken | locationId, phone, code, fullName? }
+ *
+ * `inviteToken` is the venue's invite link (lib/inviteLinks.ts); a bare
+ * `locationId` is an old `/join?location=` link, honoured only until the
+ * venue's `legacyJoinLinksUntil`. An unusable link is a 410 after the code
+ * check, before anything is filed.
  *
  * On success: if `phone` matches an existing active User (by digits), issues
  * a real session immediately — this IS the auto-match the directive
@@ -45,23 +83,33 @@ joinRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  * required in this branch) and returns `pending: true` with no session —
  * the "fallback to manual entry landing in Pending Approvals" path. A
  * request already PENDING here is returned as-is (200); a DECLINED one is a 403.
+ * Only a new request or a session counts as a use of the invite link.
  */
 joinRouter.post('/verify-otp', async (req, res) => {
   try {
-    const locationId = String(req.body?.locationId ?? '').trim();
+    const inviteToken = String(req.body?.inviteToken ?? '').trim();
+    const legacyLocationId = inviteToken ? '' : String(req.body?.locationId ?? '').trim();
     const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();
     const fullName = req.body?.fullName ? String(req.body.fullName).trim() : null;
-    if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
+    if (!inviteToken && !legacyLocationId) return res.status(400).json({ error: 'inviteToken is required.' });
     if (!rawPhone || !code) return res.status(400).json({ error: 'phone and code are required.' });
     const phone = toE164(rawPhone);
     if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
-    const location = await prisma.location.findUnique({ where: { id: locationId } });
-    if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
+    const link =
+      inviteToken && INVITE_TOKEN_SHAPE.test(inviteToken)
+        ? await prisma.inviteLink.findUnique({ where: { token: inviteToken }, include: { location: true } })
+        : null;
+    const location = inviteToken ? (link?.location ?? null) : await prisma.location.findUnique({ where: { id: legacyLocationId } });
+    if (!inviteToken && !location) return res.status(404).json({ error: `Location "${legacyLocationId}" not found.` });
 
     const result = await verifyOtpCode(phone, 'JOIN', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
+
+    const rejection = inviteToken ? inviteLinkRejection(link) : location && !isLegacyJoinLinkAccepted(location) ? 'legacy_expired' : null;
+    if (rejection || !location) return sendInviteRejected(res, rejection ?? 'not_found');
+    const locationId = location.id;
 
     // `User.phone` is E.164 and globally unique (deactivated users included),
     // so this is the one possible match. A number held at ANOTHER venue, or by
@@ -78,6 +126,7 @@ joinRouter.post('/verify-otp', async (req, res) => {
     const match = existing;
 
     if (match) {
+      if (link && !(await consumeInviteUse(prisma, link.id))) return sendInviteRejected(res, await currentInviteRejection(link.id));
       const { plainToken, expiresAt } = await issueSession(match.id);
       return res.status(200).json({
         pending: false,
@@ -111,9 +160,16 @@ joinRouter.post('/verify-otp', async (req, res) => {
     if (!fullName) {
       return res.status(400).json({ error: 'No existing match — fullName is required to submit a join request for manual review.' });
     }
-    const joinRequest = await prisma.joinRequest.create({
-      data: { locationId, phone, fullName, status: 'PENDING' },
-    });
+    let joinRequest;
+    try {
+      joinRequest = await prisma.$transaction(async (tx) => {
+        if (link && !(await consumeInviteUse(tx, link.id))) throw new InviteLinkUnusableError();
+        return tx.joinRequest.create({ data: { locationId, phone, fullName, status: 'PENDING' } });
+      });
+    } catch (err) {
+      if (link && err instanceof InviteLinkUnusableError) return sendInviteRejected(res, await currentInviteRejection(link.id));
+      throw err;
+    }
 
     // Real delivery on top of the write above (never blocking the response
     // — a push failure must not stop the applicant's request from going
