@@ -27,7 +27,8 @@
     "server:typecheck": "tsc -p server/tsconfig.json --noEmit",
     "docling:sidecar": "kill-port 8901 && \"server\\docling-sidecar\\.venv\\Scripts\\python.exe\" -m uvicorn service:app --host 127.0.0.1 --port 8901 --app-dir server/docling-sidecar",
     "server:start": "prisma migrate deploy && tsx server/scripts/backfill-phone-e164.ts && tsx server/src/index.ts",
-    "start": "npm run server:start"
+    "start": "npm run server:start",
+    "vapid:generate": "node scripts/generate-vapid.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
