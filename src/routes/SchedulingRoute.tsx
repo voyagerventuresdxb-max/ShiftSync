@@ -145,26 +145,32 @@ export default function SchedulingContent() {
           status: 'off',
         };
       }
-      const isPendingSwap = swapRequests.some((r) => r.shiftId === dayShifts[0].id && r.status === 'pending');
+      // A split shift is two (or more) segments on one day: one card, each
+      // segment's times listed, hours summed, notes/sidework from all of them.
+      dayShifts.sort((a, b) => a.start.localeCompare(b.start));
+      const isPendingSwap = swapRequests.some((r) => r.status === 'pending' && dayShifts.some((s) => s.id === r.shiftId));
       // A day's card summarises every shift on it, so ANY unpublished shift
       // makes the whole card provisional. Upload-committed shifts carry no
       // `status` at all — those stay 'confirmed', exactly as before.
       const isDraft = dayShifts.some((s) => s.status === 'draft');
+      const roles = [...new Set(dayShifts.map((s) => s.requiredRole).filter(Boolean))];
+      const notes = [...new Set(dayShifts.map((s) => s.briefingNote).filter(Boolean))];
       return {
         id: dayShifts[0].id,
         day: weekdayOf(date),
         date: formatDayMonth(date),
         venue: venueName ?? '',
-        role: dayShifts[0].requiredRole ?? activeEmployee.role,
-        start: dayShifts.map((s) => s.start).join(' / '),
-        end: dayShifts.map((s) => s.end).join(' / '),
+        role: roles.length > 0 ? roles.join(' + ') : activeEmployee.role,
+        start: dayShifts[0].start,
+        end: dayShifts[dayShifts.length - 1].end,
+        segments: dayShifts.map((s) => ({ id: s.id, start: s.start, end: s.end })),
         hours: dayShifts.reduce((sum, s) => sum + shiftHours(s.start, s.end), 0),
         // Draft outranks swap-pending: an unpublished line can still move or
         // vanish entirely, so "this isn't live yet" is the more urgent signal —
         // approving a cover for a shift that was never published is premature.
         status: isDraft ? 'draft' : isPendingSwap ? 'swap-pending' : 'confirmed',
-        briefingNote: dayShifts[0].briefingNote,
-        sidework: dayShifts[0].sidework,
+        briefingNote: notes.length > 0 ? notes.join(' · ') : undefined,
+        sidework: [...new Set(dayShifts.flatMap((s) => s.sidework ?? []))],
         sectionAssignments: myAssignments
           .filter((a) => a.shiftDate === date)
           .map((a) => `${a.sectionLabel} (${a.period})`),

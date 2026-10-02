@@ -14,6 +14,9 @@ export interface RotaCard {
   role: string;
   start: string;
   end: string;
+  /** Every shift on this day in start order — two for a split shift. Omitted = the single `start`–`end` under `id`. */
+  segments?: { id: string; start: string; end: string }[];
+  /** Summed across all segments. */
   hours: number;
   status: RotaStatus;
   briefingNote?: string;
@@ -52,7 +55,10 @@ function ShiftCard({
   const { online } = useConnectivity();
   const meta = statusMeta[shift.status];
   const isOff = shift.status === 'off';
+  const segments = shift.segments ?? [{ id: shift.id, start: shift.start, end: shift.end }];
   const [requesting, setRequesting] = useState(false);
+  // A cover request is per shift, so a split day asks which segment.
+  const [segmentId, setSegmentId] = useState(segments[0]!.id);
   const [coveringId, setCoveringId] = useState(coverCandidates[0]?.id ?? '');
   const [sent, setSent] = useState(false);
   const [sending, setSending] = useState(false);
@@ -66,7 +72,7 @@ function ShiftCard({
     setSending(true);
     setSendError(null);
     try {
-      await onRequestCover(shift.id, coveringId);
+      await onRequestCover(segments.some((s) => s.id === segmentId) ? segmentId : segments[0]!.id, coveringId);
       // Only flip to the "sent" confirmation once the server has actually
       // accepted the request — flipping it beforehand risked telling the
       // staff member their request went through when it hadn't.
@@ -134,7 +140,7 @@ function ShiftCard({
               <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 <span className="inline-flex items-center gap-2 font-medium tabular-nums">
                   <Clock className="h-3.5 w-3.5 text-accent" />
-                  {shift.start} – {shift.end}
+                  {segments.map((s) => `${s.start} – ${s.end}`).join(' · ')}
                 </span>
                 <span className="text-muted-foreground tabular-nums">{shift.hours.toFixed(1)}h</span>
               </p>
@@ -173,6 +179,21 @@ function ShiftCard({
                   ) : requesting ? (
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
+                        {segments.length > 1 && (
+                          <select
+                            aria-label="Shift to cover"
+                            value={segmentId}
+                            onChange={(e) => setSegmentId(e.target.value)}
+                            disabled={sending}
+                            className="rounded-lg border border-border bg-surface px-2 py-1 text-xs text-foreground disabled:opacity-60"
+                          >
+                            {segments.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.start}–{s.end}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                         <select
                           value={coveringId}
                           onChange={(e) => setCoveringId(e.target.value)}

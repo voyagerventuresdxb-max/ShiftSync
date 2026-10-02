@@ -53,6 +53,33 @@ test('identical slots in the source are all copied (two open Bartender 17–23 s
   assert.equal(again.skippedDuplicate, 1);
 });
 
+test('a split shift copies both segments to the same day next week', () => {
+  const lunch = shift({ start: '11:00', end: '15:00' });
+  const dinner = shift({ start: '18:00', end: '23:00' });
+  const plan = planCopyWeek({ ...base, previousWeekShifts: [lunch, dinner] });
+  assert.deepEqual(plan.rows.map((r) => [r.userId, r.date, r.start, r.end]), [
+    ['sara', '2026-09-29', '11:00', '15:00'],
+    ['sara', '2026-09-29', '18:00', '23:00'],
+  ]);
+  assert.equal(plan.skippedOverlap, 0);
+});
+
+test('skips a row that would overlap a different shift the person already has in the target week', () => {
+  const plan = planCopyWeek({
+    ...base,
+    targetWeekShifts: [{ userId: 'sara', date: '2026-09-29', roleId: 'bar', start: '12:00', end: '16:00' }],
+    previousWeekShifts: [shift({ start: '11:00', end: '15:00' }), shift({ start: '18:00', end: '23:00' }), shift({ employeeId: 'omar', start: '11:00', end: '15:00' })],
+  });
+  assert.deepEqual(plan.rows.map((r) => `${r.userId} ${r.start}`), ['sara 18:00', 'omar 11:00']);
+  assert.equal(plan.skippedOverlap, 1);
+});
+
+test('an overnight shift in the target week blocks an early shift the next morning; merely touching does not', () => {
+  const overnight = { ...base, targetWeekShifts: [{ userId: 'sara', date: '2026-09-28', roleId: 'bar', start: '20:00', end: '02:00' }] };
+  assert.equal(planCopyWeek({ ...overnight, previousWeekShifts: [shift({ start: '01:00', end: '05:00' })] }).skippedOverlap, 1);
+  assert.equal(planCopyWeek({ ...overnight, previousWeekShifts: [shift({ start: '02:00', end: '06:00' })] }).rows.length, 1);
+});
+
 test('crosses month and year boundaries correctly', () => {
   const plan = planCopyWeek({ ...base, previousWeekShifts: [shift({ date: '2026-12-28' })] });
   assert.equal(plan.rows[0]!.date, '2027-01-04');
