@@ -36,14 +36,19 @@ test('createOrgShell: org + location + OWNER + default roles + a working first l
   }
 });
 
-test('createOrgShell refuses a phone that already belongs to an active user, and blank inputs', async () => {
+test('createOrgShell stores the owner phone in E.164 and refuses a taken (even deactivated), invalid or blank one', async () => {
   const ownerPhone = phone();
-  await createOrgShell({ venueName: `${TAG} First`, ownerFullName: 'First Owner', ownerPhone });
+  const local = `0${ownerPhone.slice(4)}`; // 050XXXXXXX — same number, local format
+  const { owner } = await createOrgShell({ venueName: `${TAG} First`, ownerFullName: 'First Owner', ownerPhone: local });
+  assert.equal(owner.phone, ownerPhone, 'stored as E.164');
   await assert.rejects(() => createOrgShell({ venueName: `${TAG} Second`, ownerFullName: 'Second Owner', ownerPhone }), /already has the phone/);
+  await prisma.user.update({ where: { id: owner.id }, data: { isActive: false } });
+  await assert.rejects(() => createOrgShell({ venueName: `${TAG} Third`, ownerFullName: 'Third Owner', ownerPhone }), /already has the phone/, 'User.phone is unique across deactivated users too');
+  await assert.rejects(() => createOrgShell({ venueName: `${TAG} Bad`, ownerFullName: 'X', ownerPhone: '12345' }), /valid mobile number/);
   await assert.rejects(() => createOrgShell({ venueName: '  ', ownerFullName: 'X', ownerPhone: phone() }), /venueName/);
 });
 
-test('grantPlatformAdmin: by phone in any format; unknown or ambiguous phones are refused', async () => {
+test('grantPlatformAdmin: by phone in any format; unknown, deactivated or invalid phones are refused', async () => {
   const ownerPhone = phone(); // +97150XXXXXXX
   const { owner } = await createOrgShell({ venueName: `${TAG} Admin Venue`, ownerFullName: 'Future Admin', ownerPhone });
   assert.equal(owner.isPlatformAdmin, false);
@@ -52,4 +57,10 @@ test('grantPlatformAdmin: by phone in any format; unknown or ambiguous phones ar
   assert.equal(granted.id, owner.id);
   assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).isPlatformAdmin, true);
   await assert.rejects(() => grantPlatformAdmin('+971500000000'), /No active user/);
+  await assert.rejects(() => grantPlatformAdmin('not a phone'), /valid mobile number/);
+
+  const leaverPhone = phone();
+  const { owner: leaver } = await createOrgShell({ venueName: `${TAG} Leaver Venue`, ownerFullName: 'Leaver', ownerPhone: leaverPhone });
+  await prisma.user.update({ where: { id: leaver.id }, data: { isActive: false } });
+  await assert.rejects(() => grantPlatformAdmin(leaverPhone), /No active user/);
 });

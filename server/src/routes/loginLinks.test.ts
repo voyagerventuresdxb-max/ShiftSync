@@ -206,9 +206,10 @@ test('redeem (the tap): issues a real session once, records ip + audit, then the
     const res = await postToken(baseUrl, 'redeem', tokenOf(link.url));
     const text = await res.text();
     assert.equal(res.status, 200, text);
-    const b = JSON.parse(text) as { token: string; user: { id: string; systemRole: string }; landing: string };
+    const b = JSON.parse(text) as { token: string; user: { id: string; systemRole: string }; landing: string | null };
     assert.equal(b.user.id, staffA1.id);
-    assert.equal(b.landing, '/my-shifts');
+    assert.equal(b.user.systemRole, 'STAFF');
+    assert.equal(b.landing, null, 'no override: the client routes STAFF to /my-shifts');
     const resolved = await resolveSession(b.token);
     assert.equal(resolved?.id, staffA1.id, 'the returned token must resolve to a real session for the target');
 
@@ -329,7 +330,7 @@ test('concurrent issue for the same person leaves exactly ONE live link', async 
   });
 });
 
-test('landing: an owner of a bare venue shell lands in the wizard at Venue; everyone else on /my-shifts', async () => {
+test('landing: an owner of a bare venue shell lands in the wizard at Venue; everyone else gets null (the client routes by role)', async () => {
   const shell = await makeVenue('Shell', false);
   const shellOwner = await makeUser(shell.location.id, 'OWNER', 'Shell Owner');
   await withServer(async (baseUrl) => {
@@ -340,7 +341,7 @@ test('landing: an owner of a bare venue shell lands in the wizard at Venue; ever
 
     const setUpLink = await issueOk(baseUrl, tokens.admin, ownerA.id);
     const setUp = await postToken(baseUrl, 'redeem', tokenOf(setUpLink.url));
-    assert.equal((await body(setUp)).landing, '/my-shifts', 'an owner whose venue is set up does not re-enter the wizard');
+    assert.equal((await body(setUp)).landing, null, 'an owner whose venue is set up does not re-enter the wizard');
   });
 });
 
@@ -368,26 +369,78 @@ test('malformed and unknown tokens: 400 for junk, 410 link_invalid for a well-fo
   });
 });
 
-test('LOGIN_METHODS: links-only (default) closes the phone-code routes with 403 otp_disabled; otp reopens them', async () => {
+const OTP_ROUTES = ['/api/identity/request-otp', '/api/identity/verify-otp', '/api/join/request-otp', '/api/join/verify-otp', '/api/signup/request-otp', '/api/signup/verify-otp'];
+
+async function withLoginMethods<T>(value: string | undefined, fn: () => Promise<T>): Promise<T> {
   const previous = process.env.LOGIN_METHODS;
+  if (value === undefined) delete process.env.LOGIN_METHODS;
+  else process.env.LOGIN_METHODS = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.LOGIN_METHODS;
+    else process.env.LOGIN_METHODS = previous;
+  }
+}
+
+test('LOGIN_METHODS unset (the default): none of the six phone-code routes answers 403 otp_disabled; config says both', async () => {
   await withServer(async (baseUrl) => {
-    try {
-      delete process.env.LOGIN_METHODS;
-      for (const path of ['/api/identity/request-otp', '/api/join/request-otp', '/api/signup/request-otp', '/api/identity/verify-otp']) {
+    for (const value of [undefined, '', 'otp', 'nonsense']) {
+      await withLoginMethods(value, async () => {
+        for (const path of OTP_ROUTES) {
+          // An empty body reaches the handler's own validation (400) without minting a code.
+          const res = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const b = await body(res);
+          assert.notEqual(b.errorCode, 'otp_disabled', `${path} must stay open with LOGIN_METHODS=${String(value)}`);
+          assert.equal(res.status, 400, `${path} must reach its handler with LOGIN_METHODS=${String(value)}`);
+        }
+        assert.deepEqual(await (await fetch(`${baseUrl}/api/identity/config`)).json(), { loginMethods: 'both' });
+      });
+    }
+  });
+});
+
+test('LOGIN_METHODS=links: all six phone-code routes answer 403 otp_disabled; login links still work', async () => {
+  await withServer(async (baseUrl) => {
+    await withLoginMethods('links', async () => {
+      for (const path of OTP_ROUTES) {
         const res = await fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: '0501234567', code: '000000' }) });
         assert.equal(res.status, 403, `${path} must be closed in links mode`);
         assert.equal((await body(res)).errorCode, 'otp_disabled');
       }
-      const config = await fetch(`${baseUrl}/api/identity/config`);
-      assert.deepEqual(await config.json(), { loginMethods: 'links' });
-
-      process.env.LOGIN_METHODS = 'otp';
-      const reopened = await fetch(`${baseUrl}/api/identity/request-otp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: '0500000000' }) });
-      assert.notEqual(reopened.status, 403);
-      assert.deepEqual(await (await fetch(`${baseUrl}/api/identity/config`)).json(), { loginMethods: 'otp' });
-    } finally {
-      if (previous === undefined) delete process.env.LOGIN_METHODS;
-      else process.env.LOGIN_METHODS = previous;
-    }
+      assert.deepEqual(await (await fetch(`${baseUrl}/api/identity/config`)).json(), { loginMethods: 'links' });
+      const link = await issueOk(baseUrl, tokens.managerA1, staffA1.id);
+      assert.equal((await postToken(baseUrl, 'redeem', tokenOf(link.url))).status, 200);
+    });
   });
+});
+
+test('the token is only ever stored hashed and never written to an audit note or a log line', async () => {
+  const lines: string[] = [];
+  const originals = { log: console.log, error: console.error, warn: console.warn };
+  for (const k of ['log', 'error', 'warn'] as const) {
+    console[k] = (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    };
+  }
+  let token = '';
+  let linkId = '';
+  try {
+    await withServer(async (baseUrl) => {
+      const link = await issueOk(baseUrl, tokens.managerA1, staffA1.id);
+      token = tokenOf(link.url);
+      linkId = link.id;
+      await postToken(baseUrl, 'peek', token);
+      await postToken(baseUrl, 'redeem', token);
+      await postToken(baseUrl, 'redeem', token); // refused: logged + audited
+    });
+  } finally {
+    Object.assign(console, originals);
+  }
+  const row = await prisma.loginLink.findUniqueOrThrow({ where: { id: linkId } });
+  assert.equal(row.tokenHash, hashOtp(token));
+  assert.ok(!lines.some((l) => l.includes(token)), 'no log line may contain the token');
+  const notes = await prisma.auditLog.findMany({ where: { OR: [{ entityId: linkId }, { entityId: staffA1.id }] }, select: { note: true } });
+  assert.ok(notes.length > 0);
+  assert.ok(!notes.some((n) => n.note?.includes(token)), 'no audit note may contain the token');
 });

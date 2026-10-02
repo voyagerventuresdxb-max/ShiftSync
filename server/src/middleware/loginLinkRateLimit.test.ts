@@ -51,23 +51,28 @@ test('issuing is limited to 10 per hour per SESSION; another session is unaffect
   }
 });
 
-test('redeem is 30 per 10 minutes per IP and peek has its own 60 — a sign-in (one peek + one redeem) never halves capacity', async () => {
+test('redeem is 30 per 10 minutes per client and peek has its own 60 — keyed like otpClientKey, loopback unlimited', async () => {
   const app = express();
-  app.set('trust proxy', true);
   app.use(express.json());
   app.post('/peek', loginLinkPeekRateLimiter, (_req, res) => res.status(200).json({ ok: true }));
   app.post('/redeem', loginLinkRedeemRateLimiter, (_req, res) => res.status(200).json({ ok: true }));
   await withServer(app, async (baseUrl) => {
-    const post = (path: string, ip: string) =>
-      fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: '{"token":"x"}' });
+    // Through Vercel: Railway's X-Real-IP is Vercel's egress, X-Vercel-Forwarded-For the real client.
+    const viaVercel = (client: string) => ({ 'X-Real-IP': '198.51.100.7', 'X-Vercel-Forwarded-For': client });
+    const post = (path: string, headers: Record<string, string>) =>
+      fetch(`${baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{"token":"x"}' });
+    const one = viaVercel('203.0.113.1');
     for (let i = 0; i < 30; i++) {
-      assert.equal((await post('/peek', '10.9.9.1')).status, 200, `peek #${i + 1} allowed`);
-      assert.equal((await post('/redeem', '10.9.9.1')).status, 200, `redeem #${i + 1} allowed`);
+      assert.equal((await post('/peek', one)).status, 200, `peek #${i + 1} allowed`);
+      assert.equal((await post('/redeem', one)).status, 200, `redeem #${i + 1} allowed`);
     }
-    assert.equal((await post('/redeem', '10.9.9.1')).status, 429, 'the 31st redeem from one IP is limited');
-    assert.equal((await post('/peek', '10.9.9.1')).status, 200, 'peek has its own, larger bucket');
-    for (let i = 31; i < 60; i++) assert.equal((await post('/peek', '10.9.9.1')).status, 200, `peek #${i + 1} allowed`);
-    assert.equal((await post('/peek', '10.9.9.1')).status, 429, 'the 61st peek from one IP is limited');
-    assert.equal((await post('/redeem', '10.9.9.2')).status, 200, 'a different IP is unaffected');
+    const limited = await post('/redeem', one);
+    assert.equal(limited.status, 429, 'the 31st redeem from one client is limited');
+    assert.match(((await limited.json()) as { error: string }).error, /too many/i);
+    assert.equal((await post('/peek', one)).status, 200, 'peek has its own, larger bucket');
+    for (let i = 31; i < 60; i++) assert.equal((await post('/peek', one)).status, 200, `peek #${i + 1} allowed`);
+    assert.equal((await post('/peek', one)).status, 429, 'the 61st peek from one client is limited');
+    assert.equal((await post('/redeem', viaVercel('203.0.113.2'))).status, 200, 'another client behind the same Vercel egress is unaffected');
+    for (let i = 0; i < 35; i++) assert.equal((await post('/redeem', {})).status, 200, 'loopback with no proxy headers (local dev, e2e) is never limited');
   });
 });
