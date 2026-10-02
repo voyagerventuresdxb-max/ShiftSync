@@ -15,7 +15,7 @@ import { buildLoginLinkUrl, generateLoginLinkToken, loginLinkExpiry, loginLinkSh
  * is not used here precisely because it answers 403).
  */
 
-export type Issuer = Pick<User, 'id' | 'locationId' | 'systemRole' | 'isPlatformAdmin'>;
+export type Issuer = Pick<User, 'id' | 'locationId' | 'systemRole' | 'isPlatformAdmin' | 'isActive'>;
 
 type TargetWithLocation = User & { location: { id: string; name: string; organizationId: string; emirate: string | null; venueType: string | null } };
 
@@ -32,7 +32,8 @@ export type IssueResult =
  * Never yourself, never an inactive user. Anything else: null.
  */
 export async function findIssuableTarget(issuer: Issuer, targetUserId: string): Promise<TargetWithLocation | null> {
-  if (!targetUserId || targetUserId === issuer.id) return null;
+  // Deactivation doesn't end existing sessions, so a deactivated issuer is refused here.
+  if (!issuer.isActive || !targetUserId || targetUserId === issuer.id) return null;
   const target = await prisma.user.findUnique({
     where: { id: targetUserId },
     include: { location: { select: { id: true, name: true, organizationId: true, emirate: true, venueType: true } } },
