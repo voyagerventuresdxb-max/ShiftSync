@@ -53,6 +53,7 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
   const [savingId, setSavingId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newTitle, setNewTitle] = useState('');
+  const [newPhone, setNewPhone] = useState('');
   const [adding, setAdding] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
 
@@ -215,13 +216,18 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
     if (!online) return;
     setAdding(true);
     try {
-      const created = await addStaffMember(session.token, { fullName, jobTitle: newTitle.trim() || null });
+      const created = await addStaffMember(session.token, {
+        fullName,
+        jobTitle: newTitle.trim() || null,
+        phone: newPhone.trim() || null,
+      });
       // Same as handleFieldSave: notify outside the updater, never during render.
       const next = [...staff, created].sort((a, b) => a.fullName.localeCompare(b.fullName));
       setStaff(next);
       onChanged?.(next);
       setNewName('');
       setNewTitle('');
+      setNewPhone('');
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not add that staff member.');
@@ -325,6 +331,16 @@ export default function StaffDirectory({ locationId, onChanged }: StaffDirectory
                   placeholder="Job title (e.g. Restaurant Manager)"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
+                  disabled={!online}
+                />
+                <input
+                  type="tel"
+                  className="staff-directory-input"
+                  placeholder="Mobile (optional)"
+                  aria-label="Mobile number (optional)"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
                   disabled={!online}
                 />
