@@ -18,6 +18,7 @@ Orchestrated multi-phase run against `origin/master @ 32edfc5` (= production). S
 | 1 Security | done | `feat/otp-echo-allowlist` (base master) | [#62](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/62) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 301 pass / 1 skip (302; 18 new incl. a real `index.ts` boot-refusal spawn), build ✔, e2e full 21/21 (0 flaky) |
 | 2 Housekeeping | done | `chore/housekeeping-staff-phone` (base master) | [#61](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/61) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 62/62, server 284 pass / 1 skip (285), build ✔, e2e full 23/23 |
 | 3 /login + role routing | done | `feat/login-route-role-routing` (stacked on #62) | [#64](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/64) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 68/68, server 301 pass / 1 skip, build ✔, e2e `login.spec` 10/10 (`--retries=0`), full 31/31 |
+| 4 Approval → staff in | done | `feat/pending-applicant-status` (stacked on #64) | [#65](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/65) | typecheck ✔ ×2, lint 0 errors (18 warnings), unit 68/68, server 309 pass / 1 skip (310), build ✔, e2e `join-approval` 3/3, related 16/16, full 34/34 (`--retries=0`) |
 | 8 Deploy-safety prep | done | `chore/railway-config-as-code-vapid` (base master) | [#63](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/63) | typecheck ✔ ×2, lint 0 errors (19 pre-existing warnings), unit 66/66, server 287 pass / 1 skip, build ✔, e2e full 21/21 |
 
 ### Phase 3 notes
@@ -26,6 +27,12 @@ Orchestrated multi-phase run against `origin/master @ 32edfc5` (= production). S
 - `isSafeReturnTo` hardened: must start with `/`, same origin after WHATWG resolution, and rejects `/join`/`/login` after decoding + dot-segment resolution (`/%6Cogin`, `/./login`), case-insensitive.
 - Server behavior unchanged (OTP caps + E.164 untouched). Fixed a pre-existing race in `touch-targets.spec.ts` (sheet close does `navigate(-1)` a macrotask later; the spec's `goto` raced it).
 - Known: a token revoked server-side but unexpired in the browser is bounced off `/login` to its destination (way out: Profile → Sign out; part of #20). Login still 404s unknown numbers (existing enumeration surface, IP-limited).
+
+### Phase 4 notes
+- `identity/request-otp` now also mints a code for deactivated users and PENDING/DECLINED applicants; their status is revealed only after the code verifies. `identity/verify-otp`: active → session (unchanged shape); deactivated → 403; newest PENDING → 200 `{ pending, venueName, managerName }` with no token (an open application wins over an older decline elsewhere); DECLINED → 403 with a clear "ask a manager to add you" message.
+- `join/verify-otp`: an existing PENDING request at that venue is returned as-is (no duplicate, no second manager push); a DECLINED one → 403. Responses carry `venueName`/`managerName` (earliest active OWNER, else MANAGER, else "a manager").
+- Approve when the phone already belongs to a user → 409 `phone_taken` (was a 500 on the unique index); race-safe (P2002 caught, status re-read so a double-approve still reads "already reviewed"). Voice approvals handle it too. Approval leaves an in-app "You're in" notification for the new user's first sign-in.
+- Known: duplicate PENDING requests created before this fix remain in queues (approving the 2nd → 409; decline it). No DB constraint prevents two simultaneous first-time verifies both filing (pre-existing race). `/login` 200-vs-404 now also covers pending/declined numbers (IP-limited). Old frontend + new API: a pending answer without a token degrades to today's signed-out state.
 
 ### Phase 8 notes (deploy-safety prep — nothing deployed, no Railway/Vercel command run against any project)
 - PR #63 "Refs #52" (does not close it). `railway.json` unchanged, so today's GitHub-source deploys behave exactly as before.
