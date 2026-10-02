@@ -24,6 +24,11 @@ export function nextEchoPhone(): string {
   return phones[used]!;
 }
 
+/** Ages a phone's OTP codes by 60s so its next code request clears the per-phone 30s resend cap without sleeping. */
+export async function skipOtpResendWait(phone: string): Promise<void> {
+  await prisma.$executeRaw`UPDATE otp_codes SET created_at = created_at - interval '60 seconds' WHERE phone = ${phone}`;
+}
+
 export const TEST_ORG_PREFIX = '__e2e-test__';
 
 /** Marks a real org name as e2e-owned so teardown can find and delete it, and no

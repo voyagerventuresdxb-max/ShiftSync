@@ -34,7 +34,7 @@ export async function requestJoinOtp(phone: string): Promise<{ expiresAt: string
 
 export type JoinVerifyResult =
   | { pending: false; token: string; expiresAt: string; user: SessionUser }
-  | { pending: true; joinRequestId: string };
+  | { pending: true; joinRequestId: string; venueName: string; managerName: string | null };
 
 /** POST /api/join/verify-otp — body: { locationId, phone, code, fullName? } */
 export async function verifyJoinOtp(input: { locationId: string; phone: string; code: string; fullName?: string }): Promise<JoinVerifyResult> {

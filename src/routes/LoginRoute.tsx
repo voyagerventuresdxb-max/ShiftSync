@@ -21,6 +21,7 @@ export default function LoginContent() {
   const [devCode, setDevCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noAccount, setNoAccount] = useState(false);
+  const [waitingOn, setWaitingOn] = useState<{ venueName: string; managerName: string | null } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Also the post-verify redirect: `login()` below sets `session`.
@@ -30,6 +31,7 @@ export default function LoginContent() {
     setSubmitting(true);
     setError(null);
     setNoAccount(false);
+    setWaitingOn(null);
     try {
       const res = await requestLoginOtp(phone);
       setDevCode(res.devCode ?? null);
@@ -52,6 +54,14 @@ export default function LoginContent() {
     setError(null);
     try {
       const result = await verifyLoginOtp(phone, code);
+      if (result.pending) {
+        // No session yet: back to the phone step so they can sign in again once approved.
+        setWaitingOn({ venueName: result.venueName, managerName: result.managerName });
+        setPhase('phone');
+        setCode('');
+        setDevCode(null);
+        return;
+      }
       login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not verify that code.');
@@ -66,6 +76,7 @@ export default function LoginContent() {
     setDevCode(null);
     setError(null);
     setNoAccount(false);
+    setWaitingOn(null);
   };
 
   const onSubmit = (e: FormEvent) => {
@@ -96,6 +107,13 @@ export default function LoginContent() {
               </p>
             </>
           )}
+        </div>
+      )}
+
+      {waitingOn && (
+        <div className="mt-3 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm text-warning" role="status">
+          Waiting for {waitingOn.managerName ?? 'a manager'} to approve you at {waitingOn.venueName}. Sign in again once you've been
+          approved.
         </div>
       )}
 

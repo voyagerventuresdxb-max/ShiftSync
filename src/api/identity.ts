@@ -45,11 +45,16 @@ export async function requestLoginOtp(phone: string): Promise<{ expiresAt: strin
   });
 }
 
+/**
+ * A pending applicant gets no token, only who they're waiting on. Declined
+ * and deactivated numbers are a 403 whose message lands in `ApiError`.
+ */
+export type LoginVerifyResult =
+  | { pending?: false; token: string; expiresAt: string; user: SessionUser }
+  | { pending: true; status: 'pending'; venueName: string; managerName: string | null };
+
 /** POST /api/identity/verify-otp */
-export async function verifyLoginOtp(
-  phone: string,
-  code: string,
-): Promise<{ token: string; expiresAt: string; user: SessionUser }> {
+export async function verifyLoginOtp(phone: string, code: string): Promise<LoginVerifyResult> {
   return request('/api/identity/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

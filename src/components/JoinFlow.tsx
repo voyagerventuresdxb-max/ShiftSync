@@ -18,6 +18,7 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [waitingOn, setWaitingOn] = useState<{ venueName: string; managerName: string | null } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const handleRequestOtp = async () => {
@@ -40,6 +41,7 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
     try {
       const result = await verifyJoinOtp({ locationId, phone, code, fullName: fullName.trim() || undefined });
       if (result.pending) {
+        setWaitingOn({ venueName: result.venueName, managerName: result.managerName });
         setPhase('pending');
       } else {
         login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
@@ -102,9 +104,10 @@ export default function JoinFlow({ locationId }: { locationId: string }) {
         </div>
       )}
 
-      {phase === 'pending' && (
-        <div className="mt-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
-          Thanks — your request has been submitted for review. A manager will approve your account shortly.
+      {phase === 'pending' && waitingOn && (
+        <div className="mt-4 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm text-warning" role="status">
+          Waiting for {waitingOn.managerName ?? 'a manager'} to approve you at {waitingOn.venueName}. Sign in again once you've been
+          approved.
         </div>
       )}
 
