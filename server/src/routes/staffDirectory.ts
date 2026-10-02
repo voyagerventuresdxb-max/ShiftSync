@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
+import { revokeUserAccess } from '../lib/identity.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -253,7 +254,8 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
     // to move both — otherwise terminatedAt stays permanently null and the two
     // fields disagree about the same fact. Only a real transition writes it, so
     // re-sending isActive:false doesn't overwrite the original termination date.
-    if (data.isActive !== undefined && data.isActive !== existing.isActive) {
+    const statusChanges = data.isActive !== undefined && data.isActive !== existing.isActive;
+    if (statusChanges) {
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
@@ -278,6 +280,12 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
           });
           if (result.count === 0) {
             throw new StaffRecordChangedConcurrentlyError();
+          }
+          // Either direction: deactivation must lock them out now, and
+          // reactivation clears anything a sign-in racing the deactivation
+          // left behind, so they always come back through a fresh sign-in.
+          if (statusChanges) {
+            await revokeUserAccess(tx, existing, req.user!.id);
           }
           // `updateMany` doesn't return the row, so re-fetch it (inside the
           // same transaction) for the response's `toDto`.

@@ -314,15 +314,16 @@ test('a demoted issuer loses the power to revoke a link they issued (scope is ch
   });
 });
 
-test('a deactivated manager whose session survived can neither issue nor revoke (404)', async () => {
+test('a deactivated manager whose session row survived (set inactive directly) can neither issue nor revoke: the session no longer authenticates (401)', async () => {
   const leaver = await makeUser(A.location.id, 'MANAGER', 'Manager deactivated');
   const leaverToken = await sessionFor(leaver.id);
   await withServer(async (baseUrl) => {
     const link = await issueOk(baseUrl, leaverToken, staffA1.id);
     await prisma.user.update({ where: { id: leaver.id }, data: { isActive: false } });
-    assert.equal((await issue(baseUrl, leaverToken, staffA1.id)).status, 404);
+    assert.equal((await issue(baseUrl, leaverToken, staffA1.id)).status, 401);
     const res = await fetch(`${baseUrl}/api/login-links/${link.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${leaverToken}` } });
-    assert.equal(res.status, 404);
+    assert.equal(res.status, 401);
+    assert.equal((await postToken(baseUrl, 'peek', tokenOf(link.url))).status, 200, 'the refused revoke left the link alone');
   });
 });
 

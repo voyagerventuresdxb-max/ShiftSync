@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
-import { issueSession } from '../lib/identity.js';
+import { createOtpCode, hashOtp, issueSession, resolveSession } from '../lib/identity.js';
 
 const prisma = new PrismaClient();
 
@@ -53,10 +54,14 @@ test('GET /api/staff-directory/:locationId redacts personal fields for a STAFF c
   const manager = await prisma.user.create({
     data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager', systemRole: 'MANAGER' },
   });
+  // The caller has to be active: a deactivated user's session no longer authenticates.
+  const viewer = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Viewer', systemRole: 'STAFF' },
+  });
 
   try {
     await withServer(async (baseUrl) => {
-      const staffToken = await sessionFor(staff.id);
+      const staffToken = await sessionFor(viewer.id);
       const staffRes = await fetch(`${baseUrl}/api/staff-directory/${location.id}`, {
         headers: { Authorization: `Bearer ${staffToken}` },
       });
@@ -291,5 +296,157 @@ test('PATCH /api/staff-directory/:userId: roleId assigns one of the venue\'s act
   } finally {
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
     await prisma.location.delete({ where: { id: other.id } }).catch(() => {});
+  }
+});
+
+/** A live login link for `userId`, stored the way the route stores it (hash only). */
+async function liveLinkFor(userId: string, locationId: string) {
+  const token = randomBytes(32).toString('base64url');
+  const row = await prisma.loginLink.create({
+    data: { tokenHash: hashOtp(token), userId, locationId, expiresAt: new Date(Date.now() + 3600_000) },
+  });
+  return { token, id: row.id };
+}
+
+function myShifts(baseUrl: string, token: string) {
+  return fetch(`${baseUrl}/api/my-shifts`, { headers: { Authorization: `Bearer ${token}` } });
+}
+
+function setActive(baseUrl: string, managerToken: string, userId: string, isActive: boolean) {
+  return fetch(`${baseUrl}/api/staff-directory/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ isActive }),
+  });
+}
+
+async function testLocation(label: string) {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  return prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: `__staffdirectory-test__ ${label}`, timezone: 'Asia/Dubai' },
+  });
+}
+
+test('PATCH isActive:false ends every session of that person at once and revokes their unspent login links; nobody else is touched', async () => {
+  const location = await testLocation('deactivate');
+  const leaver = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Leaver', systemRole: 'STAFF' } });
+  const stayer = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Stayer', systemRole: 'STAFF' } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager D', systemRole: 'MANAGER' } });
+
+  try {
+    const phoneToken = await sessionFor(leaver.id);
+    const laptopToken = await sessionFor(leaver.id);
+    const stayerToken = await sessionFor(stayer.id);
+    const managerToken = await sessionFor(manager.id);
+    const live = await liveLinkFor(leaver.id, location.id);
+    const spent = await prisma.loginLink.create({
+      data: {
+        tokenHash: hashOtp(randomBytes(32).toString('base64url')),
+        userId: leaver.id,
+        locationId: location.id,
+        expiresAt: new Date(Date.now() + 3600_000),
+        consumedAt: new Date(),
+      },
+    });
+    const stayerLink = await liveLinkFor(stayer.id, location.id);
+
+    await withServer(async (baseUrl) => {
+      assert.equal((await myShifts(baseUrl, phoneToken)).status, 200);
+
+      // An edit that isn't a status change leaves sessions alone.
+      const rename = await fetch(`${baseUrl}/api/staff-directory/${leaver.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${managerToken}` },
+        body: JSON.stringify({ jobTitle: 'Runner' }),
+      });
+      assert.equal(rename.status, 200);
+      assert.equal((await myShifts(baseUrl, phoneToken)).status, 200);
+
+      const res = await setActive(baseUrl, managerToken, leaver.id, false);
+      assert.equal(res.status, 200);
+      assert.equal(((await res.json()) as { isActive: boolean }).isActive, false);
+
+      for (const token of [phoneToken, laptopToken]) {
+        const after = await myShifts(baseUrl, token);
+        assert.equal(after.status, 401, "the deactivated person's very next request must be refused");
+        assert.equal(((await after.json()) as { error: string }).error, 'Session is invalid or has expired.');
+      }
+      assert.equal(await prisma.session.count({ where: { userId: leaver.id } }), 0, 'every session row is gone');
+
+      assert.ok((await prisma.loginLink.findUniqueOrThrow({ where: { id: live.id } })).revokedAt, 'the unspent link is revoked');
+      assert.equal((await prisma.loginLink.findUniqueOrThrow({ where: { id: spent.id } })).revokedAt, null, 'an already-used link is left as it was');
+      const redeem = await fetch(`${baseUrl}/api/login-links/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: live.token }),
+      });
+      assert.equal(redeem.status, 410);
+      const audit = await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REVOKED', entityId: leaver.id } });
+      assert.ok(audit, 'the revocation is audited');
+      assert.equal(audit!.actorId, manager.id);
+      assert.equal(audit!.locationId, location.id);
+
+      assert.equal((await myShifts(baseUrl, stayerToken)).status, 200, "a colleague's session is untouched");
+      assert.equal((await myShifts(baseUrl, managerToken)).status, 200, "the manager's own session is untouched");
+      assert.equal((await prisma.loginLink.findUniqueOrThrow({ where: { id: stayerLink.id } })).revokedAt, null, "a colleague's link is untouched");
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('a session row whose user is inactive never authenticates; reactivating does not revive it, a fresh sign-in works', async () => {
+  const location = await testLocation('reactivate');
+  const phone = `+97150${(Date.now() + 7).toString().slice(-7)}`;
+  // Inactive yet holding a session row: what a sign-in racing a deactivation could leave behind.
+  const returner = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Returner', systemRole: 'STAFF', phone, isActive: false, terminatedAt: new Date() },
+  });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager E', systemRole: 'MANAGER' } });
+
+  try {
+    const stale = await sessionFor(returner.id);
+    const managerToken = await sessionFor(manager.id);
+    assert.equal(await resolveSession(stale), null, 'resolveSession refuses an inactive user');
+
+    await withServer(async (baseUrl) => {
+      assert.equal((await myShifts(baseUrl, stale)).status, 401);
+
+      assert.equal((await setActive(baseUrl, managerToken, returner.id, true)).status, 200);
+      assert.equal((await myShifts(baseUrl, stale)).status, 401, 'reactivation must not bring the old session back');
+      assert.equal(await prisma.session.count({ where: { userId: returner.id } }), 0);
+
+      const { plainCode } = await createOtpCode(phone, 'LOGIN');
+      const login = await fetch(`${baseUrl}/api/identity/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, code: plainCode }),
+      });
+      assert.equal(login.status, 200);
+      const { token } = (await login.json()) as { token: string };
+      assert.equal((await myShifts(baseUrl, token)).status, 200, 'a fresh sign-in after reactivation works');
+    });
+  } finally {
+    await prisma.otpCode.deleteMany({ where: { phone } });
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('a manager who deactivates themselves gets a clean 200, and that session ends with it', async () => {
+  const location = await testLocation('self');
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager F', systemRole: 'MANAGER' } });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await setActive(baseUrl, token, manager.id, false);
+      assert.equal(res.status, 200);
+      assert.equal(((await res.json()) as { isActive: boolean }).isActive, false);
+      const next = await fetch(`${baseUrl}/api/staff-directory/${location.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      assert.equal(next.status, 401);
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
