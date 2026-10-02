@@ -498,3 +498,11 @@ Rollback note: CLI 5.63.1 has no "roll back to deployment id". The documented ro
 - It isn't caused by the merges: the spec passed 2/2 twice when re-run alone on the same master.
 - Fix PR [#79](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/79) cherry-picks the existing fix `ed7f386` from #64 (verified 2/2). Not merged.
 - The API was **not** deployed. It still serves `031e638f-fa76-4e0b-9692-34103abacf5f` (code `32edfc5`). The frontend auto-deployed from master via Vercel.
+- Owner decision: treat that one known flaky spec as non-blocking for Stage A only (#79 not merged; #64 carries the same fix).
+
+| Time (UTC) | What | Deployment id | Code | Health |
+|---|---|---|---|---|
+| 2026-10-02 20:33–20:36 | Stage A API deploy (`railway redeploy --from-source`) | `d54bdfaa-a816-493f-ae14-d80966cbaad7` | `5f19081` (#62, #63, #61) | SUCCESS; nixpacks + `npm run server:start`; no pending migrations; API listening, no boot refusal; `/api/health` 200 JSON ×2 on the Railway domain and through Vercel; an `/api` JSON path answers JSON, not HTML |
+
+- Stage A verification on production (no numbers or codes recorded): the sign-in code echo now follows the allowlist. The allowlisted number gets a code; other numbers get none.
+- **Stopped before Stage B.** The allowlisted number has no active account, so the owner's "sign in as the allowlisted manager" precondition for the Stage B smoke test isn't met. No account was created or changed.
