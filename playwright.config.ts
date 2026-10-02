@@ -40,7 +40,8 @@ export default defineConfig({
       // ALLOW_DEV_ERROR_INJECTION arms requireSession's sentinel-token throw
       // (see require-session-error-handling.spec.ts) — same dev-only-flag
       // shape as ALLOW_DEV_OTP_ECHO, inert for any real token.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_ERROR_INJECTION: 'true' },
+      // Empty VAPID_* keep push off whatever the local .env holds (push-unavailable.spec.ts relies on it).
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_ERROR_INJECTION: 'true', VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '' },
       timeout: 60_000,
     },
     {
