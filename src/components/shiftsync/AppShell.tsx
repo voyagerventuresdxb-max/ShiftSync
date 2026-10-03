@@ -10,6 +10,7 @@ import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
+import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -194,6 +195,13 @@ export function AppShell() {
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
         const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
+        // Role check BEFORE the confirm sheet: a STAFF session must never be
+        // shown a "Confirm" for a manager action the server would refuse
+        // anyway (the server's 403 on /execute stays the real guard).
+        if (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(session.user.systemRole, intent.intent)) {
+          setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
+          return;
+        }
         setVoiceResult({ transcript, intent, voiceLogId, hasAdditionalRequest });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });

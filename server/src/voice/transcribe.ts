@@ -1,5 +1,5 @@
 import { GoogleGenAI, ApiError } from '@google/genai';
-import { voiceModel } from './model.js';
+import { voiceClientOptions, voiceModel } from './model.js';
 
 export class VoiceTranscriptionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -19,10 +19,11 @@ export class VoiceTranscriptionError extends Error {
 
 let client: GoogleGenAI | null = null;
 function getClient(): GoogleGenAI {
-  if (!process.env.GEMINI_API_KEY) {
+  const options = voiceClientOptions();
+  if (!options) {
     throw new VoiceTranscriptionError('GEMINI_API_KEY is not configured on the server — voice transcription is unavailable.');
   }
-  if (!client) client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  if (!client) client = new GoogleGenAI(options);
   return client;
 }
 
