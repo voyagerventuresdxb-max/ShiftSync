@@ -1,14 +1,16 @@
 import { GoogleGenAI, ApiError } from '@google/genai';
-import { voiceClientOptions, voiceModel } from './model.js';
+import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
 
 /**
  * Why transcription failed, so the route can answer differently:
- *  - format_rejected  Gemini refused the audio itself (400/415) — a bug in
- *                     what we send (a mimetype it doesn't take), not an outage.
- *  - unavailable      quota (429), overload (5xx), auth/config, network, or
- *                     an empty answer — retry later.
+ *  - format_rejected    Gemini refused the audio itself (400/415) — a bug in
+ *                       what we send (a mimetype it doesn't take), not an outage.
+ *  - model_unavailable  Gemini answered 404 for the configured model (retired or
+ *                       misspelled) — an operator fix, not a retry.
+ *  - unavailable        quota (429), overload (5xx), auth/config, network, or
+ *                       an empty answer — retry later.
  */
-export type VoiceFailureKind = 'format_rejected' | 'unavailable';
+export type VoiceFailureKind = 'format_rejected' | 'model_unavailable' | 'unavailable';
 
 export class VoiceTranscriptionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -63,6 +65,7 @@ export function geminiMimeTypeFor(mimeType: string): string {
  * else in the request varies per phone). Anything else is "try later".
  */
 export function classifyGeminiFailure(err: ApiError): VoiceFailureKind {
+  if (err.status === 404) return 'model_unavailable';
   return err.status === 400 || err.status === 415 ? 'format_rejected' : 'unavailable';
 }
 
@@ -110,6 +113,7 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabula
     return text;
   } catch (err) {
     if (err instanceof ApiError) {
+      reportIfModelUnavailable('transcribe', err);
       const kind = classifyGeminiFailure(err);
       throw new VoiceTranscriptionError(
         `Transcription failed (${err.status ?? 'unknown'}, ${kind}, mime=${mimeType} sent-as=${sentAs}): ${err.message}`,
