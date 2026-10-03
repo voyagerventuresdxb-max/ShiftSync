@@ -611,3 +611,9 @@ Rules as before: one branch + PR per phase from fresh `origin/master @ 7b858dd`,
   - `docs/android.md` updated (gap table, workflow section); appId stays `ae.shiftsync.app`.
 - Counts: typecheck ×2 ✔, lint 0 errors, unit 76/76, server 366 pass / 1 skip, build ✔, e2e (floor-plan pins, login, my-shifts sign-in, policy documents, zero-setup) 15/15.
 - Not possible here: building or running the APK (no JDK/SDK/emulator); the workflow's first run will show whether the runner package names work as written.
+
+## Phase 8 — iPhone / PWA re-cut of #43: done (#43 left open)
+- Branch `feat/iphone-pwa`: four of #43's commits cherry-picked onto master (no sample roster; PWA manifest, icons and Apple meta plus the Add-to-Home-Screen hint; iPhone `audio/mp4` sent to Gemini as `video/mp4` with a clear 415 for a format rejection; iOS layout: `viewport-fit=cover`, `100dvh`, 16px controls at phone width, safe-area padding, keyboard-aware scrolling). Dropped: #43's OTP-limit / prod-guard / CORS commit (superseded by #56, #58, #62), its deploy-doc, lockfile and e2e-tsconfig commits.
+- **No sample roster** also closes the Phase 3 finding: an image upload with no AI reader is a 422 with a plain message and an `errorCode`, never the built-in sample.
+- **Tests:** `e2e/iphone-pwa.spec.ts` runs on Chromium with the iPhone 13 descriptor (real WebKit is not installed in this sandbox): manifest, icons and meta; every text control ≥ 16px and `100dvh` at 390px; the Home-Screen hint with `PushManager` removed; the upload answers 422 with no preview, no sample. Counts: typecheck ×2 ✔, lint 0 errors, unit 74/74, server 366 pass / 1 skip, build ✔, e2e (onboarding ×2, review persistence, zero-setup, touch targets, login, push-unavailable, iPhone) 22/22.
+- Not possible here: WebKit / a real iPhone (safe-area insets, focus zoom, home-screen install, `audio/mp4` capture).
