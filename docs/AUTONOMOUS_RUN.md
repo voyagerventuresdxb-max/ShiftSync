@@ -545,3 +545,29 @@ Rollback note: CLI 5.63.1 has no "roll back to deployment id". The documented ro
   - #79: owner decision; #64 brought the same fix in.
 - Stage D: no run-3 PRs, so nothing merged and no deploy.
 - Railway variables: only `ECHO_ALLOWED_PHONES` and `NODE_ENV` were added; nothing else changed or was removed. No rollback happened in this run.
+
+---
+
+# Autonomous run 3 — 2026-10-03 (cloud sandbox)
+
+Rules as before: one branch + PR per phase from fresh `origin/master @ 7b858dd`, nothing merged, closed or deleted, no deploys, local Postgres only, additive migrations only, outcome-only wording for anything security-related (specifics went to the owner in chat).
+
+## Environment
+- Cloud sandbox: Node 22.22, local PostgreSQL 16 started in-container (no Docker; `dev`/`dev`/`shiftsync_dev` created by hand, then `prisma migrate deploy` + seed on `public` and the per-branch `dev_<branch>` schema via `scripts/bootstrap-branch-schema.mjs`). Playwright 1.62.1 with the pre-installed system Chromium through `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/pw-browsers/chromium` (the managed browser build for this Playwright version isn't installed and can't be downloaded here).
+- e2e must run through `npm run test:e2e` (the branch-schema wrapper): a bare `npx playwright test` points the specs' own Prisma client at `public` while the API uses `dev_<branch>`, and every login then 404s.
+- Google Fonts are blocked by the sandbox proxy's certificate, so every e2e page logs one `ERR_CERT_AUTHORITY_INVALID` for the font stylesheet. Harmless; the specs already ignore "Failed to load resource" console errors.
+- Baseline on master: typecheck ×2 ✔, lint 0 errors / 18 warnings, unit 74/74, server 363 pass / 1 skip, e2e smoke 12/12.
+
+## Phase 1 — text scrub: done
+- #72 and #76 bodies rewritten to outcome-only wording (GitHub keeps the edit history of a PR body, so the old text is still reachable from the body's "edited" menu).
+- This file's run-1/run-2 sections: seven sentences reworded the same way (commit `3e759ab` on #70's branch).
+
+## Phase 2 — auth hardening: done
+- Branch `fix/auth-hardening` (supersedes #72, which is left open and untouched). Carries #72's two code commits cherry-picked onto master, then:
+  - **Deactivation rules** (decided 2026-10-03): a MANAGER may deactivate or reactivate STAFF only; an OWNER may deactivate or reactivate MANAGERs and STAFF; nobody changes their own status; an OWNER's status is never changed from the Staff Directory; and the venue's last active owner can never be deactivated (invariant enforced inside the write transaction under a per-venue lock, whoever the caller is). Refusals are 403/409 with plain messages and change nothing.
+  - **Sign-in codes are single-use under concurrency**: consumption is one conditional update, so simultaneous submissions of one code succeed exactly once.
+  - **"Send a new code"** on `/login` and the join form: 30s countdown, and the server's own limit still wins (a 429 shows its message and restarts the countdown from `Retry-After`).
+  - **Signed-out handling everywhere**: every API call goes through one shared fetch; a rejected session on any screen clears local state and lands on `/login` with "You've been signed out. Sign in again to continue." A wrong code is still a normal form error.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 77/77 (+3), server 374 pass / 1 skip (+11, including concurrency tests for the deactivation race, the sign-in-vs-deactivation race and the last-owner invariant), build ✔, full e2e 50/50 (`--retries=0`; new `otp-resend-cooldown.spec.ts` with a faked browser clock, `deactivate-ends-session.spec.ts` extended).
+- Fixed along the way: `e2e/zero-setup-scheduling.spec.ts` chose "today + 2 days", which on a Saturday or Sunday is next week and never on screen. It now picks a day inside the displayed week.
+- Not changed: the Active/Inactive chip has no confirm step; push subscriptions survive deactivation.
