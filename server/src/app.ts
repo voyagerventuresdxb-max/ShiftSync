@@ -26,11 +26,12 @@ import { locationsRouter } from './routes/locations.js';
 import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
 import { loginLinksRouter } from './routes/loginLinks.js';
+import { corsOptionsFromEnv } from './lib/corsOptions.js';
 
 export function createApp() {
   const app = express();
 
-  app.use(cors());
+  app.use(cors(corsOptionsFromEnv()));
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));

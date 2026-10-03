@@ -3,6 +3,7 @@
  */
 import { apiFetch } from './http';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export interface RoleSummary {
   id: string;
@@ -20,7 +21,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -62,7 +63,7 @@ export async function renameRole(token: string, id: string, name: string): Promi
 
 /** DELETE /api/roles/:id — deactivates the role and unassigns staff from it; existing shifts keep it. */
 export async function removeRole(token: string, id: string): Promise<void> {
-  const res = await apiFetch(`/api/roles/${id}`, { method: 'DELETE', headers: withAuth(token) });
+  const res = await apiFetch(apiUrl(`/api/roles/${id}`), { method: 'DELETE', headers: withAuth(token) });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

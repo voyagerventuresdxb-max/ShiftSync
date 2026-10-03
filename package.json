@@ -32,9 +32,12 @@
     "server:start": "prisma migrate deploy && tsx server/scripts/backfill-phone-e164.ts && tsx server/src/index.ts",
     "start": "npm run server:start",
     "vapid:generate": "node scripts/generate-vapid.mjs",
+    "cap:sync": "node -e \"if(!process.env.VITE_API_URL){console.error('cap:sync needs VITE_API_URL (the API origin), see docs/android.md');process.exit(1)}\" && vite build && cap sync android",
+    "cap:open": "cap open android",
     "scan:secrets": "node scripts/scan-secrets.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.5.2",
     "@dnd-kit/dom": "^0.5.0",
@@ -68,6 +71,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "@eslint/js": "^9.0.0",
     "@playwright/test": "^1.62.1",
     "@types/cors": "^2.8.17",
