@@ -5,12 +5,13 @@
  * either endpoint here because no location exists yet — that's the whole
  * point of this route.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import type { SessionUser } from './identity';
 export { ApiError };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(url, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

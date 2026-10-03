@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ApiError, requestJoinOtp, verifyJoinOtp } from '../api/join';
 import { useIdentity } from '../state/IdentityContext';
 import { postLoginDestination } from '../lib/postLoginDestination';
+import { cooldownAfterRefusal, useResendCooldown } from '../hooks/useResendCooldown';
 
 type Phase = 'phone' | 'otp' | 'pending' | 'error';
 /**
@@ -22,6 +23,7 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
   const [error, setError] = useState<string | null>(null);
   const [waitingOn, setWaitingOn] = useState<{ venueName: string; managerName: string | null } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const resend = useResendCooldown();
 
   const handleRequestOtp = async () => {
     setSubmitting(true);
@@ -29,12 +31,25 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
     try {
       const res = await requestJoinOtp(phone);
       setDevCode(res.devCode ?? null);
+      setCode('');
       setPhase('otp');
+      resend.start();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not request a code.');
+      // The server's rate limit is the source of truth: wait as long as it says.
+      const wait = cooldownAfterRefusal(err);
+      if (wait > 0) resend.start(wait);
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const changeNumber = () => {
+    setPhase('phone');
+    setCode('');
+    setDevCode(null);
+    setError(null);
+    resend.clear();
   };
 
   const handleVerify = async () => {
@@ -104,6 +119,25 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
           <button className="btn btn-primary w-full" onClick={() => void handleVerify()} disabled={submitting || !code.trim()}>
             {submitting ? 'Verifying…' : 'Verify & continue'}
           </button>
+          <div className="flex justify-between gap-3">
+            <button
+              type="button"
+              className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+              onClick={changeNumber}
+              disabled={submitting}
+            >
+              Use a different number
+            </button>
+            <button
+              type="button"
+              className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:no-underline disabled:opacity-60"
+              onClick={() => void handleRequestOtp()}
+              disabled={submitting || resend.secondsLeft > 0}
+              aria-live="polite"
+            >
+              {resend.secondsLeft > 0 ? `Send a new code in ${resend.secondsLeft}s` : 'Send a new code'}
+            </button>
+          </div>
         </div>
       )}
 

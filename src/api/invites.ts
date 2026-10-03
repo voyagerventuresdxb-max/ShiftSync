@@ -2,6 +2,7 @@
  * Client for venue invite links: the manager API (server/src/routes/invites.ts)
  * and the public peek a `/join?invite=<token>` page makes before showing the form.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 export { ApiError };
@@ -18,7 +19,7 @@ export interface ActiveInvite {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(url, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
