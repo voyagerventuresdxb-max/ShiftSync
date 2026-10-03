@@ -21,14 +21,17 @@ import { myShiftsRouter } from './routes/myShifts.js';
 import { availabilityRouter } from './routes/availability.js';
 import { policyDocumentsRouter, policyDocumentFilesRouter } from './routes/policyDocuments.js';
 import { onboardingRouter } from './routes/onboarding.js';
+import { invitesRouter } from './routes/invites.js';
 import { locationsRouter } from './routes/locations.js';
 import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
+import { loginLinksRouter } from './routes/loginLinks.js';
+import { corsOptionsFromEnv } from './lib/corsOptions.js';
 
 export function createApp() {
   const app = express();
 
-  app.use(cors());
+  app.use(cors(corsOptionsFromEnv()));
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -70,9 +73,11 @@ export function createApp() {
   app.use('/api/availability', availabilityRouter);
   app.use('/api/policy-documents', policyDocumentsRouter);
   app.use('/api/onboarding', onboardingRouter);
+  app.use('/api/invites', invitesRouter);
   app.use('/api/locations', locationsRouter);
   app.use('/api/roles', rolesRouter);
   app.use('/api/voice', voiceRouter);
+  app.use('/api/login-links', loginLinksRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {

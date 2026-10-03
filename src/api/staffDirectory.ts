@@ -7,8 +7,10 @@
  * employment status (isActive), and a read-only venue name (joined from
  * Location.name) — see the 2026-08-28 People/Identity plan, Task 5.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export interface StaffDirectoryEntry {
   id: string;
@@ -30,7 +32,7 @@ export interface StaffDirectoryEntry {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

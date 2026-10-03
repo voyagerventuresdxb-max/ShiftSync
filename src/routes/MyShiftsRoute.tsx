@@ -9,6 +9,12 @@ import { Announcements } from '../components/shiftsync/Announcements';
 import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { cn } from '../lib/utils';
 
+/** "Mon 5 Oct" from a YYYY-MM-DD venue calendar day — pure calendar math, no timezone conversion. */
+function formatShiftDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y!, m! - 1, d!).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
 export default function MyShiftsContent() {
   const { session, logout } = useIdentity();
   const [pendingApproval, setPendingApproval] = useState(false);
@@ -55,8 +61,9 @@ export default function MyShiftsContent() {
     return (
       <div className="status-block space-y-3">
         <p>You're not signed in. Sign in with your phone number to see your shifts.</p>
-        <Link to="/join" className="btn btn-primary inline-flex">
-          Join or log in
+        {/* Bare /join (no ?location=) is the missing-venue dead end; login needs no venue. */}
+        <Link to="/join?mode=login&returnTo=%2Fmy-shifts" className="btn btn-primary inline-flex">
+          Log in
         </Link>
         <p className="text-xs text-muted-foreground">
           Setting up a brand-new venue?{' '}
@@ -94,9 +101,8 @@ export default function MyShiftsContent() {
           <ul className="mt-3 space-y-2">
             {shifts.map((s) => (
               <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
-                <span className="font-medium">{s.date}</span> · {s.roleName} ·{' '}
-                {new Date(s.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–
-                {new Date(s.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <span className="font-medium">{formatShiftDate(s.date)}</span> · {s.roleName} ·{' '}
+                <span data-testid="my-shift-time">{s.startLabel}–{s.endLabel}</span>
               </li>
             ))}
           </ul>

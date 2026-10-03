@@ -1,3 +1,4 @@
+import { isIsoDate, isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
@@ -8,7 +9,7 @@ import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
-import { decideJoinRequest } from '../lib/actions/joinActions.js';
+import { decideJoinRequest, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { createShift, updateShift } from '../lib/actions/shiftActions.js';
@@ -122,19 +123,16 @@ function validateIntentShape(intent: ParsedIntent): string | null {
     }
     case 'PUBLISH_ROTA': {
       if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
-      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
-        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
-      }
+      if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      // The model is told weekStart is the Monday; never trust its arithmetic.
+      if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
       return null;
     }
     case 'APPLY_ROTA_TEMPLATE': {
       if (!isNonEmptyString(intent.templateId)) return 'templateId is required.';
       if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
-      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
-        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
-      }
+      if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
       return null;
     }
     case 'POST_ANNOUNCEMENT':
@@ -191,9 +189,19 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
     const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
     return res.status(200).json({ transcript });
   } catch (err) {
+    if (err instanceof VoiceTranscriptionError && err.kind === 'format_rejected') {
+      // Gemini refused the audio format itself — a bug in what this phone
+      // records vs what we send, not an outage. Say so, so it is never
+      // mistaken for quota, and keep the mimetype in the log line.
+      console.error(`[voice.transcribe] format rejected (mime=${req.file?.mimetype})`, err);
+      return res.status(415).json({
+        error: `Your phone's recording format (${req.file?.mimetype ?? 'unknown'}) wasn't accepted by the transcription service. This is a bug on our side rather than an outage — please tell us your phone model.`,
+        errorCode: 'voice_format_rejected',
+      });
+    }
     if (err instanceof VoiceTranscriptionError) {
       console.error('[voice.transcribe] unavailable', err);
-      return res.status(503).json({ error: VOICE_UNAVAILABLE });
+      return res.status(503).json({ error: VOICE_UNAVAILABLE, errorCode: 'voice_unavailable' });
     }
     console.error('[voice.transcribe] failed', err);
     return res.status(500).json({ error: 'Unexpected error while transcribing audio.' });
@@ -435,6 +443,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         if (result.result === 'already_reviewed') {
           const msg = 'That join request was already reviewed.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        if (result.result === 'phone_taken') {
+          return respond(409, { error: JOIN_PHONE_TAKEN_ERROR }, 'REJECTED_VALIDATION', JOIN_PHONE_TAKEN_ERROR);
         }
         await writeAuditLog(prisma, {
           locationId: jr.locationId,

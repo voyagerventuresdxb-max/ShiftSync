@@ -21,7 +21,7 @@
  *    normalized by subtracting 24 and marking the shift overnight — never
  *    passed through as a literal invalid time.
  */
-import { parseDateCell, resolveDayMonthDate, isOvernight } from './normalize.js';
+import { parseDateCell, resolveDayMonthDate, isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -89,7 +89,9 @@ function hasOwnKey<T extends object>(obj: T, key: string): key is Extract<keyof 
 }
 
 function normalizeCell(value: unknown): string {
-  return String(value ?? '').trim();
+  // A Date here is a typed date/time cell (see parseWorkbook.ts `readWorkbook`);
+  // its text must not depend on the host's zone, so never `String(date)`.
+  return cellToText(value).trim();
 }
 
 /** True when every cell in a row (besides the given column range) is blank. */
