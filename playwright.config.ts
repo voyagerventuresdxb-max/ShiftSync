@@ -56,7 +56,8 @@ export default defineConfig({
       // A reused (already running) API won't have this run's ECHO_ALLOWED_PHONES.
       // GEMINI_BASE_URL sends only the voice pipeline's Gemini calls to e2e/fakeGemini.ts
       // (no key, no quota); roster vision parsing never reads it.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: FAKE_GEMINI_URL },
+      // Empty VAPID_* keep push off whatever the local .env holds (push-unavailable.spec.ts relies on it).
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: FAKE_GEMINI_URL, VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '' },
       timeout: 60_000,
     },
     {

@@ -56,6 +56,9 @@ export interface JoinRequestDto {
   phone: string;
   fullName: string;
   createdAt: string;
+  /** Times this phone was declined at this venue before. */
+  previousDeclines: number;
+  lastDeclinedAt: string | null;
 }
 
 /** GET /api/join/:locationId/pending — manager-only; the caller's own location. */

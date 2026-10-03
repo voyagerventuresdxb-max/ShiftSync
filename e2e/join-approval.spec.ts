@@ -5,7 +5,7 @@ import { cleanupTestOrgs, nextEchoPhone, prisma, skipOtpResendWait, testVenueNam
 /**
  * Staff join via the venue link and wait for a manager's approval. A
  * returning applicant sees their real status on /login; once approved, the
- * next sign-in lands on staff Home; a decline is explained, not a dead end.
+ * next sign-in lands on staff Home; a decline is explained, and they may apply again.
  *
  * Real backend + real DB, no request interception. The venue and its owner
  * are created directly; the owner approves/declines in the real
@@ -128,7 +128,7 @@ test.describe('join link → manager approval → staff in', () => {
     expect((await storedSession(page))?.user.systemRole).toBe('STAFF');
   });
 
-  test('a declined applicant is told so on /login, and the join link files no new request', async ({ page, browser }) => {
+  test('a declined applicant is told on /login they may apply again, and the join link files a new request', async ({ page, browser }) => {
     const { inviteToken, venueName, ownerPhone } = await createVenue();
     const phone = freshPhone();
 
@@ -144,12 +144,15 @@ test.describe('join link → manager approval → staff in', () => {
 
     await skipOtpResendWait(phone);
     await logIn(page, phone);
-    await expect(page.locator('.error-block')).toContainText(`Your request to join ${venueName} was declined.`);
+    await expect(page.locator('.error-block')).toContainText(
+      `Your request to join ${venueName} was declined. You can apply again with your full name through ${venueName}'s invite link`,
+    );
     expect(await storedSession(page)).toBeNull();
 
     await skipOtpResendWait(phone);
     await joinViaLink(page, inviteToken, phone);
-    await expect(page.locator('.error-block')).toContainText(`Your request to join ${venueName} was declined.`);
-    expect(await prisma.joinRequest.count({ where: { phone } })).toBe(1);
+    await expect(page.getByText(waitingText(venueName))).toBeVisible();
+    expect(await prisma.joinRequest.count({ where: { phone } })).toBe(2);
+    expect(await prisma.joinRequest.count({ where: { phone, status: 'PENDING' } })).toBe(1);
   });
 });

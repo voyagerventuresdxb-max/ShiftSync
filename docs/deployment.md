@@ -5,6 +5,14 @@ How the live site is put together, why, and the order to do it in. Written
 never had a live production deployment and deployed the frontend only
 (`docs/mvp-readiness-report.md`, item 3.5).
 
+> **Deploying the API: follow [`railway-deploy-procedure.md`](railway-deploy-procedure.md)**
+> (pre-flight checks, the build-log lines to look for, rollback, and the move off
+> `railway.json` before Railway stops reading it on 2026-12-01).
+> **Never run `railway up` against the production `shiftsync-api` service.** On 2026-09-29
+> it skipped `railway.json` and replaced the API with the frontend's `index.html` for about
+> 7 minutes (#52). Deploy from the GitHub source only. Remove this warning only after both
+> paths are proven (procedure §3).
+
 ## Shape
 
 ```
@@ -50,12 +58,14 @@ history from scratch, which is exactly what `server:start` does on every boot.
    variables (Railway can reference it as `${{Postgres.DATABASE_URL}}`).
 3. Variables on the API service (names only — never paste values into chat or docs):
 
+   Every variable the app reads, with defaults and a production checklist: [`ENV_VARS.md`](ENV_VARS.md).
+
    | Variable | Value / note |
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL |
    | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
-   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice) |
+   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice). To switch push on, follow [`push-go-live.md`](push-go-live.md). |
    | `NODE_ENV` | `production`. Turns on the boot-time safety checks below. (Railway's own `RAILWAY_ENVIRONMENT_NAME=production` turns them on too, but don't rely on that alone.) It also makes the build's `npm install` skip devDependencies, which is fine: everything the server runs is in `dependencies`. |
    | `ALLOW_DEV_OTP_ECHO` | `true` only while there is no SMS integration (#51) — it is the only way a code can be entered on the live site. It shows the real one-time code on screen (and in the server log), **but only for the numbers in `ECHO_ALLOWED_PHONES`**; every other number gets a code it can never see. |
    | `ECHO_ALLOWED_PHONES` | **Required when `ALLOW_DEV_OTP_ECHO=true` in production.** Comma-separated mobile numbers whose code may be echoed, e.g. `+971501234567,050 765 4321` (any format the app accepts; each is normalized to E.164). Invalid entries are ignored with a `[startup]` warning. Anyone who knows a listed number can sign in as it — list only demo/test numbers you control. |
