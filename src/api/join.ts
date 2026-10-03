@@ -3,12 +3,14 @@
  * phone/OTP flow for staff without an account yet, and the Pending
  * Approvals review queue it feeds when no existing User auto-matches.
  */
+import { apiFetch, retryAfterSeconds } from './http';
 import { ApiError } from './schedules';
 import { withAuth, type SessionUser } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -17,7 +19,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // non-JSON error body; keep the generic message
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, retryAfterSeconds(res) ?? undefined);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

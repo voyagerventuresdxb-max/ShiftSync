@@ -27,7 +27,7 @@ function toDto(
     reviewedAt: Date | null;
     requestedBy: { fullName: string };
     targetUser: { fullName: string } | null;
-    shift: { userId: string | null; date: Date; startTime: Date; endTime: Date };
+    shift: { userId: string | null; date: Date; startTime: Date; endTime: Date; location?: { timezone: string | null } | null };
   },
 ) {
   const statusMap: Record<string, 'pending' | 'approved' | 'denied'> = {
