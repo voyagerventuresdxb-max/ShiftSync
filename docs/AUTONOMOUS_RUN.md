@@ -767,3 +767,30 @@ Rules: merge commits only, master merged *into* PR branches (never force-push), 
 ## Stage 1A — secret scan: done, merged
 - [#89](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/89) → `9ac559a`. `npm run scan:secrets` (`scripts/scan-secrets.mjs`, no dependencies) prints `path:line  rule`, never the matched text, and exits 1 on any hit. A credential fragment quoted in `MEMORY.md` was found and removed; rotation and history cleanup are the owner's.
 - Tests: typecheck ×2 ✔, lint 0 errors, unit 79/79 (+5), server 363 pass / 1 skip, build ✔, e2e (touched spec) 1/1, scan clean.
+
+## Stage 1B — merge + deploy run-3 PRs: done (2026-10-04, 00:30–03:15 Dubai)
+Each PR: `origin/master` merged into its branch (merge commit, both sides kept), pushed (no force), gate run, merged with a merge commit. `npm run scan:secrets` clean after every merge.
+
+| PR | Merge commit | Conflicts (resolution) | Gate |
+|---|---|---|---|
+| #80 auth hardening | `0678e43` | none | unit 82, server 374 / 1 skip, **full e2e 50/50** |
+| #81 calendar liveness | `71e8016` | `MEMORY.md` (keep both) | unit 90, server 375 / 1, **full e2e 57/57** |
+| #82 parser timezone safety | `44bc0d3` | `MEMORY.md` | unit 90, server 379 / 1, parser + calendar e2e 13/13 |
+| #83 voice (mocked Gemini) + hardening | `4a9f1b7` | `MEMORY.md`; migration additive, drift clean | unit 91, server 390 / 1, **full e2e 65/65** |
+| #85 Android shell | `b18dcc2` | `MEMORY.md`, `package.json` scripts (keep both), 26 files in `src/api/*` + `useAuthenticatedBlobUrl.ts` → `apiFetch(apiUrl(url), init)` with both imports | unit 93, server 393 / 1, **full e2e 65/65** |
+| #86 iPhone / PWA | `321e479` | `MEMORY.md` | unit 93, server 406 / 1, **full e2e 68/68** |
+| #87 staff join flow | `8f76153` | `MEMORY.md`; `JoinFlow.tsx` / `LoginRoute.tsx` imports + adjacent consts (keep both) | unit 94, server 406 / 1, **full e2e 69/69** |
+| #88 pilot readiness | `48d8b45` | `MEMORY.md` | unit 94, server 406 / 1, **full e2e 74/74** |
+
+All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), build ✔. Every e2e run `CI=1 --retries=0`; no flaky or red test, so the touch-targets re-run rule never applied.
+
+| Time (Dubai) | What | Deployment id | Code | Health |
+|---|---|---|---|---|
+| before | serving (ROLLBACK_ID) | `8b6073d6-54b0-4531-9975-c133b44bd74c` | `7b858dd` | 200 JSON |
+| 2026-10-04 03:06–03:10 | API deploy (`railway redeploy --from-source`) | `f0a10bb3-98a1-4089-8ccc-1ff01e0afc58` | `48d8b45` | **SUCCESS**; build driver nixpacks; deploy log: 30 migrations found, `20261003120000_audit_publish_announce_shoutout` applied, API listening, no boot refusal; `/api/health` 200 `{"ok":true}` ×2 on the Railway domain; an `/api` JSON path answers JSON; GitHub "Vercel" status for `48d8b45`: success |
+
+- Smoke test without sign-in (Railway domain): unknown number on login → generic 404 only; the allowlisted number on signup → code echoed; another number on signup → no code. All three pass. The `/login` and `/login?as=staff` page loads were skipped (Vercel protection; owner decision) and are covered by the local e2e suites above.
+- No rollback was needed.
+- Closed as superseded (replacements verified merged): #72 → #80, #76 → #85, #43 → #86. #42 left open.
+- Docs: #70 merged after this entry (reread: outcome-only). **#75 skipped**: it names which upload path consumes the library with the open advisories; Stage 2's PR replaces it.
+- Not merged (as instructed): #69, #78, #84 (rota stack). No PR body in #80–#88 contained security specifics.
