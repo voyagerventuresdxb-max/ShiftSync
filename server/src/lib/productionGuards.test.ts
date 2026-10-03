@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { checkProductionEnv, isProduction } from './productionGuards.js';
+import { GEMINI_BASE_URL_OVERRIDES, checkProductionEnv, isProduction } from './productionGuards.js';
 
 // Pure function over an env object — no process.env mutation, no DB.
 const PROD_SIGNALS = [{ NODE_ENV: 'production' }, { RAILWAY_ENVIRONMENT_NAME: 'production' }];
@@ -125,4 +125,22 @@ test('the server entry point exits non-zero before listening when production is 
 
   const safe = await boot({ NODE_ENV: 'production', ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: '+971501234567' });
   assert.equal(safe.outcome, 'listening', safe.output);
+});
+
+test('every Gemini/Vertex base-URL override (ours and the SDK\'s own) refuses production boot; blank values are tolerated', () => {
+  assert.deepEqual([...GEMINI_BASE_URL_OVERRIDES], ['GEMINI_BASE_URL', 'GOOGLE_GEMINI_BASE_URL', 'GOOGLE_VERTEX_BASE_URL']);
+  for (const name of GEMINI_BASE_URL_OVERRIDES) {
+    assert.throws(
+      () => checkProductionEnv({ NODE_ENV: 'production', [name]: 'https://example.invalid/v1' }),
+      (err: unknown) => err instanceof Error && err.message.includes(name),
+      `${name} must refuse boot`,
+    );
+    assert.throws(
+      () => checkProductionEnv({ RAILWAY_ENVIRONMENT_NAME: 'production', [name]: 'http://127.0.0.1:4599' }),
+      (err: unknown) => err instanceof Error && err.message.includes(name),
+      `${name} must refuse boot under the Railway signal too`,
+    );
+    assert.deepEqual(checkProductionEnv({ NODE_ENV: 'production', [name]: '   ' }), { warnings: [] }, `${name} blank is not set`);
+    assert.deepEqual(checkProductionEnv({ NODE_ENV: 'development', [name]: 'http://127.0.0.1:4599' }), { warnings: [] }, `${name} is fine outside production`);
+  }
 });

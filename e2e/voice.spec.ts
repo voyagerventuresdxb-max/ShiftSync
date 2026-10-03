@@ -405,23 +405,29 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const said = "Approve Omar's request to join";
     await speak(page, said, { intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.97, summary: "Approve Omar Farouk's request to join." });
 
-    const sheet = sheetFor(page, said);
-    await expect(sheet.locator('.eyebrow')).toHaveText('Confirm voice command');
+    // The role is checked BEFORE any confirm sheet: a staff member is told
+    // plainly and never sees a "Confirm" for a manager action.
+    await expect(page.getByRole('alert').filter({ hasText: 'That command needs a manager or owner account.' })).toBeVisible();
+    await expect(sheetFor(page, said)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
 
     // A real model couldn't answer this: the staff schema it was given has no manager intents.
     const [, parse] = await expectPipeline([said]);
     expect(intentEnum(parse!)).toEqual(['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE', 'UNRECOGNIZED']);
 
-    // /execute is the boundary that holds on its own.
-    await sheet.getByRole('button', { name: 'Confirm' }).click();
-    const refusal = 'Your role does not permit the "APPROVE_JOIN" action.';
-    await expect(page.getByRole('alert').filter({ hasText: refusal })).toBeVisible();
-    await expect(page.locator('.success-block')).toHaveCount(0);
-
+    // Nothing reached /execute, nothing changed.
     expect(await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).toMatchObject({ status: 'PENDING', reviewedById: null });
     expect(await prisma.user.findUnique({ where: { phone: applicantPhone } })).toBeNull();
     expect(await prisma.auditLog.count({ where: { locationId, action: 'JOIN_APPROVED' } })).toBe(0);
     const logs = await voiceLogs(staff.id);
-    expect(logs.map((l) => [l.resolvedIntent, l.outcome, l.declineReason])).toEqual([['APPROVE_JOIN', 'REJECTED_PERMISSION', refusal]]);
+    expect(logs.map((l) => [l.resolvedIntent, l.outcome])).toEqual([['APPROVE_JOIN', 'PENDING_CONFIRMATION']]);
+
+    // /execute is the boundary that holds on its own, even for a hand-crafted request.
+    const direct = await page.request.post('/api/voice/execute', {
+      headers: { Authorization: `Bearer ${JSON.parse((await page.evaluate(() => localStorage.getItem('shiftsync.session'))) ?? '{}').token}` },
+      data: { transcript: said, intent: { intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.97, summary: 'x' } },
+    });
+    expect(direct.status()).toBe(403);
+    expect(await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).toMatchObject({ status: 'PENDING', reviewedById: null });
   });
 });

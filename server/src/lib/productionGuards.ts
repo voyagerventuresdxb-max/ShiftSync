@@ -1,7 +1,21 @@
 import { devOtpEchoEnabled, echoAllowedPhones } from './devOtpEcho.js';
 
+/**
+ * Every variable that can redirect Gemini / Vertex traffic to another host:
+ * our own dev/e2e seam (`GEMINI_BASE_URL`, read only by the voice clients)
+ * and the two the `@google/genai` SDK itself honours for ANY client,
+ * including roster vision. In production none may be set to anything: a
+ * value here means audio, transcripts and roster images would leave for a
+ * URL nobody reviewed. URL-shaped, so "any non-blank value" counts as on.
+ */
+export const GEMINI_BASE_URL_OVERRIDES = ['GEMINI_BASE_URL', 'GOOGLE_GEMINI_BASE_URL', 'GOOGLE_VERTEX_BASE_URL'] as const;
+
+export function isBaseUrlOverride(name: string): name is (typeof GEMINI_BASE_URL_OVERRIDES)[number] {
+  return (GEMINI_BASE_URL_OVERRIDES as readonly string[]).includes(name);
+}
+
 /** Settings that must never be on in production — a login bypass, a deliberate crash trigger, and a redirect of voice AI traffic. */
-export const FORBIDDEN_IN_PRODUCTION = ['ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION', 'GEMINI_BASE_URL'] as const;
+export const FORBIDDEN_IN_PRODUCTION = ['ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION', ...GEMINI_BASE_URL_OVERRIDES] as const;
 
 /**
  * NODE_ENV=production, or Railway's own environment name: this repo's start
@@ -35,14 +49,14 @@ export function checkProductionEnv(env: NodeJS.ProcessEnv = process.env): { warn
     fatal.push('ALLOW_DEV_OTP_ECHO=true needs at least one valid mobile number in ECHO_ALLOWED_PHONES (comma-separated).');
   }
   for (const flag of FORBIDDEN_IN_PRODUCTION) {
-    // GEMINI_BASE_URL is a URL, not a boolean flag: any value at all is on.
-    if (flag === 'GEMINI_BASE_URL' ? !env[flag]?.trim() : !isFlagOn(flag, env)) continue;
+    // The base-URL overrides are URLs, not boolean flags: any value at all is on.
+    if (isBaseUrlOverride(flag) ? !env[flag]?.trim() : !isFlagOn(flag, env)) continue;
     fatal.push(
       flag === 'ALLOW_DEV_OTP_BYPASS'
         ? `${flag}=true makes the fixed code 000000 log in as ANY phone number.`
         : flag === 'ALLOW_DEV_ERROR_INJECTION'
           ? `${flag}=true lets a sentinel bearer token crash session auth on demand.`
-          : `${flag} is set — voice audio and transcripts would go to that URL instead of Gemini (it exists only for the e2e fake).`,
+          : `${flag} is set — Gemini/Vertex traffic (voice audio, transcripts, roster images) would go to that URL instead of Google.`,
     );
   }
   if (fatal.length > 0) {
