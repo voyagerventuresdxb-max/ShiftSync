@@ -3,12 +3,13 @@
  * `peek` is read-only; `redeem` is the ONLY call that spends a link and is
  * made from the Sign in tap and nowhere else (see routes/LoginLinkRoute.tsx).
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth, type SessionUser } from './identity';
 import { apiUrl } from '../lib/apiUrl';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(url), init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     let errorCode: string | undefined;

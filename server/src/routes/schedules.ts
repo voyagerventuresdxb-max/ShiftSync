@@ -6,6 +6,8 @@ import { parseWorkbookBuffer, buildMergeExpandedGrid, listOtherSheetNames, Templ
 import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
 import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from '../parsing/pdfTableExtractor.js';
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
+import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
+import { venueTimezoneFor } from '../lib/venueTime.js';
 import { parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
 import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName } from '../parsing/resolveRows.js';
@@ -122,9 +124,13 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
     }
 
     // Optional reference week for text/PDF rosters that use day names
-    // ("Mon", "Friday") instead of explicit dates. Defaults to the current
-    // week's Sunday. Ignored for Excel/CSV, which carry their own dates.
-    const weekStart = String(req.body?.weekStart ?? '').trim() || currentWeekStart();
+    // ("Mon", "Friday") instead of explicit dates, and for grid rosters whose
+    // day columns carry no dates. Defaults to the Monday of the current week
+    // in the VENUE's timezone (never the host's clock). A client-sent value
+    // must itself be a Monday.
+    const requestedWeekStart = String(req.body?.weekStart ?? '').trim();
+    if (requestedWeekStart && !isMondayIso(requestedWeekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
+    const weekStart = requestedWeekStart || currentWeekStart(new Date(), await venueTimezoneFor(locationId));
 
     let parsed: { rows: ParsedShiftRow[]; issues: RowIssue[]; templateLabel: string | null };
     let anomalies: AnomalyRecord[] = [];

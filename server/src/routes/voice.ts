@@ -1,3 +1,4 @@
+import { isIsoDate, isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
@@ -122,19 +123,16 @@ function validateIntentShape(intent: ParsedIntent): string | null {
     }
     case 'PUBLISH_ROTA': {
       if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
-      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
-        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
-      }
+      if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      // The model is told weekStart is the Monday; never trust its arithmetic.
+      if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
       return null;
     }
     case 'APPLY_ROTA_TEMPLATE': {
       if (!isNonEmptyString(intent.templateId)) return 'templateId is required.';
       if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
-      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
-        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
-      }
+      if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
       return null;
     }
     case 'POST_ANNOUNCEMENT':

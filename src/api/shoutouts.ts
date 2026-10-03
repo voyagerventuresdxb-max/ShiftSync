@@ -1,4 +1,5 @@
 /** Client for the Shoutouts API (server/src/routes/shoutouts.ts). */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
@@ -15,7 +16,7 @@ export interface ShoutoutDto {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(url), init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -62,7 +63,7 @@ export async function postShoutout(
 
 /** DELETE /api/shoutouts/:id — manager/owner only (see server/src/routes/shoutouts.ts). */
 export async function deleteShoutout(token: string, id: string): Promise<void> {
-  const res = await fetch(apiUrl(`/api/shoutouts/${id}`), { method: 'DELETE', headers: withAuth(token) });
+  const res = await apiFetch(apiUrl(`/api/shoutouts/${id}`), { method: 'DELETE', headers: withAuth(token) });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

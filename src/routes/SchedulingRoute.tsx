@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, pickViewedEmployee, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
@@ -17,6 +17,7 @@ import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
+import { reconcileWeekParam } from '../engine/weekStart';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -31,7 +32,6 @@ function formatDayMonth(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
   const { session } = useIdentity();
@@ -78,15 +78,21 @@ export default function SchedulingContent() {
   // point `weekStart` and the URL already agree (a no-op) or the effect
   // naturally re-syncs. `replace` so paging through weeks doesn't spam
   // browser history with a back-button entry per week.
+  // The decision lives in engine/weekStart.ts's `reconcileWeekParam`
+  // (unit-tested): `lastSyncedWeek` is the week both sides last agreed on,
+  // which is how a Prev/Next click (state moved) is told apart from a
+  // bookmark or back/forward (URL moved) — without it every Prev/Next click
+  // snapped straight back to the not-yet-updated `?week=`. A non-Monday
+  // `?week=` is adopted as its Monday: every rota week runs Monday to Sunday
+  // and the server refuses to publish anything else.
+  const lastSyncedWeek = useRef<string | null>(null);
   useEffect(() => {
-    const param = searchParams.get('week');
-    if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
-      setWeekStart(param);
-      return;
-    }
-    if (param !== weekStart) {
+    const { adopt, write, lastSynced } = reconcileWeekParam(searchParams.get('week'), weekStart, lastSyncedWeek.current);
+    lastSyncedWeek.current = lastSynced;
+    if (adopt) setWeekStart(adopt);
+    if (write) {
       const next = new URLSearchParams(searchParams);
-      next.set('week', weekStart);
+      next.set('week', write);
       setSearchParams(next, { replace: true });
     }
   }, [weekStart, searchParams, setWeekStart, setSearchParams]);
@@ -410,8 +416,10 @@ export default function SchedulingContent() {
                               </span>
                             )}
                           </span>
-                          {DAYS.map((d) => {
-                            const dayShifts = empShifts.filter((s) => weekdayOf(s.date) === d);
+                          {DAYS.map((d, dayIndex) => {
+                            // By DATE, not weekday: a committed upload row from another
+                            // week must not appear in this week's column.
+                            const dayShifts = empShifts.filter((s) => s.date === dates[dayIndex]);
                             return (
                               <span className={`cell shift ${dayShifts[0]?.type ?? ''}`} key={d}>
                                 {dayShifts.length > 1 ? (

@@ -107,7 +107,10 @@ before listening, so the deploy fails its health check. It does this when any of
 
 - `ALLOW_DEV_OTP_ECHO=true` and `ECHO_ALLOWED_PHONES` has no valid mobile number;
 - `ALLOW_DEV_OTP_BYPASS=true`;
-- `ALLOW_DEV_ERROR_INJECTION=true`.
+- `ALLOW_DEV_ERROR_INJECTION=true`;
+- any non-blank value in `GEMINI_BASE_URL` (our dev/e2e seam for the voice clients), `GOOGLE_GEMINI_BASE_URL` or
+  `GOOGLE_VERTEX_BASE_URL` (the two overrides the `@google/genai` SDK itself honours for every client, roster
+  vision included). Any of these would send Gemini/Vertex traffic to another host.
 
 Outside production the same echo-without-allowlist case is only a `[startup]` warning, and
 invalid `ECHO_ALLOWED_PHONES` entries are always a warning, never fatal.
@@ -129,6 +132,7 @@ invalid `ECHO_ALLOWED_PHONES` entries are always a warning, never fatal.
 - [ ] `ALLOW_DEV_OTP_BYPASS` (boot refused)
 - [ ] `ALLOW_DEV_ERROR_INJECTION` (boot refused)
 - [ ] `ALLOW_DEV_OTP_ECHO` without `ECHO_ALLOWED_PHONES` (boot refused)
+- [ ] `GEMINI_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `GOOGLE_VERTEX_BASE_URL` (boot refused)
 - [ ] `VLM_FALLBACK_MODE=sample` (every image upload would return the built-in sample roster)
 - [ ] `LOGIN_METHODS` (leave unset: codes and links both stay on)
 - [ ] Anything from §4: `E2E_*`, `CI`, `PLAYWRIGHT_*`, `NODE_EXTRA_CA_CERTS`. Also `POSTGRES_PORT` and `DOCLING_*` (no sidecar runs on Railway).

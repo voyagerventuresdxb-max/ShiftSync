@@ -6,21 +6,31 @@ import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
+import { formatVenueTime } from '../venueTime.js';
+import { DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
 
 dayjs.extend(utc);
 
 /**
- * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00". Formatted in
- * UTC (same rationale as `parsing/normalize.ts`): the stored wall-clock
- * date/time is what matters, not how the server's local timezone happens to
- * render it. Shared by routes/swapRequests.ts's DTO and the notification
- * copy below, so the request list and its notifications never describe the
- * same shift differently.
+ * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00". `date` is UTC
+ * midnight of the venue-local calendar day, so it is read as UTC; `startTime`
+ * and `endTime` are real instants (built by `combineDateAndTime` in the
+ * venue's timezone), so they are rendered in that same venue timezone, never
+ * in UTC and never in the host's zone. Before this a 09:00 Dubai shift was
+ * labelled "05:00". Shared by routes/swapRequests.ts's DTO and the
+ * notification copy below, so the request list and its notifications never
+ * describe the same shift differently.
  */
-export function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date }): string {
+export function shiftLabelOf(shift: {
+  date: Date;
+  startTime: Date;
+  endTime: Date;
+  location?: { timezone: string | null } | null;
+}): string {
+  const tz = shift.location?.timezone || DEFAULT_VENUE_TIMEZONE;
   const day = dayjs.utc(shift.date).format('ddd D MMM');
-  const start = dayjs.utc(shift.startTime).format('HH:mm');
-  const end = dayjs.utc(shift.endTime).format('HH:mm');
+  const start = formatVenueTime(shift.startTime, tz);
+  const end = formatVenueTime(shift.endTime, tz);
   return `${day} · ${start}–${end}`;
 }
 
@@ -33,7 +43,7 @@ export function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date
 export const SWAP_REQUEST_INCLUDE = {
   requestedBy: { select: { fullName: true } },
   targetUser: { select: { fullName: true } },
-  shift: { select: { userId: true, date: true, startTime: true, endTime: true } },
+  shift: { select: { userId: true, date: true, startTime: true, endTime: true, location: { select: { timezone: true } } } },
 } as const;
 
 export type SwapRequestWithRelations = Prisma.ShiftSwapRequestGetPayload<{
@@ -65,6 +75,8 @@ export async function createSwapRequest(
   },
   client: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<SwapRequestWithRelations> {
+  // The window closes Wednesday 17:00 in the SHIFT's venue timezone.
+  const venue = await client.shift.findUnique({ where: { id: input.shiftId }, select: { location: { select: { timezone: true } } } });
   return client.shiftSwapRequest.create({
     data: {
       shiftId: input.shiftId,
@@ -73,7 +85,7 @@ export async function createSwapRequest(
       type: 'COVER',
       status: 'PENDING',
       reason: input.reason,
-      expiresAt: nextRequestWindowClose(),
+      expiresAt: nextRequestWindowClose(new Date(), venue?.location.timezone || DEFAULT_VENUE_TIMEZONE),
     },
     include: SWAP_REQUEST_INCLUDE,
   });
