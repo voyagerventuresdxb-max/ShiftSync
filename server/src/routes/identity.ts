@@ -122,10 +122,16 @@ identityRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
       return res.status(404).json({ error: NO_ACCOUNT_ERROR });
     }
 
+    // First sign-in ever (no session before this one): the client shows the
+    // staff "You're in" screen once, then My Shifts. Counted before issuing.
+    const firstSignIn = (await prisma.session.count({ where: { userId: match.id } })) === 0;
+    const { name: venueName } = await prisma.location.findUniqueOrThrow({ where: { id: match.locationId }, select: { name: true } });
     const { plainToken, expiresAt } = await issueSession(match.id);
     return res.status(200).json({
       token: plainToken,
       expiresAt: expiresAt.toISOString(),
+      firstSignIn,
+      venueName,
       user: {
         id: match.id,
         fullName: match.fullName,

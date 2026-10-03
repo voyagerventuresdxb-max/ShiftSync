@@ -120,7 +120,7 @@ test.describe('golden path — venue → join link → claim / approve → staff
 
       const staff = await newPage(browser);
       await open(staff, joinPath);
-      await expect(staff.getByRole('heading', { name: `Join ${venueName} on ShiftSync` })).toBeVisible();
+      await expect(staff.getByRole('heading', { name: `Join ${venueName} as staff` })).toBeVisible();
       const code = await requestCode(staff, claimedPhone);
       await staff.getByPlaceholder('6-digit code').fill(code);
       await staff.getByRole('button', { name: 'Verify & continue' }).click();

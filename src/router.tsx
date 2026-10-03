@@ -13,6 +13,7 @@ import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
 import LoginContent from './routes/LoginRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
+import WelcomeContent from './routes/WelcomeRoute';
 import OnboardingContent from './routes/OnboardingRoute';
 import LoginLinkContent from './routes/LoginLinkRoute';
 
@@ -195,6 +196,7 @@ const handles = {
   join: { title: 'Join' },
   login: { title: 'Log in' },
   signup: { title: 'Sign up' },
+  welcome: { title: "You're in" },
   myShifts: { title: 'My Shifts' },
   onboarding: { title: 'Onboarding' },
 } satisfies Record<string, RouteHandle>;
@@ -274,6 +276,8 @@ export const router = createBrowserRouter([
       // still land somewhere real.
       { path: '/signup', element: <Navigate to="/onboarding" replace />, handle: handles.signup },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
+      // One-time "You're in" after a staff member's first sign-in; falls through to My Shifts otherwise.
+      { path: '/welcome', element: <WelcomeContent />, handle: handles.welcome },
       // Deliberately NOT behind RequireSession (2026-09-16): account creation
       // is the wizard's own first step now, so a visitor with no session at
       // all must be able to reach it. OnboardingRoute.tsx applies the same

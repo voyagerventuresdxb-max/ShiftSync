@@ -50,7 +50,7 @@ export async function requestLoginOtp(phone: string): Promise<{ expiresAt: strin
  * and deactivated numbers are a 403 whose message lands in `ApiError`.
  */
 export type LoginVerifyResult =
-  | { pending?: false; token: string; expiresAt: string; user: SessionUser }
+  | { pending?: false; token: string; expiresAt: string; user: SessionUser; firstSignIn?: boolean; venueName?: string }
   | { pending: true; status: 'pending'; venueName: string; managerName: string | null };
 
 /** POST /api/identity/verify-otp */

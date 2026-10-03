@@ -33,7 +33,7 @@ export async function requestJoinOtp(phone: string): Promise<{ expiresAt: string
 }
 
 export type JoinVerifyResult =
-  | { pending: false; token: string; expiresAt: string; user: SessionUser }
+  | { pending: false; token: string; expiresAt: string; user: SessionUser; firstSignIn?: boolean; venueName?: string }
   | { pending: true; joinRequestId: string; venueName: string; managerName: string | null };
 
 /** POST /api/join/verify-otp — body: { inviteToken | locationId (old links), phone, code, fullName? } */
