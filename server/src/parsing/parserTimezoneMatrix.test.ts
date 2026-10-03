@@ -60,7 +60,9 @@ test('CSV and HTML text dates and times: month names, AM/PM, seconds, "9 AM" (th
     'Ali Hassan|2026-08-20|09:00-17:00',
     'Mona Said|2026-08-20|18:00-01:00|overnight',
     'Omar Farouk|2026-08-21|09:00-17:00',
+    'Rami Toma|2026-08-22|13:00-21:00',
     'Sara Nour|2026-08-22|09:00-17:00',
+    'Tala Adel|2026-08-23|21:00-23:30',
   ]);
   assert.deepEqual(csv.issues, []);
   const html = probe['synthetic/long-format.html.xls']!.template;

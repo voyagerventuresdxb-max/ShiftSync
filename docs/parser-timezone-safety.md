@@ -44,34 +44,53 @@ documents must be identical, and the synthetic cases must come out exactly as th
 
 Before the fix the Dubai and Los Angeles documents differed from UTC on every typed time cell.
 
-## The xlsx advisories (#23, #30, #75): not upgraded here
+## The xlsx advisories (#23, #30, #75): upgraded to SheetJS 0.20.3 (2026-10-04)
 
-The decision was to upgrade only if the full corpus **and** the timezone matrix pass on the new
-build. The fixed SheetJS builds (0.19.3+ / 0.20.2+) exist only on `cdn.sheetjs.com`, and that host
-answered **403** from this sandbox's egress proxy (so did `git.sheetjs.com`); the npm registry still
-stops at 0.18.5. The upgrade could not be attempted, so the gate was not run and `xlsx` stays at
-0.18.5. `docs/xlsx-cve.md` (PR #75) records the earlier attempt and the three parser changes it
-needed — two of those three (`UTC`-safe reading and the month-name date formats) are now in place
-through this fix, which should make a later attempt smaller.
+`xlsx` now comes from SheetJS's official CDN, `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`
+(0.20.3 is the current build per `cdn.sheetjs.com/xlsx-latest/package/package.json`, checked
+2026-10-04). It is past the fixed-in versions of both published advisories against 0.18.5. The
+lockfile pins the URL and its sha512 (`sha512-oLDq3jw7…H+3AJA==`, 2,409,319 bytes); that hash matches
+both the one recorded in PR #75 and one computed independently from a fresh download. The lockfile
+change is only the `xlsx` entry plus the eight transitive packages 0.20.3 no longer needs.
 
-### Mitigations while on 0.18.5
+### What the upgrade needed
 
-- Roster upload already requires a signed-in manager (`requireSession` + the upload rate limiter);
-  the parser only ever sees files a venue's own manager chose to upload.
-- Multer caps the upload at 10 MB, and `MAX_ROWS` (5000) bounds the parsed grid.
-- The prototype-pollution advisory concerns crafted workbook internals; the ReDoS advisory concerns
-  pathological cell text. Both are bounded by the size caps above and by the fact that the file is
-  parsed once, in a request that times out, not stored for re-parsing.
-- `npm audit --omit=dev` will keep reporting the two advisories until the dependency changes; this
-  is expected and documented in `docs/xlsx-cve.md`.
+- **`UTC: true` on both `sheet_to_json` calls** (`buildMergeExpandedGrid`, `parseRotaFile`). From
+  0.20 SheetJS re-expresses `Date` cells in host-local time unless told otherwise, which undid
+  `materializeDateCells`'s UTC dates on a non-UTC host (Dubai: 09:00 read as 05:18). With the flag,
+  output is unchanged on every host. The other two parser changes #75 listed (text left as text,
+  month-name/AM-PM formats in `normalize.ts`) were already in place from the timezone fix above.
+- **A probe fix, test-only.** The probe handed `parseRotaFile` a copy of a pooled `Buffer` sliced at
+  the original's offset, so that one field parsed truncated bytes on both versions (and could change
+  between runs). Production only calls `parseRotaFile` with PDF text, so no app code was affected.
+- The synthetic CSV gained `22-Aug-26`, `1:00 PM`, `9:00:00 PM` and `21:00:00`, so every CSV/HTML
+  date and time spelling from #75's notes is asserted exactly.
 
-### How to run the gate when the CDN is reachable
+### Gate (all passed)
+
+- The matrix test above, on 0.20.3: the three timezone documents are identical and every synthetic
+  row matches exactly.
+- Differential against 0.18.5 with the same code: the probe document (21 committed fixtures + 4
+  synthetic inputs, every entry point) is **byte-identical** between the two versions, under
+  `TZ=UTC`, `Asia/Dubai` and `America/Los_Angeles`, and identical across repeated runs.
+- Full server suite, the roster-upload e2e specs, typecheck, lint and build.
+
+### Things to know
+
+- `npm audit` does not check URL dependencies, so `xlsx` simply disappears from its report; what
+  shows the advisories are fixed is that 0.20.3 is past both fixed-in versions.
+- Dependabot can't bump it either. Upgrades are a manual URL change; re-run this gate each time.
+- Every `npm install` (Railway's build, Vercel's build) now needs `cdn.sheetjs.com` to be reachable.
+  If that ever becomes a problem, vendor the tarball (`vendor/xlsx-0.20.3.tgz` with a `file:`
+  dependency, as the SheetJS install docs suggest); the lockfile hash stays the same.
+- Rolling back: `npm install xlsx@0.18.5` restores the registry version (and its two advisories).
+
+### How to run the gate after a future SheetJS bump
 
 ```bash
-npm install https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz   # pins URL + sha512 in the lockfile
+npm install https://cdn.sheetjs.com/xlsx-<version>/xlsx-<version>.tgz   # pins URL + sha512 in the lockfile
 npm run server:typecheck
 node scripts/with-branch-schema.mjs --connection-limit=1 "node --import tsx --test 'server/src/parsing/*.test.ts'"
 ```
 
-The matrix test (`parserTimezoneMatrix.test.ts`) is the gate: it must pass unchanged. If it fails,
-`git checkout package.json package-lock.json && npm install` and stay on 0.18.5.
+The matrix test (`parserTimezoneMatrix.test.ts`) is the gate: it must pass unchanged.

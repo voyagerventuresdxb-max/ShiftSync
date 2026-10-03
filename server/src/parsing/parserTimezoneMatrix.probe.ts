@@ -46,7 +46,9 @@ function probe(buffer: Buffer, name: string): Record<string, unknown> {
     gridText: gridArr && gridArr.length <= 12 ? gridToTsvText(gridArr) : undefined,
     deterministicGrid: gridArr ? safe(() => parseExcelGrid(gridArr, WEEK_START)) : grid,
     localRows: gridArr ? safe(() => processRowsIntoRoster(gridArr, WEEK_START)) : grid,
-    rotaFile: safe(() => parseRotaFile(new Uint8Array(buffer).buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), /\.csv$/i.test(name) ? 'csv' : 'xlsx', WEEK_START)),
+    // Slice the Buffer's OWN backing store: readFileSync can hand back a pooled Buffer
+    // (byteOffset > 0), and a copy sliced at that offset is truncated garbage.
+    rotaFile: safe(() => parseRotaFile(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer, /\.csv$/i.test(name) ? 'csv' : 'xlsx', WEEK_START)),
   };
 }
 
@@ -72,7 +74,9 @@ const synthetic: Record<string, Buffer> = {
       'Ali Hassan,Bartender,20-Aug-2026,9:00 AM,17:00,30\n' +
       'Mona Said,Host,20-Aug-26,18:00,1:00 AM,0\n' +
       'Omar Farouk,Chef,"Aug 21, 2026",09:00:00,5:00 PM,45\n' +
-      'Sara Nour,Runner,2026-08-22,9 AM,17:00,0\n',
+      'Sara Nour,Runner,2026-08-22,9 AM,17:00,0\n' +
+      'Rami Toma,Runner,22-Aug-26,1:00 PM,9:00:00 PM,0\n' +
+      'Tala Adel,Host,2026-08-23,21:00:00,23:30,0\n',
   ),
   'long-format.html.xls': Buffer.from(
     '<table><tr><td>Employee Name</td><td>Role</td><td>Date</td><td>Start Time</td><td>End Time</td><td>Break (min)</td></tr>' +
