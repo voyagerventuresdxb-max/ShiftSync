@@ -1,4 +1,5 @@
 import { prisma } from '../prisma.js';
+import { writeAuditLog } from '../auditLog.js';
 import { notifyUsersBatched, notifyUser } from '../push.js';
 
 /**
@@ -75,9 +76,20 @@ export async function createAnnouncement(input: {
     return { result: 'rate_limited', message: 'Too many announcements posted recently — please wait before posting another.' };
   }
 
-  const created = await prisma.announcement.create({
-    data: { locationId: input.locationId, authorId: input.authorId, body: input.body },
-    include: { author: { select: { fullName: true } } },
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.announcement.create({
+      data: { locationId: input.locationId, authorId: input.authorId, body: input.body },
+      include: { author: { select: { fullName: true } } },
+    });
+    await writeAuditLog(tx, {
+      locationId: input.locationId,
+      actorId: input.authorId,
+      action: 'ANNOUNCEMENT_POSTED',
+      entityType: 'Announcement',
+      entityId: row.id,
+      note: `Posted an announcement (${row.body.length} characters).`,
+    });
+    return row;
   });
 
   // Real delivery on top of the write above — never inside it, a push
@@ -141,9 +153,20 @@ export async function createShoutout(input: {
     return { result: 'rate_limited', message: 'Too many shoutouts posted recently — please wait before posting another.' };
   }
 
-  const created = await prisma.shoutout.create({
-    data: { locationId: input.locationId, employeeId: input.employeeId, authorId: input.authorId, shiftSnapshot: input.shiftSnapshot, note: input.note },
-    include: { employee: { select: { fullName: true } }, author: { select: { fullName: true } } },
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.shoutout.create({
+      data: { locationId: input.locationId, employeeId: input.employeeId, authorId: input.authorId, shiftSnapshot: input.shiftSnapshot, note: input.note },
+      include: { employee: { select: { fullName: true } }, author: { select: { fullName: true } } },
+    });
+    await writeAuditLog(tx, {
+      locationId: input.locationId,
+      actorId: input.authorId,
+      action: 'SHOUTOUT_POSTED',
+      entityType: 'Shoutout',
+      entityId: row.id,
+      note: `Posted a shoutout for ${row.employee.fullName}.`,
+    });
+    return row;
   });
 
   // Skipped for the rare self-tag case (employeeId === authorId) — nobody
