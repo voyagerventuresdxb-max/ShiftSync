@@ -632,3 +632,89 @@ Rules as before: one branch + PR per phase from fresh `origin/master @ 7b858dd`,
   - **Bad-network audit** (`e2e/bad-network.spec.ts`, Playwright `setOffline` and a 2.5 s-slower API): login offline → message, button re-enabled, works again online; login on a slow link → progress state then the code step; join offline → message, retry works; rota view offline → loaded content stays, stale/offline notice, Publish disabled with a reason, re-enabled and publishing online; cold load offline recovers. **One mechanical fix:** the rota builder's disabled Publish showed no reason; it now shows the "Requires connection" notice beside it. Nothing else needed fixing: no infinite spinner or silent failure was found on these four flows.
   - **`docs/pilot-checklist.md`**: the two-phone manager demo (14 steps), iPhone and Android specifics, what to do when something goes wrong.
 - Counts: typecheck ×2 ✔, lint 0 errors, unit 74/74, build ✔, e2e (bad-network 5, zero-setup, touch targets) 8/8.
+
+## Phase 11 — integration rehearsal: done (local only, nothing pushed from it)
+Two throwaway branches in the sandbox, both `--no-ff` merges so every conflict is attributable. Neither was pushed; they are gone with the sandbox.
+
+**A. `integration/run3-local`** = `origin/master @ 7b858dd` + the eight master-based PR branches of this run, in order #80 → #81 → #82 → #83 → #85 → #86 → #87 → #88.
+- Conflicts and exact resolutions:
+  - `MEMORY.md` on every merge: both sides append under the same heading; keep both.
+  - `e2e/zero-setup-scheduling.spec.ts`: #80, #81, #82 and #83 carry the identical day-of-week fix; merges clean.
+  - #85 (Android) against #80 (auth): 26 files (`src/api/*.ts`, `src/hooks/useAuthenticatedBlobUrl.ts`). #85 wraps every URL in `apiUrl(...)`; #80 replaces `fetch` with `apiFetch`. Resolution in each file: keep both imports and call `apiFetch(apiUrl(url), init)`.
+  - #87 (staff flow) against #80: `src/components/shiftsync/JoinFlow.tsx` and `src/routes/LoginRoute.tsx`, import lines and the adjacent `const` declarations; keep both sides.
+  - One **semantic** conflict (no textual conflict): #80's `otp-resend-cooldown.spec.ts` looked for the manager join heading, #87 renames it for staff. Fixed on #80 itself (`dc6b85c`: the spec accepts either heading), so the two PRs now merge in any order.
+- Results: typecheck ×2 ✔, lint 0 errors, unit 89/89, server 406 pass / 1 skip, full e2e 74/74 (`--retries=0`) after the spec fix above (73/74 before it).
+
+**B. `integration/run3-stack`** = A + #70 (docs) + #75 (docs, draft) + the rota stack #69 → #78 → #84.
+- #70: clean. #75: `MEMORY.md` only.
+- #69 (`rebase/rota-v0-on-master`, 12 conflicting files):
+  - `MEMORY.md`: keep both.
+  - `e2e/golden-path.spec.ts` (add/add, two unrelated specs with one name): keep A's; add #69's as `e2e/golden-path-rota.spec.ts` with the "as staff" join heading from #87.
+  - `prisma/schema.prisma` (`AuditAction` enum tail): keep both groups (this run's three publish/announce/shoutout values and #69's `LEAVE_MARKED` / `LEAVE_REMOVED`). `npm run prisma:check-drift`: no drift.
+  - `src/engine/weekStart.ts` and its test: keep A's (#81's version is #69's plus Monday snapping).
+  - `server/src/lib/actions/swapActions.ts`, `src/routes/SchedulingRoute.tsx`: keep both import lists (the comment: A's).
+  - `src/api/myShifts.ts`, `server/src/routes/myShifts.ts`, `src/routes/MyShiftsRoute.tsx`: take #69's `start` / `end` field names, keep #81's venue-day "today"; render `{s.start}–{s.end}` inside #81's `my-shift-time` span.
+  - `server/src/lib/actions/rotaActions.ts`: #83's transaction + audit row **plus** #69's `tx.rotaLeave.updateMany(...)`.
+  - `server/src/routes/shifts.ts`: merged imports; keep #81's Monday check and #69's `publishedById = req.user!.id`.
+- #78: `src/components/shiftsync/RotaBuilder.tsx` imports → `totalHours, weekDates, weekdayOf` from `rosterView` and `weekRangeLabel` from `weekMath`.
+- #84: `e2e/golden-path.spec.ts` add/add again → keep A's, apply #84's `test.use` launch-options change to `golden-path-rota.spec.ts` instead.
+- Then three compile errors that git could not see (all #69 vs this run; a reviewer merging the stack will hit the same three):
+  1. `src/routes/SchedulingRoute.tsx`: `reconcileWeekParam` imported twice (#69 and #81) → drop one line.
+  2. `server/src/routes/myShifts.ts`: `const timezone` declared twice (#69 and #81) → drop the second.
+  3. `server/src/routes/shifts.ts`: `writeAuditLog` import unused once #83 moved the publish audit row into `publishRota` → drop it from the import.
+- One test needed a fix of its own: `shiftOverlapGuard.test.ts` looked the constraint up by name across the whole database and found one per branch schema. Scoped to the current schema; **pushed to #84** (`b4a90f7`), the only change that left the rehearsal.
+- Two more **semantic** conflicts, both in #69/#78's own specs against today's master (predicted in the run-1 report as "#42's spec needs `nextEchoPhone()` and `/login` once the chain lands"):
+  4. `e2e/rota-split-shift.spec.ts` and `e2e/golden-path-rota.spec.ts` sign the staff member in with a made-up `+97155…` number. master's API echoes codes only for the run's echo pool, so the sign-in waits forever (180 s timeout). Fix: `const staffPhone = nextEchoPhone();` (helper already in `e2e/helpers.ts`) in both specs.
+  5. The same two specs expect My Shifts to print the ISO date (`2026-10-06 · Bartender · 11:00–15:00`); #81 prints the venue day as `Tue, 6 Oct`. Fix: accept either (`new RegExp(\`(${tue}|\\w{3}, \\d{1,2} \\w{3,4}) · Bartender · 11:00–15:00\`)`), three lines in total.
+  These live in #78's and #69's files, which are waiting on the #42 author, so they were fixed on the rehearsal branch only and are listed here for whoever lands the stack.
+- Results on the stack after all of the above: typecheck ×2 ✔, lint 0 errors / 18 warnings, `prisma:check-drift` clean, unit 99/99, server 444 pass / 1 skip, full e2e **75 / 77** (`--retries=0`; first pass 73, then the resend heading and the two rota-spec fixes above). The two remaining failures are the sandbox, not the merge:
+  - `golden-path-rota.spec.ts` (#69's) stops at its own precondition: VAPID keys in `.env` plus a push sink.
+  - `golden-path.live.spec.ts` (#69's `@live` test against real Gemini) is meant to be excluded from the regular gate, but nothing in `playwright.config.ts` excludes it, so a plain full run executes it; here it fails before the first step (needs the managed headless-shell build and a real key). Suggest adding `grepInvert: /@live/` to the config when #69 lands.
+- Noted, not a failure: during the bad-network rota test the server logs one `shifts.list` Prisma error — the page refetches after publishing while the spec's `afterEach` is already deleting the venue. Test teardown race, spec passed.
+
+## Run 3 final report
+
+Rules kept: nothing merged, closed or deleted; master untouched; no force-push; no deploys or cloud access; local Postgres only; additive migrations only (two: three audit enum values on #83, the overlap constraint on #84); one branch + PR per phase from `origin/master @ 7b858dd`. Security wording in every PR body, commit and committed doc is outcome-only; the specifics went to the owner in chat. GitHub keeps the edit history of a PR body, so the pre-scrub text of #72 and #76 is still reachable from each body's "edited" menu; only deleting and re-creating those PRs would remove it, and this run was not allowed to close anything.
+
+### 1. Results (every PR: typecheck ×2 ✔, lint 0 errors / 18 pre-existing warnings, build ✔)
+
+| Phase | Status | PR | Tests | Could not be tested here |
+|---|---|---|---|---|
+| 0 setup | done | — | baseline on master: unit 74, server 363 / 1 skip, e2e smoke 12/12 | — |
+| 1 text scrub | done | #72, #76 bodies; #70 doc | n/a | edit history stays on GitHub |
+| 2 auth hardening | done | #80 (supersedes #72) | unit 77, server 374 / 1 skip, e2e 50/50 | — |
+| 3 calendar liveness | done | #81 | unit 82, server 364 / 1 skip (3-zone matrix), e2e 54/54 | a real Monday-00:00 rollover on a live phone |
+| 4 parser TZ safety + xlsx gate | time-safety done; upgrade not attemptable | #82 | server 367 / 1 skip (21 fixtures + 4 synthetic × 3 zones), e2e 6/6 | the xlsx 0.20.x upgrade itself (CDN unreachable) |
+| 5 voice hardening + voice PR | done | #83 | unit 75, server 374 / 1 skip, voice e2e 8/8, full e2e 55/55 | real Gemini (faked at the network boundary) |
+| 6 split-shift DB guard | done, stacked on #78 | #84 (base `feat/rota-split-shifts`) | server 320 / 1 skip (+5), e2e 2/2 | `golden-path.spec.ts` on that base (needs VAPID keys) |
+| 7 Android | done, no APK | #85 (supersedes #76) | unit 76, server 366 / 1 skip, e2e 15/15 | building/running the APK; the workflow's first run |
+| 8 iPhone / PWA | done | #86 (re-cut of #43, left open) | unit 74, server 376 / 1 skip, e2e 22/22 (Chromium, iPhone 13 descriptor) | real WebKit / iPhone |
+| 9 staff flow | done | #87 | unit 75, server 363 / 1 skip, e2e 48/48 | — |
+| 10 pilot readiness | done | #88 | unit 74, e2e 8/8; demo seed run twice + both refusals | a real two-phone demo |
+| 11 integration rehearsal | done, local only | fixes pushed to #80 (`dc6b85c`) and #84 (`b4a90f7`) | A: unit 89, server 406 / 1, e2e 74/74. B (with the rota stack): unit 99, server 444 / 1, e2e 75/77 | the two rota golden-path specs (VAPID, real Gemini) |
+
+### 2. Merge order
+1. **Independent, any order, each clean against master:** #80, #81, #82, #83, #85, #86, #87, #88. Between them only `MEMORY.md` conflicts (keep both) plus the three pairs in Phase 11 A above (#85↔#80 in `src/api/*`, #87↔#80 in two files; `zero-setup-scheduling.spec.ts` is identical on four of them). Suggested: #80 → #81 → #82 → #83 → #85 → #86 → #87 → #88, re-running the full e2e after #85 and after #87.
+2. **Docs:** #70 (this file; clean), #75 (draft, `MEMORY.md` only).
+3. **Rota stack, after the #42 author's review:** #69 → #78 → #84, with the Phase 11 B resolutions, the three compile fixes and the two spec fixes listed there. #84 already carries its own test fix.
+4. **Superseded, left for the owner to close:** #72 (by #80), #76 (by #85), #43 (by #86 for everything but the deploy-doc / lockfile commits), #42 (by #69). #79 and #55 are owner decisions from earlier runs; #41, #36, #30 are older and untouched.
+
+### 3. Real-phone checklist (what the sandbox could not do)
+- Android: run the debug-APK workflow once with `VITE_API_URL` set; install; sign in; grant the microphone on the first voice command; confirm a backup/transfer to a second device does **not** carry the session (fresh install asks for a code); back button and keyboard-inset behaviour in the rota builder.
+- iPhone Safari: Add to Home Screen shows the ShiftSync icon and name; safe-area padding top and bottom; no focus zoom on the phone field; a voice command records (`audio/mp4`) and is accepted; an image upload with no AI configured shows the plain 422 message, never a sample roster.
+- Both: `/login?as=staff` wording; invite link → join → approval → first sign-in lands on "You're in" then My Shifts; My Shifts times are venue times when the phone is set to another zone; the resend countdown and the signed-out notice; rota view offline shows the stale notice and the disabled Publish with its reason.
+- Manager demo: `docs/pilot-checklist.md`, 14 steps, two phones, demo seed on a local database only.
+
+### 4. Security specifics
+Given to the owner in chat only, per the rules of this run. Every fix in this file is described by outcome.
+
+### 5. Blocked, skipped, risky; open questions
+- **xlsx upgrade (Phase 4):** not attempted; the SheetJS CDN and git host are unreachable from the sandbox and npm stops at 0.18.5. The gate (`parserTimezoneMatrix.test.ts`) and the mitigations are in `docs/parser-timezone-safety.md`; run the gate against 0.20.x from a machine that can fetch it.
+- **No device toolchain:** no JDK/SDK/emulator, no WebKit, no real phone. The Android workflow has never run; its runner package names are unverified.
+- **Golden-path specs:** `golden-path.spec.ts` on #84's base and #69's `golden-path-rota.spec.ts` need VAPID keys and a push sink; `golden-path.live.spec.ts` needs real Gemini and is not excluded by the config (suggest `grepInvert: /@live/`).
+- **Rota stack specs vs today's master:** two semantic conflicts (echo pool, My Shifts date wording), fixed on the rehearsal branch only; whoever lands #69/#78 needs the five fixes in Phase 11 B.
+- **Known but not built (out of scope):** week start not configurable per venue; swap-request window shown but not enforced; Active/Inactive chip has no confirm step; push subscriptions survive deactivation.
+- **Open questions for the owner:** close #72/#76/#43/#42 as superseded? Review #69 so the rota stack can land? Delete and re-create #72/#76 to drop the pre-scrub body history, or accept it?
+
+### 6. Still not done (roadmap, unchanged by this run)
+- SMS go-live (#51); Railway test (#52, early November); floor-plan COMPAT removal (#55, hold until ~2026-10-04); VAPID go-live; native push and camera plugins; first Play Store upload; the xlsx upgrade.
