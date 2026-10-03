@@ -175,7 +175,13 @@ test('the documented detection query lists an existing overlapping pair, and the
       (err: unknown) => err instanceof Error && JSON.stringify(err).includes('1 pair(s) of overlapping shifts'),
     );
     // Rolled back: the constraint is still there and still enforced.
-    const constraint = await prisma.$queryRawUnsafe<{ conname: string }[]>(`SELECT conname FROM pg_constraint WHERE conname = $1`, SHIFT_OVERLAP_CONSTRAINT);
+    // Scoped to the current schema: the local dev database holds one schema per
+    // branch, and every branch that has applied this migration carries a
+    // constraint of the same name.
+    const constraint = await prisma.$queryRawUnsafe<{ conname: string }[]>(
+      `SELECT conname FROM pg_constraint WHERE conname = $1 AND connamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())`,
+      SHIFT_OVERLAP_CONSTRAINT,
+    );
     assert.equal(constraint.length, 1);
     assert.equal(await prisma.shift.count({ where: { locationId: location.id } }), 0);
   } finally {
