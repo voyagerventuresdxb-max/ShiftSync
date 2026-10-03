@@ -1,3 +1,5 @@
+import { venueWeekRange } from '../lib/venueWeek.js';
+import { venueTimezoneFor } from '../lib/venueTime.js';
 import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -162,9 +164,10 @@ attendanceRouter.get('/:locationId/weekly-hours', requireSession, async (req, re
     const weekStart = String(req.query.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
 
-    const start = new Date(`${weekStart}T00:00:00.000Z`);
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 7);
+    // Clock-ins are real instants, so the week's boundaries are the venue's
+    // own Monday 00:00s — not UTC midnight, which put Dubai's Monday 00:00–04:00
+    // clock-ins into the previous week.
+    const { start, end } = venueWeekRange(weekStart, await venueTimezoneFor(locationId));
 
     const users = await prisma.user.findMany({ where: { locationId, isActive: true }, select: { id: true, fullName: true } });
     const userIds = users.map((u) => u.id);

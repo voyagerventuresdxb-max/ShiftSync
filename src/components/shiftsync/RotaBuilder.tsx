@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useCloseOnBack } from '@/lib/backNavigation';
 import { weekDates, weekdayOf } from '@/engine/rosterView';
+import { weekRangeLabel } from '@/engine/weekMath';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
@@ -471,7 +472,7 @@ export function RotaBuilder() {
               <button onClick={() => setWeekStart(shiftWeek(weekStart, -1))} aria-label="Previous week" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="px-1 text-sm font-semibold tracking-tight">{weekdayOf(days[0])} {days[0].slice(8)} – {weekdayOf(days[6])} {days[6].slice(8)}</span>
+              <span className="px-1 text-sm font-semibold tracking-tight" data-testid="rota-week-label">{weekRangeLabel(days[0]!, days[6]!)}</span>
               <button onClick={() => setWeekStart(shiftWeek(weekStart, 1))} aria-label="Next week" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
                 <ChevronRight className="h-4 w-4" />
               </button>

@@ -3,6 +3,7 @@
  * session-resolved staff member's next 5 upcoming shifts, plus whether
  * they still have a JoinRequest pending review.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 export { ApiError };
@@ -12,13 +13,16 @@ export interface MyShiftEntry {
   date: string;
   startTime: string;
   endTime: string;
+  /** Venue wall-clock "HH:mm" — what to show, whatever timezone the device is in. */
+  startLabel: string;
+  endLabel: string;
   roleName: string;
   status: 'DRAFT' | 'PUBLISHED' | 'COMPLETED' | 'CANCELLED';
 }
 
 /** GET /api/my-shifts — session-resolved via the Bearer token. */
 export async function fetchMyShifts(token: string): Promise<{ pendingApproval: boolean; shifts: MyShiftEntry[] }> {
-  const res = await fetch('/api/my-shifts', { headers: withAuth(token) });
+  const res = await apiFetch('/api/my-shifts', { headers: withAuth(token) });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
