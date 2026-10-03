@@ -741,3 +741,29 @@ Read-only notes gathered before stopping (no changes made):
 - Fixtures privacy check: findings reported to the owner directly.
 
 To run the brief as written: run it on the laptop (Railway CLI linked, open network), or widen this cloud environment's network access to the Railway, Vercel, SheetJS and Google docs hosts and provide a Railway link without exposing a token to the session.
+
+---
+
+# Autonomous run 4 (laptop) — 2026-10-03/04
+
+Rules: merge commits only, master merged *into* PR branches (never force-push), one documented source redeploy of the API, read-only Railway commands, closes only for #72/#76/#43 after their replacements merge. Local Docker Postgres with per-branch schemas. Security wording outcome-only. `npm run scan:secrets` after every merge and conflict resolution.
+
+## Stage 0 — preconditions: passed with one owner decision
+
+| Check | Result |
+|---|---|
+| Echo allowlist set; `NODE_ENV=production` | yes / yes |
+| Dev-bypass, error-injection and the three base-URL override variables | all absent; `VLM_FALLBACK_MODE` is not `sample` |
+| `/api/health` on the Railway domain | 200 `{"ok":true}` |
+| `/api/health` via Vercel | **302 to Vercel's SSO login.** The production URL is behind Vercel Deployment Protection (switched on after the 2026-10-02 run; the 2026-10-02 checks got 200 there). |
+| `ROLLBACK_ID` | `8b6073d6-54b0-4531-9975-c133b44bd74c` (code `7b858dd`) |
+| Fresh worktree of `origin/master` | `7b858dd` |
+| `VLM_MODEL` / `VLM_FALLBACK_MODEL` / `VOICE_MODEL` on production | all unset (code defaults apply; no Gemini 2.5 ID) |
+| Gemini / Vertex credential variables on production | none present: **production vision and voice are not live** |
+
+- **Owner decision on the Vercel check:** proceed. At every stage the Vercel check is Railway-domain health plus GitHub's "Vercel deploy succeeded" status for master's head commit. Page-load smoke tests that need the Vercel URL are skipped (the local e2e suites cover those pages). No Vercel setting is touched; the owner handles protection after the run.
+- Noted for Stage 3: the API service runs in Railway region `sfo` (US West).
+
+## Stage 1A — secret scan: done, merged
+- [#89](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/89) → `9ac559a`. `npm run scan:secrets` (`scripts/scan-secrets.mjs`, no dependencies) prints `path:line  rule`, never the matched text, and exits 1 on any hit. A credential fragment quoted in `MEMORY.md` was found and removed; rotation and history cleanup are the owner's.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 79/79 (+5), server 363 pass / 1 skip, build ✔, e2e (touched spec) 1/1, scan clean.
