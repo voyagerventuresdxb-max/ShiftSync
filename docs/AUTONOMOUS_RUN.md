@@ -617,3 +617,11 @@ Rules as before: one branch + PR per phase from fresh `origin/master @ 7b858dd`,
 - **No sample roster** also closes the Phase 3 finding: an image upload with no AI reader is a 422 with a plain message and an `errorCode`, never the built-in sample.
 - **Tests:** `e2e/iphone-pwa.spec.ts` runs on Chromium with the iPhone 13 descriptor (real WebKit is not installed in this sandbox): manifest, icons and meta; every text control ≥ 16px and `100dvh` at 390px; the Home-Screen hint with `PushManager` removed; the upload answers 422 with no preview, no sample. Counts: typecheck ×2 ✔, lint 0 errors, unit 74/74, server 376 pass / 1 skip, build ✔, e2e (onboarding ×2, review persistence, zero-setup, touch targets, login, push-unavailable, iPhone) 22/22.
 - Not possible here: WebKit / a real iPhone (safe-area insets, focus zoom, home-screen install, `audio/mp4` capture).
+
+## Phase 9 — staff flow: done
+- Branch `feat/staff-join-flow`. Same auth system and codes; staff see different words and paths:
+  - invite-link join screen: "Join <Venue> as staff", a short welcome, the phone field, no venue-setup or manager wording; its links go to the staff sign-in;
+  - `/login?as=staff`: the "Staff sign in" variant of the one `/login` (staff heading and hint, no onboarding links, "Manager log in" instead);
+  - "You're in": the verify responses now say whether this is the person's first sign-in and name the venue; a staff member's first sign-in lands on `/welcome` (venue, first name, "See my shifts", auto-continue) and then My Shifts. A repeat sign-in goes straight to My Shifts; `/welcome` without a pending welcome just forwards.
+  - Staff never see manager onboarding (`/onboarding` still bounces STAFF to My Shifts).
+- Tests: `e2e/staff-flow.spec.ts` with two browser contexts (join → waiting → owner approves on `/people` → staff sign in → You're in → My Shifts; asserts no manager wording on any staff screen and that the applicant never visited `/onboarding` or `/signup`); `invite-links.spec.ts` and `golden-path.spec.ts` headings updated. Counts: typecheck ×2 ✔, lint 0 errors, unit 75/75 (+1), server 363 pass / 1 skip, build ✔, full e2e 48/48 (`--retries=0`).
