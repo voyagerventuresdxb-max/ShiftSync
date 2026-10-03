@@ -51,6 +51,8 @@ const TIME_RE = /^\d{2}:\d{2}$/;
  * only this generic line crosses the wire.
  */
 const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
+/** A retired/misspelled model is not fixed by retrying, so say so (and point at the buttons). */
+const VOICE_MODEL_UNAVAILABLE = "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile.";
 
 /**
  * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
@@ -199,6 +201,9 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
         errorCode: 'voice_format_rejected',
       });
     }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'model_unavailable') {
+      return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
+    }
     if (err instanceof VoiceTranscriptionError) {
       console.error('[voice.transcribe] unavailable', err);
       return res.status(503).json({ error: VOICE_UNAVAILABLE, errorCode: 'voice_unavailable' });
@@ -240,6 +245,9 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
       hasAdditionalRequest: shouldPromptForAdditionalRequest(resolution),
     });
   } catch (err) {
+    if (err instanceof VoiceIntentError && err.modelUnavailable) {
+      return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
+    }
     if (err instanceof VoiceIntentError) {
       console.error('[voice.parseIntent] unavailable', err);
       return res.status(503).json({ error: VOICE_UNAVAILABLE });
