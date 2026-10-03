@@ -119,6 +119,9 @@ export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string)
     range: sheet['!ref'],
     blankrows: false,
     defval: null,
+    // SheetJS ≥ 0.20 re-expresses Date cells in host-local time unless told otherwise;
+    // materializeDateCells already built them as UTC, so keep them as they are.
+    UTC: true,
   });
 }
 

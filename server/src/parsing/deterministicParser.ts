@@ -161,7 +161,7 @@ export function parseRotaFile(
     const workbook = readWorkbook(fileBuffer, typeof fileBuffer === 'string' ? 'string' : 'array');
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
-    rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
+    rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, UTC: true }) as unknown[][]; // UTC: see buildMergeExpandedGrid
   } else if (fileType === 'pdf-text') {
     // fileBuffer is pre-extracted text lines from pdf-parse.
     rawRows = String(fileBuffer)
