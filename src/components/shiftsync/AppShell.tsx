@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
 import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
 import { NotificationBell } from '@/components/shiftsync/NotificationBell';
+import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
@@ -359,6 +360,7 @@ export function AppShell() {
       )}
 
       <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
+        <SessionGuard />
         <Outlet />
       </main>
 

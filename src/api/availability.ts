@@ -2,6 +2,7 @@
  * Client for the Availability API (server/src/routes/availability.ts) — a
  * staff member's per-day unavailable/preferred-off marks for a given week.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 export { ApiError };
@@ -14,7 +15,7 @@ export interface AvailabilityMarkDto {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(url, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

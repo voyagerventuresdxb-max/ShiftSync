@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/http';
 import { useEffect, useState } from 'react';
 import { withAuth } from '../api/identity';
 
@@ -20,7 +21,7 @@ export function useAuthenticatedBlobUrl(fileUrl: string | undefined, token: stri
     }
     let cancelled = false;
     let objectUrl: string | undefined;
-    fetch(fileUrl, { headers: withAuth(token) })
+    apiFetch(fileUrl, { headers: withAuth(token) })
       .then((res) => {
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
         return res.blob();
