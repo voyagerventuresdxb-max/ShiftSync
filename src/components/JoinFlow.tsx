@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ApiError, requestJoinOtp, verifyJoinOtp } from '../api/join';
 import { useIdentity } from '../state/IdentityContext';
 import { postLoginDestination } from '../lib/postLoginDestination';
+import { shouldShowStaffWelcome, stashStaffWelcome, STAFF_LOGIN_PATH, WELCOME_PATH } from '../lib/staffWelcome';
 import { cooldownAfterRefusal, useResendCooldown } from '../hooks/useResendCooldown';
 
 type Phase = 'phone' | 'otp' | 'pending' | 'error';
@@ -62,10 +63,12 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
         setWaitingOn({ venueName: result.venueName, managerName: result.managerName });
         setPhase('pending');
       } else {
+        // A first sign-in (phone matched the roster) gets the one-time "You're in" screen.
+        if (shouldShowStaffWelcome(result)) stashStaffWelcome(result.venueName ?? venueName);
         login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
         // Never a returnTo: a fresh join wasn't bounced from anywhere, and an
         // unsigned invite link could otherwise redirect a new hire anywhere.
-        window.location.href = postLoginDestination(result.user.systemRole);
+        window.location.href = shouldShowStaffWelcome(result) ? WELCOME_PATH : postLoginDestination(result.user.systemRole);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not verify that code.');
@@ -75,9 +78,14 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
   };
 
   return (
-    <section className="panel mx-auto max-w-md p-6">
-      <h2 className="text-lg font-semibold">{venueName ? `Join ${venueName} on ShiftSync` : 'Join ShiftSync'}</h2>
-      <p className="hint mt-1">New here? We'll match your number against your venue's roster.</p>
+    <section className="panel mx-auto max-w-md p-6" data-audience="staff">
+      <p className="eyebrow">Staff</p>
+      <h2 className="text-lg font-semibold">{venueName ? `Join ${venueName} as staff` : 'Join your venue as staff'}</h2>
+      <p className="hint mt-1">
+        {venueName
+          ? `Welcome to the ${venueName} team. Enter your mobile number and we'll text you a code — your manager approves you from there.`
+          : "Enter your mobile number and we'll text you a code — your manager approves you from there."}
+      </p>
 
       {error && (
         <div className="error-block mt-3" role="alert">
@@ -147,29 +155,23 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
           approved.
         </div>
       )}
-
-      {phase !== 'pending' && (
-        <Link
-          to="/login"
-          className="mt-5 block w-full text-center text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-        >
-          Already have an account? Log in
+      {phase === 'pending' && (
+        <Link to={STAFF_LOGIN_PATH} className="btn btn-ghost mt-4 w-full">
+          Staff sign in
         </Link>
       )}
 
       {/*
-       * This screen is for joining a venue's EXISTING roster — someone
-       * looking to stand up a brand-new venue for the first time (the exact
-       * confusion behind the home-base user report this was added for)
-       * belongs on /signup instead, not merged into this flow.
+       * Staff-only screen: no venue-setup or manager wording here. Someone who
+       * wants to set up a brand-new venue starts from the manager login.
        */}
       {phase !== 'pending' && (
-        <p className="mt-2 text-center text-xs text-muted-foreground">
-          Setting up a brand-new venue?{' '}
-          <Link to="/signup" className="underline-offset-2 hover:text-foreground hover:underline">
-            Sign up your restaurant
-          </Link>
-        </p>
+        <Link
+          to={STAFF_LOGIN_PATH}
+          className="mt-5 block w-full text-center text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+        >
+          Already on the team? Staff sign in
+        </Link>
       )}
     </section>
   );

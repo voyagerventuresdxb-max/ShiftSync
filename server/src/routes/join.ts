@@ -133,11 +133,14 @@ joinRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
 
     if (match) {
       if (link && !(await consumeInviteUse(prisma, link.id))) return sendInviteRejected(res, await currentInviteRejection(link.id));
+      const firstSignIn = (await prisma.session.count({ where: { userId: match.id } })) === 0;
       const { plainToken, expiresAt } = await issueSession(match.id);
       return res.status(200).json({
         pending: false,
         token: plainToken,
         expiresAt: expiresAt.toISOString(),
+        firstSignIn,
+        venueName: location.name,
         user: {
           id: match.id,
           fullName: match.fullName,

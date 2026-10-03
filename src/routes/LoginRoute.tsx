@@ -5,6 +5,7 @@ import { getLoginConfig, type LoginMethods } from '../api/loginLinks';
 import { extractLoginLinkToken, LOGIN_LINK_PATH } from '../../shared/loginLinks';
 import { useIdentity } from '../state/IdentityContext';
 import { postLoginDestination } from '../lib/postLoginDestination';
+import { hasStaffWelcome, shouldShowStaffWelcome, stashStaffWelcome, WELCOME_PATH } from '../lib/staffWelcome';
 import { cooldownAfterRefusal, useResendCooldown } from '../hooks/useResendCooldown';
 import { SESSION_ENDED_REASON } from '../components/shiftsync/SessionGuard';
 
@@ -20,6 +21,9 @@ export default function LoginContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnTo = searchParams.get('returnTo');
+  // `?as=staff`: the same screen and the same codes, worded for staff — no
+  // venue-setup links, no manager wording. Staff never see manager onboarding.
+  const staffLook = searchParams.get('as') === 'staff';
   // Set by SessionGuard when a dead session bounced them here. Plain words, no mechanics.
   const sessionEnded = searchParams.get('reason') === SESSION_ENDED_REASON;
   const resend = useResendCooldown();
@@ -44,8 +48,9 @@ export default function LoginContent() {
   }, []);
   const otpEnabled = loginMethods !== 'links';
 
-  // Also the post-verify redirect: `login()` below sets `session`.
-  if (session) return <Navigate to={postLoginDestination(session.user.systemRole, returnTo)} replace />;
+  // Also the post-verify redirect: `login()` below sets `session`. A staff
+  // member's very first sign-in goes through the one-time "You're in" screen.
+  if (session) return <Navigate to={hasStaffWelcome() ? WELCOME_PATH : postLoginDestination(session.user.systemRole, returnTo)} replace />;
 
   const requestCode = async () => {
     setSubmitting(true);
@@ -86,6 +91,7 @@ export default function LoginContent() {
         setDevCode(null);
         return;
       }
+      if (shouldShowStaffWelcome(result)) stashStaffWelcome(result.venueName);
       login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not verify that code.');
@@ -125,13 +131,16 @@ export default function LoginContent() {
   };
 
   return (
-    <section className="panel mx-auto max-w-md p-6">
-      <h2 className="text-lg font-semibold">Log in to ShiftSync</h2>
+    <section className="panel mx-auto max-w-md p-6" data-audience={staffLook ? 'staff' : undefined}>
+      {staffLook && <p className="eyebrow">Staff</p>}
+      <h2 className="text-lg font-semibold">{staffLook ? 'Staff sign in' : 'Log in to ShiftSync'}</h2>
       <p className="hint mt-1">
         {!otpEnabled
           ? 'ShiftSync signs you in with a link from your manager. Paste it below.'
           : phase === 'phone'
-            ? "We'll text a code to the number your venue has on file."
+            ? staffLook
+              ? "Enter the mobile number your manager has for you. We'll text you a code."
+              : "We'll text a code to the number your venue has on file."
             : `Enter the code we sent to ${phone}.`}
       </p>
 
@@ -144,7 +153,7 @@ export default function LoginContent() {
       {error && (
         <div className="error-block mt-3" role="alert">
           <p>{error}</p>
-          {noAccount && (
+          {noAccount && !staffLook && (
             <>
               <p className="mt-1">Joining a team? Use your venue's invite link.</p>
               <p className="mt-1">
@@ -155,6 +164,7 @@ export default function LoginContent() {
               </p>
             </>
           )}
+          {noAccount && staffLook && <p className="mt-1">Ask your manager for the venue's invite link, or check the number with them.</p>}
         </div>
       )}
 
@@ -257,11 +267,19 @@ export default function LoginContent() {
         </form>
       )}
 
-      {otpEnabled && (
+      {otpEnabled && !staffLook && (
         <p className="mt-5 text-center text-xs text-muted-foreground">
           Setting up a brand-new venue?{' '}
           <Link to="/onboarding" className="underline-offset-2 hover:text-foreground hover:underline">
             Sign up your restaurant
+          </Link>
+        </p>
+      )}
+      {otpEnabled && staffLook && (
+        <p className="mt-5 text-center text-xs text-muted-foreground">
+          Managing a venue?{' '}
+          <Link to="/login" className="underline-offset-2 hover:text-foreground hover:underline">
+            Manager log in
           </Link>
         </p>
       )}
