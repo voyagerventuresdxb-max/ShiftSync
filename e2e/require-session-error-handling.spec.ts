@@ -38,7 +38,7 @@ test.describe('requireSession — thrown error does not crash the server', () =>
 
     const [badResponse, goodResponse] = await Promise.all([
       request.get(`/api/staff-directory/${user.locationId}`, {
-        headers: { Authorization: 'Bearer __test-inject-requiresession-error__' },
+        headers: { Authorization: 'Bearer __test-inject-requiresession-error__' }, // scan-secrets: allow (test sentinel, not a credential)
       }),
       request.get(`/api/staff-directory/${user.locationId}`, {
         headers: { Authorization: `Bearer ${token}` },
