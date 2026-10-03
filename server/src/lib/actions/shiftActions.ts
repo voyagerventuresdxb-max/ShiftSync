@@ -30,6 +30,34 @@ type Client = Prisma.TransactionClient | typeof prisma;
  */
 export class ShiftOverlapError extends Error {}
 
+/**
+ * The database-level half of the rule (migration
+ * 20261003140000_shift_no_overlap_per_user): an EXCLUDE constraint on
+ * (user_id, [start_time, end_time)) for non-CANCELLED shifts. The app-level
+ * `findShiftOverlap` check runs first for a friendly message, but two
+ * concurrent writes can both pass it; the constraint is what makes exactly
+ * one of them win. Its violation surfaces from Prisma as a request error
+ * naming the constraint; every writer maps it to ShiftOverlapError.
+ */
+export const SHIFT_OVERLAP_CONSTRAINT = 'shifts_no_overlap_per_user';
+export const DB_OVERLAP_MESSAGE = 'This person already has a shift at that time — two shifts for one person can\'t overlap.';
+
+export function isShiftOverlapViolation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const text = `${err.message} ${(err as { meta?: { message?: string } }).meta?.message ?? ''}`;
+  return text.includes(SHIFT_OVERLAP_CONSTRAINT);
+}
+
+/** Runs a shift write, turning a constraint violation into the same 409 every caller already handles. */
+export async function guardingOverlap<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (isShiftOverlapViolation(err)) throw new ShiftOverlapError(DB_OVERLAP_MESSAGE);
+    throw err;
+  }
+}
+
 // Through `client`, never the global pool: inside a transaction that would wait on the connection the transaction holds.
 async function timezoneOf(locationId: string, client: Client): Promise<string> {
   const location = await client.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
@@ -130,7 +158,7 @@ export async function createShift(
   // Callers pass the unchecked shape (userId, not an `assignee` relation).
   const { userId, startTime, endTime } = data as unknown as { userId?: string | null; startTime: Date | string; endTime: Date | string };
   if (userId) await assertNoOverlap({ userId, startTime: new Date(startTime), endTime: new Date(endTime) }, client);
-  return client.shift.create({ data, include: SHIFT_INCLUDE });
+  return guardingOverlap(() => client.shift.create({ data, include: SHIFT_INCLUDE }));
 }
 
 /** Raw update — exactly the `tx.shift.update(...)` call `PATCH /:id` made inline before this extraction. Same validate-in-caller split as `createShift`. */
@@ -139,7 +167,7 @@ export async function updateShift(
   data: Prisma.ShiftUpdateInput,
   client: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<ShiftWithRelations> {
-  return client.shift.update({ where: { id }, data, include: SHIFT_INCLUDE });
+  return guardingOverlap(() => client.shift.update({ where: { id }, data, include: SHIFT_INCLUDE }));
 }
 
 type ShiftSnapshot = Pick<ShiftWithRelations, 'id' | 'locationId' | 'userId' | 'status' | 'date' | 'startTime' | 'endTime' | 'roleId' | 'managerNotes' | 'sidework'>;

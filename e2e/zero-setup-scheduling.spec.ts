@@ -43,7 +43,14 @@ test.describe('zero-setup scheduling — default roles + Staff Directory role co
     await page.getByRole('button', { name: 'Continue to Dashboard' }).click();
     await page.waitForURL(/\/$/, { timeout: 10000 });
     const location = await prisma.location.findFirst({ where: { name: venueName } });
-    const shiftDay = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    // A day the CURRENT week's builder shows: today+2 used to be chosen, which
+    // on a Saturday or Sunday lands in next week and is never on screen.
+    // Wednesday of the Monday-based current week (same rule as src/engine/weekStart.ts).
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    monday.setDate(monday.getDate() + (monday.getDay() === 0 ? -6 : 1 - monday.getDay()));
+    monday.setDate(monday.getDate() + 2);
+    const shiftDay = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
 
     // Default roles exist in the DB and in the directory's Roles panel.
     const seeded = await prisma.role.findMany({ where: { locationId: location!.id } });

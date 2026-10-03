@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from './normalize.js';
 import type { PreviewRow } from './types.js';
 import { findBlockingLeave } from '../lib/actions/leaveActions.js';
+import { findBatchOverlap, guardingOverlap, ShiftOverlapError } from '../lib/actions/shiftActions.js';
 
 export interface PersistShiftsResult {
   createdCount: number;
@@ -52,13 +53,26 @@ export async function persistShifts(
   const location = await prisma.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
   const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
 
+  // The same overlap rule every other shift writer applies: a roster import
+  // may not give one person two overlapping shifts, against what's stored or
+  // another row of the same file. Friendly message first; the database
+  // constraint behind `guardingOverlap` still catches a concurrent writer.
+  const planned = importable.map((row) => ({
+    userId: row.resolvedUserId,
+    date: row.date,
+    startTime: combineDateAndTime(row.date, row.startTime, timezone),
+    endTime: combineDateAndTime(row.date, row.endTime, timezone, row.overnight),
+  }));
+  const overlap = await findBatchOverlap(locationId, planned, prisma);
+  if (overlap) throw new ShiftOverlapError(overlap);
+
   const created: { id: string; userId: string | null }[] = [];
   for (const row of importable) {
     const startTime = combineDateAndTime(row.date, row.startTime, timezone);
     const endTime = combineDateAndTime(row.date, row.endTime, timezone, row.overnight);
 
     created.push(
-      await prisma.shift.create({
+      await guardingOverlap(() => prisma.shift.create({
         data: {
           locationId,
           roleId: row.resolvedRoleId!,
@@ -72,7 +86,7 @@ export async function persistShifts(
           status: 'PUBLISHED',
         },
         select: { id: true, userId: true },
-      }),
+      })),
     );
   }
 

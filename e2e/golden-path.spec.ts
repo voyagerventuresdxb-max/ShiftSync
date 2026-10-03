@@ -39,7 +39,14 @@ const API = 'http://localhost:4000';
 const PHONE = { width: 380, height: 822 };
 
 // Mic for the voice keystone: Chromium's fake device + auto-accepted prompt.
-test.use({ launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] } });
+// `test.use` REPLACES the config's launchOptions, so the opt-in system Chromium
+// (PLAYWRIGHT_CHROMIUM_EXECUTABLE, see playwright.config.ts) has to be carried along.
+test.use({
+  launchOptions: {
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}),
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+  },
+});
 test.describe.configure({ mode: 'serial' });
 
 interface PushHit {
