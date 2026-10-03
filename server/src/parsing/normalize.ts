@@ -20,7 +20,7 @@ const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
  * Resolves a day-month date that has no year (e.g. "18-Aug", "17-Aug MONDAY",
  * "18 Aug") to a full ISO date, using a reference week to infer the year.
  * Gemini often returns dates as "D-MMM" without a year; the roster week
- * (weekStart, an ISO Sunday) anchors the correct year.
+ * (weekStart, the week's Monday) anchors the correct year.
  */
 export function resolveDayMonthDate(value: unknown, weekStart: string): string | null {
   if (typeof value !== 'string') return null;

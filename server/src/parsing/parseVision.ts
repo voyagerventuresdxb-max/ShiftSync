@@ -257,7 +257,7 @@ async function callGemini(
   weekStart?: string,
 ): Promise<string> {
   const referenceWeek = weekStart
-    ? ` The current active roster week starts on ${weekStart} (ISO Sunday). Use this as the reference week to resolve day-month dates and to anchor the week's date range.`
+    ? ` The current active roster week starts on ${weekStart} (a Monday; every rota week here runs Monday to Sunday). Use this as the reference week to resolve day-month dates and to anchor the week's date range.`
     : '';
   const response = await genai.models.generateContent({
     model,
@@ -308,7 +308,7 @@ async function callGeminiWithGridText(
   weekStart?: string,
 ): Promise<string> {
   const referenceWeek = weekStart
-    ? ` The current active roster week starts on ${weekStart} (ISO Sunday). Use this as the reference week to resolve day-month dates and to anchor the week's date range.`
+    ? ` The current active roster week starts on ${weekStart} (a Monday; every rota week here runs Monday to Sunday). Use this as the reference week to resolve day-month dates and to anchor the week's date range.`
     : '';
   const response = await genai.models.generateContent({
     model,
