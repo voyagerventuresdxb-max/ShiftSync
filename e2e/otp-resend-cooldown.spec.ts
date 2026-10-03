@@ -87,7 +87,7 @@ test.describe('"Send a new code" cooldown honours the server rate limit', () => 
 
     await page.clock.install();
     await open(page, `/join?invite=${link.token}`);
-    await expect(page.getByRole('heading', { name: /Join .* on ShiftSync/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Join .* (on ShiftSync|as staff)/ })).toBeVisible();
     await exerciseResend(page, phone, '/api/join/request-otp');
   });
 });
