@@ -794,3 +794,10 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 - Closed as superseded (replacements verified merged): #72 → #80, #76 → #85, #43 → #86. #42 left open.
 - Docs: #70 merged after this entry (reread: outcome-only). **#75 skipped**: it names which upload path consumes the library with the open advisories; Stage 2's PR replaces it.
 - Not merged (as instructed): #69, #78, #84 (rota stack). No PR body in #80–#88 contained security specifics.
+
+## Stage 2 — xlsx 0.20.3 from the SheetJS CDN: done, merged and deployed (2026-10-04, 03:15–03:31 Dubai)
+- [#90](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/90) → `64de660`. `xlsx` now installs from `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` (current build); lockfile pins URL + sha512, matching #75's recorded hash and an independent download. Lockfile diff limited to the `xlsx` entry and eight transitive packages it no longer uses.
+- What the upgrade needed: `UTC: true` on both `sheet_to_json` calls (0.20 re-expresses Date cells in host-local time). Found and fixed on the way (test-only): the timezone probe fed `parseRotaFile` a mis-sliced pooled `Buffer`, so that field parsed truncated bytes on both versions and could vary between runs.
+- **Gate, all passed:** timezone matrix (UTC / Asia/Dubai / America/Los_Angeles) green; the probe document (21 fixtures + 4 synthetic CSV/HTML/typed-cell inputs, every parser entry point, now including `22-Aug-26`, `1:00 PM`, `9:00:00 PM`, `21:00:00`) is byte-identical between 0.18.5 and 0.20.3 in all three zones and across reruns; server 406 pass / 1 skip; roster-upload e2e 9/9; typecheck ×2, lint 0 errors, build; scan clean. Vercel built the merge commit (`success`), so a CDN-sourced install works in a hosted build.
+- Deploy: `f5f3e49c-55dd-4247-bf1c-6f37f32646f0` (code `64de660`), nixpacks, no pending migrations, API listening; `/api/health` 200 JSON ×2; smoke 3/3. Previous: `f0a10bb3` (rollback target, not needed).
+- #75 (draft, docs) left open; superseded by #90 for the owner to close.
