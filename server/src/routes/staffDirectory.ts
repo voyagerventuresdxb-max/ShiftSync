@@ -6,6 +6,7 @@ import { withAuditedTransaction } from '../lib/auditLog.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { findUserByPhone } from './identity.js';
 import { revokeUserAccess } from '../lib/identity.js';
+import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError } from '../lib/actions/employmentStatusActions.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -259,6 +260,11 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
     // re-sending isActive:false doesn't overwrite the original termination date.
     const statusChanges = data.isActive !== undefined && data.isActive !== existing.isActive;
     if (statusChanges) {
+      // Who may change whose status (see employmentStatusActions.ts). Checked
+      // on a real transition only, so re-sending the current value is a no-op
+      // for everyone, as before.
+      const refusal = employmentStatusRefusal(req.user!, existing);
+      if (refusal) return res.status(403).json({ error: refusal });
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
@@ -288,6 +294,11 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
           // reactivation clears anything a sign-in racing the deactivation
           // left behind, so they always come back through a fresh sign-in.
           if (statusChanges) {
+            // Invariant: a venue keeps at least one active owner, whatever
+            // the caller's role (defence in depth behind the 403 above).
+            if (data.isActive === false && existing.systemRole === 'OWNER') {
+              await assertNotLastActiveOwner(tx, existing.locationId, existing.id);
+            }
             await revokeUserAccess(tx, existing, req.user!.id);
           }
           // `updateMany` doesn't return the row, so re-fetch it (inside the
@@ -312,6 +323,7 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       });
     } catch (err) {
       if (isPhoneConflict(err)) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
+      if (err instanceof LastOwnerError) return res.status(409).json({ error: err.message });
       throw err;
     }
     if (!user) {

@@ -157,10 +157,18 @@ export async function requestOtpCode(
   });
 }
 
+export const OTP_ALREADY_USED_REASON = 'That code has already been used — request a new one.';
+
 /**
  * Verifies a submitted code against the most recent unconsumed OTP for
  * (phone, purpose). Consumes it (success or failure) so a code can never be
  * replayed, and rate-limits guesses via `attempts`.
+ *
+ * Consumption is ONE conditional update (`consumedAt IS NULL` in the WHERE):
+ * the row is read first, but only the request whose update actually matches
+ * wins. Two requests racing with the same correct code both pass the hash
+ * check; exactly one of them flips `consumedAt`, the other sees `count === 0`
+ * and is refused. Same for the expiry/attempt-cap consumption paths.
  */
 export async function verifyOtpCode(
   phone: string,
@@ -175,19 +183,21 @@ export async function verifyOtpCode(
     orderBy: { createdAt: 'desc' },
   });
   if (!record) return { ok: false, reason: 'No active code for this phone number — request a new one.' };
+  const consume = () => prisma.otpCode.updateMany({ where: { id: record.id, consumedAt: null }, data: { consumedAt: new Date() } });
   if (record.expiresAt < new Date()) {
-    await prisma.otpCode.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+    await consume();
     return { ok: false, reason: 'That code has expired — request a new one.' };
   }
   if (record.attempts >= MAX_OTP_ATTEMPTS) {
-    await prisma.otpCode.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+    await consume();
     return { ok: false, reason: 'Too many incorrect attempts — request a new code.' };
   }
   if (hashOtp(submittedCode) !== record.codeHash) {
-    await prisma.otpCode.update({ where: { id: record.id }, data: { attempts: { increment: 1 } } });
+    await prisma.otpCode.updateMany({ where: { id: record.id, consumedAt: null }, data: { attempts: { increment: 1 } } });
     return { ok: false, reason: 'Incorrect code.' };
   }
-  await prisma.otpCode.update({ where: { id: record.id }, data: { consumedAt: new Date() } });
+  const { count } = await consume();
+  if (count === 0) return { ok: false, reason: OTP_ALREADY_USED_REASON };
   return { ok: true };
 }
 

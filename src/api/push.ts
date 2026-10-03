@@ -1,11 +1,12 @@
 /** Client for the Web Push subscription API (server/src/routes/push.ts). */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 
 export { ApiError };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(url, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

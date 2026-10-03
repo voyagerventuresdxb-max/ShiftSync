@@ -70,21 +70,33 @@ test.describe('deactivation ends the session', () => {
       await expect(row.getByRole('button', { name: 'Inactive', exact: true })).toBeVisible();
       expect(await prisma.session.count({ where: { userId: staff.id } })).toBe(0);
 
-      // --- Staff's next request: refused, and the app drops to the signed-out state.
+      // --- The same manager may not deactivate themselves: the chip refuses with a plain error.
+      const own = page.getByRole('row').filter({ hasText: 'Deactivating Manager' });
+      const refusedSelf = page.waitForResponse((r) => r.url().includes('/api/staff-directory/') && r.request().method() === 'PATCH');
+      await own.getByRole('button', { name: 'Active', exact: true }).click();
+      expect((await refusedSelf).status()).toBe(403);
+      await expect(page.getByText("You can't change your own employment status", { exact: false })).toBeVisible();
+      await expect(own.getByRole('button', { name: 'Active', exact: true })).toBeVisible();
+
+      // --- Staff's next request: refused, local session cleared, and the app
+      // sends them to /login with a plain message (SessionGuard, app-wide).
       const refused = staffPage.waitForResponse((r) => r.url().endsWith('/api/my-shifts'));
       await staffPage.reload();
       expect((await refused).status()).toBe(401);
-      await expect(staffPage.getByText("You're not signed in.", { exact: false })).toBeVisible();
+      await staffPage.waitForURL((url) => url.pathname === '/login');
+      const landed = new URL(staffPage.url());
+      expect(landed.searchParams.get('reason')).toBe('session-ended');
+      expect(landed.searchParams.get('returnTo')).toBe('/my-shifts');
+      await expect(staffPage.getByTestId('session-ended-notice')).toContainText("You've been signed out. Sign in again to continue.");
       await expect(staffPage.getByRole('heading', { name: /Welcome back/ })).toHaveCount(0);
-      await expect(staffPage.getByText('Your next shifts')).toHaveCount(0);
       expect(await staffPage.evaluate(() => localStorage.getItem('shiftsync.session'))).toBeNull();
 
       // --- And signing back in is refused with the deactivated message.
       await skipOtpResendWait(staffPhone);
-      await open(staffPage, '/login');
       await logIn(staffPage, staffPhone);
       await expect(staffPage.locator('.error-block')).toContainText('has been deactivated');
       expect(await staffPage.evaluate(() => localStorage.getItem('shiftsync.session'))).toBeNull();
+      expect(new URL(staffPage.url()).pathname).toBe('/login');
     } finally {
       await staffContext.close();
     }

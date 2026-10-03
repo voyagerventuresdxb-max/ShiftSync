@@ -15,6 +15,7 @@
  * this union in sync with intentSchema.ts's `ParsedIntent` by hand if that
  * file changes.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 export { ApiError };
@@ -37,7 +38,7 @@ export type ParsedIntent =
   | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(url, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
