@@ -14,7 +14,8 @@
  *  - Leave/absence codes (Off, A/L, PH, Sick, etc.)
  */
 import * as XLSX from 'xlsx';
-import { isOvernight } from './normalize.js';
+import { cellToText, isOvernight } from './normalize.js';
+import { readWorkbook } from './parseWorkbook.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
 
 /** Standardized role categories to prevent generic "Floor" labels. */
@@ -82,7 +83,7 @@ export function parseShiftCell(cellValue: unknown): {
     return { type: 'OFF', intervals: [], raw: '' };
   }
 
-  const raw = String(cellValue).trim();
+  const raw = cellToText(cellValue).trim();
   const lowerRaw = raw.toLowerCase();
 
   // Leave/absence codes.
@@ -157,7 +158,7 @@ export function parseRotaFile(
   let rawRows: unknown[][] = [];
 
   if (fileType === 'xlsx' || fileType === 'csv') {
-    const workbook = XLSX.read(fileBuffer, { type: 'array' });
+    const workbook = readWorkbook(fileBuffer, typeof fileBuffer === 'string' ? 'string' : 'array');
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
     rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
@@ -184,8 +185,8 @@ export function processRowsIntoRoster(rows: unknown[][], weekStart?: string): Pa
   for (const row of rows) {
     if (!row || row.length < 2) continue;
 
-    const possibleName = String(row[0] ?? '').trim();
-    const possibleRole = String(row[1] ?? '').trim();
+    const possibleName = cellToText(row[0]).trim();
+    const possibleRole = cellToText(row[1]).trim();
 
     // Skip header rows and empty name cells.
     if (!possibleName || possibleName.toLowerCase().includes('name') || possibleName.toLowerCase().includes('employee')) {

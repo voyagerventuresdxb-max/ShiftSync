@@ -1,3 +1,4 @@
+import { gridToTsvText } from './parseWorkbook.js';
 import { GoogleGenAI, ApiError } from '@google/genai';
 import { PDFParse } from 'pdf-parse';
 import { isOvernight, parseDateCell, parseTimeCell, resolveDayMonthDate } from './normalize.js';
@@ -360,9 +361,7 @@ export async function parseRosterGrid(
 ): Promise<ParsedVisionResult> {
   const startTime = Date.now();
   const mode = fallbackMode();
-  const gridText = grid
-    .map((row) => row.map((cell) => (cell === null || cell === undefined ? '' : String(cell))).join('\t'))
-    .join('\n');
+  const gridText = gridToTsvText(grid);
 
   if (mode === 'sample') {
     console.warn('[parseVision] VLM_FALLBACK_MODE=sample — returning cached sample response (no Gemini call).');
