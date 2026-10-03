@@ -492,6 +492,13 @@ export function RotaBuilder() {
                 <Save className="h-3.5 w-3.5" /> Save as template
               </button>
             </div>
+            {/* The publish button is disabled offline; say why, right where the manager is looking, instead of a greyed button with no reason (bad-network audit, 2026-10-03). */}
+            {!online && (
+              <div className="basis-full" data-testid="rota-offline-notice">
+                <OfflineActionNotice />
+              </div>
+            )}
+
           </header>
 
           {flash && <p className="border-b border-border/60 bg-accent/10 px-4 py-2 text-xs text-accent">{flash}</p>}
