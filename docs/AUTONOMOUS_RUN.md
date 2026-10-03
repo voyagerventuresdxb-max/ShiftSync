@@ -718,3 +718,26 @@ Given to the owner in chat only, per the rules of this run. Every fix in this fi
 
 ### 6. Still not done (roadmap, unchanged by this run)
 - SMS go-live (#51); Railway test (#52, early November); floor-plan COMPAT removal (#55, hold until ~2026-10-04); VAPID go-live; native push and camera plugins; first Play Store upload; the xlsx upgrade.
+
+---
+
+# Autonomous run 4 — 2026-10-03: stopped at preconditions
+
+The run-4 brief was written for a laptop with Railway CLI access and open network. It was started in the same cloud sandbox as run 3, where those preconditions do not hold, so the run stopped before Stage 1 as the brief requires. Nothing was merged, closed, pushed to a PR branch or deployed; no production variable was read or changed.
+
+| Precondition | Result in this sandbox |
+|---|---|
+| Railway CLI installed and linked | not installed, no link, Railway API host blocked by the sandbox network policy |
+| Production variable presence checks | not possible without Railway access |
+| `/api/health` OK (Railway domain and via Vercel) | both hosts blocked by the sandbox network policy |
+| `ROLLBACK_ID` recorded | not possible without Railway access |
+| Clean fresh worktree of `origin/master` | possible (`origin/master` still `7b858dd`) |
+| `gh` CLI | present, but its token is invalid here; the GitHub connector works |
+
+Also unreachable from this sandbox, relevant to later stages: the SheetJS CDN (Stage 2) and Google's current Gemini / Vertex model docs (Stage 3c). Stage 3 cannot pick or verify a model ID here.
+
+Read-only notes gathered before stopping (no changes made):
+- Model IDs in app code on master: roster vision primary and voice default to a 3.6 Flash ID, vision fallback to a 3.5 Flash-Lite ID (`parseVision.ts`, `voice/model.ts`, `docs/ENV_VARS.md`). Gemini 2.5 IDs appear only in two old plan documents under `docs/superpowers/plans/` and in vendored `.ai/skills` tooling, not in the running app. Whether production overrides `VLM_MODEL`, `VLM_FALLBACK_MODEL` or `VOICE_MODEL` with a 2.5 ID could not be checked. Model IDs still live as literals in two files, so Stage 3b's single config module is still to do.
+- Fixtures privacy check: findings reported to the owner directly.
+
+To run the brief as written: run it on the laptop (Railway CLI linked, open network), or widen this cloud environment's network access to the Railway, Vercel, SheetJS and Google docs hosts and provide a Railway link without exposing a token to the session.
