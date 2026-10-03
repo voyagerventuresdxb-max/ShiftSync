@@ -13,6 +13,9 @@ export interface MyShiftEntry {
   date: string;
   startTime: string;
   endTime: string;
+  /** Venue wall-clock "HH:mm" — what to show, whatever timezone the device is in. */
+  startLabel: string;
+  endLabel: string;
   roleName: string;
   status: 'DRAFT' | 'PUBLISHED' | 'COMPLETED' | 'CANCELLED';
 }
