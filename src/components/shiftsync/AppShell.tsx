@@ -5,10 +5,12 @@ import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
 import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
 import { NotificationBell } from '@/components/shiftsync/NotificationBell';
+import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
+import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -193,6 +195,13 @@ export function AppShell() {
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
         const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
+        // Role check BEFORE the confirm sheet: a STAFF session must never be
+        // shown a "Confirm" for a manager action the server would refuse
+        // anyway (the server's 403 on /execute stays the real guard).
+        if (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(session.user.systemRole, intent.intent)) {
+          setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
+          return;
+        }
         setVoiceResult({ transcript, intent, voiceLogId, hasAdditionalRequest });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
@@ -312,8 +321,8 @@ export function AppShell() {
   const onMyShifts = useLocation().pathname === '/my-shifts';
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <header className="sticky top-0 z-20 px-3 pt-3 sm:px-4">
+    <div className="min-h-dvh bg-background pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <header className="sticky top-0 z-20 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-4">
         <div className="glass-bar mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-3 py-2.5 shadow-lux sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
@@ -359,6 +368,7 @@ export function AppShell() {
       )}
 
       <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
+        <SessionGuard />
         <Outlet />
       </main>
 

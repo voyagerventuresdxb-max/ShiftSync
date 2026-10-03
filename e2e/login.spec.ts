@@ -99,10 +99,15 @@ test.describe('/login — phone + OTP for every role, routed by role', () => {
 
   test('a second code for the same number within 30s is refused with a 429 and its message', async ({ page }) => {
     const phone = await createUser('STAFF');
+    // The button itself counts down for 30s (otp-resend-cooldown.spec.ts covers
+    // that); a faked clock gets past it so this test still exercises the SERVER's cap.
+    await page.clock.install();
     await open(page, '/login');
     await requestCode(page, phone);
+    await expect(page.getByRole('button', { name: /Send a new code in \d+s/ })).toBeDisabled();
+    await page.clock.fastForward(31_000);
     const response = page.waitForResponse((r) => r.url().endsWith('/api/identity/request-otp') && r.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Send a new code' }).click();
+    await page.getByRole('button', { name: 'Send a new code', exact: true }).click();
     expect((await response).status()).toBe(429);
     await expect(page.locator('.error-block')).toContainText('Too many code requests for this number');
   });

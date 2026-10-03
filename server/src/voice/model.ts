@@ -15,3 +15,18 @@ export const DEFAULT_VOICE_MODEL = 'gemini-3.6-flash';
 export function voiceModel(): string {
   return process.env.VOICE_MODEL || DEFAULT_VOICE_MODEL;
 }
+
+/**
+ * Options for both voice Gemini clients, or null when voice isn't configured.
+ * GEMINI_BASE_URL (dev/e2e only — productionGuards.ts refuses to boot with it
+ * in production) points them at a local fake Gemini, which needs no real key.
+ * Roster vision parsing (parseVision.ts) deliberately doesn't read it.
+ */
+export function voiceClientOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): { apiKey: string; httpOptions?: { baseUrl: string } } | null {
+  const baseUrl = env.GEMINI_BASE_URL?.trim();
+  const apiKey = env.GEMINI_API_KEY || (baseUrl ? 'local-fake-gemini' : '');
+  if (!apiKey) return null;
+  return baseUrl ? { apiKey, httpOptions: { baseUrl } } : { apiKey };
+}

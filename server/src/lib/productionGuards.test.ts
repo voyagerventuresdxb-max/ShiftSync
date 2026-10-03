@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { checkProductionEnv, isProduction } from './productionGuards.js';
+import { GEMINI_BASE_URL_OVERRIDES, checkProductionEnv, isProduction } from './productionGuards.js';
 
 // Pure function over an env object — no process.env mutation, no DB.
 const PROD_SIGNALS = [{ NODE_ENV: 'production' }, { RAILWAY_ENVIRONMENT_NAME: 'production' }];
-const ALL_FLAGS_ON = { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_OTP_BYPASS: 'true', ALLOW_DEV_ERROR_INJECTION: 'true' };
+const ALL_FLAGS_ON = { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_OTP_BYPASS: 'true', ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: 'http://127.0.0.1:4599' };
 
 test('production is NODE_ENV=production or RAILWAY_ENVIRONMENT_NAME=production, nothing else', () => {
   for (const signal of PROD_SIGNALS) assert.equal(isProduction(signal), true, JSON.stringify(signal));
@@ -39,6 +39,17 @@ for (const signal of PROD_SIGNALS) {
     });
   }
 
+  test(`${label}: refuses to start with GEMINI_BASE_URL set to anything, so voice AI traffic is never redirected`, () => {
+    for (const url of ['http://127.0.0.1:4599', 'https://example.com', 'false']) {
+      assert.throws(
+        () => checkProductionEnv({ ...signal, GEMINI_BASE_URL: url }),
+        (err: unknown) => err instanceof Error && err.message.includes('GEMINI_BASE_URL'),
+        `GEMINI_BASE_URL=${url}`,
+      );
+    }
+    assert.deepEqual(checkProductionEnv({ ...signal, GEMINI_BASE_URL: ' ' }), { warnings: [] });
+  });
+
   test(`${label}: boots with the echo on and a valid allowlist, warning only about the junk entry`, () => {
     const { warnings } = checkProductionEnv({ ...signal, ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: '050 123 4567, junk' });
     assert.equal(warnings.length, 1);
@@ -54,7 +65,8 @@ test('one error names every offending setting, so a single redeploy fixes all of
   assert.throws(
     () => checkProductionEnv({ NODE_ENV: 'production', ...ALL_FLAGS_ON }),
     (err: unknown) =>
-      err instanceof Error && ['ECHO_ALLOWED_PHONES', 'ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION'].every((s) => err.message.includes(s)),
+      err instanceof Error &&
+      ['ECHO_ALLOWED_PHONES', 'ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION', 'GEMINI_BASE_URL'].every((s) => err.message.includes(s)),
   );
 });
 
@@ -76,6 +88,7 @@ function boot(env: Record<string, string>): Promise<{ outcome: number | 'listeni
       ALLOW_DEV_OTP_ECHO: 'false',
       ALLOW_DEV_OTP_BYPASS: 'false',
       ALLOW_DEV_ERROR_INJECTION: 'false',
+      GEMINI_BASE_URL: '',
       ECHO_ALLOWED_PHONES: 'none',
       PORT: '0',
       ...env,
@@ -112,4 +125,22 @@ test('the server entry point exits non-zero before listening when production is 
 
   const safe = await boot({ NODE_ENV: 'production', ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: '+971501234567' });
   assert.equal(safe.outcome, 'listening', safe.output);
+});
+
+test('every Gemini/Vertex base-URL override (ours and the SDK\'s own) refuses production boot; blank values are tolerated', () => {
+  assert.deepEqual([...GEMINI_BASE_URL_OVERRIDES], ['GEMINI_BASE_URL', 'GOOGLE_GEMINI_BASE_URL', 'GOOGLE_VERTEX_BASE_URL']);
+  for (const name of GEMINI_BASE_URL_OVERRIDES) {
+    assert.throws(
+      () => checkProductionEnv({ NODE_ENV: 'production', [name]: 'https://example.invalid/v1' }),
+      (err: unknown) => err instanceof Error && err.message.includes(name),
+      `${name} must refuse boot`,
+    );
+    assert.throws(
+      () => checkProductionEnv({ RAILWAY_ENVIRONMENT_NAME: 'production', [name]: 'http://127.0.0.1:4599' }),
+      (err: unknown) => err instanceof Error && err.message.includes(name),
+      `${name} must refuse boot under the Railway signal too`,
+    );
+    assert.deepEqual(checkProductionEnv({ NODE_ENV: 'production', [name]: '   ' }), { warnings: [] }, `${name} blank is not set`);
+    assert.deepEqual(checkProductionEnv({ NODE_ENV: 'development', [name]: 'http://127.0.0.1:4599' }), { warnings: [] }, `${name} is fine outside production`);
+  }
 });

@@ -10,17 +10,72 @@ dayjs.extend(timezone);
 /** Fallback IANA zone when a Location record has no explicit timezone set. */
 export const DEFAULT_VENUE_TIMEZONE = 'Asia/Dubai';
 
-const DATE_FORMATS = ['YYYY-MM-DD', 'DD/MM/YYYY', 'D/M/YYYY', 'MM/DD/YYYY', 'DD-MM-YYYY', 'D MMM YYYY', 'D MMMM YYYY'];
-const TIME_FORMATS = ['HH:mm', 'H:mm', 'hh:mm A', 'h:mm A', 'hh:mmA', 'h:mmA', 'HHmm'];
+// Text dates as CSV and HTML exports write them (SheetJS no longer guesses at
+// them for us, see parseWorkbook.ts `readWorkbook`): ISO, day-first and
+// month-first numerics, and the month-name spellings `20-Aug-2026`,
+// `20-Aug-26`, `20 Aug 2026`, `Aug 20, 2026`.
+const DATE_FORMATS = [
+  'YYYY-MM-DD',
+  'YYYY/MM/DD',
+  'DD/MM/YYYY',
+  'D/M/YYYY',
+  'MM/DD/YYYY',
+  'DD-MM-YYYY',
+  'D-MMM-YYYY',
+  'DD-MMM-YYYY',
+  'D-MMM-YY',
+  'DD-MMM-YY',
+  'D MMM YYYY',
+  'D MMMM YYYY',
+  'MMM D, YYYY',
+  'MMM D YYYY',
+  'MMMM D, YYYY',
+];
+const TIME_FORMATS = ['HH:mm', 'H:mm', 'HH:mm:ss', 'H:mm:ss', 'hh:mm A', 'h:mm A', 'hh:mmA', 'h:mmA', 'h:mm:ss A', 'h A', 'hA', 'HHmm'];
 
 // Excel's epoch is 1899-12-30 (accounting for the historic leap-year bug).
-const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+export const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+
+/**
+ * An Excel serial (days since the epoch, fraction = time of day) as a UTC
+ * Date whose UTC fields are the sheet's wall-clock values. Rounded to the
+ * nearest second first: SheetJS derives a CSV/HTML serial through a local
+ * Date, which on a host whose zone had a sub-minute offset in 1899
+ * (Asia/Dubai: +3:41:12) leaves ~12s of noise. Pure arithmetic, no
+ * timezone involved, so every host produces the same Date.
+ */
+export function excelSerialToUtcDate(serial: number): Date {
+  return new Date(EXCEL_EPOCH_MS + Math.round(serial * 86_400) * 1000);
+}
+
+/**
+ * A grid cell as text for the text paths (Gemini prompt, local fallback,
+ * header detection), identical on every host: a Date is rendered from its UTC
+ * fields (the sheet's wall-clock values, see parseWorkbook.ts `readWorkbook`),
+ * never via `String(date)`, whose output carries the host's zone and offset.
+ * A pure time-of-day cell (a serial below 1, i.e. on the Excel epoch day)
+ * renders as "HH:mm"; a date-only cell as "YYYY-MM-DD"; a date-time as both.
+ */
+export function cellToText(cell: unknown): string {
+  if (cell === null || cell === undefined) return '';
+  if (cell instanceof Date) {
+    if (Number.isNaN(cell.getTime())) return '';
+    const iso = cell.toISOString();
+    const date = iso.slice(0, 10);
+    const time = iso.slice(11, 16);
+    const sinceEpoch = cell.getTime() - EXCEL_EPOCH_MS;
+    if (sinceEpoch >= 0 && sinceEpoch < 86_400_000) return time;
+    return time === '00:00' ? date : `${date} ${time}`;
+  }
+  return String(cell);
+}
+
 
 /**
  * Resolves a day-month date that has no year (e.g. "18-Aug", "17-Aug MONDAY",
  * "18 Aug") to a full ISO date, using a reference week to infer the year.
  * Gemini often returns dates as "D-MMM" without a year; the roster week
- * (weekStart, an ISO Sunday) anchors the correct year.
+ * (weekStart, the week's Monday) anchors the correct year.
  */
 export function resolveDayMonthDate(value: unknown, weekStart: string): string | null {
   if (typeof value !== 'string') return null;
@@ -75,8 +130,8 @@ export function parseDateCell(value: unknown): string | null {
   }
   if (typeof value === 'number' && Number.isFinite(value)) {
     // Use UTC fields throughout so local server timezone never shifts the calendar day.
-    const ms = EXCEL_EPOCH_MS + Math.floor(value) * 86_400_000;
-    const d = new Date(ms);
+    // Same second-rounding as excelSerialToUtcDate before taking the day.
+    const d = excelSerialToUtcDate(value);
     if (Number.isNaN(d.getTime())) return null;
     const y = d.getUTCFullYear();
     const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -102,7 +157,7 @@ export function parseTimeCell(value: unknown): string | null {
     return dayjs.utc(value).format('HH:mm');
   }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    const fraction = value % 1;
+    const fraction = (Math.round(value * 86_400) / 86_400) % 1;
     const totalMinutes = Math.round(fraction * 24 * 60);
     const hours = Math.floor(totalMinutes / 60) % 24;
     const minutes = totalMinutes % 60;

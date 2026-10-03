@@ -113,7 +113,7 @@ test.describe('invite links — expiring, revocable, regenerable', () => {
     await expect(owner.panel.getByText('Expires in 30 days · 0 joins')).toBeVisible();
 
     const applicant = await applicantOpens(browser, link);
-    await expect(applicant.getByRole('heading', { name: `Join ${venueName} on ShiftSync` })).toBeVisible();
+    await expect(applicant.getByRole('heading', { name: `Join ${venueName} as staff` })).toBeVisible();
     const phone = freshPhone();
     await joinWithForm(applicant, phone);
     await expect(applicant.getByText(waitingText(venueName))).toBeVisible();
@@ -166,7 +166,7 @@ test.describe('invite links — expiring, revocable, regenerable', () => {
     await expectDeadLink(stale, 'This invite link is no longer active — ask your manager for a new one.');
 
     const applicant = await applicantOpens(browser, newLink);
-    await expect(applicant.getByRole('heading', { name: `Join ${venueName} on ShiftSync` })).toBeVisible();
+    await expect(applicant.getByRole('heading', { name: `Join ${venueName} as staff` })).toBeVisible();
     await joinWithForm(applicant, freshPhone());
     await expect(applicant.getByText(waitingText(venueName))).toBeVisible();
     expect((await prisma.inviteLink.findUniqueOrThrow({ where: { token: tokenOf(newLink) } })).useCount).toBe(1);
@@ -177,7 +177,7 @@ test.describe('invite links — expiring, revocable, regenerable', () => {
     await prisma.location.update({ where: { id: locationId }, data: { legacyJoinLinksUntil: new Date(Date.now() + 86_400_000) } });
 
     const early = await applicantOpens(browser, `/join?location=${locationId}`);
-    await expect(early.getByRole('heading', { name: 'Join ShiftSync' })).toBeVisible();
+    await expect(early.getByRole('heading', { name: 'Join your venue as staff' })).toBeVisible();
     await joinWithForm(early, freshPhone());
     await expect(early.getByText(waitingText(venueName))).toBeVisible();
 

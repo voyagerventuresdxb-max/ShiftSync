@@ -5,6 +5,9 @@ import { getLoginConfig, type LoginMethods } from '../api/loginLinks';
 import { extractLoginLinkToken, LOGIN_LINK_PATH } from '../../shared/loginLinks';
 import { useIdentity } from '../state/IdentityContext';
 import { postLoginDestination } from '../lib/postLoginDestination';
+import { hasStaffWelcome, shouldShowStaffWelcome, stashStaffWelcome, WELCOME_PATH } from '../lib/staffWelcome';
+import { cooldownAfterRefusal, useResendCooldown } from '../hooks/useResendCooldown';
+import { SESSION_ENDED_REASON } from '../components/shiftsync/SessionGuard';
 
 type Phase = 'phone' | 'code';
 
@@ -18,6 +21,12 @@ export default function LoginContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnTo = searchParams.get('returnTo');
+  // `?as=staff`: the same screen and the same codes, worded for staff — no
+  // venue-setup links, no manager wording. Staff never see manager onboarding.
+  const staffLook = searchParams.get('as') === 'staff';
+  // Set by SessionGuard when a dead session bounced them here. Plain words, no mechanics.
+  const sessionEnded = searchParams.get('reason') === SESSION_ENDED_REASON;
+  const resend = useResendCooldown();
   const [phase, setPhase] = useState<Phase>('phone');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -39,8 +48,9 @@ export default function LoginContent() {
   }, []);
   const otpEnabled = loginMethods !== 'links';
 
-  // Also the post-verify redirect: `login()` below sets `session`.
-  if (session) return <Navigate to={postLoginDestination(session.user.systemRole, returnTo)} replace />;
+  // Also the post-verify redirect: `login()` below sets `session`. A staff
+  // member's very first sign-in goes through the one-time "You're in" screen.
+  if (session) return <Navigate to={hasStaffWelcome() ? WELCOME_PATH : postLoginDestination(session.user.systemRole, returnTo)} replace />;
 
   const requestCode = async () => {
     setSubmitting(true);
@@ -52,12 +62,16 @@ export default function LoginContent() {
       setDevCode(res.devCode ?? null);
       setCode('');
       setPhase('code');
+      resend.start();
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setNoAccount(true);
         setError('No account with that number.');
       } else {
         setError(err instanceof ApiError ? err.message : 'Could not request a code.');
+        // The server's rate limit is the source of truth: wait as long as it says.
+        const wait = cooldownAfterRefusal(err);
+        if (wait > 0) resend.start(wait);
       }
     } finally {
       setSubmitting(false);
@@ -77,6 +91,7 @@ export default function LoginContent() {
         setDevCode(null);
         return;
       }
+      if (shouldShowStaffWelcome(result)) stashStaffWelcome(result.venueName);
       login({ token: result.token, expiresAt: result.expiresAt, user: result.user });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not verify that code.');
@@ -92,6 +107,7 @@ export default function LoginContent() {
     setError(null);
     setNoAccount(false);
     setWaitingOn(null);
+    resend.clear();
   };
 
   const onSubmit = (e: FormEvent) => {
@@ -115,20 +131,29 @@ export default function LoginContent() {
   };
 
   return (
-    <section className="panel mx-auto max-w-md p-6">
-      <h2 className="text-lg font-semibold">Log in to ShiftSync</h2>
+    <section className="panel mx-auto max-w-md p-6" data-audience={staffLook ? 'staff' : undefined}>
+      {staffLook && <p className="eyebrow">Staff</p>}
+      <h2 className="text-lg font-semibold">{staffLook ? 'Staff sign in' : 'Log in to ShiftSync'}</h2>
       <p className="hint mt-1">
         {!otpEnabled
           ? 'ShiftSync signs you in with a link from your manager. Paste it below.'
           : phase === 'phone'
-            ? "We'll text a code to the number your venue has on file."
+            ? staffLook
+              ? "Enter the mobile number your manager has for you. We'll text you a code."
+              : "We'll text a code to the number your venue has on file."
             : `Enter the code we sent to ${phone}.`}
       </p>
+
+      {sessionEnded && !error && (
+        <div className="mt-3 rounded-lg border border-border bg-card p-4 text-sm" role="status" data-testid="session-ended-notice">
+          You've been signed out. Sign in again to continue.
+        </div>
+      )}
 
       {error && (
         <div className="error-block mt-3" role="alert">
           <p>{error}</p>
-          {noAccount && (
+          {noAccount && !staffLook && (
             <>
               <p className="mt-1">Joining a team? Use your venue's invite link.</p>
               <p className="mt-1">
@@ -139,6 +164,7 @@ export default function LoginContent() {
               </p>
             </>
           )}
+          {noAccount && staffLook && <p className="mt-1">Ask your manager for the venue's invite link, or check the number with them.</p>}
         </div>
       )}
 
@@ -201,11 +227,12 @@ export default function LoginContent() {
               </button>
               <button
                 type="button"
-                className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                className="hit-44 text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:no-underline disabled:opacity-60"
                 onClick={() => void requestCode()}
-                disabled={submitting}
+                disabled={submitting || resend.secondsLeft > 0}
+                aria-live="polite"
               >
-                Send a new code
+                {resend.secondsLeft > 0 ? `Send a new code in ${resend.secondsLeft}s` : 'Send a new code'}
               </button>
             </div>
           </>
@@ -240,11 +267,19 @@ export default function LoginContent() {
         </form>
       )}
 
-      {otpEnabled && (
+      {otpEnabled && !staffLook && (
         <p className="mt-5 text-center text-xs text-muted-foreground">
           Setting up a brand-new venue?{' '}
           <Link to="/onboarding" className="underline-offset-2 hover:text-foreground hover:underline">
             Sign up your restaurant
+          </Link>
+        </p>
+      )}
+      {otpEnabled && staffLook && (
+        <p className="mt-5 text-center text-xs text-muted-foreground">
+          Managing a venue?{' '}
+          <Link to="/login" className="underline-offset-2 hover:text-foreground hover:underline">
+            Manager log in
           </Link>
         </p>
       )}

@@ -32,7 +32,7 @@ export type IssueResult =
  * Never yourself, never an inactive user. Anything else: null.
  */
 export async function findIssuableTarget(issuer: Issuer, targetUserId: string): Promise<TargetWithLocation | null> {
-  // Deactivation doesn't end existing sessions, so a deactivated issuer is refused here.
+  // Defence in depth: requireSession already refuses a deactivated issuer.
   if (!issuer.isActive || !targetUserId || targetUserId === issuer.id) return null;
   const target = await prisma.user.findUnique({
     where: { id: targetUserId },

@@ -3,7 +3,9 @@
  * login for existing staff, and the localStorage-backed session store
  * shared by every screen that needs the logged-in user's Bearer token.
  */
+import { apiFetch, retryAfterSeconds } from './http';
 import { ApiError } from './schedules';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 export interface SessionUser {
@@ -15,7 +17,7 @@ export interface SessionUser {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -24,7 +26,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // non-JSON error body; keep the generic message
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, retryAfterSeconds(res) ?? undefined);
   }
   return (await res.json()) as T;
 }
@@ -50,7 +52,7 @@ export async function requestLoginOtp(phone: string): Promise<{ expiresAt: strin
  * and deactivated numbers are a 403 whose message lands in `ApiError`.
  */
 export type LoginVerifyResult =
-  | { pending?: false; token: string; expiresAt: string; user: SessionUser }
+  | { pending?: false; token: string; expiresAt: string; user: SessionUser; firstSignIn?: boolean; venueName?: string }
   | { pending: true; status: 'pending'; venueName: string; managerName: string | null };
 
 /** POST /api/identity/verify-otp */
@@ -68,7 +70,7 @@ export async function verifyLoginOtp(phone: string, code: string): Promise<Login
  * it, which matters on the shared venue devices this app actually runs on.
  */
 export async function revokeSession(token: string): Promise<void> {
-  const res = await fetch('/api/identity/session', {
+  const res = await apiFetch(apiUrl('/api/identity/session'), {
     method: 'DELETE',
     headers: withAuth(token),
   });
