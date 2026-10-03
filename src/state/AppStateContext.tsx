@@ -147,6 +147,31 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   const [weekStart, setWeekStart] = useState(currentWeekStart());
+  // `currentWeekStart()` was computed once, at mount. A tab left open past
+  // Monday 00:00 (a kiosk, a manager's phone) would otherwise keep showing
+  // last week as "this week". Only an untouched auto-selected week follows the
+  // clock; a week the user navigated to is theirs and never moves.
+  const autoWeekRef = useRef(weekStart);
+  useEffect(() => {
+    const follow = () => {
+      const now = currentWeekStart();
+      if (now !== autoWeekRef.current) {
+        setWeekStart((current) => {
+          const untouched = current === autoWeekRef.current;
+          autoWeekRef.current = now;
+          return untouched ? now : current;
+        });
+      }
+    };
+    window.addEventListener('focus', follow);
+    document.addEventListener('visibilitychange', follow);
+    const id = setInterval(follow, 60_000);
+    return () => {
+      window.removeEventListener('focus', follow);
+      document.removeEventListener('visibilitychange', follow);
+      clearInterval(id);
+    };
+  }, []);
 
   const roster: Roster = useMemo(
     () => ({

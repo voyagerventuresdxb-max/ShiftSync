@@ -178,7 +178,7 @@ export function processRowsIntoRoster(rows: unknown[][], weekStart?: string): Pa
   const leaveRecords: ParsedVisionResult['leaveRecords'] = [];
   const anomalies: ParsedVisionResult['anomalies'] = [];
 
-  // Determine the week's day dates (Sunday-first) from weekStart.
+  // The week's seven dates, in column order, starting at weekStart (a Monday, like every rota week in this app).
   const dayDates = weekStart ? weekDates(weekStart) : null;
 
   let rowNumber = 1;
@@ -254,7 +254,7 @@ export function processRowsIntoRoster(rows: unknown[][], weekStart?: string): Pa
   };
 }
 
-/** Returns the 7 ISO dates (Sunday-first) for the week containing weekStart. */
+/** Returns the 7 ISO dates of the week starting at weekStart (Monday-first). */
 function weekDates(weekStart: string): string[] {
   const base = new Date(`${weekStart}T00:00:00Z`);
   const dates: string[] = [];
