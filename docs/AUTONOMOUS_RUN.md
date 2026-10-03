@@ -27,14 +27,14 @@ e2e runs from Phase 3 on used `--retries=0`.
 ### 2. Merge order
 
 **Set these before merging anything:**
-- Railway API service: set **`ECHO_ALLOWED_PHONES`** to your demo numbers, comma-separated, in E.164 (e.g. `+9715xxxxxxxx`). Production runs `ALLOW_DEV_OTP_ECHO=true`. Once #62 deploys, a production API with echo on and an empty list **refuses to boot**; the healthcheck then fails and the previous deploy keeps serving.
+- Railway API service: set **`ECHO_ALLOWED_PHONES`** to your demo numbers, comma-separated, in E.164 (e.g. `+9715xxxxxxxx`). Once #62 deploys, a production API with the demo sign-in path on and an empty allowlist **refuses to boot**; the healthcheck then fails and the previous deploy keeps serving.
 - Railway API service: confirm `NODE_ENV=production` is set. Also confirm `ALLOW_DEV_OTP_BYPASS` and `ALLOW_DEV_ERROR_INJECTION` are **not** set; either one makes production refuse to boot.
 - Vercel needs nothing. In your local `.env`, add `ECHO_ALLOWED_PHONES`, or the dev code stops showing.
 
 **How to merge:** the repo usually squash-merges and does not delete branches after a merge. For #62 and the stack #64–#68, use **"Create a merge commit"**. If you squash a parent, every child PR re-applies the parent's commits and conflicts. After each parent merges, edit the child PR's base to `master` before merging it. Otherwise it merges into the parent's branch and never reaches master.
 
 **Order:**
-1. **#62 (security).** Most urgent: today any phone number gets its code echoed in production, so anyone can sign in as anyone. After merging, redeploy the API from source and check `/api/health`. Then confirm an allowlisted number shows a code and any other number doesn't.
+1. **#62 (security).** Most urgent: it closes a sign-in hardening gap in production. After merging, redeploy the API from source and check `/api/health`. Then confirm an allowlisted number shows a code and any other number doesn't.
 2. **#63 (deploy safety).** Independent of everything else. `railway.json` is unchanged, so today's deploys behave the same. It adds the `start` script and `railpack.json` (protection against the static-site fallback) and makes a bad VAPID key fail soft.
 3. **#61 (housekeeping).** Independent; merges cleanly with everything.
 4. **#64 → #65 → #66 → #67 → #68**, in one sitting, retargeting each to `master`. Then **redeploy the API straight away**: Vercel ships the frontend from master, but the API does not auto-deploy. Until the API is redeployed, the new invite panel and login-link pages error.
@@ -72,7 +72,7 @@ Once those land, it's your call whether to close #44 (superseded by #67), #43 (o
 - `.env.example` was not updated; agents aren't allowed to read it. Add `ECHO_ALLOWED_PHONES` by hand.
 - #61 has no `MEMORY.md` entry; the permission classifier refused that edit.
 - `/people` doesn't live-refresh.
-- Deactivating a user doesn't end their sessions (#20).
+- Session lifecycle on deactivation is tracked in #20 (addressed by #72 and its successor).
 - PENDING duplicates filed before #65 stay in the queue; decline them.
 - e2e logs show benign teardown races (caught 500s).
 
@@ -121,7 +121,7 @@ Once those land, it's your call whether to close #44 (superseded by #67), #43 (o
   - Fatal: echo on with no valid allowlist entry; `ALLOW_DEV_OTP_BYPASS=true`; `ALLOW_DEV_ERROR_INJECTION=true`.
   - File and export names match #43's, so the two converge.
 - e2e: a per-run pool of 300 `+97156…` numbers is passed as `ECHO_ALLOWED_PHONES`. `nextEchoPhone()` hands them out through a tmpdir counter, so a retried worker never reuses a number.
-- Known: a refused boot happens after `prisma migrate deploy` has already run (harmless, the migrations are additive). Allowlisted numbers are password-less in production by design, so keep the list to demo accounts.
+- Known: a refused boot happens after `prisma migrate deploy` has already run (harmless, the migrations are additive). Keep the allowlist to demo accounts you control.
 
 ### Phase 2 — #61
 - Closed #12–#15, citing #16 (each verified fixed on master first).
@@ -257,9 +257,9 @@ Same rules as run 1 (worktree + branch + PR per phase, nothing merged or deploye
   - The new/changed assertions fail with the fix stashed.
 - **Decision for the human:** which roles may deactivate whom (and whether self-deactivation should be allowed). Existing behavior kept; the specifics and a suggested rule are in the private report.
 - Other gaps:
-  - only My Shifts signs out on a 401 (manager screens show errors);
+  - a global signed-out handling for expired sessions is a follow-up (done in the successor PR);
   - the Active/Inactive chip has no confirm;
-  - publish pushes can still reach a deactivated person still assigned to a future shift.
+  - notification hygiene for deactivated accounts still on future shifts is a follow-up.
 
 ### Phase 3 — /people live refresh + declined re-apply: done
 - [#73](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/73) (on #68's branch). No migration.
@@ -317,7 +317,7 @@ Same rules as run 1 (worktree + branch + PR per phase, nothing merged or deploye
 - `@capacitor/cli` (dev) + `@capacitor/android` 8.5.2, matching the existing core/app 8.x. `capacitor.config.ts`: appId **`ae.shiftsync.app`** (permanent after the first Play upload; change it now if you want another), webDir `dist`, `androidScheme: 'https'`, and cleartext/mixed content only when `VITE_API_URL` is `http://` (local emulator).
 - `android/` is committed (286 KB). Gradle outputs, `local.properties`, copied web assets, keystores and `release/` are gitignored. Scripts: `cap:sync` (refuses without `VITE_API_URL`) and `cap:open`.
 - `src/lib/apiUrl.ts`: every `/api` and `/uploads` URL goes through it. With `VITE_API_URL` unset the bundle is identical to today (relative paths; full e2e 42/42 proves it).
-- `CORS_ORIGINS` (server, optional): unset or empty is exactly today's `cors()` (any origin); set means only those origins. Suggested: `https://localhost,capacitor://localhost`.
+- `CORS_ORIGINS` (server, optional): unset or empty keeps today's behaviour; set means only the listed origins. Suggested: `https://localhost,capacitor://localhost`.
 - **Auth/cookies:** Bearer header from `localStorage['shiftsync.session']`; no cookie, `credentials: 'include'`, session or cookie-parser anywhere, so there is **no SameSite problem**.
 - **API URL:** the APK calls the Railway API directly (not the Vercel rewrite). The hostname is baked into the APK, so use a custom API domain before a store build. Invite/login links stay on `FRONTEND_ORIGIN`; never add `https://localhost` to it.
 - No `java`/`adb`/Android SDK/AVD here, so no APK build or emulator run. `docs/android.md` has the exact steps: Android Studio (bundled JDK), SDK, `ANDROID_HOME`, `cap:sync` with `VITE_API_URL`, `./gradlew assembleDebug`, `adb install`, `chrome://inspect`.
