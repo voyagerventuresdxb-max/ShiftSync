@@ -27,6 +27,7 @@ How values are loaded:
 | `NODE_ENV` | `production` arms the boot-time refusal rules (§5) and makes `prisma.ts` use `DATABASE_URL` as-is, with no `git`-derived `dev_<branch>` schema. It also makes `npm install` skip devDependencies. | **yes**, `production` (Railpack also sets it in the image **(from #63)**, but set it on the service anyway) | unset locally. Never set `production` in a dev worktree: it turns off the per-branch-schema fallback. | `server/src/lib/productionGuards.ts:11`, `server/src/lib/prisma.ts:22,36` |
 | `RAILWAY_ENVIRONMENT_NAME` | Injected by Railway. `production` counts as production for the refusal rules, even without `NODE_ENV`. | injected by Railway | unset locally | `server/src/lib/productionGuards.ts:11` |
 | `FRONTEND_ORIGIN` | Comma-separated allowlist of frontend origins. Invite links use the caller's origin only if it is listed. Login links always use the **first** entry. | **yes** (`https://shift-sync-shift-sync1.vercel.app`) | `http://localhost:5173` when unset | `server/src/lib/inviteLinks.ts:20`. Login links read it through `server/src/lib/loginLinks.ts:37`. |
+| `CORS_ORIGINS` | Comma-separated browser origins allowed to call the API cross-origin (the Capacitor app at `https://localhost`, a staging frontend that uses `VITE_API_URL`). Unset or empty: any origin, as before it existed. The production web app never needs listing — it is same-origin through the Vercel rewrite. | no (staging: the staging frontend URL) | unset (any origin) | `server/src/lib/corsOptions.ts` |
 | `ALLOW_DEV_OTP_ECHO` | Returns the one-time code in the request-otp response (`devCode`) and logs it, but only for numbers in `ECHO_ALLOWED_PHONES`. It is the only way to receive a code while there is no SMS provider (#51). | conditional: `true` only for a demo with no SMS, and only together with `ECHO_ALLOWED_PHONES`. Remove it afterwards. | unset (off) | `server/src/lib/devOtpEcho.ts:12` |
 | `ECHO_ALLOWED_PHONES` | Comma-separated mobile numbers, in any format `toE164` accepts, whose code may be echoed. Invalid entries are ignored with a `[startup]` warning. | conditional: **required whenever `ALLOW_DEV_OTP_ECHO=true` in production** (otherwise boot is refused). Anyone who knows a listed number can sign in as it, so list only numbers you control. | empty (no number is echoed) | `server/src/lib/devOtpEcho.ts:19` |
 | `ALLOW_DEV_OTP_BYPASS` | Makes the fixed code `000000` verify for **any** phone. | **must be absent.** Boot is refused if it is `true`. | unset (off) | `server/src/lib/identity.ts:26` |
@@ -57,10 +58,13 @@ and `npm run vapid:generate` prints a fresh pair to the terminal only.
 
 ## 2. Frontend build (`src/`, Vite, Vercel)
 
-**None.** The frontend reads no `import.meta.env` / `VITE_*` variables. It calls relative
-`/api/...` and `/uploads/...` URLs, and Vercel proxies them to the Railway host that is
-hard-coded in `vercel.json`. The Vercel project needs no environment variables. `vite.config.ts`
-reads none (fixed port `5173`, proxy to `localhost:4000`). The Vercel build runs
+| Name | Purpose | Required? | Safe default | Where read |
+|---|---|---|---|---|
+| `VITE_API_URL` | Build-time API origin. Set: every `/api` and `/uploads` URL becomes absolute to that origin (the Capacitor Android build, and Vercel **Preview** builds pointed at staging — see [`staging-setup.md`](staging-setup.md)). Unset: relative URLs, proxied by Vercel's rewrite to the Railway host hard-coded in `vercel.json`. | **never on Vercel Production**; Preview (staging branch) and app builds only | unset (relative URLs) | `src/lib/apiUrl.ts` |
+
+Production needs no Vercel variables. Note that `vercel.json`'s rewrite sends **every** deployment's
+`/api` traffic, previews included, to the production API unless `VITE_API_URL` is set for them.
+`vite.config.ts` reads none (fixed port `5173`, proxy to `localhost:4000`). The Vercel build runs
 `prisma generate`, which needs no database connection.
 
 ## 3. Scripts and CLI
@@ -96,6 +100,12 @@ Not configurable by environment:
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` **(from #69)** | The rota golden-path push e2e needs a real pair in `.env` to deliver a push to its local receiver. | see §1 | unset (that spec fails its precondition) | `e2e/golden-path.spec.ts` on `rebase/rota-v0-on-master` |
 | `NODE_EXTRA_CA_CERTS` **(from #69)** | Node built-in. Makes the API trust the e2e push-sink's self-signed certificate. Set it **only** in the test command's environment, never in `.env`. | **must be absent** | unset | `scripts/e2e-push-sink-cert.mjs` prints the command on `rebase/rota-v0-on-master` |
 | `NOTIFY_USER_ID` **(from #63)** | Internal to `server/src/lib/push.test.ts`, which passes it to the child process the test spawns. | **must be absent** | — | `server/src/lib/push.test.ts` on `chore/railway-config-as-code-vapid` |
+
+## 4b. Health and request ids (no variables)
+
+- `GET /api/health`: liveness only, `{"ok":true}`, never touches the database (Railway's healthcheck).
+- `GET /api/health/ready`: `200` when the database answers and every migration folder shipped with the build is applied, else `503`; the body has counts only (`db`, `migrations.expected/applied/pending`). `server/src/lib/readiness.ts`.
+- Every response carries `X-Request-Id` (a safe incoming one is kept). Log lines written while handling a request are prefixed `[rid=<first 8>]`, and phone-number shapes are masked in all server logs (`server/src/lib/requestContext.ts`).
 
 ## 5. Production refusal rules
 
