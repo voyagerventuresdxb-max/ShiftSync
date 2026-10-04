@@ -50,6 +50,17 @@ for (const signal of PROD_SIGNALS) {
     assert.deepEqual(checkProductionEnv({ ...signal, GEMINI_BASE_URL: ' ' }), { warnings: [] });
   });
 
+  test(`${label}: refuses to start with PUSH_TRANSPORT set to anything (push would be recorded, not delivered)`, () => {
+    for (const value of ['record', 'true', 'anything']) {
+      assert.throws(
+        () => checkProductionEnv({ ...signal, PUSH_TRANSPORT: value }),
+        (err: unknown) => err instanceof Error && err.message.includes('PUSH_TRANSPORT'),
+        `PUSH_TRANSPORT=${value}`,
+      );
+    }
+    assert.deepEqual(checkProductionEnv({ ...signal, PUSH_TRANSPORT: '' }), { warnings: [] });
+  });
+
   test(`${label}: boots with the echo on and a valid allowlist, warning only about the junk entry`, () => {
     const { warnings } = checkProductionEnv({ ...signal, ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: '050 123 4567, junk' });
     assert.equal(warnings.length, 1);

@@ -755,3 +755,76 @@ test('a header row that labels its own name column ("Name | Monday | Tuesday | W
   const result = parseExcelGrid(grid, WEEK_START);
   assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
 });
+
+test('ALL-CAPS venue: a blank-week staff member is never silently taken as a real section header', () => {
+  // Every name is in capitals, so "written in caps" can't tell a header from a person. Before
+  // the fix, the blank-week row below became a REAL role and relabelled the next staff member
+  // with no warning; now it is grouped provisionally and flagged for the manager.
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['SUPERVISORS', '', ''],
+    ['TEST ALPHA', '9-17', '9-17'],
+    ['TEST BLANKWEEK', '', ''],
+    ['TEST GAMMA', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 4);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'TEST ALPHA').every((r) => r.roleName === 'Supervisor' || r.roleName === 'SUPERVISORS'));
+  const flagged = result.anomalies.find((a) => a.kind === 'unrecognized_section_header' && a.rawText === 'TEST BLANKWEEK');
+  assert.ok(flagged, 'the ambiguous caps label is surfaced as a blocking anomaly');
+  assert.match(flagged!.reason, /TEST GAMMA/);
+});
+
+test('ALL-CAPS venue: vocabulary headers still apply normally (no new anomalies)', () => {
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['SUPERVISORS', '', ''],
+    ['TEST ALPHA', '9-17', '9-17'],
+    ['RUNNERS', '', ''],
+    ['TEST BETA', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 4);
+  assert.equal(result.anomalies.length, 0);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'TEST BETA').every((r) => /RUNNER/i.test(r.roleName)));
+});
+
+test('mixed-case venue: an ALL-CAPS header inside the listing is still a real header (unchanged)', () => {
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['Test Alpha', '9-17', '9-17'],
+    ['FOH TEAM', '', ''],
+    ['Test Beta', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Beta').every((r) => r.roleName === 'FOH TEAM'));
+  assert.equal(result.anomalies.filter((a) => a.kind === 'unrecognized_section_header').length, 0);
+});
+
+test('per-row title shape: a novel first section header with no staff above groups the untitled rows below and is flagged', () => {
+  const grid: unknown[][] = [
+    ['', '', 'Monday', 'Tuesday'],
+    ['Poolside Crew', '', '', ''], // novel vocabulary, title case, very first label
+    ['', 'Test Person One', '9-17', '9-17'],
+    ['', 'Test Person Two', '10-18', ''],
+    ['Supervisor', 'Test Person Three', '11-19', '11-19'], // own title wins
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Person One').every((r) => r.roleName === 'Poolside Crew'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Person Two').every((r) => r.roleName === 'Poolside Crew'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Person Three').every((r) => r.roleName === 'Supervisor'));
+  const flagged = result.anomalies.find((a) => a.kind === 'unrecognized_section_header' && a.rawText === 'Poolside Crew');
+  assert.ok(flagged);
+  assert.equal(flagged!.affectedRowNumbers?.length, 3);
+});
+
+test('per-row title shape: a trailing caption with nobody below it produces no anomaly', () => {
+  const grid: unknown[][] = [
+    ['', '', 'Monday', 'Tuesday'],
+    ['Supervisor', 'Test Person One', '9-17', '9-17'],
+    ['Prepared by the office', '', '', ''],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.anomalies.filter((a) => a.kind === 'unrecognized_section_header').length, 0);
+});
