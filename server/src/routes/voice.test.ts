@@ -5,6 +5,11 @@ import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 
+// These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
+// (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
+process.env.AI_MONTHLY_BUDGET_USD = '1000000';
+process.env.AI_DAILY_CALL_LIMIT = '1000000';
+
 const prisma = new PrismaClient();
 
 /** Starts the real Express app on an ephemeral port and hands the caller its base URL. */

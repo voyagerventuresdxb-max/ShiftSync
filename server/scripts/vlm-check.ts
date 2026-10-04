@@ -6,6 +6,13 @@
  * PASS/FAIL. It prints NO credential material (no key, prefix, length, project id or
  * service-account field) and no error text from the provider — only its kind and HTTP status.
  *
+ * The call goes through the AI spend cap like every other model call, so it needs the database
+ * (it records one call's token counts and estimated cost, nothing else) and is refused with
+ * FAIL (paused) if the monthly budget or daily call limit is reached or the database can't be
+ * reached. Locally, run it through the per-branch wrapper so it uses this branch's schema:
+ * `node scripts/with-branch-schema.mjs "tsx server/scripts/vlm-check.ts"`. Never wrap it under
+ * `railway run`: the wrapper would point production's connection at a dev schema.
+ *
  * Exit codes: 0 pass, 1 fail, 2 not configured.
  * Production check: `railway run npm run vlm:check` (see docs/vlm-go-live.md).
  */
@@ -14,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { describeVisionConfig, VertexCredentialsError } from '../src/lib/aiConfig.js';
 import { getVisionProvider, VisionProviderError } from '../src/parsing/visionProvider.js';
 import { mapVlmResponseToResult } from '../src/parsing/parseVision.js';
+import { prisma } from '../src/lib/prisma.js';
 
 // Under `railway run` the service's own variables are injected (RAILWAY_ENVIRONMENT_NAME among them):
 // don't let a local .env fill gaps there, or a local key could stand in for production's real config.
@@ -67,12 +75,14 @@ async function main(): Promise<number> {
 
 // exitCode, not process.exit(): exiting while the HTTP client's sockets are still closing trips
 // a libuv assertion on Windows. The process ends on its own once they close.
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  () => {
-    console.log('[vlm:check] RESULT: FAIL (unexpected error)');
-    process.exitCode = 1;
-  },
-);
+main()
+  .then(
+    (code) => {
+      process.exitCode = code;
+    },
+    () => {
+      console.log('[vlm:check] RESULT: FAIL (unexpected error)');
+      process.exitCode = 1;
+    },
+  )
+  .finally(() => prisma.$disconnect().catch(() => undefined));
