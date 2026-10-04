@@ -1054,3 +1054,10 @@ SMS go-live; Railway config before 2026-12-01; VAPID go-live; native push/camera
 - Decision: no new escalation reason. A mismatch is a review flag for the manager; an unreadable header still escalates as `unrecognized_layout` under the existing policy.
 - Eval corpus grows from 14 to 18 rosters (three spellings and a mismatch). Deterministic eval: day 88% → 94%, role 97% → 100%, leave 84% → 94%, extra shifts 4 → 0, escalation agreement 13/14 → 18/18. Every earlier roster scores the same or better, and all four new rosters score 100%.
 - Parser corpus and timezone matrix (UTC, Asia/Dubai, America/Los_Angeles) green. Gate: typecheck ×2, lint 0 errors, unit 94/94, server 614 / 3 skip, full e2e 80/80, scan clean.
+
+## Stage D — fixes + the one API deploy: done (12:31 Dubai)
+- [#114](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/114) → `ff9934c`. Decided swap requests stay decided: REST answers 409 `swap_already_decided`, and two simultaneous decisions can't both land. Deleting someone else's availability mark answers the same 404 as a missing one. `signup.test.ts` flake fixed at the root: a database-wide organization count, raced by other test files, is now scoped to the test's own rows. The new tests fail on the old code. Gate: unit 94/94, server 618 / 3 skip, full e2e 80/80, scan clean.
+- API deployed once (`railway redeploy --from-source`, 12:28 Dubai): deployment `32f13663-c315-46a6-b1b1-fb89b3eb9085`, code `ff9934c`, SUCCESS. Previous: `806be2a0` (kept as the rollback target).
+- Checks: `/api/health` 200 twice; `/api/health/ready` 200 with 32/32 migrations; the deploy log shows `20261004130000_ai_spend_guard` applied; GitHub "Vercel" status for `ff9934c`: success.
+- Smoke test without sign-in: sign-in and signup responses behave as intended (3/3), and `GET /api/ai/usage` without a session is refused (401). No rollback needed.
+- Railway variables: none changed. The AI cap runs on its defaults (USD 5 per month, 60 calls per day).
