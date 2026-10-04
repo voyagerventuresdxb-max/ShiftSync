@@ -832,3 +832,8 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 ## Stage 6 — swap-request window enforced: done, PR open
 - [#96](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/96). A cover request can be filed until Wednesday 17:00 venue time of the shift's own (Monday-based) week; after that REST and voice answer `409 swap_window_closed` with the close time and "ask your manager directly", and nothing is written. Managers can still decide requests already filed. `expiresAt` is now the shift-week's close.
 - Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 411 pass / 1 skip (+5, plus timezone-matrix cases), e2e 16/16, scan clean. One existing voice test used a fixed past date and now uses a shift a week ahead.
+
+## Stage 7 — platform safety: done, PR open
+- [#97](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/97). `GET /api/health/ready` (database answers + every shipped migration applied → 200, else 503; counts only); `/api/health` unchanged. `X-Request-Id` on every response, `[rid=…]` on log lines written during a request, and phone-number shapes masked in every server log line. `docs/staging-setup.md` (Railway staging environment, separate Supabase project, Vercel Preview with `VITE_API_URL`); `docs/ENV_VARS.md` updated.
+- **Finding:** `vercel.json` sends every Vercel deployment's `/api` traffic, previews included, to the production API.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 411 pass / 1 skip (+5), **full e2e 74/74**, scan clean (the scan caught a placeholder-password example in the first draft of the staging guide; fixed).
