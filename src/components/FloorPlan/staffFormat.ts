@@ -1,4 +1,4 @@
-/** Two-letter avatar initials, e.g. "Andrea Rossi" -> "AR". */
+/** Two-letter avatar initials, e.g. "Kalim Rossi" -> "KR". */
 export function initials(name: string): string {
   return name
     .trim()

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { renderPdfPagesToImages } from '../src/parsing/ocrExtractor.js';
 
-const pdfPath = process.argv[2] ?? 'server/test-fixtures/real-roster.pdf';
+const pdfPath = process.argv[2] ?? 'server/test-fixtures/private/real-roster.pdf'; // local only, see docs/test-fixtures.md
 const buffer = readFileSync(pdfPath);
 
 const pages = await renderPdfPagesToImages(buffer, 2);
@@ -14,7 +14,8 @@ for (let i = 0; i < pages.length; i++) {
   const isPng = sig === '89504e470d0a1a0a';
   console.log(`[verify] page ${i + 1}: ${Math.round(png.length / 1024)}KB, PNG signature=${sig}, valid=${isPng}`);
   // Write to disk so it can be inspected
-  writeFileSync(`server/test-fixtures/rendered-page-${i + 1}.png`, png);
+  // Renders of a real roster are real data too: written to the gitignored private directory.
+  writeFileSync(`server/test-fixtures/private/rendered-page-${i + 1}.png`, png);
 }
 
 if (pages.length === 0) {

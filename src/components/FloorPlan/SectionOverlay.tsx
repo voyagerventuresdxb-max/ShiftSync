@@ -9,7 +9,7 @@ interface Props {
   onTap: () => void;
 }
 
-/** "Unassigned" / "Andrea" / "Andrea +2" depending on headcount. */
+/** "Unassigned" / "Kalim" / "Kalim +2" depending on headcount. */
 function primaryLabel(section: AssignmentSectionDto): string {
   const [first, ...rest] = section.assignments;
   if (!first) return 'Unassigned';
