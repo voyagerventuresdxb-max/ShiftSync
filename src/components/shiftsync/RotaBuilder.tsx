@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { DragDropProvider, useDraggable, useDroppable } from '@dnd-kit/react';
 import { KeyboardSensor, PointerActivationConstraints, PointerSensor } from '@dnd-kit/dom';
 import {
+  AlertTriangle,
   Ban,
   Check,
   ChevronDown,
@@ -24,6 +25,7 @@ import { cn } from '@/lib/utils';
 import { useCloseOnBack } from '@/lib/backNavigation';
 import { totalHours, weekDates, weekdayOf } from '@/engine/rosterView';
 import { weekRangeLabel } from '@/engine/weekMath';
+import { openShiftCounts, uncoveredLabel } from '@/engine/openShifts';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
@@ -133,6 +135,10 @@ export function RotaBuilder() {
 
   const days = useMemo(() => weekDates(weekStart), [weekStart]);
   const weekShifts = mergedRoster.shifts.filter((s) => days.includes(s.date));
+  // Shifts with nobody assigned: flagged in the header and per day, and publishing them takes a second tap.
+  const open = openShiftCounts(weekShifts, days);
+  const [publishConfirm, setPublishConfirm] = useState(false);
+  useEffect(() => setPublishConfirm(false), [weekStart, open.total]);
 
   // Availability marks (unavailable/preferred-off) for every staff member
   // actually assigned a shift in the visible week, keyed as `${userId}|${date}`
@@ -491,6 +497,12 @@ export function RotaBuilder() {
       say("Requires connection — try again once you're back online.");
       return;
     }
+    if (open.total > 0 && !publishConfirm) {
+      setPublishConfirm(true);
+      say(`${uncoveredLabel(open.total)} this week — nobody is assigned. Tap publish again to publish anyway.`);
+      return;
+    }
+    setPublishConfirm(false);
     try {
       const result = await publishCurrentWeek();
       bump();
@@ -575,8 +587,13 @@ export function RotaBuilder() {
                 {locked ? <Lock className="h-3 w-3" /> : <PencilLine className="h-3 w-3" />}
                 {locked ? 'Published · locked' : publishInfo?.publishedAt ? 'Unpublished changes' : 'Draft'}
               </span>
+              {open.total > 0 && (
+                <span role="status" data-testid="uncovered-badge" className="inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/15 px-2.5 py-1 text-[11px] font-semibold text-warning">
+                  <AlertTriangle className="h-3 w-3" /> {uncoveredLabel(open.total)}
+                </span>
+              )}
               <button onClick={() => void publish()} disabled={!online} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
-                <Send className="h-3.5 w-3.5" /> {publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
+                <Send className="h-3.5 w-3.5" /> {publishConfirm ? `Publish with ${uncoveredLabel(open.total)}?` : publishInfo?.publishedAt ? 'Publish changes' : 'Publish & notify'}
               </button>
               <button onClick={() => void copyLastWeek()} disabled={!online || copying} className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60">
                 <Copy className="h-3.5 w-3.5" /> {copying ? 'Copying…' : 'Copy last week'}
@@ -622,7 +639,14 @@ export function RotaBuilder() {
                 <div className="grid grid-cols-[6.5rem_repeat(7,minmax(0,1fr))] border-b border-border bg-background/40 sm:grid-cols-[10rem_repeat(7,minmax(0,1fr))]">
                   <div className="sticky left-0 z-[2] bg-surface p-3 eyebrow">Staff</div>
                   {days.map((d) => (
-                    <div key={d} className="p-2.5 text-center text-xs font-medium">{weekdayOf(d)} {d.slice(8)}</div>
+                    <div key={d} className="p-2.5 text-center text-xs font-medium">
+                      {weekdayOf(d)} {d.slice(8)}
+                      {(open.byDay[d] ?? 0) > 0 && (
+                        <span data-testid={`uncovered-day-${d}`} className="mt-0.5 block text-[10px] font-semibold text-warning">
+                          {open.byDay[d]} open
+                        </span>
+                      )}
+                    </div>
                   ))}
                 </div>
 
@@ -637,7 +661,7 @@ export function RotaBuilder() {
                       aria-expanded={!rowCollapsed}
                       className={cn(
                         'flex w-full items-center gap-2 border-b border-border/60 bg-surface-raised/50 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] transition-colors hover:bg-surface-raised',
-                        row.flagged ? 'text-warning' : 'text-muted-foreground',
+                        row.flagged || (row.key === OPEN_ROW && open.total > 0) ? 'text-warning' : 'text-muted-foreground',
                       )}
                     >
                       <span className="sticky left-3 flex items-center gap-2">
