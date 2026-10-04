@@ -25,9 +25,11 @@ import { uploadCache } from '../store/uploadCache.js';
  *   managerB      manager of the other venue                → 403 / 404
  *   managerA / staffA / ownerA  the positive control        → 2xx, run after every refusal
  *
- * Routes that are anonymous by documented decision (the kiosk-access reads,
- * health, the VAPID public key, sign-in config) are listed in PUBLIC_BY_DESIGN
- * and asserted as such, so a change to that decision is a visible test edit.
+ * Routes that are anonymous by documented decision (health, the VAPID public
+ * key, sign-in config) are listed in PUBLIC_BY_DESIGN and asserted as such, so
+ * a change to that decision is a visible test edit. The four kiosk reads
+ * (rota, publish status, announcements, shoutouts) are ordinary cases here;
+ * what the venue's kiosk token unlocks on them is covered by kiosk.test.ts.
  * Token-capability routes (invite peek, login-link peek/redeem, OTP routes)
  * are out of scope: the token, not the venue, is the credential.
  *
@@ -266,6 +268,7 @@ interface Case extends Call {
 /** Every route that touches venue A's data, with everyone who must be refused. */
 const CASES: Case[] = [
   // announcements
+  { name: 'GET /api/announcements/:locationId', method: 'GET', path: (f) => `/api/announcements/${f.locA}`, refuse: OUTSIDERS },
   { name: 'POST /api/announcements', method: 'POST', path: () => '/api/announcements', body: () => ({ body: `${TAG} new` }), refuse: ['anon', 'deactivatedA'] },
   { name: 'PATCH /api/announcements/:id', method: 'PATCH', path: (f) => `/api/announcements/${f.annA}`, body: () => ({ body: 'tampered' }), refuse: NOT_MANAGERS_OF_A },
   { name: 'DELETE /api/announcements/:id', method: 'DELETE', path: (f) => `/api/announcements/${f.annDel}`, refuse: NOT_MANAGERS_OF_A },
@@ -334,6 +337,10 @@ const CASES: Case[] = [
   { name: 'POST /api/invites/:locationId/regenerate', method: 'POST', path: (f) => `/api/invites/${f.locA}/regenerate`, body: () => ({}), refuse: NOT_MANAGERS_OF_A },
   { name: 'POST /api/invites/:locationId/revoke', method: 'POST', path: (f) => `/api/invites/${f.locA}/revoke`, refuse: NOT_MANAGERS_OF_A },
   { name: 'GET /api/onboarding/:locationId/invite', method: 'GET', path: (f) => `/api/onboarding/${f.locA}/invite`, refuse: NOT_MANAGERS_OF_A },
+  // kiosk link
+  { name: 'GET /api/kiosk/:locationId', method: 'GET', path: (f) => `/api/kiosk/${f.locA}`, refuse: NOT_MANAGERS_OF_A },
+  { name: 'POST /api/kiosk/:locationId/regenerate', method: 'POST', path: (f) => `/api/kiosk/${f.locA}/regenerate`, refuse: NOT_MANAGERS_OF_A },
+  { name: 'POST /api/kiosk/:locationId/revoke', method: 'POST', path: (f) => `/api/kiosk/${f.locA}/revoke`, refuse: NOT_MANAGERS_OF_A },
   // join approvals
   { name: 'GET /api/join/:locationId/pending', method: 'GET', path: (f) => `/api/join/${f.locA}/pending`, refuse: NOT_MANAGERS_OF_A },
   { name: 'PATCH /api/join/:requestId', method: 'PATCH', path: (f) => `/api/join/${f.jrA}`, body: () => ({ decision: 'decline' }), refuse: NOT_MANAGERS_OF_A },
@@ -395,6 +402,8 @@ const CASES: Case[] = [
   },
   { name: 'POST /api/schedules/upload/:batchId/confirm', method: 'POST', path: (f) => `/api/schedules/upload/${f.batchA}/confirm`, body: () => ({}), refuse: NOT_MANAGERS_OF_A },
   // shifts
+  { name: 'GET /api/shifts/:locationId', method: 'GET', path: (f) => `/api/shifts/${f.locA}?weekStart=${f.monday}`, refuse: OUTSIDERS },
+  { name: 'GET /api/shifts/:locationId/publish-status', method: 'GET', path: (f) => `/api/shifts/${f.locA}/publish-status?weekStart=${f.monday}`, refuse: OUTSIDERS },
   {
     name: 'POST /api/shifts',
     method: 'POST',
@@ -435,6 +444,7 @@ const CASES: Case[] = [
     refuse: ['managerA'],
   },
   // shoutouts
+  { name: 'GET /api/shoutouts/:locationId', method: 'GET', path: (f) => `/api/shoutouts/${f.locA}`, refuse: OUTSIDERS },
   { name: 'POST /api/shoutouts', method: 'POST', path: () => '/api/shoutouts', body: (f) => ({ employeeId: f.staffA2, note: `${TAG} nice` }), refuse: ['anon', 'deactivatedA', 'staffB', 'managerB'] },
   { name: 'DELETE /api/shoutouts/:id', method: 'DELETE', path: (f) => `/api/shoutouts/${f.shoutDel}`, refuse: NOT_MANAGERS_OF_A },
   // staff directory
@@ -479,16 +489,12 @@ for (const c of CASES) {
   });
 }
 
-/** Anonymous by documented decision (kiosk-access reads, health, public config). */
+/** Anonymous by documented decision (health, public config). */
 const PUBLIC_BY_DESIGN: Call[] = [
   { method: 'GET', path: () => '/api/health' },
   { method: 'GET', path: () => '/api/health/ready' },
   { method: 'GET', path: () => '/api/identity/config' },
   { method: 'GET', path: () => '/api/push/vapid-public-key' },
-  { method: 'GET', path: (f) => `/api/announcements/${f.locA}` },
-  { method: 'GET', path: (f) => `/api/shoutouts/${f.locA}` },
-  { method: 'GET', path: (f) => `/api/shifts/${f.locA}?weekStart=${f.monday}` },
-  { method: 'GET', path: (f) => `/api/shifts/${f.locA}/publish-status?weekStart=${f.monday}` },
 ];
 
 test('public by design: these answer an anonymous caller (a change here is a product decision, not a refactor)', async () => {
@@ -578,6 +584,7 @@ test("nothing of venue A's changed after every refused request", async () => {
  * after every refusal; order matters only where a control consumes a fixture.
  */
 const CONTROLS: [Actor, string][] = [
+  ['staffA', 'GET /api/announcements/:locationId'],
   ['staffA', 'POST /api/announcements'],
   ['managerA', 'PATCH /api/announcements/:id'],
   ['managerA', 'DELETE /api/announcements/:id'],
@@ -609,6 +616,9 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'POST /api/invites/:locationId/regenerate'],
   ['managerA', 'GET /api/onboarding/:locationId/invite'],
   ['managerA', 'POST /api/invites/:locationId/revoke'],
+  ['managerA', 'GET /api/kiosk/:locationId'],
+  ['managerA', 'POST /api/kiosk/:locationId/regenerate'],
+  ['managerA', 'POST /api/kiosk/:locationId/revoke'],
   ['managerA', 'GET /api/join/:locationId/pending'],
   ['managerA', 'PATCH /api/join/:requestId'],
   ['staffA', 'GET /api/locations/:id'],
@@ -633,11 +643,14 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'POST /api/rota-templates'],
   ['managerA', 'POST /api/rota-templates/:id/apply'],
   ['managerA', 'DELETE /api/rota-templates/:id'],
+  ['staffA', 'GET /api/shifts/:locationId'],
+  ['staffA', 'GET /api/shifts/:locationId/publish-status'],
   ['managerA', 'POST /api/shifts'],
   ['managerA', 'PATCH /api/shifts/:id'],
   ['managerA', 'DELETE /api/shifts/:id'],
   ['managerA', 'POST /api/shifts/bulk'],
   ['managerA', 'POST /api/shifts/:locationId/publish'],
+  ['staffA', 'GET /api/shoutouts/:locationId'],
   ['staffA', 'POST /api/shoutouts'],
   ['managerA', 'DELETE /api/shoutouts/:id'],
   ['staffA', 'GET /api/staff-directory/:locationId'],
@@ -678,14 +691,7 @@ test('every route the API mounts is covered by this matrix (or listed as public 
     'POST /api/login-links/peek',
     'POST /api/login-links/redeem',
   ]);
-  const PUBLIC = new Set([
-    'GET /api/identity/config',
-    'GET /api/push/vapid-public-key',
-    'GET /api/announcements/:locationId',
-    'GET /api/shoutouts/:locationId',
-    'GET /api/shifts/:locationId',
-    'GET /api/shifts/:locationId/publish-status',
-  ]);
+  const PUBLIC = new Set(['GET /api/identity/config', 'GET /api/push/vapid-public-key']);
   const mounts = new Map<string, string>();
   for (const m of readFileSync(join(dir, '..', 'app.ts'), 'utf8').matchAll(/app\.use\('([^']+)', (\w+)\)/g)) mounts.set(m[2]!, m[1]!);
   const covered = new Set(CASES.map((c) => c.name.replace(/ \(.*\)$/, '').replace(/^(POST \/api\/voice\/execute).*/, '$1')));
