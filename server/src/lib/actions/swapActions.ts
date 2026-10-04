@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../prisma.js';
-import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js';
+import { isRequestLocked, isRequestWindowOpen, requestWindowCloseForShift, SwapWindowClosedError } from '../swapRequestPolicy.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
@@ -65,6 +65,11 @@ export class ShiftAlreadyReassignedError extends Error {}
  * body shape. Accepts either the top-level `prisma` client or a `tx` — a
  * caller that writes an accompanying audit-log row (routes/swapRequests.ts,
  * routes/voice.ts's REQUEST_SWAP) passes `tx` so both commit atomically.
+ *
+ * Enforces the request window (swapRequestPolicy.ts): once Wednesday 17:00
+ * venue-local of the shift's week has passed, it throws SwapWindowClosedError
+ * and nothing is written. Only filing is limited — decideSwapRequest still
+ * lets a manager act on requests already filed.
  */
 export async function createSwapRequest(
   input: {
@@ -74,9 +79,14 @@ export async function createSwapRequest(
     reason: string | null;
   },
   client: Prisma.TransactionClient | typeof prisma = prisma,
+  now: Date = new Date(),
 ): Promise<SwapRequestWithRelations> {
-  // The window closes Wednesday 17:00 in the SHIFT's venue timezone.
-  const venue = await client.shift.findUnique({ where: { id: input.shiftId }, select: { location: { select: { timezone: true } } } });
+  // The window closes Wednesday 17:00 of the shift's week, in the SHIFT's venue timezone.
+  const shift = await client.shift.findUnique({ where: { id: input.shiftId }, select: { date: true, location: { select: { timezone: true } } } });
+  const timezone = shift?.location.timezone || DEFAULT_VENUE_TIMEZONE;
+  if (shift && !isRequestWindowOpen(shift.date, now, timezone)) {
+    throw new SwapWindowClosedError(requestWindowCloseForShift(shift.date, timezone), timezone);
+  }
   return client.shiftSwapRequest.create({
     data: {
       shiftId: input.shiftId,
@@ -85,7 +95,8 @@ export async function createSwapRequest(
       type: 'COVER',
       status: 'PENDING',
       reason: input.reason,
-      expiresAt: nextRequestWindowClose(new Date(), venue?.location.timezone || DEFAULT_VENUE_TIMEZONE),
+      // The request's own deadline: when its shift's week stops taking requests.
+      expiresAt: shift ? requestWindowCloseForShift(shift.date, timezone) : now,
     },
     include: SWAP_REQUEST_INCLUDE,
   });

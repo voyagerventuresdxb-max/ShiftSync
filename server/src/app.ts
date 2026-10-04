@@ -1,6 +1,5 @@
 import express, { type ErrorRequestHandler } from 'express';
 import cors from 'cors';
-import { join } from 'node:path';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
 import { floorPlanRouter, floorPlanFilesRouter } from './routes/floorPlan.js';
@@ -27,31 +26,39 @@ import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
 import { loginLinksRouter } from './routes/loginLinks.js';
 import { corsOptionsFromEnv } from './lib/corsOptions.js';
+import { requestIdMiddleware } from './lib/requestContext.js';
+import { checkReadiness } from './lib/readiness.js';
+import { isPushRecording, pushOutbox } from './lib/push.js';
 
 export function createApp() {
   const app = express();
 
+  // First, so every later log line (and the error handler's) carries this request's id.
+  app.use(requestIdMiddleware);
   app.use(cors(corsOptionsFromEnv()));
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  // Readiness, for deploys and uptime checks: database reachable and every shipped migration applied.
+  app.get('/api/health/ready', async (_req, res) => {
+    const readiness = await checkReadiness();
+    res.status(readiness.ok ? 200 : 503).json(readiness);
+  });
+  // Dev/e2e only (PUSH_TRANSPORT=record, refused in production): what push would have delivered.
+  if (isPushRecording()) {
+    app.get('/api/dev/push-outbox', (req, res) => {
+      const userId = typeof req.query.userId === 'string' ? req.query.userId : undefined;
+      res.json({ sent: pushOutbox().filter((p) => !userId || p.userId === userId) });
+    });
+  }
 
   // Both uploaded-file subpaths are session-gated and location-scoped (see
-  // policyDocuments.ts / floorPlan.ts), each mounted BEFORE the generic
-  // static fallback below so it intercepts its own subpath first. Anything
-  // under /uploads NOT matching one of these two known subdirectories still
-  // falls through to the unauthenticated static mount below — there are
-  // none today (only floor-plans/ and policy-documents/ exist), but a
-  // future third upload type would need the exact same treatment, not a
-  // silent ride on the generic fallback.
+  // policyDocuments.ts / floorPlan.ts). They are the only way to read an
+  // upload: anything else under /uploads is a 404, never a static file. A
+  // future third upload type needs its own authenticated route like these.
   app.use('/uploads/policy-documents', policyDocumentFilesRouter);
   app.use('/uploads/floor-plans', floorPlanFilesRouter);
-
-  // Kept only as a defensive fallback for the two known subpaths above (both
-  // now intercepted before reaching here) and as an explicit trip-wire for
-  // any future /uploads/<new-subdir> that hasn't been given its own
-  // authenticated route yet — see the comment above.
-  app.use('/uploads', express.static(join(import.meta.dirname, '..', 'uploads')));
+  app.use('/uploads', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 
   app.use('/api/schedules', schedulesRouter);
   app.use('/api/staff-directory', staffDirectoryRouter);

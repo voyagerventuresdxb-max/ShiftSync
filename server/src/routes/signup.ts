@@ -8,6 +8,7 @@ import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
+import { sendOtpSms, SMS_SEND_FAILED_ERROR } from '../lib/sms.js';
 
 export const signupRouter = Router();
 
@@ -27,7 +28,8 @@ signupRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async 
     if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'SIGNUP');
-    // No SMS integration exists; this is a stand-in until one is added.
+    if ((await sendOtpSms(phone, plainCode, 'signup')) === 'failed') return res.status(503).json({ error: SMS_SEND_FAILED_ERROR });
+    // Dev stand-in for SMS: echoes the code, for allowlisted numbers only.
     const echo = devOtpEchoFor(phone);
     if (echo) logDevOtpEcho('signup', phone, 'SIGNUP', plainCode);
 

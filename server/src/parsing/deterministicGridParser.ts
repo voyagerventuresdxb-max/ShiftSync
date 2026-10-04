@@ -21,6 +21,7 @@
  *    normalized by subtracting 24 and marking the shift overnight — never
  *    passed through as a literal invalid time.
  */
+import { isAllCapsLabel } from './escalation.js';
 import { parseDateCell, resolveDayMonthDate, isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
@@ -863,6 +864,26 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     }
   }
 
+  // An "ALL-CAPS venue": every row that carries real shift data has its staff name in capitals.
+  // There, "written in caps" says nothing about a label being a section header (a staff member
+  // with a blank week looks exactly like one), so a header recognised ONLY by that pattern is
+  // treated like an unrecognised header below — provisional and flagged for the manager —
+  // instead of silently relabelling everyone beneath it. Vocabulary matches are unaffected.
+  const allCapsVenue = (() => {
+    if (columnOrderAmbiguous) return false;
+    const labelCol = hasTitleColumn ? nameColIndex : 0;
+    const labels: string[] = [];
+    for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+      const row = grid[r] ?? [];
+      const label = normalizeCell(row[labelCol]);
+      if (!label || /^d+(.d+)?$/.test(label) || !rowHasShiftShapedData(row, columns, fileLegend)) continue;
+      labels.push(label);
+    }
+    return labels.length >= 2 && labels.every(isAllCapsLabel);
+  })();
+  /** A header that only the ALL-CAPS pattern recognised, in a sheet where that pattern proves nothing. */
+  const isPatternOnlyHeaderInCapsVenue = (label: string) => allCapsVenue && canonicalRoleName(label) === label;
+
   let currentRole = '';
   // True whenever `currentRole` was set by the unrecognized-section-header
   // promotion below (or hasn't been set to anything real yet), false once
@@ -1047,7 +1068,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       const roleMatch = rowHasData ? undefined : nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
       if (roleMatch) {
         currentRole = roleMatch;
-        currentRoleIsProvisional = false;
+        currentRoleIsProvisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
+        if (currentRoleIsProvisional) unrecognizedHeaderTexts.add(roleMatch);
         continue;
       }
 
@@ -1190,7 +1212,28 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         if (v) headerCandidates.push(v);
       }
       const roleMatch = headerCandidates.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
-      if (roleMatch) currentRole = roleMatch;
+      if (roleMatch) {
+        currentRole = roleMatch;
+        currentRoleIsProvisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
+        if (currentRoleIsProvisional) unrecognizedHeaderTexts.add(roleMatch);
+        continue;
+      }
+      // One unrecognised label on an otherwise blank row (no staff name, no day data): a novel
+      // section header — possibly the very first one, with no staff above it, which neither
+      // the vocabulary nor the caps signal can catch. Group the untitled rows below under it
+      // provisionally and flag it, exactly like the single-label shape does; per-row titles
+      // still take precedence. Never replaces a real (recognised) header.
+      const label = headerCandidates.length === 1 ? headerCandidates[0]! : null;
+      if (
+        label &&
+        currentRoleIsProvisional &&
+        !/^d+(.d+)?$/.test(label) &&
+        !SUMMARY_ROW_LABELS.has(label.toLowerCase()) &&
+        columns.every((col) => isBlank(row[col.colIndex]))
+      ) {
+        currentRole = label;
+        unrecognizedHeaderTexts.add(label);
+      }
       continue;
     }
 

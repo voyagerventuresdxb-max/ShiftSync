@@ -25,6 +25,7 @@ import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { notifyUser } from '../lib/push.js';
 import { getManagerIdsForLocation, getApproverNameForLocation } from '../lib/managers.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
+import { sendOtpSms, SMS_SEND_FAILED_ERROR } from '../lib/sms.js';
 
 export const joinRouter = Router();
 
@@ -58,7 +59,8 @@ joinRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (r
     if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'JOIN');
-    // No SMS integration exists; this is a stand-in until one is added.
+    if ((await sendOtpSms(phone, plainCode, 'join')) === 'failed') return res.status(503).json({ error: SMS_SEND_FAILED_ERROR });
+    // Dev stand-in for SMS: echoes the code, for allowlisted numbers only.
     const echo = devOtpEchoFor(phone);
     if (echo) logDevOtpEcho('join', phone, 'JOIN', plainCode);
 
