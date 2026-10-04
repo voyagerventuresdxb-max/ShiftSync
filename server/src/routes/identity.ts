@@ -9,6 +9,7 @@ import { loginMethods } from '../lib/loginLinks.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 import { getApproverNameForLocation } from '../lib/managers.js';
 import { canReapplyToJoin, joinDeclinedMessage } from '../lib/actions/joinActions.js';
+import { AccountAlreadyDeletedError, deleteOwnAccount, LastOwnerDeletionError } from '../lib/actions/accountDeletion.js';
 
 export const identityRouter = Router();
 
@@ -161,5 +162,24 @@ identityRouter.delete('/session', requireSession, async (req, res) => {
   } catch (err) {
     console.error('[identity.revokeSession] failed', err);
     return res.status(500).json({ error: 'Unexpected error while signing out.' });
+  }
+});
+
+/**
+ * DELETE /api/identity/account — body: { confirm: true }
+ * Deletes the signed-in person's own account, immediately (see lib/actions/accountDeletion.ts):
+ * personal details removed, every session ended, past shifts kept de-identified. A venue's last
+ * active owner gets 409 `last_owner` and nothing changes.
+ */
+identityRouter.delete('/account', requireSession, async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'Confirm that you want to delete your account.' });
+  try {
+    await deleteOwnAccount(req.user!.id);
+    return res.status(200).json({ deleted: true });
+  } catch (err) {
+    if (err instanceof LastOwnerDeletionError) return res.status(409).json({ error: err.message, errorCode: 'last_owner' });
+    if (err instanceof AccountAlreadyDeletedError) return res.status(410).json({ error: err.message });
+    console.error('[identity.deleteAccount] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while deleting the account.' });
   }
 });
