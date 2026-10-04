@@ -11,7 +11,7 @@ import { parseRosterImage, VisionIngestionError, __setGeminiClientForTests } fro
  * (a real 429 cannot be produced on demand, and every real call is paid);
  * everything from the retry loop down is the real code.
  */
-const SAMPLE_NAMES = ['Andrea', 'Roberto', 'Alessandro', 'Tomas', 'Sintia', 'Pratik', 'Rojina', 'Hefny', 'Bashkar', 'Gattopardo'];
+const SAMPLE_NAMES = ['Kalim', 'Nemur', 'Karen', 'Rumur', 'Ruren', 'Mibru', 'Nezon', 'Lodak', 'Kadak', 'Gattopardo'];
 
 function fakeClientThatAlwaysReturns(status: number): GoogleGenAI {
   return {

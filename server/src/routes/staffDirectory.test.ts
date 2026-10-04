@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { createOtpCode, hashOtp, issueSession, resolveSession } from '../lib/identity.js';
-import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError } from '../lib/actions/employmentStatusActions.js';
+import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError, phoneChangeRefusal } from '../lib/actions/employmentStatusActions.js';
 
 const prisma = new PrismaClient();
 
@@ -671,4 +671,68 @@ test('employmentStatusRefusal: the pure rule table', () => {
   assert.equal(employmentStatusRefusal(actor('a', 'OWNER'), actor('b', 'MANAGER')), null);
   assert.match(employmentStatusRefusal(actor('a', 'OWNER'), actor('b', 'OWNER'))!, /owner's status/);
   assert.match(employmentStatusRefusal(actor('a', 'STAFF'), actor('b', 'STAFF'))!, /manager or owner/);
+});
+
+test("phone rules: the sign-in phone follows the status reach — a MANAGER changes STAFF numbers only, an OWNER not another OWNER's; anyone their own", async () => {
+  const location = await testLocation('phone-rules');
+  const phone = () => `+97150${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
+  const mk = (label: string, systemRole: 'OWNER' | 'MANAGER' | 'STAFF') =>
+    prisma.user.create({ data: { locationId: location.id, fullName: `__staffdirectory-test__ ${label}`, systemRole, phone: phone() } });
+  const owner = await mk('Owner P', 'OWNER');
+  const owner2 = await mk('Owner P2', 'OWNER');
+  const manager = await mk('Manager P', 'MANAGER');
+  const manager2 = await mk('Manager P2', 'MANAGER');
+  const staff = await mk('Staff P', 'STAFF');
+  try {
+    const ownerToken = await sessionFor(owner.id);
+    const managerToken = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const setPhone = (token: string, userId: string, value: string | null) =>
+        fetch(`${baseUrl}/api/staff-directory/${userId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ phone: value }),
+        });
+      const phoneOf = async (id: string) => (await prisma.user.findUniqueOrThrow({ where: { id } })).phone;
+      // MANAGER → OWNER / MANAGER: refused, nothing changes (also clearing it).
+      for (const target of [owner, manager2]) {
+        const before = await phoneOf(target.id);
+        for (const value of [phone(), null]) {
+          const res = await setPhone(managerToken, target.id, value);
+          assert.equal(res.status, 403);
+          assert.match(((await res.json()) as { error: string }).error, /staff phone numbers only/);
+          assert.equal(await phoneOf(target.id), before, 'a refusal changes nothing');
+        }
+      }
+      // OWNER → another OWNER: refused.
+      assert.equal((await setPhone(ownerToken, owner2.id, phone())).status, 403);
+      // Allowed: MANAGER → STAFF, OWNER → MANAGER, anyone → themselves.
+      assert.equal((await setPhone(managerToken, staff.id, phone())).status, 200);
+      assert.equal((await setPhone(ownerToken, manager2.id, phone())).status, 200);
+      assert.equal((await setPhone(managerToken, manager.id, phone())).status, 200);
+      assert.equal((await setPhone(ownerToken, owner.id, phone())).status, 200);
+      // Re-sending the current number is a no-op for everyone, and other fields stay editable.
+      assert.equal((await setPhone(managerToken, owner.id, (await phoneOf(owner.id))!)).status, 200, 'no change, no rule check');
+      const rename = await fetch(`${baseUrl}/api/staff-directory/${owner.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${managerToken}` },
+        body: JSON.stringify({ jobTitle: 'General manager' }),
+      });
+      assert.equal(rename.status, 200, 'non-credential fields are unaffected');
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('phoneChangeRefusal: the pure rule table', () => {
+  const actor = (id: string, systemRole: 'OWNER' | 'MANAGER' | 'STAFF') => ({ id, systemRole });
+  assert.equal(phoneChangeRefusal(actor('a', 'MANAGER'), actor('a', 'MANAGER')), null);
+  assert.equal(phoneChangeRefusal(actor('a', 'OWNER'), actor('a', 'OWNER')), null);
+  assert.equal(phoneChangeRefusal(actor('a', 'MANAGER'), actor('b', 'STAFF')), null);
+  assert.match(phoneChangeRefusal(actor('a', 'MANAGER'), actor('b', 'MANAGER'))!, /staff phone numbers only/);
+  assert.match(phoneChangeRefusal(actor('a', 'MANAGER'), actor('b', 'OWNER'))!, /staff phone numbers only/);
+  assert.equal(phoneChangeRefusal(actor('a', 'OWNER'), actor('b', 'STAFF')), null);
+  assert.equal(phoneChangeRefusal(actor('a', 'OWNER'), actor('b', 'MANAGER')), null);
+  assert.match(phoneChangeRefusal(actor('a', 'OWNER'), actor('b', 'OWNER'))!, /only be changed by that owner/);
 });
