@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { renderPdfPagesToImages, extractOcrFromImage } from '../src/parsing/ocrExtractor.js';
 
-const pdfPath = process.argv[2] ?? 'server/test-fixtures/real-roster.pdf';
+const pdfPath = process.argv[2] ?? 'server/test-fixtures/private/real-roster.pdf'; // local only, see docs/test-fixtures.md
 const buffer = readFileSync(pdfPath);
 
 console.log(`[verify] PDF size: ${Math.round(buffer.length / 1024)}KB`);

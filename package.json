@@ -35,7 +35,8 @@
     "vapid:generate": "node scripts/generate-vapid.mjs",
     "cap:sync": "node -e \"if(!process.env.VITE_API_URL){console.error('cap:sync needs VITE_API_URL (the API origin), see docs/android.md');process.exit(1)}\" && vite build && cap sync android",
     "cap:open": "cap open android",
-    "scan:secrets": "node scripts/scan-secrets.mjs"
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "fixtures:restore-private": "node scripts/restore-private-fixtures.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
