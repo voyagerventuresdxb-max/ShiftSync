@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { onBehalfUserId } from '../lib/onBehalf.js';
 
 export const eightySixRouter = Router();
 
@@ -82,10 +83,8 @@ eightySixRouter.post('/', requireSession, async (req, res) => {
     const itemName = String(req.body?.itemName ?? '').trim();
     const station = String(req.body?.station ?? '').trim();
     const note = req.body?.note ? String(req.body.note).trim() : null;
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    const createdById = await onBehalfUserId(req, res, 'createdById');
+    if (!createdById) return;
 
     if (!itemName) return res.status(400).json({ error: 'itemName is required.' });
     if (!station) return res.status(400).json({ error: 'station is required.' });
@@ -128,10 +127,8 @@ eightySixRouter.patch('/:itemId/back-on', requireSession, async (req, res) => {
       return res.status(409).json({ error: 'This item is already back on.' });
     }
 
-    const backOnById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    const backOnById = await onBehalfUserId(req, res, 'actorId');
+    if (!backOnById) return;
     const item = await withAuditedTransaction(
       prisma,
       (tx) =>
