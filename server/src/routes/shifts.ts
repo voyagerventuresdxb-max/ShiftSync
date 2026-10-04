@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
+import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { requireSession, requireManager, optionalSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { visibleShiftFilter } from '../lib/shiftVisibility.js';
 import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
@@ -329,6 +330,9 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     if (!assertOwnsLocation(req, res, locationId)) return;
     const weekStart = String(req.body?.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
+    // RotaPublish is keyed on the Monday; a non-Monday would publish a
+    // misaligned 7 days and leave an orphan publish row no status read finds.
+    if (!isMondayIso(weekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
     // Always the signed-in manager — never a body-supplied id (an on-behalf
     // id let the audit trail name whoever was selected in "Viewing", even STAFF).
     const publishedById = req.user!.id;

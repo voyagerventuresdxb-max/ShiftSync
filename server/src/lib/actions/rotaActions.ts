@@ -1,3 +1,4 @@
+import { writeAuditLog } from '../auditLog.js';
 import { prisma } from '../prisma.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
@@ -98,21 +99,33 @@ export async function publishRota(input: {
   // auto `@updatedAt` never line up, and every shift looks "changed since
   // publish" the instant it was published.
   const publishedAt = new Date();
-  const [publish] = await prisma.$transaction([
-    prisma.rotaPublish.upsert({
+  const weekIso = input.weekStart.toISOString().slice(0, 10);
+  const publish = await prisma.$transaction(async (tx) => {
+    const row = await tx.rotaPublish.upsert({
       where: { locationId_weekStart: { locationId: input.locationId, weekStart: input.weekStart } },
       create: { locationId: input.locationId, weekStart: input.weekStart, publishedAt, publishedById: input.publishedById, notifiedCount },
       update: { publishedAt, publishedById: input.publishedById, notifiedCount },
-    }),
-    prisma.shift.updateMany({
+    });
+    await tx.shift.updateMany({
       where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
       data: { status: 'PUBLISHED', updatedAt: publishedAt },
-    }),
-    prisma.rotaLeave.updateMany({
+    });
+    await tx.rotaLeave.updateMany({
       where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
       data: { status: 'PUBLISHED', updatedAt: publishedAt },
-    }),
-  ]);
+    });
+    // The publish is a venue-wide event staff act on; it gets its own audit
+    // row (REST and voice both land here), committed with the publish itself.
+    await writeAuditLog(tx, {
+      locationId: input.locationId,
+      actorId: input.publishedById,
+      action: 'ROTA_PUBLISHED',
+      entityType: 'RotaPublish',
+      entityId: row.id,
+      note: `Published the rota for the week of ${weekIso}: ${shiftCount} shift(s), ${notifiedCount} people notified.`,
+    });
+    return row;
+  });
 
   return { result: 'ok', publishedAt: publish.publishedAt, notifiedCount: publish.notifiedCount, affectedUserIds };
 }

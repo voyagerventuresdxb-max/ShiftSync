@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { intentSchemaFor, type ParsedIntent } from './intentSchema.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
-import { voiceModel } from './model.js';
+import { voiceClientOptions, voiceModel } from './model.js';
 import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
 import { bestMatch } from '../lib/textSimilarity.js';
 import { visibleShiftFilter } from '../lib/shiftVisibility.js';
@@ -152,10 +152,11 @@ export async function parseVoiceIntent(
   transcript: string,
   user: { id: string; systemRole: SystemRole; fullName: string; locationId: string },
 ): Promise<VoiceIntentResolution> {
-  if (!process.env.GEMINI_API_KEY) {
+  const options = voiceClientOptions();
+  if (!options) {
     throw new VoiceIntentError('GEMINI_API_KEY is not configured on the server — voice intent parsing is unavailable.');
   }
-  if (!client) client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  if (!client) client = new GoogleGenAI(options);
 
   const context = await buildContext(user);
   const systemPrompt = buildSystemPrompt(user.systemRole, context);

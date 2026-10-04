@@ -1,22 +1,11 @@
 import type { SystemRole } from '@prisma/client';
 import { Type } from '@google/genai';
 
-export const STAFF_INTENTS = ['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE'] as const;
-
-export const MANAGER_INTENTS = [
-  ...STAFF_INTENTS,
-  'APPROVE_SWAP',
-  'DECLINE_SWAP',
-  'APPROVE_JOIN',
-  'DECLINE_JOIN',
-  'CREATE_SHIFT',
-  'EDIT_SHIFT',
-  'ASSIGN_SECTION',
-  'PUBLISH_ROTA',
-  'APPLY_ROTA_TEMPLATE',
-  'POST_ANNOUNCEMENT',
-  'POST_SHOUTOUT',
-] as const;
+// The role → intent table is shared with the client (shared/voiceIntents.ts),
+// which refuses to open the confirm sheet for an out-of-role intent before
+// anything reaches /execute; the 403 below stays the real guard.
+import { STAFF_INTENTS, MANAGER_INTENTS } from '../../../shared/voiceIntents.js';
+export { STAFF_INTENTS, MANAGER_INTENTS };
 
 export type StaffIntentType = (typeof STAFF_INTENTS)[number];
 export type ManagerIntentType = (typeof MANAGER_INTENTS)[number];

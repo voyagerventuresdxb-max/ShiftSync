@@ -5,12 +5,14 @@
  * either endpoint here because no location exists yet — that's the whole
  * point of this route.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import type { SessionUser } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -42,7 +44,7 @@ export async function requestSignupOtp(phone: string): Promise<{ expiresAt: stri
  *
  * A phone that already has an account fails with a 409 `ApiError` — callers
  * should catch that specifically (`err instanceof ApiError && err.status === 409`)
- * and point the user at `/join?mode=login` rather than treating it as a
+ * and point the user at `/login` rather than treating it as a
  * generic failure.
  */
 export async function verifySignupOtp(input: {
