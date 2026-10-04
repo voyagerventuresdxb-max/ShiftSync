@@ -66,7 +66,7 @@ export async function setAvailability(
   });
 }
 
-/** DELETE /api/availability/:id — session-gated; the server 403s on someone else's mark. */
+/** DELETE /api/availability/:id — session-gated; someone else's mark answers 404, like a missing one. */
 export async function removeAvailability(token: string, id: string): Promise<void> {
   await request(`/api/availability/${id}`, { method: 'DELETE', headers: withAuth(token) });
 }
