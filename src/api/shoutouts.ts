@@ -6,9 +6,10 @@ import { apiUrl } from '../lib/apiUrl';
 
 export interface ShoutoutDto {
   id: string;
-  employeeId: string;
+  /** Absent on a kiosk read (no session), as is `authorId`: names only. */
+  employeeId?: string;
   employeeName: string;
-  authorId: string | null;
+  authorId?: string | null;
   authorName: string | null;
   shiftSnapshot: string | null;
   note: string;
@@ -30,9 +31,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** GET /api/shoutouts/:locationId */
-export async function fetchShoutouts(locationId: string): Promise<ShoutoutDto[]> {
-  const data = await request<{ shoutouts: ShoutoutDto[] }>(`/api/shoutouts/${locationId}`);
+/** GET /api/shoutouts/:locationId — `headers` from `venueReadHeaders` (api/venueBinding.ts). */
+export async function fetchShoutouts(locationId: string, headers: Record<string, string>): Promise<ShoutoutDto[]> {
+  const data = await request<{ shoutouts: ShoutoutDto[] }>(`/api/shoutouts/${locationId}`, { headers });
   return data.shoutouts;
 }
 

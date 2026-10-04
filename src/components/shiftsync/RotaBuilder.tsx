@@ -93,6 +93,7 @@ export function RotaBuilder() {
     refreshPublishInfo,
     refetchWeekShifts,
     currentEmployeeId,
+    readHeaders,
   } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
@@ -152,7 +153,7 @@ export function RotaBuilder() {
     // page with no locationId has nothing else to render anyway.
     if (!locationId) return;
     let cancelled = false;
-    fetchWeekShifts(locationId, weekStart)
+    fetchWeekShifts(locationId, weekStart, readHeaders)
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
@@ -171,7 +172,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, dataVersion, locationId]);
+  }, [weekStart, dataVersion, locationId, readHeaders]);
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];

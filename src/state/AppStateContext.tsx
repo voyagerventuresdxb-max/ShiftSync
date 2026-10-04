@@ -7,7 +7,8 @@ import type { PreviewRow } from '../api/schedules';
 import { fetchStaffDirectory, type StaffDirectoryEntry } from '../api/staffDirectory';
 import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/swapRequests';
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
-import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
+import { loadBoundVenue, loadKioskToken, saveVenueBinding, venueReadHeaders } from '../api/venueBinding';
+import { withAuth } from '../api/identity';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
 
@@ -61,9 +62,16 @@ interface AppStateValue {
    * "shared kiosk device" case. Persisted to localStorage so the binding
    * survives future visits with no `?venue=` param present. No-ops while a
    * real session exists, so a bookmarked kiosk link can never override a
-   * signed-in user's own venue.
+   * signed-in user's own venue. A kiosk link's token replaces the stored
+   * one; binding another venue without a token drops the old venue's token.
    */
-  bindAnonymousVenue: (locationId: string) => void;
+  bindAnonymousVenue: (locationId: string, kioskToken?: string | null) => void;
+  /**
+   * Headers for the four venue reads (rota, publish status, announcements,
+   * shoutouts): the session when signed in, else this device's kiosk token —
+   * see `venueReadHeaders` in api/venueBinding.ts.
+   */
+  readHeaders: Record<string, string>;
   mergedRoster: Roster;
   /**
    * True until the FIRST `weekShifts` fetch (success or failure) settles,
@@ -115,12 +123,16 @@ const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const { session } = useIdentity();
-  const [anonymousVenueId, setAnonymousVenueId] = useState<string | null>(() => loadBoundVenue());
-  const locationId = session?.user.locationId ?? anonymousVenueId;
-  const bindAnonymousVenue = useCallback((id: string) => {
-    saveBoundVenue(id);
-    setAnonymousVenueId(id);
+  const [binding, setBinding] = useState(() => ({ venueId: loadBoundVenue(), kioskToken: loadKioskToken() }));
+  useEffect(() => saveVenueBinding(binding.venueId, binding.kioskToken), [binding]);
+  const locationId = session?.user.locationId ?? binding.venueId;
+  const bindAnonymousVenue = useCallback((id: string, kioskToken: string | null = null) => {
+    setBinding((prev) => {
+      const token = kioskToken ?? (prev.venueId === id ? prev.kioskToken : null);
+      return prev.venueId === id && prev.kioskToken === token ? prev : { venueId: id, kioskToken: token };
+    });
   }, []);
+  const readHeaders = useMemo(() => venueReadHeaders(session?.token ?? null, binding.kioskToken), [session, binding.kioskToken]);
 
   // The real venue's display name — never `config.name` (see the comment on
   // `config`, above). `GET /api/locations/:id` requires a session, so an
@@ -218,10 +230,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const loadedWeekShiftsWeekRef = useRef<string | null>(null);
 
   const refetchWeekShifts = useCallback(async () => {
-    // No session, no real venue to scope this fetch to — clear rather than
-    // fetch against a hardcoded/wrong location. Same shared-device reasoning
-    // as the staff-directory/swap-requests effects below.
-    if (!locationId) {
+    // Session only: with none, clear rather than fetch (same shared-device
+    // reasoning as the staff-directory/swap-requests effects below). A kiosk
+    // screen reads its published rota itself (KioskRoute), in the reduced
+    // shape its token gets, which is not a full roster.
+    if (!session) {
       setWeekShifts([]);
       loadedWeekShiftsWeekRef.current = null;
       setInitialScheduleLoading(false);
@@ -230,7 +243,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const seq = ++reqSeqRef.current;
     const targetWeek = weekStart;
     try {
-      const dtos = await fetchWeekShifts(locationId, weekStart);
+      const dtos = await fetchWeekShifts(session.user.locationId, weekStart, withAuth(session.token));
       if (seq !== reqSeqRef.current) return;
       setWeekShifts(
         dtos.map((s) => ({
@@ -271,7 +284,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // `setState(false)` when already `false` is a no-op re-render.
       if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
-  }, [weekStart, locationId]);
+  }, [weekStart, session]);
 
   useEffect(() => {
     void refetchWeekShifts();
@@ -545,14 +558,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // pattern as `refetchWeekShifts` above, and re-fetched by every editor
   // after a mutation (a create/update/delete flips `hasUnpublishedChanges`).
   const refreshPublishInfo = useCallback(() => {
-    if (!locationId) {
+    // Session only, like `refetchWeekShifts` above: only the editors read this.
+    if (!session) {
       setPublishInfo(null);
       return;
     }
-    fetchPublishStatus(locationId, weekStart)
+    fetchPublishStatus(session.user.locationId, weekStart, withAuth(session.token))
       .then(setPublishInfo)
       .catch(() => setPublishInfo(null));
-  }, [weekStart, locationId]);
+  }, [weekStart, session]);
 
   useEffect(() => {
     refreshPublishInfo();
@@ -568,6 +582,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       locationId,
       venueName,
       bindAnonymousVenue,
+      readHeaders,
       mergedRoster,
       initialScheduleLoading,
       scheduleLoadFailed,
@@ -601,6 +616,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       locationId,
       venueName,
       bindAnonymousVenue,
+      readHeaders,
       mergedRoster,
       initialScheduleLoading,
       scheduleLoadFailed,
