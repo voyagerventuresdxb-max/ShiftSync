@@ -51,3 +51,7 @@ Set up once: `npm run db:setup`, `npm run db:seed:demo -- --phones=<owner>,<staf
 5. **3:15 Floor plan:** drag a staff chip onto a section for tonight; open the section.
 6. **4:00 Post an announcement** from Home; the staff phone shows it on its next focus (and as a push once VAPID is set).
 7. **4:30 Close** on onboarding: a new venue uploads an Excel roster and lands on the Review screen in seconds.
+
+**Between runs:** `npm run db:reset:demo -- --phones=<owner>,<staff>,<applicant>` (the same three numbers) puts the demo venue back exactly as seeded in a few seconds: it removes the demo organization, including anyone who joined, every edit and announcement, and the three numbers' sign-in codes, then re-seeds. Like the seed, it refuses to run unless the database is on localhost.
+
+**Recorded walkthrough:** `npm run demo:record` (`playwright.demo.config.ts`, `e2e/demo/five-minute-demo.demo.ts`) plays the script above at phone size (390x844). It records one video per scene and one of the whole run into `DEMO_VIDEO_DIR` (default `test-results/demo-videos`; videos are never committed). It uses made-up numbers from the e2e echo pool and resets the venue before each take. Scene 5 opens a section but doesn't drag a chip.
