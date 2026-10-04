@@ -28,11 +28,41 @@ Never paste a key, key file or any part of one into chat, a PR, an issue, a comm
 2. **Billing** → link the project to a billing account.
 3. **APIs & Services → Library** → search **Vertex AI API** → **Enable**.
 
-## 2. Budget alert and quota cap
+## 2. Spending: the in-app cap is the hard stop
 
-1. **Billing → Budgets & alerts → Create budget.** Scope: this project only. Amount: a monthly figure you're comfortable with (e.g. USD 20 for a pilot). Alert thresholds: 50 %, 90 %, 100 % of actual spend, emailed to you. A budget **alerts**; it does not stop spend.
-2. **Quota cap (the actual stop):** **IAM & Admin → Quotas & System Limits** → filter *Service: Vertex AI API* → find the generate-content requests-per-minute quota for the base model (`gemini-3.6-flash`, and `gemini-3.5-flash-lite`) in location `eu` → **Edit quotas** → set a low value (e.g. 10 per minute) → submit. The exact quota names in that list were not verified while writing this; pick the per-minute generate-content quota for each model in `eu`.
-3. The app adds its own limits on top (`server/src/routes/schedules.ts`): AI reading takes files up to 5 MB and runs at most **once per venue per week** (a successful read starts the week), plus the general roster-upload rate limiter.
+**The hard stop is inside the app, not in Google Cloud.** Every Gemini / Vertex call the API makes
+(roster vision, voice transcription, voice intent, and `vlm:check`) first reserves its worst-case
+cost against a monthly budget and a daily call count kept in the database
+(`server/src/lib/aiBudget.ts`). If the call could cross either limit, nothing is sent to Google and
+the manager sees "AI reading is paused for this month; upload Excel/CSV or add staff manually."
+Spreadsheets, text PDFs and manual entry keep working. If the counters can't be reached, AI calls
+are refused too (fail closed).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AI_MONTHLY_BUDGET_USD` | `5` | Estimated spend per UTC calendar month, all venues together. |
+| `AI_DAILY_CALL_LIMIT` | `60` | Model calls per UTC day, all venues together. |
+| `AI_PRICE_IN_PER_M` / `AI_PRICE_OUT_PER_M` | `3` / `15` | USD per 1M input / output tokens used for the estimate. At or above the highest price Google lists for these models (checked 2026-10-04), so the estimate runs high, never low. |
+
+The API logs `[ai-budget] WARNING: estimated AI spend for <month> has reached 80% …` once a month
+when the estimate passes 80 %. The owner can see the cap's state at `GET /api/ai/usage`
+(month-to-date estimate, limit, calls today, call limit).
+
+The steps below are a second line, in Google Cloud:
+
+1. **Budget alert at USD 5.** **Billing → Budgets & alerts → Create budget.** Scope: this project
+   only. Amount: **USD 5** per month. Alert thresholds: **50 %, 90 %, 100 %** of actual spend,
+   emailed to you. **A budget alert only sends an email; it does not stop spending.** Google's billing
+   data also lags by hours, so the email can arrive after the money is spent.
+2. **Lower the Vertex quotas.** **IAM & Admin → Quotas & System Limits** → filter *Service: Vertex AI
+   API* → find the generate-content requests-per-minute quota for each model (`gemini-3.6-flash` and
+   `gemini-3.5-flash-lite`) in location `eu` → **Edit quotas** → set a low value (e.g. 10 per minute)
+   → submit. The exact quota names in that list were not verified while writing this; pick the
+   per-minute generate-content quota for each model in `eu`. A quota limits the **rate**, not the
+   monthly total.
+3. The app's other limits still apply (`server/src/routes/schedules.ts`): AI reading takes files up
+   to 5 MB and runs at most **once per venue per week** (a successful read starts the week), plus the
+   general roster-upload rate limiter.
 
 ## 3. Service account with Vertex AI User only
 
@@ -56,18 +86,27 @@ change; don't deploy it from the banner — use step 5.
 
 Leave `VLM_MODEL`, `VLM_FALLBACK_MODEL` unset unless you need to change the defaults.
 
-## 5. Check it from your laptop, then deploy
+## 5. Deploy, then check it inside the service
 
-1. Update the linked checkout and run the check with production's variables (this runs locally;
-   it does not touch the database and prints no credential material):
+`vlm:check` goes through the spend cap like every other call, so it must reach production's
+database to record its one call (token counts and estimated cost only). Production's database is
+on Railway's private network, so a `railway run npm run vlm:check` from your laptop can't reach it
+and always ends `FAIL (paused)` with an `[ai-budget] spend ledger unreachable` line — the cap
+failing closed, not a credentials problem. Run it inside the service instead:
+
+1. Deploy the API the documented way ([`railway-deploy-procedure.md`](railway-deploy-procedure.md) §2: `railway redeploy --from-source`, never `railway up`), so the new variables are live. In the deploy log there must be **no** `[vision] … client setup failed` line.
+2. Open a shell in the running service and run the check there. `railway ssh` needs an SSH key on
+   your Railway account (Account settings → SSH keys). The check prints no credential material.
 
    ```powershell
    cd C:\dev\ShiftSync-deploy
-   git fetch origin
-   git checkout --detach origin/master
-   npm install
-   npx -y @railway/cli@5.63.1 run npm run vlm:check
+   npx -y @railway/cli@5.63.1 ssh
+   # then, inside the service:
+   npm run vlm:check
    ```
+
+   Without an SSH key, skip this step: the photo test in §6 exercises the same provider through
+   the same cap.
 
    Expect: `provider=vertex-gemini model=gemini-3.6-flash … region=eu`, then
    `answered by model=… in …ms; tokens in/out=…; shift rows read=4 (expected 4)` and
@@ -76,7 +115,11 @@ Leave `VLM_MODEL`, `VLM_FALLBACK_MODEL` unset unless you need to change the defa
    - `FAIL (failed, HTTP 403)` → the service account lacks **Vertex AI User**, or the API isn't enabled.
    - `FAIL (model_unavailable)` → a model/location mismatch; check `GEMINI_VERTEX_LOCATION` is unset or `eu`.
    - `FAIL (busy, HTTP 429)` → the quota from step 2 is too low or exhausted; wait a minute.
-2. Deploy the API the documented way ([`railway-deploy-procedure.md`](railway-deploy-procedure.md) §2: `railway redeploy --from-source`, never `railway up`). In the deploy log there must be **no** `[vision] … client setup failed` line.
+   - `FAIL (paused)` → the in-app cap refused the call before anything was sent: the month's budget
+     or today's call limit is reached, or (with an `[ai-budget] spend ledger unreachable` line) the
+     database couldn't be reached — you ran it outside the service.
+   - Do **not** run it through `node scripts/with-branch-schema.mjs` against production: that
+     wrapper is for dev worktrees and would point production's connection at a dev schema.
 
 ## 6. Photo-roster test on a phone
 
@@ -92,6 +135,21 @@ Leave `VLM_MODEL`, `VLM_FALLBACK_MODEL` unset unless you need to change the defa
 
 ## Cost
 
-`vlm:check` and every production read log the input/output token counts. Multiply by the current
-per-token prices on Google's Vertex AI pricing page for the model in use; prices weren't copied
-here because they change.
+`vlm:check` and every production read log the input/output token counts, and the spend cap keeps a
+per-venue monthly ledger (`ai_usage`: calls, tokens, estimated USD; no content). The estimate uses
+`AI_PRICE_IN_PER_M` / `AI_PRICE_OUT_PER_M` (defaults 3 / 15), set deliberately above Google's listed
+prices. Prices checked on 2026-10-04 on Google's
+[Vertex AI pricing page](https://cloud.google.com/vertex-ai/generative-ai/pricing), per 1M tokens:
+
+| Model | Input | Output |
+|---|---|---|
+| Gemini 3.6 Flash, global endpoint, standard, until 2026-12-31 | $0.75 | $3.75 |
+| Gemini 3.6 Flash, global endpoint, standard, from 2027-01-01 | $1.50 | $7.50 |
+| Gemini 3.6 Flash, regional / multi-region endpoints (`eu`) | +10 % on the above | +10 % |
+| Gemini 3.6 Flash, Priority tier, regional, from 2027-01-01 (highest listed) | $2.97 | $14.85 |
+| Gemini 3.5 Flash-Lite, global endpoint | $0.30 | $2.50 |
+
+"Thinking" tokens are billed as output. Every call asks for the lowest thinking level (`minimal`)
+and has a per-feature output ceiling (roster vision 16,384, voice transcription 1,024, voice intent
+2,048 tokens). Re-check the pricing page before raising the budget; if Google raises prices above
+the defaults, raise `AI_PRICE_IN_PER_M` / `AI_PRICE_OUT_PER_M` to match.

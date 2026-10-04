@@ -25,6 +25,7 @@ import { locationsRouter } from './routes/locations.js';
 import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
 import { loginLinksRouter } from './routes/loginLinks.js';
+import { aiRouter } from './routes/ai.js';
 import { corsOptionsFromEnv } from './lib/corsOptions.js';
 import { requestIdMiddleware } from './lib/requestContext.js';
 import { checkReadiness } from './lib/readiness.js';
@@ -85,6 +86,7 @@ export function createApp() {
   app.use('/api/roles', rolesRouter);
   app.use('/api/voice', voiceRouter);
   app.use('/api/login-links', loginLinksRouter);
+  app.use('/api/ai', aiRouter);
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
