@@ -912,3 +912,11 @@ Each: merge master into the branch, rerun its gate, merge with a merge commit; r
 
 ### 6. Still not done
 SMS go-live; Railway config before 2026-12-01 (#52 follow-ups); VAPID go-live; native push and camera plugins; first Play upload.
+
+# Run 5 (started 2026-10-04 05:40 Dubai, after Run 4's final report)
+
+## Stage A — merge Run 4's PRs + one API deploy (in progress)
+- Merge set, in dependency order: #99 → #92 → #93 → #95 → #96 → #97 → #98 → #100. Each: master merged into the branch (merge commit, both sides kept), full gate (typecheck ×2, lint, unit, build, server, full e2e with `@live` excluded, secrets scan), then a merge commit.
+- Not merged: #94 (Run 4 opened it as prepare-only; merging it is tied to the owner's history decision), #91 (this log; still being written), #69/#78/#84 (owner review).
+- PR bodies reread before merging: outcome-only.
+- Rollback target before the deploy: `f5f3e49c` (code `64de660`).
