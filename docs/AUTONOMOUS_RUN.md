@@ -809,3 +809,10 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 - `npm run vlm:check` prints backend, model, region, latency, tokens, PASS/FAIL and nothing secret; `check-env-load.ts` prints presence only. The model's raw answer (staff names) is no longer logged. `docs/vlm-go-live.md` has the owner's steps.
 - Production: no model overrides set (3c: nothing to change) and no Vertex credentials (3h: skipped). **Production vision and voice are not live.**
 - Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 426 pass / 1 skip (+20), e2e (voice 8, uploads 6) 14/14, scan clean.
+
+## Stage 4 — escalation + parser gaps: done, PR open (stacked on #92)
+- [#93](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/93), base `feat/ai-config-vision-provider` (#92) because escalation uses #92's provider; retarget after #92 merges.
+- Deterministic parsers first; the AI reader only for an image/scan, a proven parse data-loss, an unrecognised layout, an ALL-CAPS-only roster, or an empty-role share above `ROSTER_ESCALATE_EMPTY_ROLE_SHARE` (0.3). Every AI read needs the manager's per-file consent (nothing is sent without it), then the 5 MB cap and the weekly allowance (now recorded only when the AI actually answered). Unavailable AI → messages name "People → Add staff member". Upload is manager/owner only, like confirm. Review screen unchanged and still mandatory.
+- Parser: ALL-CAPS-only sheets no longer let a blank-week staff row silently relabel the people below (flagged instead); the per-row-title layout now groups a novel first section header (flagged). All audit fixtures keep their row counts.
+- Client: consent prompt + escalation notice in Scheduling and the onboarding Roster step; the photo option now states the third-party AI reader.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 453 pass / 1 skip (+27), e2e 13/13 (new consent spec), scan clean.
