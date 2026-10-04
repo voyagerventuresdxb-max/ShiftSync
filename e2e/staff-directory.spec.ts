@@ -47,4 +47,26 @@ test.describe('people — staff directory', () => {
 
     expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
   });
+
+  test('adding with a phone stores it as E.164; adding the same number again shows the server error', async ({ page }) => {
+    await signupNewVenue(page, testVenueName('staff-directory-phone'));
+
+    await page.goto('/people');
+    const toggle = page.getByRole('button', { name: /Staff Directory/ });
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+
+    const digits = Date.now().toString().slice(-7);
+    await page.getByPlaceholder('Full name').fill('Omar Phone');
+    await page.getByPlaceholder('Mobile (optional)').fill(`054 ${digits.slice(0, 3)} ${digits.slice(3)}`);
+    await page.getByRole('button', { name: 'Add staff member' }).click();
+    await expect(page.getByRole('cell', { name: 'Omar Phone' })).toBeVisible();
+    await expect(page.getByPlaceholder('Mobile (optional)')).toHaveValue('');
+    expect((await prisma.user.findFirst({ where: { fullName: 'Omar Phone' } }))?.phone).toBe(`+97154${digits}`);
+
+    await page.getByPlaceholder('Full name').fill('Omar Duplicate');
+    await page.getByPlaceholder('Mobile (optional)').fill(`+971 54 ${digits}`);
+    await page.getByRole('button', { name: 'Add staff member' }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'This phone number is already registered to another staff member.' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Omar Duplicate' })).toHaveCount(0);
+  });
 });

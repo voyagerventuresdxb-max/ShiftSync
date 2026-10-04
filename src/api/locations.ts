@@ -1,7 +1,9 @@
 /**
  * Client for the ShiftSync locations API (server/src/routes/locations.ts).
  */
+import { apiFetch } from './http';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export { VENUE_TYPES } from '../../shared/venueTypes';
 
@@ -23,7 +25,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

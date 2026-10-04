@@ -1,13 +1,12 @@
 /**
  * Client for the ShiftSync onboarding API (server/src/routes/onboarding.ts).
  */
+import { apiFetch } from './http';
 import { withAuth } from './identity';
+import type { ActiveInvite } from './invites';
+import { apiUrl } from '../lib/apiUrl';
 
-export interface MintedInvite {
-  inviteUrl: string;
-  qrDataUrl: string;
-  whatsappUrl: string;
-}
+export type MintedInvite = ActiveInvite;
 
 export class ApiError extends Error {
   constructor(
@@ -20,7 +19,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -35,8 +34,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * GET /api/onboarding/:locationId/invite — mints (or re-mints) the venue's
- * join-link + QR. Passes this app's own origin as `baseUrl` — the server
+ * GET /api/onboarding/:locationId/invite — the venue's active join-link + QR,
+ * created on first call. Passes this app's own origin as `baseUrl` — the server
  * defaults to its own (API) host when it's omitted, which put the backend's
  * port in every generated invite link/QR/WhatsApp text instead of the
  * frontend's.

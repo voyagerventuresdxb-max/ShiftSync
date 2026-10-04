@@ -41,14 +41,14 @@ function persistedFor(rows: PreviewRow[]): PersistedRow[] {
 /** Build a realistic 116-shift preview payload across a 7-day week. */
 function build116ShiftPreview(): PreviewRow[] {
   const staff = [
-    { name: 'Alessandro', role: 'Management' },
-    { name: 'Pratik', role: 'Supervisor' },
-    { name: 'Roberto', role: 'Management' },
+    { name: 'Karen', role: 'Management' },
+    { name: 'Mibru', role: 'Supervisor' },
+    { name: 'Nemur', role: 'Management' },
     { name: 'Maria', role: 'Waiter' },
     { name: 'Jose', role: 'Waiter' },
     { name: 'Ahmed', role: 'Chef' },
     { name: 'Priya', role: 'Host' },
-    { name: 'Derrick', role: 'Runner' },
+    { name: 'Kapix', role: 'Runner' },
   ];
   const days = ['2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22', '2026-08-23'];
   const rows: PreviewRow[] = [];
@@ -154,7 +154,7 @@ test('Confirm & Commit flushes matched preview rows into the roster state', () =
 
 test('unmatched-role rows ARE flushed, flagged needsRoleReview, not silently dropped', () => {
   const preview = build116ShiftPreview();
-  // Mark one row (Alessandro's first shift) as unmatched_role.
+  // Mark one row (Karen's first shift) as unmatched_role.
   preview[0] = { ...preview[0], status: 'unmatched_role' };
   const committedRows = preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role');
   assert.equal(committedRows.length, 116, 'the unmatched row is still flushed, not excluded');
@@ -166,7 +166,7 @@ test('unmatched-role rows ARE flushed, flagged needsRoleReview, not silently dro
 
   const unsavedShift = committed.shifts.find((s) => s.id === 'upload-shift-batch-1-1');
   assert.ok(unsavedShift, 'the unpersisted row keeps the synthetic shift id fallback');
-  assert.equal(unsavedShift!.employeeId, 'upload-emp-Alessandro', 'and the synthetic employee id fallback');
+  assert.equal(unsavedShift!.employeeId, 'upload-emp-Karen', 'and the synthetic employee id fallback');
 
   const savedShifts = committed.shifts.filter((s) => s.id !== 'upload-shift-batch-1-1');
   assert.ok(
@@ -174,11 +174,11 @@ test('unmatched-role rows ARE flushed, flagged needsRoleReview, not silently dro
     'every persisted row still uses its real Shift id',
   );
 
-  const flagged = committed.employees.find((e) => e.name === 'Alessandro');
-  assert.ok(flagged, 'Alessandro is present');
-  assert.equal(flagged!.needsRoleReview, true, 'Alessandro is flagged for review');
+  const flagged = committed.employees.find((e) => e.name === 'Karen');
+  assert.ok(flagged, 'Karen is present');
+  assert.equal(flagged!.needsRoleReview, true, 'Karen is flagged for review');
 
-  const others = committed.employees.filter((e) => e.name !== 'Alessandro');
+  const others = committed.employees.filter((e) => e.name !== 'Karen');
   assert.ok(
     others.every((e) => !e.needsRoleReview),
     'no other employee is incorrectly flagged',

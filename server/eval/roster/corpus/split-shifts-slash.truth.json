@@ -1,0 +1,161 @@
+{
+  "id": "split-shifts-slash",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Priya Raghunathan",
+      "role": "WAITERS",
+      "date": "2026-08-17",
+      "start": "10:00",
+      "end": "14:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "WAITERS",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "WAITERS",
+      "date": "2026-08-18",
+      "start": "10:00",
+      "end": "14:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "WAITERS",
+      "date": "2026-08-18",
+      "start": "18:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "WAITERS",
+      "date": "2026-08-20",
+      "start": "10:00",
+      "end": "14:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "WAITERS",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "WAITERS",
+      "date": "2026-08-18",
+      "start": "11:00",
+      "end": "15:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "WAITERS",
+      "date": "2026-08-18",
+      "start": "18:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "WAITERS",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "15:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "WAITERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "WAITERS",
+      "date": "2026-08-21",
+      "start": "11:00",
+      "end": "15:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "WAITERS",
+      "date": "2026-08-21",
+      "start": "18:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "12:00",
+      "end": "16:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "19:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "12:00",
+      "end": "16:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "19:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "12:00",
+      "end": "16:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "19:00",
+      "end": "23:00"
+    }
+  ],
+  "leave": [],
+  "flagged": [],
+  "file": "split-shifts-slash.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "split shifts in one cell",
+    "Indian names"
+  ]
+}

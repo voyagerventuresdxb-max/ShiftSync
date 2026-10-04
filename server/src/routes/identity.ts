@@ -1,87 +1,76 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeSession, phoneDigits } from '../lib/identity.js';
+import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession, revokeSession } from '../lib/identity.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
 import { requireSession, bearerToken } from '../middleware/requireSession.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
+import { loginMethods } from '../lib/loginLinks.js';
+import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
+import { sendOtpSms, SMS_SEND_FAILED_ERROR } from '../lib/sms.js';
+import { getApproverNameForLocation } from '../lib/managers.js';
+import { canReapplyToJoin, joinDeclinedMessage } from '../lib/actions/joinActions.js';
+import { AccountAlreadyDeletedError, deleteOwnAccount, LastOwnerDeletionError } from '../lib/actions/accountDeletion.js';
 
 export const identityRouter = Router();
 
-/**
- * The dev-OTP echo is FAIL-CLOSED and opt-in: it is only ever enabled when
- * `ALLOW_DEV_OTP_ECHO` is explicitly set to 'true'. It deliberately does NOT
- * key off `NODE_ENV`, because nothing in this repo's scripts, Dockerfile or
- * start command ever sets `NODE_ENV=production` — a `NODE_ENV !== 'production'`
- * check would therefore leak every real OTP by default. Gate both the HTTP
- * echo and the plaintext server-log line on this one flag.
- */
-const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
+/** GET /api/identity/config — public: which sign-in methods are on (lib/loginLinks.ts `loginMethods`). */
+identityRouter.get('/config', (_req, res) => {
+  return res.status(200).json({ loginMethods: loginMethods() });
+});
+
+const NO_ACCOUNT_ERROR = 'No active account found with that phone number.';
 
 /**
- * Finds active users anywhere in the system whose stored phone normalizes to
- * the same digits as `phone`. Returns ALL matches, because `phoneDigits` is
- * lossy (it strips leading `971`/`0`) and `User.phone` has no unique
- * constraint at the DB level yet — two genuinely different numbers can
- * normalize to the same digits, and silently picking the first would hand
- * one person another person's session.
+ * The User holding this phone, active or not. The unique index covers
+ * deactivated users too, so signup and join must check this one before
+ * creating anything with the number, or the insert collides.
  *
- * Deliberately GLOBAL, not location-scoped: login no longer requires knowing
- * which venue you belong to before you can even request a code — you don't
- * know that up front from a bare `/join?mode=login` redirect (see
- * `RequireSession` in `router.tsx`, and the real bug this fixed: it redirects
- * a signed-out visit with no location context at all, so a login flow that
- * required one couldn't be reached). Matches `server/src/routes/signup.ts`'s
- * own global, unscoped phone lookup — both now treat phone as the real
- * cross-venue identity key, consistent with Decision A1 (one User, one
- * Location, phone intended to be globally unique — a DB-level unique
- * constraint on `User.phone` is a separate, still-pending, explicitly
- * user-gated migration; this is the application-layer half of that same
- * model, already necessary regardless of when that migration lands).
+ * Deliberately GLOBAL, not location-scoped: login doesn't require knowing
+ * which venue you belong to before you can request a code. You don't know
+ * that up front from a `/login` redirect (see
+ * `RequireSession` in `router.tsx`). Under Decision A1 (one User, one
+ * Location) phone is the cross-venue identity key. `e164` must come from
+ * `toE164`: `User.phone` is stored in E.164, so this is one indexed lookup.
  */
-// Exported so signup.ts's own global "does this phone already have an
-// account" check reuses this instead of re-implementing the same lossy
-// digits-filter a second time — one lookup, one place to fix if phone
-// normalization ever changes. Selects only the fields either caller actually
-// needs (not full rows) — this scans every active phone-bearing User in the
-// system on every login attempt now that it's global, not location-scoped,
-// so keeping each row cheap matters more than it did before.
-export async function findPhoneMatches(phone: string) {
-  const digits = phoneDigits(phone);
-  const users = await prisma.user.findMany({
-    where: { isActive: true, phone: { not: null } },
-    select: { id: true, phone: true, fullName: true, jobTitle: true, locationId: true, systemRole: true },
+export async function findUserByPhone(e164: string) {
+  return prisma.user.findUnique({
+    where: { phone: e164 },
+    select: { id: true, phone: true, fullName: true, jobTitle: true, locationId: true, systemRole: true, isActive: true },
   });
-  return users.filter((u) => u.phone && phoneDigits(u.phone) === digits);
 }
-
-const AMBIGUOUS_MATCH_ERROR = 'Multiple staff members match this phone number — contact support.';
 
 /**
  * POST /api/identity/request-otp — body: { phone }
- * Login path: the phone must already match exactly one active User anywhere
- * in the system — no `locationId` needed up front, since the whole point of
+ * Login path: the phone must already match a User (active or deactivated) or
+ * a PENDING/DECLINED JoinRequest — no `locationId` needed up front, since the whole point of
  * logging back in is that the client doesn't necessarily know (or need to
  * know) which venue that is until after the phone resolves to a real account.
  */
-identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
+identityRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
-    if (!phone) return res.status(400).json({ error: 'phone is required.' });
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
-    const matches = await findPhoneMatches(phone);
-    if (matches.length === 0) {
-      return res.status(404).json({ error: 'No active account found with that phone number.' });
+    // Deactivated staff and pending/declined applicants get a code too; their status is only revealed after verify.
+    const known =
+      (await findUserByPhone(phone)) ??
+      (await prisma.joinRequest.findFirst({ where: { phone, status: { in: ['PENDING', 'DECLINED'] } }, select: { id: true } }));
+    if (!known) {
+      return res.status(404).json({ error: NO_ACCOUNT_ERROR });
     }
-    if (matches.length > 1) return res.status(409).json({ error: AMBIGUOUS_MATCH_ERROR });
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'LOGIN');
-    // No SMS integration exists; this is a stand-in until one is added.
-    if (DEV_OTP_ECHO) {
-      console.log(`[identity] OTP for ${phone} (LOGIN): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
-    }
+    if ((await sendOtpSms(phone, plainCode, 'identity')) === 'failed') return res.status(503).json({ error: SMS_SEND_FAILED_ERROR });
+    // Dev stand-in for SMS: echoes the code, for allowlisted numbers only.
+    const echo = devOtpEchoFor(phone);
+    if (echo) logDevOtpEcho('identity', phone, 'LOGIN', plainCode);
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: DEV_OTP_ECHO ? plainCode : undefined,
+      devCode: echo ? plainCode : undefined,
     });
   } catch (err) {
     if (err instanceof OtpRateLimitError) return sendOtpRateLimited(res, err.scope, err.retryAfterSeconds);
@@ -90,27 +79,62 @@ identityRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
   }
 });
 
-/** POST /api/identity/verify-otp — body: { phone, code } */
-identityRouter.post('/verify-otp', async (req, res) => {
+/**
+ * POST /api/identity/verify-otp — body: { phone, code }
+ * Active user → session. Otherwise, only after the code checks out: pending
+ * applicant → 200 `{ pending: true, status, venueName, managerName }` (no
+ * token); deactivated or declined → 403 `{ status, venueName, error }`.
+ */
+identityRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
+    const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();
-    if (!phone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    if (!rawPhone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
     const result = await verifyOtpCode(phone, 'LOGIN', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
-    const matches = await findPhoneMatches(phone);
-    if (matches.length === 0) {
-      return res.status(404).json({ error: 'No active account found with that phone number.' });
+    const match = await findUserByPhone(phone);
+    if (match && !match.isActive) {
+      const { name: venueName } = await prisma.location.findUniqueOrThrow({ where: { id: match.locationId }, select: { name: true } });
+      return res.status(403).json({
+        status: 'deactivated',
+        venueName,
+        error: `Your staff account at ${venueName} has been deactivated. Ask a manager there to reactivate it.`,
+      });
     }
-    if (matches.length > 1) return res.status(409).json({ error: AMBIGUOUS_MATCH_ERROR });
-    const match = matches[0]!;
+    if (!match) {
+      // An open application wins over an old declined one (e.g. declined at one venue, applied to another).
+      const include = { location: { select: { name: true } } } as const;
+      const pending = await prisma.joinRequest.findFirst({ where: { phone, status: 'PENDING' }, orderBy: { createdAt: 'desc' }, include });
+      if (pending) {
+        return res.status(200).json({
+          pending: true,
+          status: 'pending',
+          venueName: pending.location.name,
+          managerName: await getApproverNameForLocation(pending.locationId),
+        });
+      }
+      const declined = await prisma.joinRequest.findFirst({ where: { phone, status: 'DECLINED' }, orderBy: { createdAt: 'desc' }, include });
+      if (declined) {
+        const canReapply = await canReapplyToJoin(declined.locationId, phone);
+        return res.status(403).json({ status: 'declined', venueName: declined.location.name, error: joinDeclinedMessage(declined.location.name, canReapply) });
+      }
+      return res.status(404).json({ error: NO_ACCOUNT_ERROR });
+    }
 
+    // First sign-in ever (no session before this one): the client shows the
+    // staff "You're in" screen once, then My Shifts. Counted before issuing.
+    const firstSignIn = (await prisma.session.count({ where: { userId: match.id } })) === 0;
+    const { name: venueName } = await prisma.location.findUniqueOrThrow({ where: { id: match.locationId }, select: { name: true } });
     const { plainToken, expiresAt } = await issueSession(match.id);
     return res.status(200).json({
       token: plainToken,
       expiresAt: expiresAt.toISOString(),
+      firstSignIn,
+      venueName,
       user: {
         id: match.id,
         fullName: match.fullName,
@@ -140,5 +164,24 @@ identityRouter.delete('/session', requireSession, async (req, res) => {
   } catch (err) {
     console.error('[identity.revokeSession] failed', err);
     return res.status(500).json({ error: 'Unexpected error while signing out.' });
+  }
+});
+
+/**
+ * DELETE /api/identity/account — body: { confirm: true }
+ * Deletes the signed-in person's own account, immediately (see lib/actions/accountDeletion.ts):
+ * personal details removed, every session ended, past shifts kept de-identified. A venue's last
+ * active owner gets 409 `last_owner` and nothing changes.
+ */
+identityRouter.delete('/account', requireSession, async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'Confirm that you want to delete your account.' });
+  try {
+    await deleteOwnAccount(req.user!.id);
+    return res.status(200).json({ deleted: true });
+  } catch (err) {
+    if (err instanceof LastOwnerDeletionError) return res.status(409).json({ error: err.message, errorCode: 'last_owner' });
+    if (err instanceof AccountAlreadyDeletedError) return res.status(410).json({ error: err.message });
+    console.error('[identity.deleteAccount] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while deleting the account.' });
   }
 });

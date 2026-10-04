@@ -1,3 +1,4 @@
+import { isIsoDate, isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
@@ -8,7 +9,8 @@ import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
-import { decideJoinRequest } from '../lib/actions/joinActions.js';
+import { SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
+import { decideJoinRequest, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { createShift, updateShift } from '../lib/actions/shiftActions.js';
@@ -50,6 +52,10 @@ const TIME_RE = /^\d{2}:\d{2}$/;
  * only this generic line crosses the wire.
  */
 const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
+/** A retired/misspelled model is not fixed by retrying, so say so (and point at the buttons). */
+const VOICE_MODEL_UNAVAILABLE = "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile.";
+/** The in-app AI spend cap (lib/aiBudget.ts) refused the call before anything was sent. */
+const VOICE_PAUSED = "Voice commands are paused (AI spending limit reached). Use the app's buttons meanwhile.";
 
 /**
  * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
@@ -122,19 +128,16 @@ function validateIntentShape(intent: ParsedIntent): string | null {
     }
     case 'PUBLISH_ROTA': {
       if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
-      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
-        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
-      }
+      if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      // The model is told weekStart is the Monday; never trust its arithmetic.
+      if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
       return null;
     }
     case 'APPLY_ROTA_TEMPLATE': {
       if (!isNonEmptyString(intent.templateId)) return 'templateId is required.';
       if (!DATE_RE.test(intent.weekStart)) return 'weekStart must be YYYY-MM-DD.';
-      const d = new Date(`${intent.weekStart}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.weekStart) {
-        return 'weekStart must be a real calendar date (YYYY-MM-DD).';
-      }
+      if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
+      if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
       return null;
     }
     case 'POST_ANNOUNCEMENT':
@@ -188,12 +191,28 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
       vocabulary = undefined;
     }
 
-    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
+    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary, req.user!.locationId);
     return res.status(200).json({ transcript });
   } catch (err) {
+    if (err instanceof VoiceTranscriptionError && err.kind === 'format_rejected') {
+      // Gemini refused the audio format itself — a bug in what this phone
+      // records vs what we send, not an outage. Say so, so it is never
+      // mistaken for quota, and keep the mimetype in the log line.
+      console.error(`[voice.transcribe] format rejected (mime=${req.file?.mimetype})`, err);
+      return res.status(415).json({
+        error: `Your phone's recording format (${req.file?.mimetype ?? 'unknown'}) wasn't accepted by the transcription service. This is a bug on our side rather than an outage — please tell us your phone model.`,
+        errorCode: 'voice_format_rejected',
+      });
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'paused') {
+      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'model_unavailable') {
+      return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
+    }
     if (err instanceof VoiceTranscriptionError) {
       console.error('[voice.transcribe] unavailable', err);
-      return res.status(503).json({ error: VOICE_UNAVAILABLE });
+      return res.status(503).json({ error: VOICE_UNAVAILABLE, errorCode: 'voice_unavailable' });
     }
     console.error('[voice.transcribe] failed', err);
     return res.status(500).json({ error: 'Unexpected error while transcribing audio.' });
@@ -232,6 +251,12 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
       hasAdditionalRequest: shouldPromptForAdditionalRequest(resolution),
     });
   } catch (err) {
+    if (err instanceof VoiceIntentError && err.paused) {
+      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+    }
+    if (err instanceof VoiceIntentError && err.modelUnavailable) {
+      return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
+    }
     if (err instanceof VoiceIntentError) {
       console.error('[voice.parseIntent] unavailable', err);
       return res.status(503).json({ error: VOICE_UNAVAILABLE });
@@ -346,11 +371,18 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That staff member could not be found at your location.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
-        const created = await withAuditedTransaction(
-          prisma,
-          (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
-          (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
-        );
+        let created;
+        try {
+          created = await withAuditedTransaction(
+            prisma,
+            (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
+            (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
+          );
+        } catch (err) {
+          // The week's request window has closed (Wednesday 17:00, venue time) — same answer as the REST route.
+          if (err instanceof SwapWindowClosedError) return respond(409, { error: err.message, errorCode: 'swap_window_closed' }, 'REJECTED_VALIDATION', err.message);
+          throw err;
+        }
         // Same notification path as the REST route (routes/swapRequests.ts's
         // POST) — never inside the transaction above.
         void notifySwapRequested(created, locationId);
@@ -394,6 +426,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That shift was already reassigned by another swap request.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // Decided by someone else between the PENDING check above and this call.
+        if (result.result === 'already_decided') {
+          const msg = `That swap request was already ${result.status.toLowerCase()}.`;
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
         // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
         // SWAP_DECLINED) inside its transaction — append the voice transcript by
         // writing a SECOND, linked row rather than mutating the first, keeping
@@ -435,6 +472,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         if (result.result === 'already_reviewed') {
           const msg = 'That join request was already reviewed.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        if (result.result === 'phone_taken') {
+          return respond(409, { error: JOIN_PHONE_TAKEN_ERROR }, 'REJECTED_VALIDATION', JOIN_PHONE_TAKEN_ERROR);
         }
         await writeAuditLog(prisma, {
           locationId: jr.locationId,

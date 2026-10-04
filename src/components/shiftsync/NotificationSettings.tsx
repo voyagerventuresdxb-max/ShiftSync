@@ -7,9 +7,11 @@ import {
   getExistingSubscriptionEndpoint,
   subscribeToPush,
   unsubscribeFromPush,
+  needsHomeScreenInstallForPush,
 } from '../../lib/push';
+import { fetchVapidPublicKey } from '../../api/push';
 
-type Status = 'checking' | 'unsupported' | 'denied' | 'subscribed' | 'not-subscribed';
+type Status = 'checking' | 'unsupported' | 'unavailable' | 'denied' | 'subscribed' | 'not-subscribed';
 
 /**
  * The explicit opt-in for Web Push, replacing ProfileRoute's old
@@ -27,6 +29,11 @@ export function NotificationSettings() {
   const refresh = async () => {
     if (!isPushSupported()) {
       setStatus('unsupported');
+      return;
+    }
+    // Server has no VAPID keys: say so up front instead of offering a button that prompts for permission, then fails.
+    if ((await fetchVapidPublicKey().catch(() => null)) === '') {
+      setStatus('unavailable');
       return;
     }
     const permission = getPushPermissionState();
@@ -83,8 +90,20 @@ export function NotificationSettings() {
 
       {status === 'checking' ? (
         <p className="hint mt-2">Checking this device…</p>
+      ) : status === 'unsupported' && needsHomeScreenInstallForPush() ? (
+        // iPhone/iPad in a Safari tab: PushManager only exists once the app
+        // is on the Home Screen, so "unsupported" here means "install first".
+        <p className="hint mt-2">
+          On iPhone, notifications work once ShiftSync is on your Home Screen. In Safari tap <strong>Share</strong>, then{' '}
+          <strong>Add to Home Screen</strong>, and open ShiftSync from there to turn them on.
+        </p>
       ) : status === 'unsupported' ? (
         <p className="hint mt-2">Push notifications aren't supported in this browser.</p>
+      ) : status === 'unavailable' ? (
+        <p className="hint mt-2">
+          Push notifications aren't switched on for ShiftSync yet. Updates still appear under the bell at the top of
+          the app.
+        </p>
       ) : status === 'denied' ? (
         <p className="hint mt-2">
           Notifications are blocked for this site in your browser settings. Allow notifications for ShiftSync there,

@@ -1,0 +1,126 @@
+{
+  "id": "long-format-indian",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Priya Raghunathan",
+      "role": "Bartender",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "Bartender",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "Bartender",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "Bartender",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "Host",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "Host",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "Host",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "Host",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "Host",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "Chef",
+      "date": "2026-08-17",
+      "start": "10:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "Chef",
+      "date": "2026-08-19",
+      "start": "10:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "Chef",
+      "date": "2026-08-20",
+      "start": "10:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "Runner",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "Runner",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "Runner",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "Runner",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [],
+  "flagged": [],
+  "file": "long-format-indian.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "long-format template",
+    "Indian names"
+  ]
+}
