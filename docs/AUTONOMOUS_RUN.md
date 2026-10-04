@@ -986,3 +986,40 @@ Audit of #69 → #78 → #84 against the scope list (evidence = implementing fil
 
 - PRs (base `feat/split-shift-db-guard`): [#108](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/108) uncovered flags, [#109](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/109) availability for everyone (new manager-only read; add it to the access matrix #104 once both are on master), [#110](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/110) builder UI tests, [#111](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/111) bulk actions. Each with unit + Playwright tests; screenshots at 390 and 1280 in `C:\dev\_autonomous-run-artifacts\stage-f-screens\` (not committed).
 - Gates: #108 unit 107/107, server 443/1, e2e green (the bad-network rota spec now confirms the second publish tap); #109 unit 104/104, server 444/1, e2e 13/13; #110 4/4 and 8/8 repeated; #111 unit 106/106, server 443/1, e2e 11/11; all lint 0 errors, scan clean.
+
+## Run 5 final report (2026-10-04, 05:40–09:50 Dubai)
+
+### 1. Stages
+| Stage | Status | PR | Tests | Merged / deployed? |
+|---|---|---|---|---|
+| A Merge Run 4's PRs + deploy | done | #99, #92, #93, #95, #96, #97, #98, #100 | full e2e 75–80/80 on the app-wide PRs; final master tree full e2e 80/80 | merged; API `806be2a0` (master `1d56839`) |
+| B Cross-venue access audit | done | #101, #102, #103 (fixes), #104 (matrix) | matrix 100 checks; matrix branch full e2e 80/80 | open |
+| C Review pack | done | #105 | docs; scan clean | open |
+| D Offline staff schedule | done | #106 | unit 99, e2e 35/35 + 11/11 | open |
+| E Bundle slimming | done | #107 | full e2e 80/80; budget check in build | open |
+| F Rota scope audit + completion (stretch) | done | #108, #109, #110, #111 (stacked on #84) | unit + e2e each | open |
+
+### 2. Production
+API deployment `806be2a0-7f9e-4c8d-9d13-038fd0777bd5` (code `1d56839`), `/api/health` 200, `/api/health/ready` 200 (31/31 migrations), GitHub "Vercel" status for `1d56839`: success. No rollback. Production untouched after Stage A.
+
+### 3. Review first
+1. #102 and #101 (access fixes), then #103, then #104 (the matrix; it contains all three).
+2. `docs/rota-review-guide.md` (#105) with the screenshots in `C:\dev\_autonomous-run-artifacts\demo-screens\` — start with `21-rota-draft-split-shift-leave`.
+3. #107 (half the JS for staff screens) and #106 (offline schedule).
+4. The rota stack (#69 → #78 → #84) and its Stage F additions (#108–#111).
+
+### 4. Real-phone checklist
+- Sign in by code and by login link; a staff member sees My Shifts and Home's "Your next shift".
+- Airplane mode with the app open: My Shifts, the next-shift card and the published week show "Offline — last updated …"; back online they refresh; sign out wipes the copy.
+- On a slow phone network, Home and My Shifts load noticeably faster after #107 (staff no longer download the builder, floor plan or onboarding).
+- Manager: builder shows "N uncovered shifts", asks before publishing them; select several shifts and assign or delete them; availability badges for people without shifts.
+- Staff Directory: a manager can't change an owner's or another manager's phone; staff numbers still editable.
+
+### 5. Blocked, skipped, risky
+- Not merged by rule: #94 (fixture privacy, tied to the history decision), #91 (this log), the rota stack and everything stacked on it.
+- Rota stack refresh needed after master moved: the golden-path rota spec should switch to #99's push outbox; #103 vs #69's publish lines (keep #69's); add #109's new route to the access matrix (#104) once both land.
+- Observations from the access audit beyond the three fixes are in the owner's chat report.
+- Inherited flaky server test (`signup.test.ts`, database-wide count).
+
+### 6. Still not done
+SMS go-live; Railway config before 2026-12-01; VAPID go-live; native push/camera plugins; first Play upload; Vercel deployment protection; Gemini key rotation; GCP billing and credentials (vision and voice still not live).
