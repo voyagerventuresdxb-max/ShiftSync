@@ -1041,3 +1041,16 @@ SMS go-live; Railway config before 2026-12-01; VAPID go-live; native push/camera
 - #75 closed with "superseded by #90".
 - **#91 (this log) not merged.** Reread for security wording: the current text is now outcome-only, but earlier commits on this branch still carry the older wording, and merge commits would bring them into master's history. Skipped as the brief asks when in doubt; squash-merge or close is the owner's call. Run 6 keeps logging here.
 - `signup.test.ts` did not flake in any Stage A gate.
+
+## Stage B — AI spend cap: merged (11:54 Dubai)
+- [#112](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/112) → `7e02dc8`. One guard (`server/src/lib/aiBudget.ts`) in front of every Gemini/Vertex call: atomic worst-case reservation against the UTC month and day counters, settled to real tokens; refusals send nothing and say "AI reading is paused for this month; upload Excel/CSV or add staff manually"; additive ledger (venue, feature, month, calls, tokens, estimated USD; no content); per-feature output ceilings and the lowest thinking level; one warning log at 80%; owner-only `GET /api/ai/usage` (in the access matrix). Defaults: USD 5 per month, 60 calls per day, prices 3 / 15 per 1M tokens (at or above Google's highest listed price, checked 2026-10-04).
+- Decision: if the counters can't be reached, the call is refused (fail closed).
+- Decision: `vlm:check` also goes through the cap. Production's database is private, so the check now runs inside the service (`railway ssh`) after deploying; without SSH, the phone test covers the same path. Docs updated.
+- Decision: the usage endpoint shows the deployment-wide cap figures (needed to read the cap) plus the venue's own share.
+- Gate: typecheck ×2, lint 0 errors, unit 94/94, server 610 / 3 skip, build, scan clean; full e2e 79/80. The one failure (`onboarding-step-persistence`) came from heavy machine load: a pre-existing sign-up transaction passed its 5 s timeout. The spec passed 2/2 alone. Recorded as a Run 7 flake to fix at the root.
+
+## Stage C — roster day headers: merged (12:10 Dubai)
+- [#113](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/113) → `9e0aad1`. The grid parser reads `Mon 17/08`, `MON 17-08`, `Mon 17 Aug` and `17/08 Mon`. Numeric dates are always DD/MM, and the year is inferred from the roster week (New Year handled both ways). When a header's weekday disagrees with its date, the date is kept and every entry under it is flagged for the manager. The weekday check uses the UTC calendar date, so there is no timezone drift.
+- Decision: no new escalation reason. A mismatch is a review flag for the manager; an unreadable header still escalates as `unrecognized_layout` under the existing policy.
+- Eval corpus grows from 14 to 18 rosters (three spellings and a mismatch). Deterministic eval: day 88% → 94%, role 97% → 100%, leave 84% → 94%, extra shifts 4 → 0, escalation agreement 13/14 → 18/18. Every earlier roster scores the same or better, and all four new rosters score 100%.
+- Parser corpus and timezone matrix (UTC, Asia/Dubai, America/Los_Angeles) green. Gate: typecheck ×2, lint 0 errors, unit 94/94, server 614 / 3 skip, full e2e 80/80, scan clean.
