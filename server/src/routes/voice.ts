@@ -418,6 +418,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That shift was already reassigned by another swap request.';
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // Decided by someone else between the PENDING check above and this call.
+        if (result.result === 'already_decided') {
+          const msg = `That swap request was already ${result.status.toLowerCase()}.`;
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
         // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
         // SWAP_DECLINED) inside its transaction — append the voice transcript by
         // writing a SECOND, linked row rather than mutating the first, keeping
