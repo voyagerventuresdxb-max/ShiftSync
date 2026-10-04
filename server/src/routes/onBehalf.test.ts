@@ -7,16 +7,17 @@ import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 
 /**
- * A manager may record an action on behalf of a colleague (the "Viewing"
- * selector), but only a colleague at the same venue: naming another venue's
- * person is a 404 and nothing is written.
+ * On the 86 routes a manager may record an action on behalf of a colleague,
+ * but only a colleague at the same venue: naming another venue's person is a
+ * 404 and nothing is written. The shift routes take the actor from the
+ * session only: whoever the body names, the signed-in manager is recorded.
  */
 const prisma = new PrismaClient();
 const TAG = '__on-behalf-test__';
 let server: Server;
 let base = '';
 let orgIds: string[] = [];
-let fx: { locA: string; roleA: string; managerToken: string; colleague: string; outsider: string; shiftId: string; monday: string };
+let fx: { locA: string; roleA: string; manager: string; managerToken: string; colleague: string; outsider: string; shiftId: string; monday: string };
 
 function futureMonday(): string {
   const d = new Date();
@@ -41,7 +42,7 @@ before(async () => {
   const shift = await prisma.shift.create({
     data: { locationId: locA.id, roleId: roleA.id, userId: colleague.id, date: new Date(`${monday}T00:00:00.000Z`), startTime: new Date(`${monday}T13:00:00.000Z`), endTime: new Date(`${monday}T19:00:00.000Z`) },
   });
-  fx = { locA: locA.id, roleA: roleA.id, managerToken: (await issueSession(manager.id)).plainToken, colleague: colleague.id, outsider: outsider.id, shiftId: shift.id, monday };
+  fx = { locA: locA.id, roleA: roleA.id, manager: manager.id, managerToken: (await issueSession(manager.id)).plainToken, colleague: colleague.id, outsider: outsider.id, shiftId: shift.id, monday };
   server = await new Promise<Server>((resolve) => {
     const s = createApp().listen(0, () => resolve(s));
   });
@@ -57,41 +58,38 @@ after(async () => {
 const send = (method: string, path: string, body: object) =>
   fetch(`${base}${path}`, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${fx.managerToken}` }, body: JSON.stringify(body) });
 
-test("another venue's person can't be named as the actor on any on-behalf route; nothing is written", async () => {
-  const shiftsBefore = await prisma.shift.count({ where: { locationId: fx.locA } });
-  const shiftBody = { roleId: fx.roleA, date: fx.monday, start: '09:00', end: '11:00' };
-  const cases: [string, string, object][] = [
-    ['POST', '/api/shifts', { ...shiftBody, createdById: fx.outsider }],
-    ['POST', '/api/shifts/bulk', { shifts: [shiftBody], createdById: fx.outsider }],
-    ['PATCH', `/api/shifts/${fx.shiftId}`, { breakMinutes: 30, actorId: fx.outsider }],
-    ['DELETE', `/api/shifts/${fx.shiftId}`, { actorId: fx.outsider }],
-    ['POST', `/api/shifts/${fx.locA}/publish`, { weekStart: fx.monday, publishedById: fx.outsider }],
-    ['POST', '/api/eighty-six', { itemName: `${TAG} lime`, station: 'Bar', createdById: fx.outsider }],
-  ];
-  for (const [method, path, body] of cases) {
-    const res = await send(method, path, body);
-    assert.equal(res.status, 404, `${method} ${path}`);
-  }
+test("another venue's person can't be named as the actor on the 86 routes; nothing is written", async () => {
+  assert.equal((await send('POST', '/api/eighty-six', { itemName: `${TAG} lime`, station: 'Bar', createdById: fx.outsider })).status, 404);
   const item = await prisma.eightySixItem.create({ data: { locationId: fx.locA, itemName: `${TAG} mint`, station: 'Bar' } });
   assert.equal((await send('PATCH', `/api/eighty-six/${item.id}/back-on`, { actorId: fx.outsider })).status, 404);
 
-  assert.equal(await prisma.shift.count({ where: { locationId: fx.locA } }), shiftsBefore, 'no shift created or deleted');
-  const shift = await prisma.shift.findUniqueOrThrow({ where: { id: fx.shiftId } });
-  assert.equal(shift.breakMinutes, 0, 'the shift is unchanged');
-  assert.equal(shift.status, 'DRAFT', 'nothing was published');
   assert.equal(await prisma.eightySixItem.count({ where: { locationId: fx.locA, itemName: `${TAG} lime` } }), 0);
   assert.equal((await prisma.eightySixItem.findUniqueOrThrow({ where: { id: item.id } })).status, 'EIGHTY_SIXED');
   assert.equal(await prisma.auditLog.count({ where: { actorId: fx.outsider } }), 0, 'no audit row names the outsider');
 });
 
-test('a colleague at the same venue can still be named, and is recorded', async () => {
-  const created = await send('POST', '/api/shifts', { roleId: fx.roleA, date: fx.monday, start: '15:00', end: '16:00', createdById: fx.colleague });
+test('shift routes record the signed-in manager, whoever the body names', async () => {
+  const shiftBody = { roleId: fx.roleA, date: fx.monday, start: '09:00', end: '11:00' };
+  const created = await send('POST', '/api/shifts', { ...shiftBody, createdById: fx.outsider });
   assert.equal(created.status, 201);
-  const id = ((await created.json()) as { shift: { id: string } }).shift.id;
-  assert.equal((await prisma.shift.findUniqueOrThrow({ where: { id } })).createdById, fx.colleague);
+  const createdId = ((await created.json()) as { shift: { id: string } }).shift.id;
+  assert.equal((await prisma.shift.findUniqueOrThrow({ where: { id: createdId } })).createdById, fx.manager);
+  const cases: [string, string, object][] = [
+    ['POST', '/api/shifts/bulk', { shifts: [{ ...shiftBody, start: '11:00', end: '12:00' }], createdById: fx.colleague }],
+    ['PATCH', `/api/shifts/${fx.shiftId}`, { breakMinutes: 30, actorId: fx.outsider }],
+    ['DELETE', `/api/shifts/${createdId}`, { actorId: fx.outsider }],
+    ['POST', `/api/shifts/${fx.locA}/publish`, { weekStart: fx.monday, publishedById: fx.colleague }],
+  ];
+  for (const [method, path, body] of cases) {
+    const res = await send(method, path, body);
+    assert.ok(res.status >= 200 && res.status < 300, `${method} ${path}: ${res.status}`);
+  }
+  assert.equal(await prisma.auditLog.count({ where: { locationId: fx.locA, actorId: { in: [fx.outsider, fx.colleague] } } }), 0, 'every audit row names the manager');
+  assert.equal((await prisma.rotaPublish.findFirstOrThrow({ where: { locationId: fx.locA } })).publishedById, fx.manager);
+});
+
+test('a colleague at the same venue can still be named on the 86 routes, and is recorded', async () => {
   const item = await send('POST', '/api/eighty-six', { itemName: `${TAG} olive`, station: 'Bar', createdById: fx.colleague });
   assert.equal(item.status, 201);
   assert.equal((await prisma.eightySixItem.findFirstOrThrow({ where: { locationId: fx.locA, itemName: `${TAG} olive` } })).createdById, fx.colleague);
-  // Naming nobody, or yourself, records the caller as before.
-  assert.equal((await send('PATCH', `/api/shifts/${fx.shiftId}`, { breakMinutes: 15 })).status, 200);
 });
