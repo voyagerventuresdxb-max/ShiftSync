@@ -10,6 +10,7 @@ Every line has an end-to-end Playwright spec in `e2e/` that drives the real app,
 | Venue signup + onboarding | Welcome → Venue → Roster (Excel/CSV/text PDF) → Review (edit, flag, confirm) → Invite; survives a reload on every step | `onboarding`, `onboarding-step-persistence`, `review-persistence`, `venue-name-rename` |
 | Sign-in | Phone + one-time code for every role, routed by role; resend cooldown; manager-issued one-time login links | `login`, `otp-resend-cooldown`, `login-links` |
 | Joining | Expiring, revocable invite links; pending → owner approves on People → staff signs in → "You're in" → My Shifts; decline and re-apply | `invite-links`, `join-approval`, `staff-flow`, `people-refresh-reapply` |
+| Kiosk screen | Per-venue kiosk link from People (shown once, regenerate, revoke) opens `/kiosk` on a shared screen: published rota, announcements, shoutouts; a venue id alone or an old link shows nothing (`docs/deployment.md` → Kiosk links) | `kiosk-token` |
 | People | Staff Directory add/edit, phones stored as E.164; deactivating someone signs them out at once | `staff-directory`, `deactivate-ends-session` |
 | Scheduling | Default roles, shifts without any roster upload, templates, publish with one notification per person | `zero-setup-scheduling`, `voice` |
 | Time zones | Week, "today" and shift times are the venue's (tested from Dubai and Los Angeles viewers, month and year ends) | `calendar-liveness` |
@@ -37,7 +38,7 @@ Server-side rules with their own suites (no e2e): the Wednesday 17:00 cover-requ
 ## Known limits
 - **Rota builder v0 is not on master yet.** Leave on the grid, copy last week, split shifts, the overlap guard and manager-only drafts are in #69 → #78 → #84, awaiting review (`docs/rota-review-guide.md`).
 - **Parser:** day headers written like `Mon 17/08` aren't recognised (the eval harness reports it); image rosters need the AI reader.
-- **Live updates** are refetch-on-focus/visibility/notification, not websockets.
+- **Live updates** are refetch-on-focus/visibility/notification, not websockets. A kiosk screen left open picks up new announcements or rota edits only when reloaded (it does move to the new week on Monday).
 - **Legal pages** are drafts, marked as such, pending legal review.
 - **Railway config-as-code** (`railway.json`) stops working on 2026-12-01 (#52 follow-ups).
 
