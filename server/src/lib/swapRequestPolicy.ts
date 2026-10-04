@@ -25,6 +25,37 @@ export function nextRequestWindowClose(now: Date = new Date(), timezone: string 
 }
 
 /**
+ * When cover requests for a shift's week close: Wednesday 17:00, venue-local, of the Monday-based
+ * week the shift belongs to (`shiftDate` is `Shift.date`, the venue calendar day). From then on
+ * that week's coverage is settled: staff can't file new requests for it, while managers can still
+ * decide the ones already filed. Pure: the host's timezone never enters.
+ */
+export function requestWindowCloseForShift(shiftDate: Date | string, timezone: string = DEFAULT_VENUE_TIMEZONE): Date {
+  const iso = typeof shiftDate === 'string' ? shiftDate.slice(0, 10) : shiftDate.toISOString().slice(0, 10);
+  const day = new Date(`${iso}T00:00:00.000Z`);
+  const toWednesday = CLOSE_WEEKDAY - (day.getUTCDay() === 0 ? 7 : day.getUTCDay()); // Monday-based week
+  const wednesday = new Date(day.getTime() + toWednesday * 86_400_000).toISOString().slice(0, 10);
+  return dayjs.tz(`${wednesday}T${String(CLOSE_HOUR).padStart(2, '0')}:00:00`, timezone).toDate();
+}
+
+export function isRequestWindowOpen(shiftDate: Date | string, now: Date = new Date(), timezone: string = DEFAULT_VENUE_TIMEZONE): boolean {
+  return now.getTime() < requestWindowCloseForShift(shiftDate, timezone).getTime();
+}
+
+/** Thrown by createSwapRequest when the shift's week is past its request window. */
+export class SwapWindowClosedError extends Error {
+  readonly closedAt: Date;
+  constructor(closedAt: Date, timezone: string = DEFAULT_VENUE_TIMEZONE) {
+    const when = dayjs(closedAt).tz(timezone).format('dddd D MMM [at] HH:mm');
+    super(
+      `Cover requests for this shift's week closed on ${when} (venue time). Ask your manager directly — they can still change the rota.`,
+    );
+    this.name = 'SwapWindowClosedError';
+    this.closedAt = closedAt;
+  }
+}
+
+/**
  * A pending swap request is auto-locked when a DIFFERENT already-approved
  * request already reassigned the same shift out from under it — approving
  * this one too would silently overwrite that resolution. Decided requests

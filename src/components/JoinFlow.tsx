@@ -5,6 +5,7 @@ import { useIdentity } from '../state/IdentityContext';
 import { postLoginDestination } from '../lib/postLoginDestination';
 import { shouldShowStaffWelcome, stashStaffWelcome, STAFF_LOGIN_PATH, WELCOME_PATH } from '../lib/staffWelcome';
 import { cooldownAfterRefusal, useResendCooldown } from '../hooks/useResendCooldown';
+import { LegalLinks } from '../routes/LegalRoute';
 
 type Phase = 'phone' | 'otp' | 'pending' | 'error';
 /**
@@ -173,6 +174,7 @@ export default function JoinFlow({ inviteToken, locationId, venueName }: { invit
           Already on the team? Staff sign in
         </Link>
       )}
+      <LegalLinks />
     </section>
   );
 }

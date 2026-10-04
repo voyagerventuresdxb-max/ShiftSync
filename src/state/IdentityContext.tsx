@@ -4,7 +4,8 @@ import { loadSession, saveSession, clearSession, revokeSession, type StoredSessi
 interface IdentityValue {
   session: StoredSession | null;
   login: (session: StoredSession) => void;
-  logout: () => void;
+  /** `revoke: false` skips the server sign-out call (e.g. the account was just deleted, so no session is left). */
+  logout: (options?: { revoke?: boolean }) => void;
 }
 
 const IdentityCtx = createContext<IdentityValue | null>(null);
@@ -23,10 +24,10 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
    * they asked to leave. The token they're discarding is the only thing that
    * could have used it anyway.
    */
-  const logout = useCallback(() => {
+  const logout = useCallback((options?: { revoke?: boolean }) => {
     setSession((current) => {
       clearSession();
-      if (current) {
+      if (current && options?.revoke !== false) {
         void revokeSession(current.token).catch(() => {
           // Already signed out locally; a failed revoke is not worth surfacing.
         });

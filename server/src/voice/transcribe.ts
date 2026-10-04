@@ -1,14 +1,18 @@
-import { GoogleGenAI, ApiError } from '@google/genai';
-import { voiceClientOptions, voiceModel } from './model.js';
+import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
+import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
+import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, audioInputEstimate, withAiBudget } from '../lib/aiBudget.js';
+import { billedOutputTokens } from '../parsing/visionProvider.js';
 
 /**
  * Why transcription failed, so the route can answer differently:
- *  - format_rejected  Gemini refused the audio itself (400/415) — a bug in
- *                     what we send (a mimetype it doesn't take), not an outage.
- *  - unavailable      quota (429), overload (5xx), auth/config, network, or
- *                     an empty answer — retry later.
+ *  - format_rejected    Gemini refused the audio itself (400/415) — a bug in
+ *                       what we send (a mimetype it doesn't take), not an outage.
+ *  - model_unavailable  Gemini answered 404 for the configured model (retired or
+ *                       misspelled) — an operator fix, not a retry.
+ *  - unavailable        quota (429), overload (5xx), auth/config, network, or
+ *                       an empty answer — retry later.
  */
-export type VoiceFailureKind = 'format_rejected' | 'unavailable';
+export type VoiceFailureKind = 'format_rejected' | 'model_unavailable' | 'unavailable' | 'paused';
 
 export class VoiceTranscriptionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -63,6 +67,7 @@ export function geminiMimeTypeFor(mimeType: string): string {
  * else in the request varies per phone). Anything else is "try later".
  */
 export function classifyGeminiFailure(err: ApiError): VoiceFailureKind {
+  if (err.status === 404) return 'model_unavailable';
   return err.status === 400 || err.status === 415 ? 'format_rejected' : 'unavailable';
 }
 
@@ -79,7 +84,7 @@ export function classifyGeminiFailure(err: ApiError): VoiceFailureKind {
  *   before calling this function, or verify behavior empirically, since an
  *   unsupported mimetype will surface as a Gemini ApiError below.
  */
-export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabularyHint?: string): Promise<string> {
+export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabularyHint?: string, locationId: string | null = null): Promise<string> {
   const genai = getClient();
   const sentAs = geminiMimeTypeFor(mimeType);
   // Always logged: when a phone's format is rejected this line is the
@@ -91,25 +96,36 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabula
     : 'Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it.';
 
   try {
-    const response = await genai.models.generateContent({
-      model: voiceModel(),
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: instruction },
-            { inlineData: { mimeType: sentAs, data: buffer.toString('base64') } },
+    const response = await withAiBudget(
+      { locationId, feature: 'voice_transcribe', inputTokensEstimate: audioInputEstimate(buffer.length) + Math.ceil(instruction.length / 3) },
+      async () => {
+        const r = await genai.models.generateContent({
+          model: voiceModel(),
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: instruction },
+                { inlineData: { mimeType: sentAs, data: buffer.toString('base64') } },
+              ],
+            },
           ],
-        },
-      ],
-    });
+          config: { maxOutputTokens: MAX_OUTPUT_TOKENS.voice_transcribe, thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } },
+        });
+        return { value: r, usage: { inputTokens: r.usageMetadata?.promptTokenCount ?? null, outputTokens: billedOutputTokens(r.usageMetadata) } };
+      },
+    );
     const text = response.text?.trim();
     if (!text) {
       throw new VoiceTranscriptionError('Gemini returned an empty transcription.');
     }
     return text;
   } catch (err) {
+    if (err instanceof AiBudgetExceededError) {
+      throw new VoiceTranscriptionError(`AI spend cap reached (${err.limit}); no call made.`, err, 'paused');
+    }
     if (err instanceof ApiError) {
+      reportIfModelUnavailable('transcribe', err);
       const kind = classifyGeminiFailure(err);
       throw new VoiceTranscriptionError(
         `Transcription failed (${err.status ?? 'unknown'}, ${kind}, mime=${mimeType} sent-as=${sentAs}): ${err.message}`,

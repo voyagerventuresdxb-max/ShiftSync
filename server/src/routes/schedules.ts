@@ -8,7 +8,9 @@ import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from '../parsing/p
 import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
 import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { venueTimezoneFor } from '../lib/venueTime.js';
-import { parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
+import { AI_TEMPLATE_LABEL, parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
+import { getVisionProvider } from '../parsing/visionProvider.js';
+import { deterministicEscalationReason, ESCALATION_REASON_TEXT, type EscalationReason } from '../parsing/escalation.js';
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
 import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
@@ -108,21 +110,51 @@ async function extractPdfText(buffer: Buffer): Promise<string | null> {
 export const schedulesRouter = Router();
 
 /**
- * POST /api/schedules/upload
- * multipart/form-data: file=<xlsx|xls|csv>
- *
- * Parses + validates the sheet against the 3 master templates, resolves
- * rows against existing Role/User records for the location, and returns a
- * sanity-check preview. Nothing is written to the database at this stage.
- * The response includes a `batchId` to pass to the confirm step below.
- * Session-gated: locationId is derived from the caller's session.
+ * The deterministic grid parser the upload route uses. A test seam only: its data-loss gate
+ * (RosterExtractionAnomalyError) is defensive and no natural grid trips it any more, so the
+ * escalation tests substitute a parser that throws. Never set from production code.
  */
-schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.single('file'), async (req, res) => {
+let gridParser: typeof parseExcelGrid = parseExcelGrid;
+export function __setGridParserForTests(fn: typeof parseExcelGrid | null): void {
+  gridParser = fn ?? parseExcelGrid;
+}
+
+/** The manual path, named wherever AI reading can't help. */
+const MANUAL_PATH = 'You can also add staff by hand: People → Add staff member.';
+const AI_CONSENT_MESSAGE =
+  'To read it, ShiftSync needs to send the file to its AI reader, a third-party service outside the UAE. Nothing is sent unless you agree.';
+
+/** What happened to an escalation; returned on the preview so the review screen can say so. */
+interface EscalationOutcome {
+  reason: EscalationReason;
+  status: 'used' | 'needs_consent' | 'unavailable';
+  message: string;
+}
+
+function withManualPath(message: string): string {
+  return /by hand/i.test(message) ? message : `${message} ${MANUAL_PATH}`;
+}
+
+/**
+ * POST /api/schedules/upload
+ * multipart/form-data: file=<xlsx|xls|csv|pdf|image>, weekStart?=YYYY-MM-DD (a Monday),
+ * aiConsent?="true" (the manager agreed to send THIS file to the AI reader).
+ *
+ * The deterministic parsers always run first. The file goes to the vision provider only for
+ * one of the reasons in parsing/escalation.ts, only when a provider is configured, and only
+ * with `aiConsent` — without it the answer is a 422 `ai_consent_required` (nothing sent) or,
+ * when a local result exists, that result plus `escalation.status: 'needs_consent'`. The 5 MB
+ * cap and the once-per-venue-per-week allowance apply to every AI read. Nothing is written to
+ * the database here: the response is a preview with a `batchId` for the confirm step below.
+ * Manager/owner sessions only (like confirm): an AI read costs the venue money and allowance.
+ */
+schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRateLimiter, upload.single('file'), async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded. Attach it under the "file" field.' });
     }
+    const file = req.file;
 
     // Optional reference week for text/PDF rosters that use day names
     // ("Mon", "Friday") instead of explicit dates, and for grid rosters whose
@@ -132,239 +164,256 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
     const requestedWeekStart = String(req.body?.weekStart ?? '').trim();
     if (requestedWeekStart && !isMondayIso(requestedWeekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
     const weekStart = requestedWeekStart || currentWeekStart(new Date(), await venueTimezoneFor(locationId));
+    const aiConsent = String(req.body?.aiConsent ?? '') === 'true';
 
-    let parsed: { rows: ParsedShiftRow[]; issues: RowIssue[]; templateLabel: string | null };
+    let parsed: { rows: ParsedShiftRow[]; issues: RowIssue[]; templateLabel: string | null } | null = null;
     let anomalies: AnomalyRecord[] = [];
     let leaveRecords: LeaveRecord[] = [];
     let legend: { code: string; meaning: string }[] = [];
+    let escalation: EscalationOutcome | undefined;
 
-    if (isImage(req.file)) {
-      // Arbitrary layouts (screenshots, colour-coded grids, hand-made
-      // templates) — pass the raw image straight to the hosted Gemini
-      // vision model in a single call. No local OCR/geometry pre-pass — the
-      // model reads the matrix (staff column x day header row) directly off
-      // the pixels. See parseVision.ts for EU-region Vertex AI config.
-      const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
-      if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
+    const adopt = (result: ParsedVisionResult) => {
+      parsed = { rows: result.rows, issues: result.issues, templateLabel: result.templateLabel };
+      anomalies = result.anomalies;
+      leaveRecords = result.leaveRecords;
+      legend = result.legend;
+    };
+
+    /**
+     * Gate in front of an AI read that has NO local result to fall back on. Returns the 422 body
+     * to send, or null to proceed. With no provider configured nothing can be sent, so there is
+     * nothing to consent to: the caller's vision entry point answers with its own local fallback
+     * or `vision_unconfigured`.
+     */
+    const gateWithoutLocalResult = async (reason: EscalationReason) => {
+      if (!getVisionProvider()) return null;
+      if (!aiConsent) {
+        return { error: `${ESCALATION_REASON_TEXT[reason]} ${AI_CONSENT_MESSAGE}`, errorCode: 'ai_consent_required', escalationReason: reason };
+      }
+      const blockReason = await checkVisionFallbackAllowed(file.size, locationId);
+      return blockReason ? { error: withManualPath(blockReason), errorCode: 'vision_fallback_blocked' } : null;
+    };
+
+    /** Runs an AI read whose gate passed; records the weekly allowance only when the AI actually answered. */
+    const readWithAi = async (run: () => Promise<ParsedVisionResult>) => {
+      const result = await run();
+      if (result.templateLabel === AI_TEMPLATE_LABEL) await markVisionFallbackUsed(locationId);
+      return result;
+    };
+
+    /**
+     * Escalation of a SUCCESSFUL but suspect local result (ALL-CAPS venue, many empty roles):
+     * the local result stays unless the manager agreed and the AI read succeeds.
+     */
+    const maybeEscalate = async (local: ParsedVisionResult, run: () => Promise<ParsedVisionResult>) => {
+      const reason = deterministicEscalationReason(local);
+      if (!reason || !getVisionProvider()) return local;
+      if (!aiConsent) {
+        escalation = { reason, status: 'needs_consent', message: `${ESCALATION_REASON_TEXT[reason]} ${AI_CONSENT_MESSAGE}` };
+        return local;
+      }
+      const blockReason = await checkVisionFallbackAllowed(file.size, locationId);
+      if (blockReason) {
+        escalation = { reason, status: 'unavailable', message: blockReason };
+        return local;
+      }
       try {
-        const visionResult = await parseRosterImage(req.file.buffer, req.file.mimetype, req.file.originalname, weekStart);
-        parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
-        anomalies = visionResult.anomalies;
-        leaveRecords = visionResult.leaveRecords;
-        legend = visionResult.legend;
-        await markVisionFallbackUsed(locationId);
+        const ai = await readWithAi(run);
+        escalation = { reason, status: 'used', message: 'Read by the AI reader. Check every row before confirming.' };
+        return ai;
       } catch (err) {
-        if (err instanceof VisionIngestionError) {
-          return res.status(422).json({ error: err.message, errorCode: err.code });
-        }
+        if (!(err instanceof VisionIngestionError)) throw err;
+        escalation = { reason, status: 'unavailable', message: `${err.message} The built-in reader's result is shown instead.` };
+        return local;
+      }
+    };
+
+    /** The grid parser proved it dropped real data: AI reader (with consent), else a clear 422. */
+    const escalateExtractionAnomaly = async (
+      anomaly: RosterExtractionAnomalyError,
+      run: () => Promise<ParsedVisionResult>,
+    ): Promise<{ result: ParsedVisionResult } | { status: number; body: Record<string, unknown> }> => {
+      if (!getVisionProvider()) {
+        return { status: 422, body: { error: withManualPath(anomaly.message), errorCode: 'roster_extraction_anomaly' } };
+      }
+      const gate = await gateWithoutLocalResult('extraction_anomaly');
+      if (gate) return { status: 422, body: gate };
+      try {
+        const ai = await readWithAi(run);
+        escalation = { reason: 'extraction_anomaly', status: 'used', message: 'Read by the AI reader. Check every row before confirming.' };
+        return { result: ai };
+      } catch (err) {
+        if (err instanceof VisionIngestionError) return { status: 422, body: { error: withManualPath(err.message), errorCode: err.code } };
         throw err;
       }
-    } else if (isPdf(req.file)) {
+    };
+
+    const visionError = (err: unknown) => {
+      if (err instanceof VisionIngestionError) return res.status(422).json({ error: withManualPath(err.message), errorCode: err.code });
+      throw err;
+    };
+
+    if (isImage(file)) {
+      // Arbitrary layouts (screenshots, colour-coded grids, hand-made templates):
+      // nothing to parse locally, so this is the image_or_scan escalation.
+      const gate = await gateWithoutLocalResult('image_or_scan');
+      if (gate) return res.status(422).json(gate);
+      try {
+        adopt(await readWithAi(() => parseRosterImage(file.buffer, file.mimetype, file.originalname, weekStart, { locationId: req.user!.locationId })));
+      } catch (err) {
+        return visionError(err);
+      }
+    } else if (isPdf(file)) {
       // Check for a real, positioned text layer first (pdfjs-dist) — a
       // scanned/photographed PDF has none at all, and no amount of text
       // reconstruction can recover data that was never encoded as text.
-      const hasTextLayer = await hasPdfTextLayer(req.file.buffer);
+      const hasTextLayer = await hasPdfTextLayer(file.buffer);
+      const readPdfWithAi = (localFallback = true) => () =>
+        parseRosterImage(file.buffer, 'application/pdf', file.originalname, weekStart, { localFallback, locationId: req.user!.locationId });
 
-      let deterministicPdfResult: ParsedVisionResult | null = null;
       if (hasTextLayer) {
-        // PRIMARY path for a text-layer PDF: reconstruct the grid from
-        // real character positions (no network call, fully reproducible)
-        // and reuse the exact same deterministic interpreter as Excel/CSV.
-        const grid = await extractPdfGrid(req.file.buffer);
-        const gridResult = parseExcelGrid(grid, weekStart);
-        if (gridResult.templateLabel === 'Deterministic Grid Parser') {
-          deterministicPdfResult = gridResult;
-        }
-      }
-
-      if (deterministicPdfResult) {
-        parsed = { rows: deterministicPdfResult.rows, issues: deterministicPdfResult.issues, templateLabel: deterministicPdfResult.templateLabel };
-        anomalies = deterministicPdfResult.anomalies;
-        leaveRecords = deterministicPdfResult.leaveRecords;
-        legend = deterministicPdfResult.legend;
-      } else if (!hasTextLayer) {
-        // No text layer at all (scanned/photographed PDF) — try the local
-        // Docling sidecar before the hosted vision model (Docling is free
-        // and local; worth trying first when it might already produce a
-        // clean table). Deliberately scoped to ONLY this branch: evaluated
-        // against both permanent fixtures, Docling's layout model failed to
-        // detect any table region at all on a text-layer/borderless-grid
-        // PDF (Gattopardo — strictly worse than the deterministic parser
-        // above), but correctly structured a scanned no-text-layer roster
-        // (Bar des Pres, 22x9, ~47s). See doclingClient.ts and
-        // server/docling-sidecar/ for the evaluation.
-        let doclingResult: ParsedVisionResult | null = null;
+        // PRIMARY path for a text-layer PDF: reconstruct the grid from real
+        // character positions (no network call, fully reproducible) and reuse
+        // the exact same deterministic interpreter as Excel/CSV.
+        const grid = await extractPdfGrid(file.buffer);
+        let gridResult: ParsedVisionResult | null = null;
         try {
-          doclingResult = await parseScannedPdfViaDocling(req.file.buffer, req.file.originalname, weekStart);
+          gridResult = gridParser(grid, weekStart);
         } catch (err) {
-          if (err instanceof DoclingUnavailableError) {
-            // Sidecar not running/unreachable/timed out — not a hard
-            // failure, just fall through to the hosted vision model below.
-            doclingResult = null;
+          if (!(err instanceof RosterExtractionAnomalyError)) throw err;
+          const outcome = await escalateExtractionAnomaly(err, readPdfWithAi(false));
+          if ('status' in outcome) return res.status(outcome.status).json(outcome.body);
+          adopt(outcome.result);
+        }
+        if (gridResult && gridResult.templateLabel === 'Deterministic Grid Parser') {
+          adopt(await maybeEscalate(gridResult, readPdfWithAi(false)));
+        } else if (gridResult) {
+          // Text layer present but the grid parser didn't recognise the shape — try the
+          // line-oriented text parser (cheap, no API call), then the AI reader. Docling is
+          // NOT tried here: it has no demonstrated value on text-layer PDFs.
+          const text = await extractPdfText(file.buffer);
+          const textResult = text ? parseRosterText(text, weekStart) : null;
+          if (textResult && textResult.rows.length > 0) {
+            parsed = { rows: textResult.rows, issues: textResult.issues, templateLabel: 'PDF Text Roster' };
           } else {
-            throw err;
+            const gate = await gateWithoutLocalResult('unrecognized_layout');
+            if (gate) return res.status(422).json(gate);
+            try {
+              adopt(await readWithAi(readPdfWithAi()));
+            } catch (err) {
+              return visionError(err);
+            }
           }
         }
-
+      } else {
+        // No text layer at all (scanned/photographed PDF) — try the local Docling
+        // sidecar first (free and local; see doclingClient.ts for its evaluation),
+        // then the AI reader.
+        let doclingResult: ParsedVisionResult | null = null;
+        try {
+          doclingResult = await parseScannedPdfViaDocling(file.buffer, file.originalname, weekStart);
+        } catch (err) {
+          if (!(err instanceof DoclingUnavailableError)) throw err;
+        }
         if (doclingResult) {
           console.log(
             `[schedules] PDF resolved via Docling sidecar: ${doclingResult.rows.length} rows, ${doclingResult.anomalies.length} anomalies, ${doclingResult.leaveRecords.length} leave records.`,
           );
-        }
-
-        if (doclingResult) {
-          parsed = { rows: doclingResult.rows, issues: doclingResult.issues, templateLabel: doclingResult.templateLabel };
-          anomalies = doclingResult.anomalies;
-          leaveRecords = doclingResult.leaveRecords;
-          legend = doclingResult.legend;
+          adopt(doclingResult);
         } else {
-          const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
-          if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
+          const gate = await gateWithoutLocalResult('image_or_scan');
+          if (gate) return res.status(422).json(gate);
           try {
-            // Gemini/Vertex accepts PDF bytes directly (unlike the old
-            // Ollama path, which needed a rasterized PNG because its image
-            // loader can't decode a PDF container) — send the original file
-            // straight through, no rasterization step needed.
-            const visionResult = await parseRosterImage(req.file.buffer, 'application/pdf', req.file.originalname, weekStart);
-            parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
-            anomalies = visionResult.anomalies;
-            leaveRecords = visionResult.leaveRecords;
-            legend = visionResult.legend;
-            await markVisionFallbackUsed(locationId);
+            adopt(await readWithAi(readPdfWithAi()));
           } catch (err) {
-            if (err instanceof VisionIngestionError) {
-              return res.status(422).json({ error: err.message, errorCode: err.code });
-            }
-            throw err;
-          }
-        }
-      } else {
-        // Text layer present but the deterministic grid parser couldn't
-        // make sense of it — try the line-oriented text parser (cheap, no
-        // API call), then the hosted vision model. Docling is NOT tried
-        // here — it has no demonstrated value on text-layer PDFs (see the
-        // branch above) and one clear negative data point.
-        const text = await extractPdfText(req.file.buffer);
-        const textResult = text ? parseRosterText(text, weekStart) : null;
-        if (textResult && textResult.rows.length > 0) {
-          parsed = { rows: textResult.rows, issues: textResult.issues, templateLabel: 'PDF Text Roster' };
-        } else {
-          const blockReason = await checkVisionFallbackAllowed(req.file.size, locationId);
-          if (blockReason) return res.status(422).json({ error: blockReason, errorCode: 'vision_fallback_blocked' });
-          try {
-            const visionResult = await parseRosterImage(req.file.buffer, 'application/pdf', req.file.originalname, weekStart);
-            parsed = { rows: visionResult.rows, issues: visionResult.issues, templateLabel: visionResult.templateLabel };
-            anomalies = visionResult.anomalies;
-            leaveRecords = visionResult.leaveRecords;
-            legend = visionResult.legend;
-            await markVisionFallbackUsed(locationId);
-          } catch (err) {
-            if (err instanceof VisionIngestionError) {
-              return res.status(422).json({ error: err.message, errorCode: err.code });
-            }
-            throw err;
+            return visionError(err);
           }
         }
       }
     } else {
       try {
-        const workbook = parseWorkbookBuffer(req.file.buffer, req.file.originalname);
+        const workbook = parseWorkbookBuffer(file.buffer, file.originalname);
         parsed = { rows: workbook.rows, issues: workbook.issues, templateLabel: workbook.templateLabel };
       } catch (err) {
-        if (err instanceof TemplateDetectionError) {
-          // Doesn't match any of the 3 long-format ("one row per shift")
-          // templates — likely a grid-format roster (day-of-week columns,
-          // merged section headers). Try the deterministic grid parser
-          // first (no network call, fully reproducible) — it's the
-          // PRIMARY path for this shape now. Only fall back to the
-          // Gemini grid-text engine as a last resort, for layouts the
-          // deterministic parser genuinely doesn't recognize (e.g.
-          // days-as-rows, or headers it can't locate at all) — this keeps
-          // the format coverage already validated for those shapes
-          // instead of hard-rejecting the upload.
-          const grid = buildMergeExpandedGrid(req.file.buffer, req.file.originalname);
-          // Every parser in this app only ever reads the workbook's first
-          // sheet (see listOtherSheetNames' own doc comment) — a
-          // multi-tab file (per-outlet, per-week archive, a notes tab
-          // first) can have its real roster sitting on a tab that's never
-          // looked at, with no indication of that in an otherwise
-          // confidently-successful result. Surfaced unconditionally
-          // whenever more than one sheet exists, regardless of whether
-          // the first sheet's own parse succeeds — the manager, not the
-          // app, is the one who can tell whether the other tabs matter.
-          const otherSheetNames = listOtherSheetNames(req.file.buffer, req.file.originalname);
-          const ignoredSheetsAnomaly: AnomalyRecord | null =
-            otherSheetNames.length > 0
-              ? {
-                  employeeName: null,
-                  date: null,
-                  rawText: otherSheetNames.join(', '),
-                  reason:
-                    `This file has ${otherSheetNames.length} other sheet(s) that were not read (${otherSheetNames.join(', ')}) — ` +
-                    `only the first sheet was parsed, and no rows were extracted from the other sheet(s) listed above ` +
-                    `(this is a diagnostic, not an automatic recovery). If your roster data is on a different tab, move ` +
-                    `or copy it to the first tab and re-upload.`,
-                  confidence: 0,
-                  rowNumber: null,
-                  kind: 'ignored_workbook_sheets',
-                }
-              : null;
-          const deterministicResult = parseExcelGrid(grid, weekStart);
-          const deterministicRecognizedShape = deterministicResult.templateLabel === 'Deterministic Grid Parser';
+        if (!(err instanceof TemplateDetectionError)) throw err;
+        // Doesn't match any of the 3 long-format ("one row per shift") templates —
+        // likely a grid-format roster (day-of-week columns, merged section headers).
+        // The deterministic grid parser is the PRIMARY path for this shape; the AI
+        // reader is only an escalation (see parsing/escalation.ts).
+        const grid = buildMergeExpandedGrid(file.buffer, file.originalname);
+        // Every parser in this app only ever reads the workbook's first sheet —
+        // surfaced unconditionally whenever more than one sheet exists, since only
+        // the manager can tell whether the other tabs matter.
+        const otherSheetNames = listOtherSheetNames(file.buffer, file.originalname);
+        const ignoredSheetsAnomaly: AnomalyRecord | null =
+          otherSheetNames.length > 0
+            ? {
+                employeeName: null,
+                date: null,
+                rawText: otherSheetNames.join(', '),
+                reason:
+                  `This file has ${otherSheetNames.length} other sheet(s) that were not read (${otherSheetNames.join(', ')}) — ` +
+                  `only the first sheet was parsed, and no rows were extracted from the other sheet(s) listed above ` +
+                  `(this is a diagnostic, not an automatic recovery). If your roster data is on a different tab, move ` +
+                  `or copy it to the first tab and re-upload.`,
+                confidence: 0,
+                rowNumber: null,
+                kind: 'ignored_workbook_sheets',
+              }
+            : null;
+        const withSheetsNote = (result: ParsedVisionResult): ParsedVisionResult =>
+          ignoredSheetsAnomaly ? { ...result, anomalies: [ignoredSheetsAnomaly, ...result.anomalies] } : result;
+        const readGridWithAi = (localFallback = true) => () => parseRosterGrid(grid, file.originalname, weekStart, { localFallback, locationId: req.user!.locationId });
 
-          if (deterministicRecognizedShape) {
-            parsed = { rows: deterministicResult.rows, issues: deterministicResult.issues, templateLabel: deterministicResult.templateLabel };
-            anomalies = ignoredSheetsAnomaly ? [ignoredSheetsAnomaly, ...deterministicResult.anomalies] : deterministicResult.anomalies;
-            leaveRecords = deterministicResult.leaveRecords;
-            legend = deterministicResult.legend;
-          } else {
-            try {
-              const gridResult = await parseRosterGrid(grid, req.file.originalname, weekStart);
-              parsed = { rows: gridResult.rows, issues: gridResult.issues, templateLabel: gridResult.templateLabel };
-              anomalies = ignoredSheetsAnomaly ? [ignoredSheetsAnomaly, ...gridResult.anomalies] : gridResult.anomalies;
-              leaveRecords = gridResult.leaveRecords;
-              legend = gridResult.legend;
-            } catch (gridErr) {
-              if (gridErr instanceof VisionIngestionError) {
-                return res.status(422).json({ error: gridErr.message, errorCode: gridErr.code });
-              }
-              if (gridErr instanceof TemplateDetectionError) {
-                return res.status(422).json({ error: gridErr.message });
-              }
-              throw gridErr;
-            }
+        let deterministicResult: ParsedVisionResult | null = null;
+        try {
+          deterministicResult = gridParser(grid, weekStart);
+        } catch (gridErr) {
+          if (!(gridErr instanceof RosterExtractionAnomalyError)) throw gridErr;
+          const outcome = await escalateExtractionAnomaly(gridErr, readGridWithAi(false));
+          if ('status' in outcome) return res.status(outcome.status).json(outcome.body);
+          adopt(withSheetsNote(outcome.result));
+        }
+
+        if (deterministicResult && deterministicResult.templateLabel === 'Deterministic Grid Parser') {
+          adopt(withSheetsNote(await maybeEscalate(deterministicResult, readGridWithAi(false))));
+        } else if (deterministicResult) {
+          // A layout the grid parser genuinely doesn't recognise (e.g. days-as-rows).
+          const gate = await gateWithoutLocalResult('unrecognized_layout');
+          if (gate) return res.status(422).json(gate);
+          try {
+            adopt(withSheetsNote(await readWithAi(readGridWithAi())));
+          } catch (gridErr) {
+            if (gridErr instanceof TemplateDetectionError) return res.status(422).json({ error: gridErr.message });
+            return visionError(gridErr);
           }
-        } else {
-          throw err;
         }
       }
     }
 
+    const result = parsed as { rows: ParsedShiftRow[]; issues: RowIssue[]; templateLabel: string | null } | null;
+    if (!result) throw new Error('upload: no parse result was produced');
+
     // For image/VLM uploads, an all-leave week (or a sheet where every cell
     // needed manager review) is a valid, non-error outcome — anomalies and
     // leaveRecords still carry useful data even with zero workable rows.
-    // Only hard-reject when the model produced nothing at all (no rows, no
-    // anomalies, no leave records, and no parse issues to surface).
-    if (
-      parsed.rows.length === 0 &&
-      anomalies.length === 0 &&
-      leaveRecords.length === 0 &&
-      parsed.issues.length === 0
-    ) {
+    // Only hard-reject when nothing at all came out (no rows, no anomalies,
+    // no leave records, and no parse issues to surface).
+    if (result.rows.length === 0 && anomalies.length === 0 && leaveRecords.length === 0 && result.issues.length === 0) {
       return res.status(422).json({
-        error: 'No valid shift rows could be parsed from this file.',
-        templateDetected: parsed.templateLabel,
-        issues: parsed.issues,
+        error: withManualPath('No valid shift rows could be parsed from this file.'),
+        templateDetected: result.templateLabel,
+        issues: result.issues,
       });
     }
 
-    const { previewRows, summary } = await resolveRowsAgainstDatabase(prisma, locationId, parsed.rows);
+    const { previewRows, summary } = await resolveRowsAgainstDatabase(prisma, locationId, result.rows);
     const batchId = uploadCache.put(locationId, null, previewRows);
 
     return res.status(200).json({
       batchId,
-      templateDetected: parsed.templateLabel,
-      parseIssues: parsed.issues, // rows dropped before DB resolution (bad dates/times/blank fields)
+      templateDetected: result.templateLabel,
+      parseIssues: result.issues, // rows dropped before DB resolution (bad dates/times/blank fields)
       summary,
       // VLM-path metadata anomaly fallback: unresolvable cells/codes and
       // non-working-day records, for the manager-review panel. Empty arrays
@@ -372,6 +421,8 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
       anomalies,
       leaveRecords,
       legend,
+      // Present when the AI reader was used, or would help but needs consent / is unavailable.
+      ...(escalation ? { escalation } : {}),
       preview: previewRows.map((r) => ({
         rowNumber: r.rowNumber,
         employeeName: r.employeeName,
@@ -388,17 +439,12 @@ schedulesRouter.post('/upload', requireSession, rosterUploadRateLimiter, upload.
     });
   } catch (err) {
     if (err instanceof RosterExtractionAnomalyError) {
-      // A day-grid shape WAS recognized but real shift data was dropped
-      // during classification (e.g. an ALL-CAPS staff row misread as a
-      // section header) — a loud, visible failure for the manager to see
-      // and retry/escalate, not a silent 200-success with missing rows.
-      return res.status(422).json({ error: err.message, errorCode: 'roster_extraction_anomaly' });
+      // Defensive: every grid-parse site above handles this itself.
+      return res.status(422).json({ error: withManualPath(err.message), errorCode: 'roster_extraction_anomaly' });
     }
     if (err instanceof MalformedPdfError) {
       // 0 bytes or bytes that aren't a PDF at all (issue #19) — a bad
-      // upload, not a server fault. Same 422 treatment as every other
-      // unparseable-input case in this route (VisionIngestionError,
-      // TemplateDetectionError, RosterExtractionAnomalyError above).
+      // upload, not a server fault.
       return res.status(422).json({
         error: "This file doesn't look like a valid PDF — please check it opens correctly and re-upload.",
         errorCode: 'malformed_pdf',
