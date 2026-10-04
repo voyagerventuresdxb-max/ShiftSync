@@ -86,20 +86,27 @@ change; don't deploy it from the banner — use step 5.
 
 Leave `VLM_MODEL`, `VLM_FALLBACK_MODEL` unset unless you need to change the defaults.
 
-## 5. Check it from your laptop, then deploy
+## 5. Deploy, then check it inside the service
 
-1. Update the linked checkout and run the check with production's variables. It runs on your
-   laptop and prints no credential material. It goes through the spend cap like every other call,
-   so it uses production's database connection to record the one call (token counts and estimated
-   cost only):
+`vlm:check` goes through the spend cap like every other call, so it must reach production's
+database to record its one call (token counts and estimated cost only). Production's database is
+on Railway's private network, so a `railway run npm run vlm:check` from your laptop can't reach it
+and always ends `FAIL (paused)` with an `[ai-budget] spend ledger unreachable` line — the cap
+failing closed, not a credentials problem. Run it inside the service instead:
+
+1. Deploy the API the documented way ([`railway-deploy-procedure.md`](railway-deploy-procedure.md) §2: `railway redeploy --from-source`, never `railway up`), so the new variables are live. In the deploy log there must be **no** `[vision] … client setup failed` line.
+2. Open a shell in the running service and run the check there. `railway ssh` needs an SSH key on
+   your Railway account (Account settings → SSH keys). The check prints no credential material.
 
    ```powershell
    cd C:\dev\ShiftSync-deploy
-   git fetch origin
-   git checkout --detach origin/master
-   npm install
-   npx -y @railway/cli@5.63.1 run npm run vlm:check
+   npx -y @railway/cli@5.63.1 ssh
+   # then, inside the service:
+   npm run vlm:check
    ```
+
+   Without an SSH key, skip this step: the photo test in §6 exercises the same provider through
+   the same cap.
 
    Expect: `provider=vertex-gemini model=gemini-3.6-flash … region=eu`, then
    `answered by model=… in …ms; tokens in/out=…; shift rows read=4 (expected 4)` and
@@ -110,11 +117,9 @@ Leave `VLM_MODEL`, `VLM_FALLBACK_MODEL` unset unless you need to change the defa
    - `FAIL (busy, HTTP 429)` → the quota from step 2 is too low or exhausted; wait a minute.
    - `FAIL (paused)` → the in-app cap refused the call before anything was sent: the month's budget
      or today's call limit is reached, or (with an `[ai-budget] spend ledger unreachable` line) the
-     database can't be reached from your laptop. In the last case, run the check inside the service
-     instead: `npx -y @railway/cli@5.63.1 ssh`, then `npm run vlm:check` there.
-   - Do **not** run it through `node scripts/with-branch-schema.mjs` here: that wrapper is for dev
-     worktrees and would point production's connection at a dev schema.
-2. Deploy the API the documented way ([`railway-deploy-procedure.md`](railway-deploy-procedure.md) §2: `railway redeploy --from-source`, never `railway up`). In the deploy log there must be **no** `[vision] … client setup failed` line.
+     database couldn't be reached — you ran it outside the service.
+   - Do **not** run it through `node scripts/with-branch-schema.mjs` against production: that
+     wrapper is for dev worktrees and would point production's connection at a dev schema.
 
 ## 6. Photo-roster test on a phone
 

@@ -10,11 +10,13 @@
  * (it records one call's token counts and estimated cost, nothing else) and is refused with
  * FAIL (paused) if the monthly budget or daily call limit is reached or the database can't be
  * reached. Locally, run it through the per-branch wrapper so it uses this branch's schema:
- * `node scripts/with-branch-schema.mjs "tsx server/scripts/vlm-check.ts"`. Never wrap it under
- * `railway run`: the wrapper would point production's connection at a dev schema.
+ * `node scripts/with-branch-schema.mjs "tsx server/scripts/vlm-check.ts"`. Never wrap it against
+ * production: the wrapper would point production's connection at a dev schema.
  *
  * Exit codes: 0 pass, 1 fail, 2 not configured.
- * Production check: `railway run npm run vlm:check` (see docs/vlm-go-live.md).
+ * Production check: inside the service (`railway ssh`, then `npm run vlm:check`) — production's
+ * database is private, so `railway run` from a laptop can't reach the ledger and fails closed
+ * (see docs/vlm-go-live.md §5).
  */
 import { config as loadDotenv } from 'dotenv';
 import { readFileSync } from 'node:fs';
