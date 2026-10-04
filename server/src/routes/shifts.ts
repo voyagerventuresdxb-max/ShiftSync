@@ -9,6 +9,7 @@ import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
+import { onBehalfUserId } from '../lib/onBehalf.js';
 
 export const shiftsRouter = Router();
 
@@ -113,10 +114,8 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     const breakMinutes = Number(req.body?.breakMinutes ?? 0);
     const briefingNote = req.body?.briefingNote ? String(req.body.briefingNote).trim() : null;
     const sidework = Array.isArray(req.body?.sidework) ? req.body.sidework.map(String) : [];
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    const createdById = await onBehalfUserId(req, res, 'createdById');
+    if (!createdById) return;
 
     if (!roleId) return res.status(400).json({ error: 'roleId is required.' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date is required, as YYYY-MM-DD.' });
@@ -202,10 +201,8 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
     }
 
-    const actorId =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    const actorId = await onBehalfUserId(req, res, 'actorId');
+    if (!actorId) return;
     const updated = await withAuditedTransaction(
       prisma,
       (tx) => updateShift(id, data as Prisma.ShiftUpdateInput, tx),
@@ -224,10 +221,8 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
-    const actorId =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    const actorId = await onBehalfUserId(req, res, 'actorId');
+    if (!actorId) return;
     await withAuditedTransaction(
       prisma,
       async (tx) => {
@@ -255,10 +250,8 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
 shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    const createdById = await onBehalfUserId(req, res, 'createdById');
+    if (!createdById) return;
     type BulkShiftRow = { roleId?: unknown; userId?: unknown; date: string; start: string; end: string; breakMinutes?: number };
     const rows = (Array.isArray(req.body?.shifts) ? req.body.shifts : []) as BulkShiftRow[];
     if (rows.length === 0) return res.status(400).json({ error: 'shifts must be a non-empty array.' });
@@ -331,10 +324,8 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     // RotaPublish is keyed on the Monday; a non-Monday would publish a
     // misaligned 7 days and leave an orphan publish row no status read finds.
     if (!isMondayIso(weekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
-    const publishedById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.publishedById ? String(req.body.publishedById).trim() : '') || req.user!.id;
+    const publishedById = await onBehalfUserId(req, res, 'publishedById');
+    if (!publishedById) return;
 
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const result = await publishRota({ locationId, weekStart: start, publishedById });
