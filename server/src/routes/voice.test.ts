@@ -281,14 +281,16 @@ test('POST /api/voice/execute: REQUEST_SWAP from a STAFF session creates a real 
   const target = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task6-test__ request-swap target', systemRole: 'STAFF' },
   });
+  // A shift a week from now: its week's cover-request window (Wednesday 17:00 of that week) is still open.
+  const day = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
   const shift = await prisma.shift.create({
     data: {
       locationId: location!.id,
       roleId: role!.id,
       userId: requester.id,
-      date: new Date('2026-09-03T00:00:00.000Z'),
-      startTime: new Date('2026-09-03T09:00:00.000Z'),
-      endTime: new Date('2026-09-03T17:00:00.000Z'),
+      date: new Date(`${day}T00:00:00.000Z`),
+      startTime: new Date(`${day}T09:00:00.000Z`),
+      endTime: new Date(`${day}T17:00:00.000Z`),
       status: 'PUBLISHED',
     },
   });

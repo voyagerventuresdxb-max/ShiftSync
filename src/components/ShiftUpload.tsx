@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { motion } from 'motion/react';
+import { Link } from 'react-router-dom';
 import { CheckCircle2 } from 'lucide-react';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
@@ -14,7 +15,7 @@ import {
 
 const ACCEPTED = '.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp';
 
-type Phase = 'idle' | 'uploading' | 'preview' | 'confirming' | 'done' | 'error';
+type Phase = 'idle' | 'uploading' | 'consent' | 'preview' | 'confirming' | 'done' | 'error';
 
 interface Props {
   /** Optional id of the manager committing the roster (audit trail). */
@@ -54,25 +55,40 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
     skippedCount: number;
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The file being read, kept so the manager can say "yes, send it to the AI reader" without picking it again.
+  const fileRef = useRef<File | null>(null);
+  const [consentMessage, setConsentMessage] = useState<string | null>(null);
 
   const handleFile = useCallback(
-    async (file: File) => {
+    async (file: File, aiConsent = false) => {
+      fileRef.current = file;
       setError(null);
+      setConsentMessage(null);
       setSessionExpired(false);
       setConfirmResult(null);
       setFileName(file.name);
       setPhase('uploading');
       try {
-        const res = await uploadRoster(session!.token, file);
+        const res = await uploadRoster(session!.token, file, { aiConsent });
         setData(res);
         setPhase('preview');
       } catch (err) {
+        // Nothing has been sent anywhere yet: ask before the file goes to the third-party AI reader.
+        if (err instanceof ApiError && err.errorCode === 'ai_consent_required') {
+          setConsentMessage(err.message);
+          setPhase('consent');
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Upload failed.');
         setPhase('error');
       }
     },
     [session],
   );
+
+  const sendToAiReader = useCallback(() => {
+    if (fileRef.current) void handleFile(fileRef.current, true);
+  }, [handleFile]);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -131,6 +147,8 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
     setSessionExpired(false);
     setConfirmResult(null);
     setFileName(null);
+    setConsentMessage(null);
+    fileRef.current = null;
     if (inputRef.current) inputRef.current.value = '';
   }, []);
 
@@ -179,7 +197,8 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
           </p>
           <p className="dropzone-sub">.xlsx · .xls · .csv · .pdf · .png · .jpg · .webp — up to 10MB</p>
           <p className="dropzone-sub">
-            Image and scanned-PDF rosters are read by a third-party AI vision service outside the UAE (max 5MB, once per venue per week) — Excel/CSV/text-PDF rosters are never sent anywhere.
+            Spreadsheets and text PDFs are read on ShiftSync's own server. Photos, scans and layouts it can't read can go to a
+            third-party AI reader outside the UAE — only after you agree, each time (max 5MB, once per venue per week).
           </p>
         </div>
       ) : null}
@@ -202,6 +221,34 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
           <button className="btn btn-ghost" onClick={reset}>
             Try another file
           </button>
+        </div>
+      )}
+
+      {phase === 'consent' && consentMessage && (
+        <div className="error-block" role="alertdialog" aria-labelledby="ai-consent-text" data-testid="ai-consent-panel">
+          <p id="ai-consent-text">{consentMessage}</p>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary" onClick={sendToAiReader} data-testid="ai-consent-send">
+              Send to the AI reader
+            </button>
+            <button className="btn btn-ghost" onClick={reset}>
+              Choose another file
+            </button>
+          </div>
+          <p className="hint">
+            Or add staff by hand: <Link to="/people">People → Add staff member</Link>.
+          </p>
+        </div>
+      )}
+
+      {phase === 'preview' && data?.escalation && (
+        <div className="hint" role="status" data-testid="escalation-banner" data-status={data.escalation.status}>
+          <p>{data.escalation.message}</p>
+          {data.escalation.status === 'needs_consent' && (
+            <button className="btn btn-ghost" onClick={sendToAiReader} data-testid="escalation-reread">
+              Re-read with the AI reader
+            </button>
+          )}
         </div>
       )}
 
