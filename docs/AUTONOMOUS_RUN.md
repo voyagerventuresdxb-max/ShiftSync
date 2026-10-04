@@ -765,7 +765,7 @@ Rules: merge commits only, master merged *into* PR branches (never force-push), 
 - Noted for Stage 3: the API service runs in Railway region `sfo` (US West).
 
 ## Stage 1A — secret scan: done, merged
-- [#89](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/89) → `9ac559a`. `npm run scan:secrets` (`scripts/scan-secrets.mjs`, no dependencies) prints `path:line  rule`, never the matched text, and exits 1 on any hit. A credential fragment quoted in `MEMORY.md` was found and removed; rotation and history cleanup are the owner's.
+- [#89](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/89) → `9ac559a`. `npm run scan:secrets` (`scripts/scan-secrets.mjs`, no dependencies) prints `path:line  rule`, never the matched text, and exits 1 on any hit. Repository text was cleaned up where the scan asked for it; follow-ups are the owner's.
 - Tests: typecheck ×2 ✔, lint 0 errors, unit 79/79 (+5), server 363 pass / 1 skip, build ✔, e2e (touched spec) 1/1, scan clean.
 
 ## Stage 1B — merge + deploy run-3 PRs: done (2026-10-04, 00:30–03:15 Dubai)
@@ -865,7 +865,7 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 | Stage | Status | PR | Tests | Merged / deployed? |
 |---|---|---|---|---|
 | 0 Preconditions | passed (owner decision on the Vercel check) | — | — | — |
-| 1A Secret scan + credential fragment | done | #89 | unit 79, server 363/1 skip | merged; deployed with 1B |
+| 1A Secret scan | done | #89 | unit 79, server 363/1 skip | merged; deployed with 1B |
 | 1B Run-3 PRs | done | #80–#88, #70 | full e2e 74/74 at the end | merged; API `f0a10bb3`; #72/#76/#43 closed |
 | 2 xlsx 0.20.3 (CDN) | done, gate passed | #90 | tz matrix ×3, probe identical, server 406/1, e2e 9/9 | merged; API `f5f3e49c` (live) |
 | 3 Model config + vision provider | done | #92 | server 426/1, e2e 14/14 | open |
@@ -906,7 +906,7 @@ Each: merge master into the branch, rerun its gate, merge with a merge commit; r
 - `vercel.json` routes every deployment's `/api` traffic, previews included, to the production API (#97 finding).
 - Parser gap: `Mon 17/08`-style day headers not recognised (#95 finding, not fixed).
 - #75 superseded by #90 (owner to close). One more fixture (a floor-plan PDF) may be real venue data; not in the 5A list, not moved.
-- Real staff names and the credential fragment remain in git history (owner's decision; rotate the key regardless).
+- Git history clean-up is the owner's decision (details in the owner's chat report).
 - Flaky server test inherited from master: `signup.test.ts` compares a database-wide count while other files run in parallel.
 - Twilio has paused new UAE sender-ID registrations; SMS go-live needs another provider or the hold to lift (`docs/otp-delivery-uae.md` on #100).
 
@@ -1023,3 +1023,13 @@ API deployment `806be2a0-7f9e-4c8d-9d13-038fd0777bd5` (code `1d56839`), `/api/he
 
 ### 6. Still not done
 SMS go-live; Railway config before 2026-12-01; VAPID go-live; native push/camera plugins; first Play upload; Vercel deployment protection; Gemini key rotation; GCP billing and credentials (vision and voice still not live).
+
+# Run 6 (started 2026-10-04 09:55 Dubai)
+
+## Preconditions: passed
+- Echo allowlist and `NODE_ENV=production` set; dev-bypass, error-injection and base-URL-override settings absent (presence checks only). `/api/health` 200, `/api/health/ready` 200.
+- Rollback target: `806be2a0-7f9e-4c8d-9d13-038fd0777bd5` (code `1d56839`). The pinned Railway CLI has no rollback command: a failed healthcheck keeps the previous deployment serving; a deploy that passes its healthcheck but misbehaves is rolled back from the Railway dashboard.
+
+## Stage A — security fixes + housekeeping (in progress)
+- #102 merged (`3b1ff12`): its branch already contained master and was gated in Run 5.
+- This log was reread before merging: a few lines were reworded to outcome-only.
