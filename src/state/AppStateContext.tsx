@@ -10,6 +10,7 @@ import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShift
 import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
+import { isNetworkFailure, loadOffline, saveOffline } from '../lib/offlineCache';
 
 /**
  * Shared UI vocabulary (role/shift-type labels) plus a compliance ruleset —
@@ -75,6 +76,8 @@ interface AppStateValue {
   initialScheduleLoading: boolean;
   /** True when the most recent weekShifts fetch failed — distinct from `initialScheduleLoading`, which only covers the first load. Lets SchedulingRoute tell "offline, nothing cached for this week" apart from a genuine "no staff parsed yet" empty state. */
   scheduleLoadFailed: boolean;
+  /** Set when the shown week is a staff member's saved offline copy (the live fetch failed for lack of network): when it was saved. Null while the week is live. */
+  scheduleOfflineSince: string | null;
   swapRequests: SwapRequest[];
   /** True until the first swap-requests fetch (success or failure) settles — same "initial load only" shape as `initialScheduleLoading`, for ApprovalsPanel. */
   swapRequestsLoading: boolean;
@@ -117,6 +120,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const { session } = useIdentity();
   const [anonymousVenueId, setAnonymousVenueId] = useState<string | null>(() => loadBoundVenue());
   const locationId = session?.user.locationId ?? anonymousVenueId;
+  // A staff member's published weeks are kept as their offline copy (lib/offlineCache.ts).
+  const offlineUserId = session?.user.systemRole === 'STAFF' ? session.user.id : null;
   const bindAnonymousVenue = useCallback((id: string) => {
     saveBoundVenue(id);
     setAnonymousVenueId(id);
@@ -194,6 +199,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [swapRequestsLoading, setSwapRequestsLoading] = useState(true);
   const [swapRequestsLoadFailed, setSwapRequestsLoadFailed] = useState(false);
   const [scheduleLoadFailed, setScheduleLoadFailed] = useState(false);
+  const [scheduleOfflineSince, setScheduleOfflineSince] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
@@ -232,8 +238,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     try {
       const dtos = await fetchWeekShifts(locationId, weekStart);
       if (seq !== reqSeqRef.current) return;
-      setWeekShifts(
-        dtos.map((s) => ({
+      const shifts: Shift[] = dtos.map((s) => ({
           id: s.id,
           employeeId: s.employeeId ?? `open-${s.id}`,
           date: s.date,
@@ -245,11 +250,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           status: s.status,
           briefingNote: s.briefingNote ?? undefined,
           sidework: s.sidework,
-        })),
-      );
+        }));
+      setWeekShifts(shifts);
       loadedWeekShiftsWeekRef.current = targetWeek;
       setScheduleLoadFailed(false);
-    } catch {
+      setScheduleOfflineSince(null);
+      if (offlineUserId) {
+        saveOffline(offlineUserId, `rotaWeek.${targetWeek}`, { locationId, shifts: shifts.filter((s) => s.status === 'published') });
+      }
+    } catch (err) {
       // A stale failure is discarded for the same reason a stale success is:
       // it must not clear a newer week's freshly-loaded shifts.
       if (seq !== reqSeqRef.current) return;
@@ -258,8 +267,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // We hold no valid cached data for THIS week at all (first load of
         // it, or whatever's in `weekShifts` is leftover from a different
         // week) — leaving it in place would show the wrong week's shifts
-        // under this week's header, so clearing is the only safe option.
-        setWeekShifts([]);
+        // under this week's header, so clearing is the only safe option —
+        // unless this staff member has a saved copy of this very week and the
+        // network is the reason: then that copy is shown, flagged as offline.
+        const cached = offlineUserId && isNetworkFailure(err) ? loadOffline<{ locationId: string; shifts: Shift[] }>(offlineUserId, `rotaWeek.${targetWeek}`) : null;
+        if (cached && cached.data.locationId === locationId) {
+          setWeekShifts(cached.data.shifts);
+          loadedWeekShiftsWeekRef.current = targetWeek;
+          setScheduleOfflineSince(cached.savedAt);
+        } else {
+          setWeekShifts([]);
+          setScheduleOfflineSince(null);
+        }
       }
       // Else: the failure is for the SAME week already on screen (e.g. a
       // transient offline blip) — the currently-displayed data is still
@@ -271,11 +290,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // `setState(false)` when already `false` is a no-op re-render.
       if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
-  }, [weekStart, locationId]);
+  }, [weekStart, locationId, offlineUserId]);
 
   useEffect(() => {
     void refetchWeekShifts();
   }, [refetchWeekShifts]);
+
+  // A saved offline copy is on screen: fetch the live week as soon as the device is back online.
+  useEffect(() => {
+    if (!scheduleOfflineSince) return;
+    const onOnline = () => void refetchWeekShifts();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [scheduleOfflineSince, refetchWeekShifts]);
 
   const mergedRoster: Roster = useMemo(() => {
     const withCommitted = mergeCommitted(roster, committed);
@@ -571,6 +598,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       mergedRoster,
       initialScheduleLoading,
       scheduleLoadFailed,
+      scheduleOfflineSince,
       swapRequests,
       swapRequestsLoading,
       swapRequestsLoadFailed,
@@ -604,6 +632,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       mergedRoster,
       initialScheduleLoading,
       scheduleLoadFailed,
+      scheduleOfflineSince,
       swapRequests,
       swapRequestsLoading,
       swapRequestsLoadFailed,
