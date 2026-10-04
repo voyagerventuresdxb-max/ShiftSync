@@ -89,6 +89,8 @@ Not configurable by environment:
 |---|---|---|---|---|
 | `E2E_RUN_ID` | Run id. Seeds this run's echo-phone block and the file that counts which phones were handed out. | **must be absent** (test only) | `playwright.config.ts` sets it (`??=` `Date.now()`) | `playwright.config.ts:7`, `e2e/helpers.ts:17` |
 | `E2E_ECHO_PHONES` | This run's pool of 300 `+97156…` numbers. Passed to the API as `ECHO_ALLOWED_PHONES` and handed out by `nextEchoPhone()`. | **must be absent** | set by `playwright.config.ts` | `playwright.config.ts:10`, `e2e/helpers.ts:17` |
+| `PUSH_TRANSPORT` | `record`: push sends go to an in-memory outbox (`GET /api/dev/push-outbox`, mounted only then) instead of a push service, and no VAPID key is needed or served. Lets e2e specs check who was notified with what. | **must be absent** — any value refuses boot (§5) | unset (real delivery when VAPID is set) | `server/src/lib/push.ts`; set by `playwright.config.ts` for the e2e API |
+| `E2E_LIVE` | Set by `npm run test:e2e:live`: runs only the `@live`-tagged specs (real external services). Normal runs exclude `@live` (`grepInvert`). | **must be absent** | unset | `playwright.config.ts` |
 | `ALLOW_DEV_OTP_ECHO`, `ECHO_ALLOWED_PHONES`, `ALLOW_DEV_ERROR_INJECTION` | Set on the API that Playwright starts (`webServer.env`). An API that is already running and gets reused keeps its own values and won't echo this run's phones. | see §1 | set by `playwright.config.ts` | `playwright.config.ts:56` |
 | `PLAYWRIGHT_CHROMIUM_EXECUTABLE` | Use a system Chromium instead of Playwright's managed build. | no | unset (managed browser) | `playwright.config.ts:41` |
 | `CI` | When set, Playwright always starts its own API and Vite servers (`reuseExistingServer: false`). | no | unset (reuse running servers) | `playwright.config.ts:51,62` |
@@ -113,6 +115,7 @@ before listening, so the deploy fails its health check. It does this when any of
 - any non-blank value in `GEMINI_BASE_URL` (our dev/e2e seam for the voice clients), `GOOGLE_GEMINI_BASE_URL` or
   `GOOGLE_VERTEX_BASE_URL` (the two overrides the `@google/genai` SDK itself honours for every client, roster
   vision included). Any of these would send Gemini/Vertex traffic to another host.
+- any non-blank value in `PUSH_TRANSPORT` (the e2e push seam: sends would be recorded in memory, never delivered).
 
 Outside production the same echo-without-allowlist case is only a `[startup]` warning, and
 invalid `ECHO_ALLOWED_PHONES` entries are always a warning, never fatal.
@@ -135,6 +138,7 @@ invalid `ECHO_ALLOWED_PHONES` entries are always a warning, never fatal.
 - [ ] `ALLOW_DEV_ERROR_INJECTION` (boot refused)
 - [ ] `ALLOW_DEV_OTP_ECHO` without `ECHO_ALLOWED_PHONES` (boot refused)
 - [ ] `GEMINI_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`, `GOOGLE_VERTEX_BASE_URL` (boot refused)
+- [ ] `PUSH_TRANSPORT` (boot refused)
 - [ ] `VLM_FALLBACK_MODE=sample` (obsolete: now logged and treated as `auto`; remove it)
 - [ ] `LOGIN_METHODS` (leave unset: codes and links both stay on)
 - [ ] Anything from §4: `E2E_*`, `CI`, `PLAYWRIGHT_*`, `NODE_EXTRA_CA_CERTS`. Also `POSTGRES_PORT` and `DOCLING_*` (no sidecar runs on Railway).
