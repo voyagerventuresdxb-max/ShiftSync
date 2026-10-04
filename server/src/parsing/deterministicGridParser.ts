@@ -764,7 +764,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
 
   // Most rosters have exactly one leading column (the staff name). Some
   // print an explicit per-row title in its own column before the name
-  // (e.g. "RM" | "Robert Orgovan" | ... — Bar des Pres FOH style), on top
+  // (e.g. "RM" | "Nedak Mizon" | ... — Bar des Pres FOH style), on top
   // of (or instead of) grouping staff under section headers. Inferred from
   // where the day columns actually start, rather than hardcoded, so both
   // shapes work without knowing in advance which one a given file uses.
@@ -897,10 +897,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // "Valet & Door") each correctly take over from the last. A REAL role
   // must never be silently overwritten by an ambiguous blank row, though
   // — see the promotion site below for why (a blank-week employee sitting
-  // INSIDE an already-correct section, e.g. Gattopardo's Irma between
-  // Rafael and Robert under HEAD WAITERS, is structurally indistinguishable
+  // INSIDE an already-correct section, e.g. Gattopardo's Lomur between
+  // Nelim and Nedak under HEAD WAITERS, is structurally indistinguishable
   // from a genuine new header at that one row; only refusing to touch an
-  // already-real currentRole prevents that from corrupting Robert's role).
+  // already-real currentRole prevents that from corrupting Nedak's role).
   let currentRoleIsProvisional = true;
   let rowNumber = 1;
   let hasSeenAnyStaffRow = false;
@@ -1132,7 +1132,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
 
       // Try the normal staff-row path first, completely unchanged — this
       // is what still lets a blank-day-columns employee with a note-column
-      // leave code (e.g. Gattopardo's Sintia/Tomas — see the "leave
+      // leave code (e.g. Gattopardo's Ruren/Rumur — see the "leave
       // detection" fallback inside processStaffRow) produce their real
       // LeaveRecord exactly as before. Only when this produces genuinely
       // NOTHING do we consider the row for header promotion below.
@@ -1161,12 +1161,12 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       //
       // Known, accepted ambiguity, NEUTRALIZED rather than just documented:
       // a genuinely blank-week employee with no note-column code either (a
-      // real pattern — see the Gattopardo reference fixture's Irma, who
-      // sits between Rafael and Robert inside the already-correct HEAD
+      // real pattern — see the Gattopardo reference fixture's Lomur, who
+      // sits between Nelim and Nedak inside the already-correct HEAD
       // WAITERS section) is structurally indistinguishable from a genuine
       // new header at this one row alone. The `currentRoleIsProvisional`
       // guard is what makes this safe either way: if a REAL header already
-      // applies here (Irma's case), this block never touches it, so Robert
+      // applies here (Lomur's case), this block never touches it, so Nedak
       // still correctly inherits HEAD WAITERS unchanged — confirmed against
       // both real reference fixtures (Gattopardo, Bar des Pres), not just
       // reasoned about; the first version of this fix (no provisional
