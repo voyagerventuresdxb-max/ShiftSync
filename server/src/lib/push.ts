@@ -3,6 +3,7 @@
  * Plan's "Publish & notify" is the first caller, but any future feature
  * that needs to reach a user's device calls sendPushToUser(s) the same way.
  */
+import { createECDH } from 'node:crypto';
 import webpush from 'web-push';
 import { prisma } from './prisma.js';
 
@@ -10,8 +11,24 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? 'mailto:ops@example.com';
 
+let pushEnabled = false;
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    // Halves of two different pairs pass web-push's format checks, but every push service rejects the signature.
+    const ecdh = createECDH('prime256v1');
+    ecdh.setPrivateKey(Buffer.from(VAPID_PRIVATE_KEY, 'base64url'));
+    if (ecdh.getPublicKey().toString('base64url') !== VAPID_PUBLIC_KEY) {
+      throw new Error('VAPID_PUBLIC_KEY is not the public half of VAPID_PRIVATE_KEY');
+    }
+    pushEnabled = true;
+  } catch (err) {
+    // A typo in a deploy variable must not crash-loop the API. web-push echoes a bad subject verbatim, and that
+    // variable may hold a mis-pasted private key, so the subject's value never reaches the log.
+    const reason = err instanceof Error ? err.message : String(err);
+    const safeReason = VAPID_SUBJECT ? reason.split(VAPID_SUBJECT).join('<VAPID_SUBJECT>') : reason;
+    console.error(`[push] VAPID config rejected (${safeReason}) — push notifications are disabled.`);
+  }
 } else {
   // Fail soft, not silent: a misconfigured deploy still boots (push is an
   // enhancement, not a hard dependency), but every send attempt logs why
@@ -20,7 +37,7 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 }
 
 export function getVapidPublicKey(): string {
-  return VAPID_PUBLIC_KEY;
+  return pushEnabled ? VAPID_PUBLIC_KEY : '';
 }
 
 export interface PushPayload {
@@ -39,7 +56,7 @@ export interface PushPayload {
  * user with none, must not block delivery to anyone else in a batch call.
  */
 export async function sendPushToUser(userId: string, payload: PushPayload): Promise<{ sent: number; removed: number }> {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return { sent: 0, removed: 0 };
+  if (!pushEnabled) return { sent: 0, removed: 0 };
 
   const subscriptions = await prisma.pushSubscription.findMany({ where: { userId } });
   let sent = 0;
@@ -93,7 +110,11 @@ export async function notifyUser(userId: string, payload: PushPayload): Promise<
   } catch (err) {
     console.error('[push.notifyUser] failed to record notification', userId, err);
   }
-  await sendPushToUser(userId, payload);
+  try {
+    await sendPushToUser(userId, payload);
+  } catch (err) {
+    console.error('[push.notifyUser] push delivery failed', userId, err);
+  }
 }
 
 /**

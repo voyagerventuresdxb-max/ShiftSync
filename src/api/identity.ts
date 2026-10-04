@@ -3,7 +3,9 @@
  * login for existing staff, and the localStorage-backed session store
  * shared by every screen that needs the logged-in user's Bearer token.
  */
+import { apiFetch, retryAfterSeconds } from './http';
 import { ApiError } from './schedules';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 export interface SessionUser {
@@ -15,7 +17,7 @@ export interface SessionUser {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -24,7 +26,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // non-JSON error body; keep the generic message
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, retryAfterSeconds(res) ?? undefined);
   }
   return (await res.json()) as T;
 }
@@ -34,7 +36,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * matches the phone globally across every venue (it's the real cross-venue
  * identity key under this app's one-user-one-location model), which is what
  * lets login work from contexts that don't know a venue yet, like
- * `RequireSession`'s redirect to `/join?mode=login`. `devCode` is only
+ * `RequireSession`'s redirect to `/login`. `devCode` is only
  * present when the server has the opt-in ALLOW_DEV_OTP_ECHO flag set.
  */
 export async function requestLoginOtp(phone: string): Promise<{ expiresAt: string; devCode?: string }> {
@@ -45,11 +47,16 @@ export async function requestLoginOtp(phone: string): Promise<{ expiresAt: strin
   });
 }
 
+/**
+ * A pending applicant gets no token, only who they're waiting on. Declined
+ * and deactivated numbers are a 403 whose message lands in `ApiError`.
+ */
+export type LoginVerifyResult =
+  | { pending?: false; token: string; expiresAt: string; user: SessionUser; firstSignIn?: boolean; venueName?: string }
+  | { pending: true; status: 'pending'; venueName: string; managerName: string | null };
+
 /** POST /api/identity/verify-otp */
-export async function verifyLoginOtp(
-  phone: string,
-  code: string,
-): Promise<{ token: string; expiresAt: string; user: SessionUser }> {
+export async function verifyLoginOtp(phone: string, code: string): Promise<LoginVerifyResult> {
   return request('/api/identity/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -63,7 +70,7 @@ export async function verifyLoginOtp(
  * it, which matters on the shared venue devices this app actually runs on.
  */
 export async function revokeSession(token: string): Promise<void> {
-  const res = await fetch('/api/identity/session', {
+  const res = await apiFetch(apiUrl('/api/identity/session'), {
     method: 'DELETE',
     headers: withAuth(token),
   });

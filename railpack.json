@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "provider": "node",
+  "steps": {
+    "build": {
+      "commands": [
+        { "src": ".", "dest": "." },
+        { "cmd": "npx prisma generate", "customName": "npx prisma generate" }
+      ]
+    }
+  },
+  "deploy": {
+    "startCommand": "npm run server:start"
+  }
+}

@@ -5,7 +5,9 @@
  * exactly what the parser resolved before anything is committed.
  */
 
+import { apiFetch } from './http';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export type RowMatchStatus =
   | 'matched'
@@ -97,6 +99,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    /** From a 429's `Retry-After` header, when the server sent one. */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -104,7 +108,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

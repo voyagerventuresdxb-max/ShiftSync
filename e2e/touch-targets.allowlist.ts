@@ -40,6 +40,7 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^.+ \d+ · \d+ shifts?$/, route: '/scheduling', category: 'b', reason: 'RotaBuilder department toggles (#42, 30px) sit 6px above the first row\'s empty-cell add buttons, whose hit-44 reaches into the toggle: z-order/row-height decision' },
   { label: /^Mark all read$/, category: 'b', reason: '78x16 text link 8px above the first notification row' },
   { label: /^(Log in|Join instead)$/, category: 'b', reason: 'two 16px inline text links side by side in the Account step footer' },
+  { label: /^Sign up your restaurant$/, route: '/login', category: 'b', reason: 'pre-existing 15px inline footer link, first measured when /login joined this gate (login links); sizing is a design call' },
   { label: /^(Remove|Notify|Re-notify) /, route: '/floor-plan', category: 'b', reason: 'SectionDetail assignee row: 28x28 Remove sits above the 15px Notify text button' },
   { label: /^(Add duty…|Expo)$/, route: '/floor-plan', category: 'b', reason: 'duty-label button uses `truncate` (overflow hidden): its own ::after would be clipped; needs a wrapper' },
   { label: /^Section \d+,/, route: '/floor-plan', category: 'b', reason: 'section pins (~57x44 at 390px) overlap their neighbours in dense clusters at 1x; zoom separates them (e2e/floor-plan-pins.spec.ts crowding test)' },

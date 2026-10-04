@@ -223,6 +223,14 @@
   overflow-y: auto;
   /* Scrolls like a phone screen: no visible track inside the frame. */
   scrollbar-width: none;
+  /* On a real phone the stage IS the viewport (see the media query below),
+     so the notch/status bar and the home indicator fall inside it: keep the
+     content out from under both. Zero everywhere else. */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  /* When a field near the bottom is focused, leave room for the keyboard
+     in the scroll position (src/lib/keyboardInset.ts does the scrolling). */
+  scroll-padding-bottom: 45vh;
 }
 .ob-stage--scroll::-webkit-scrollbar {
   display: none;

@@ -1,3 +1,4 @@
+import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
@@ -132,6 +133,8 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (re
     // the created rows name someone other than whoever actually did this.
     const createdById = req.user!.id;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
+    // Template day offsets are Monday-relative; applying to any other day shifts every shift.
+    if (!isMondayIso(weekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
 
     // Ownership check stays here (the route knows the caller's own venue via
     // the session; the extracted action doesn't take a callerLocationId to

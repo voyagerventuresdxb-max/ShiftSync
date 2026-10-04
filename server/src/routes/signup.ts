@@ -2,18 +2,14 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
 import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { findUserByPhone } from './identity.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
+import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 
 export const signupRouter = Router();
-
-/**
- * Fail-closed, opt-in dev-OTP echo — see the matching comment in
- * `identity.ts`. Never keyed off `NODE_ENV`, which nothing in this repo sets.
- */
-const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /**
  * POST /api/signup/request-otp — body: { phone }
@@ -23,7 +19,7 @@ const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
  * `locationId` here because there is no location yet; that's the entire
  * point of this route.
  */
-signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
+signupRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
@@ -32,13 +28,12 @@ signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'SIGNUP');
     // No SMS integration exists; this is a stand-in until one is added.
-    if (DEV_OTP_ECHO) {
-      console.log(`[signup] OTP for ${phone} (SIGNUP): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
-    }
+    const echo = devOtpEchoFor(phone);
+    if (echo) logDevOtpEcho('signup', phone, 'SIGNUP', plainCode);
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: DEV_OTP_ECHO ? plainCode : undefined,
+      devCode: echo ? plainCode : undefined,
     });
   } catch (err) {
     if (err instanceof OtpRateLimitError) return sendOtpRateLimited(res, err.scope, err.retryAfterSeconds);
@@ -58,7 +53,7 @@ signupRouter.post('/request-otp', otpRequestIpLimiter, async (req, res) => {
  * collects the venue's real emirate/address/venueType right after this, so
  * only the bare minimum is collected here.
  */
-signupRouter.post('/verify-otp', async (req, res) => {
+signupRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
     const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();

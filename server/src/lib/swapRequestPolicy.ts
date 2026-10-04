@@ -1,25 +1,26 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
+import { DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-/** Every venue's swap-request window closes Wednesday 17:00, venue-local. */
-const VENUE_TIMEZONE = 'Asia/Dubai';
+/** Every venue's swap-request window closes Wednesday 17:00, venue-local (the venue's own `Location.timezone`). */
 const CLOSE_WEEKDAY = 3; // dayjs: 0=Sunday..6=Saturday, Wednesday=3
 const CLOSE_HOUR = 17;
 
 /**
  * The next Wednesday 17:00 in the venue's timezone, from `now`. If `now` is
  * already Wednesday and past 17:00, rolls to the following week instead of
- * returning a time in the past.
+ * returning a time in the past. Pure: the host's own timezone never enters.
  */
-export function nextRequestWindowClose(now: Date = new Date()): Date {
-  const nowInVenue = dayjs(now).tz(VENUE_TIMEZONE);
+export function nextRequestWindowClose(now: Date = new Date(), timezone: string = DEFAULT_VENUE_TIMEZONE): Date {
+  const nowInVenue = dayjs(now).tz(timezone);
   const daysUntilClose = (CLOSE_WEEKDAY - nowInVenue.day() + 7) % 7;
   let candidate = nowInVenue.add(daysUntilClose, 'day').hour(CLOSE_HOUR).minute(0).second(0).millisecond(0);
-  if (candidate.isBefore(nowInVenue)) candidate = candidate.add(7, 'day');
+  // At exactly 17:00:00 the window has closed: roll to next week, never return `now`.
+  if (!candidate.isAfter(nowInVenue)) candidate = candidate.add(7, 'day');
   return candidate.toDate();
 }
 

@@ -3,12 +3,14 @@
  * phone/OTP flow for staff without an account yet, and the Pending
  * Approvals review queue it feeds when no existing User auto-matches.
  */
+import { apiFetch, retryAfterSeconds } from './http';
 import { ApiError } from './schedules';
 import { withAuth, type SessionUser } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -17,7 +19,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // non-JSON error body; keep the generic message
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, retryAfterSeconds(res) ?? undefined);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -33,11 +35,17 @@ export async function requestJoinOtp(phone: string): Promise<{ expiresAt: string
 }
 
 export type JoinVerifyResult =
-  | { pending: false; token: string; expiresAt: string; user: SessionUser }
-  | { pending: true; joinRequestId: string };
+  | { pending: false; token: string; expiresAt: string; user: SessionUser; firstSignIn?: boolean; venueName?: string }
+  | { pending: true; joinRequestId: string; venueName: string; managerName: string | null };
 
-/** POST /api/join/verify-otp — body: { locationId, phone, code, fullName? } */
-export async function verifyJoinOtp(input: { locationId: string; phone: string; code: string; fullName?: string }): Promise<JoinVerifyResult> {
+/** POST /api/join/verify-otp — body: { inviteToken | locationId (old links), phone, code, fullName? } */
+export async function verifyJoinOtp(input: {
+  inviteToken?: string;
+  locationId?: string;
+  phone: string;
+  code: string;
+  fullName?: string;
+}): Promise<JoinVerifyResult> {
   return request('/api/join/verify-otp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -50,6 +58,9 @@ export interface JoinRequestDto {
   phone: string;
   fullName: string;
   createdAt: string;
+  /** Times this phone was declined at this venue before. */
+  previousDeclines: number;
+  lastDeclinedAt: string | null;
 }
 
 /** GET /api/join/:locationId/pending — manager-only; the caller's own location. */

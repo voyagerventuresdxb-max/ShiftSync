@@ -4,6 +4,9 @@ import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
+import { findUserByPhone } from './identity.js';
+import { revokeUserAccess } from '../lib/identity.js';
+import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError } from '../lib/actions/employmentStatusActions.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -146,6 +149,8 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
+    // Any holder counts (deactivated too); the P2002 catch below covers the race.
+    if (phone && (await findUserByPhone(phone))) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
 
     const user = await withAuditedTransaction(
       prisma,
@@ -253,7 +258,13 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
     // to move both — otherwise terminatedAt stays permanently null and the two
     // fields disagree about the same fact. Only a real transition writes it, so
     // re-sending isActive:false doesn't overwrite the original termination date.
-    if (data.isActive !== undefined && data.isActive !== existing.isActive) {
+    const statusChanges = data.isActive !== undefined && data.isActive !== existing.isActive;
+    if (statusChanges) {
+      // Who may change whose status (see employmentStatusActions.ts). Checked
+      // on a real transition only, so re-sending the current value is a no-op
+      // for everyone, as before.
+      const refusal = employmentStatusRefusal(req.user!, existing);
+      if (refusal) return res.status(403).json({ error: refusal });
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
@@ -279,6 +290,17 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
           if (result.count === 0) {
             throw new StaffRecordChangedConcurrentlyError();
           }
+          // Either direction: deactivation must lock them out now, and
+          // reactivation clears anything a sign-in racing the deactivation
+          // left behind, so they always come back through a fresh sign-in.
+          if (statusChanges) {
+            // Invariant: a venue keeps at least one active owner, whatever
+            // the caller's role (defence in depth behind the 403 above).
+            if (data.isActive === false && existing.systemRole === 'OWNER') {
+              await assertNotLastActiveOwner(tx, existing.locationId, existing.id);
+            }
+            await revokeUserAccess(tx, existing, req.user!.id);
+          }
           // `updateMany` doesn't return the row, so re-fetch it (inside the
           // same transaction) for the response's `toDto`.
           const updated = await tx.user.findUnique({
@@ -301,6 +323,7 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       });
     } catch (err) {
       if (isPhoneConflict(err)) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
+      if (err instanceof LastOwnerError) return res.status(409).json({ error: err.message });
       throw err;
     }
     if (!user) {
