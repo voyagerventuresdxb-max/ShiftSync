@@ -106,3 +106,17 @@ export function describeVisionConfig(config: VisionConfig = visionConfig()): str
   const where = config.backend === 'vertex' ? `vertex location=${config.location}` : 'developer-api';
   return `vision: ${where} model=${config.model} fallback=${config.fallbackModel}`;
 }
+
+/** Share of a deterministic grid result's shift rows with no role above which the roster is escalated to vision. */
+export const DEFAULT_ESCALATE_EMPTY_ROLE_SHARE = 0.3;
+
+export interface EscalationConfig {
+  /** 0–1, from `ROSTER_ESCALATE_EMPTY_ROLE_SHARE`; out-of-range or non-numeric values use the default. */
+  emptyRoleShare: number;
+}
+
+export function escalationConfig(env: NodeJS.ProcessEnv = process.env): EscalationConfig {
+  const raw = trimmed(env.ROSTER_ESCALATE_EMPTY_ROLE_SHARE);
+  const share = raw === '' ? NaN : Number(raw);
+  return { emptyRoleShare: Number.isFinite(share) && share >= 0 && share <= 1 ? share : DEFAULT_ESCALATE_EMPTY_ROLE_SHARE };
+}

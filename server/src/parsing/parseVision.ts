@@ -165,6 +165,14 @@ function normalizeInterpretation(value: unknown): VlmCell['interpretation'] {
   }
 }
 
+/** templateLabel of a result the AI reader produced (local fallbacks are labelled 'Deterministic local parser (…)'). */
+export const AI_TEMPLATE_LABEL = 'Direct Vision Ingestion';
+
+export interface VisionCallOptions {
+  /** Default true (per VLM_FALLBACK_MODE). false: on any AI failure throw the coded VisionIngestionError. */
+  localFallback?: boolean;
+}
+
 /** Test seam kept for existing tests: swaps the Gemini SDK client inside the real provider. */
 export { __setGeminiClientForTests } from './visionProvider.js';
 
@@ -226,14 +234,17 @@ function mapProviderOutput(output: VisionOutput, provider: VisionProvider, weekS
  * reads the same grid — still the manager's own data.
  *
  * @param grid  Merge-expanded 2D grid (see buildMergeExpandedGrid).
+ * @param options.localFallback  false = never substitute a local parse; throw the coded error
+ *   instead (an escalation that already holds its own deterministic result uses this).
  */
 export async function parseRosterGrid(
   grid: unknown[][],
   originalFilename: string,
   weekStart?: string,
+  options: VisionCallOptions = {},
 ): Promise<ParsedVisionResult> {
   const startTime = Date.now();
-  const mode = fallbackMode();
+  const mode = options.localFallback === false ? 'off' : fallbackMode();
   const provider = getVisionProvider();
 
   if (!provider) {
@@ -264,9 +275,10 @@ export async function parseRosterImage(
   mimeType: string,
   originalFilename: string,
   weekStart?: string,
+  options: VisionCallOptions = {},
 ): Promise<ParsedVisionResult> {
   const startTime = Date.now();
-  const mode = fallbackMode();
+  const mode = options.localFallback === false ? 'off' : fallbackMode();
   const provider = getVisionProvider();
 
   // Not configured. In "auto" mode a text-layer PDF still gets the
@@ -492,7 +504,7 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
   const { accepted, anomalies: constraintAnomalies } = enforceNoDoubleShifts(rows);
 
   return {
-    templateLabel: 'Direct Vision Ingestion',
+    templateLabel: AI_TEMPLATE_LABEL,
     rows: accepted,
     issues,
     anomalies: [...anomalies, ...constraintAnomalies],
