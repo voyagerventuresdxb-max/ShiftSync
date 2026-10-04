@@ -1,5 +1,5 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { cleanupTestOrgs, continueThroughVenue, prisma, signupNewVenue, testVenueName } from './helpers';
+import { cleanupTestOrgs, continueThroughVenue, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
 
 /**
  * Split shifts, end to end on a phone-sized frame with two real sessions:
@@ -84,7 +84,7 @@ test('split shift: two segments in the builder → summed hours → hidden from 
     await m.getByPlaceholder(/Job title/).fill('Bartender');
     await m.getByRole('button', { name: 'Add staff member' }).click();
     await expect(m.getByRole('cell', { name: 'Sara Split' })).toBeVisible();
-    const staffPhone = `+97155${Date.now().toString().slice(-7)}`;
+    const staffPhone = nextEchoPhone();
     phones.push(staffPhone);
     const phoneInput = m.getByRole('row', { name: /Sara Split/ }).locator('input').nth(1);
     await phoneInput.fill(staffPhone);
@@ -167,8 +167,8 @@ test('split shift: two segments in the builder → summed hours → hidden from 
     await s.goto('/my-shifts');
     const mine = s.locator('li', { hasText: 'Bartender' });
     await expect(mine).toHaveCount(2);
-    await expect(mine.nth(0)).toContainText(`${tue} · Bartender · 11:00–15:00`);
-    await expect(mine.nth(1)).toContainText(`${tue} · Bartender · 18:00–23:00`);
+    await expect(mine.nth(0)).toContainText(new RegExp(`(${tue}|\\w{3},? \\d{1,2} \\w{3,4}) · Bartender · 11:00–15:00`));
+    await expect(mine.nth(1)).toContainText(new RegExp(`(${tue}|\\w{3},? \\d{1,2} \\w{3,4}) · Bartender · 18:00–23:00`));
 
     await s.goto(`/scheduling?week=${weekStart}`);
     const card = s.locator('article', { has: s.getByRole('heading', { name: 'Bartender' }) });

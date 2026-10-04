@@ -1,4 +1,17 @@
 import { defineConfig, devices } from '@playwright/test';
+import { FAKE_GEMINI_URL } from './e2e/fakeGemini';
+
+// The API echoes OTPs only for ECHO_ALLOWED_PHONES, so each run gets its own pool of
+// numbers (handed out by e2e/helpers.ts `nextEchoPhone`). Workers re-evaluate this file;
+// `??=` keeps the runner's values, which they inherit.
+const ECHO_POOL_SIZE = 300;
+process.env.E2E_RUN_ID ??= String(Date.now());
+// A different 300-number block of +97156xxxxxxx every second (cycles after ~9h).
+const echoBlock = Math.floor(Number(process.env.E2E_RUN_ID) / 1000) % Math.floor(10_000_000 / ECHO_POOL_SIZE);
+const echoPhones = (process.env.E2E_ECHO_PHONES ??= Array.from(
+  { length: ECHO_POOL_SIZE },
+  (_, i) => `+97156${String(echoBlock * ECHO_POOL_SIZE + i).padStart(7, '0')}`,
+).join(','));
 
 export default defineConfig({
   testDir: './e2e',
@@ -40,8 +53,18 @@ export default defineConfig({
       // ALLOW_DEV_ERROR_INJECTION arms requireSession's sentinel-token throw
       // (see require-session-error-handling.spec.ts) — same dev-only-flag
       // shape as ALLOW_DEV_OTP_ECHO, inert for any real token.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ALLOW_DEV_ERROR_INJECTION: 'true' },
+      // A reused (already running) API won't have this run's ECHO_ALLOWED_PHONES.
+      // GEMINI_BASE_URL sends only the voice pipeline's Gemini calls to e2e/fakeGemini.ts
+      // (no key, no quota); roster vision parsing never reads it.
+      // Empty VAPID_* keep push off whatever the local .env holds (push-unavailable.spec.ts relies on it).
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: FAKE_GEMINI_URL, VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '' },
       timeout: 60_000,
+    },
+    {
+      command: 'node --import tsx e2e/fakeGemini.ts --serve',
+      url: `${FAKE_GEMINI_URL}/__health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
     },
     {
       command: 'npm run dev',

@@ -1,0 +1,115 @@
+import { useEffect, useRef, useState } from 'react';
+import { ApiError, fetchInviteLink, type ActiveInvite } from '../api/invites';
+import { useIdentity } from '../state/IdentityContext';
+import { useSingleFlight } from '../hooks/useLiveRefresh';
+import InviteLinkActions from './InviteLinkActions';
+
+/**
+ * People › the venue's join link: copy / WhatsApp / QR, plus regenerate and
+ * revoke. Manager-only. Reloads in place (e.g. the use count) whenever
+ * `refreshKey` changes.
+ */
+export default function InviteLinkPanel({ locationId, refreshKey }: { locationId: string; refreshKey: number }) {
+  const { session } = useIdentity();
+  const [active, setActive] = useState<ActiveInvite | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  // Counts regenerates/revokes made here, so a reload that started before one can't show the old link again.
+  const changes = useRef(0);
+  const loaded = useRef(false);
+
+  const load: () => void = useSingleFlight(async () => {
+    if (!session) return;
+    const changesAtStart = changes.current;
+    try {
+      const link = await fetchInviteLink(session.token, locationId);
+      if (changes.current !== changesAtStart) {
+        load();
+        return;
+      }
+      loaded.current = true;
+      setActive(link);
+      setError(null);
+    } catch (err) {
+      // Once the link is on screen a failed reload keeps it there, rather than swapping the panel for an error.
+      if (!loaded.current) setError(err instanceof ApiError ? err.message : 'Could not load the join link.');
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  useEffect(() => {
+    load();
+  }, [load, session, locationId, refreshKey]);
+
+  const onChange = (next: ActiveInvite | null) => {
+    changes.current += 1;
+    setActive(next);
+  };
+
+  const copy = async () => {
+    if (!active) return;
+    try {
+      await navigator.clipboard.writeText(active.inviteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Clipboard blocked: the link is in the selectable field above.
+    }
+  };
+
+  const saveQr = () => {
+    if (!active) return;
+    const a = document.createElement('a');
+    a.href = active.qrDataUrl;
+    a.download = 'shiftsync-join-qr.png';
+    a.click();
+  };
+
+  return (
+    <section className="panel animate-rise p-4" aria-labelledby="invite-link-heading">
+      <p className="eyebrow">Invite your team</p>
+      <h2 id="invite-link-heading" className="text-base font-semibold tracking-tight">
+        Join link
+      </h2>
+
+      {loading ? (
+        <p className="hint mt-3">Loading join link…</p>
+      ) : error ? (
+        <div className="error-block mt-3" role="alert">
+          <p>{error}</p>
+        </div>
+      ) : (
+        <>
+          {active && (
+            <div className="mt-3 flex items-start gap-3">
+              <img src={active.qrDataUrl} alt="Join link QR code" className="h-20 w-20 shrink-0 rounded-md bg-white p-1" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <input
+                  readOnly
+                  aria-label="Join link"
+                  value={active.inviteUrl}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="staff-directory-input w-full font-mono text-xs"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn btn-primary" onClick={() => void copy()}>
+                    {copied ? 'Copied' : 'Copy link'}
+                  </button>
+                  <a className="btn btn-ghost" href={active.whatsappUrl} target="_blank" rel="noreferrer">
+                    WhatsApp
+                  </a>
+                  <button className="btn btn-ghost" onClick={saveQr}>
+                    Save QR
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          <InviteLinkActions locationId={locationId} active={active} onChange={onChange} look="panel" />
+        </>
+      )}
+    </section>
+  );
+}

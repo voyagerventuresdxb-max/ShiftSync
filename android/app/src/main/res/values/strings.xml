@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ShiftSync</string>
+    <string name="title_activity_main">ShiftSync</string>
+    <string name="package_name">ae.shiftsync.app</string>
+    <string name="custom_url_scheme">ae.shiftsync.app</string>
+</resources>

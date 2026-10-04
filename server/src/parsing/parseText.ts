@@ -10,6 +10,8 @@
  * used by the workbook parser (parseDateCell/parseTimeCell/...).
  */
 
+import { currentVenueWeekStart } from '../lib/venueWeek.js';
+import { DEFAULT_VENUE_TIMEZONE } from './normalize.js';
 import { isOvernight, parseTimeCell } from './normalize.js';
 import type { ParsedShiftRow, RowIssue } from './types.js';
 
@@ -231,12 +233,13 @@ function dayToDate(weekStart: string, dayName: string): string | null {
   return `${yy}-${mm}-${dd}`;
 }
 
-/** Default week start: the Sunday of the current week (matches frontend). */
-export function currentWeekStart(now: Date = new Date()): string {
-  const d = new Date(now);
-  d.setDate(d.getDate() - d.getDay()); // back to Sunday
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+/**
+ * Default week start: the MONDAY of the current week in the venue's timezone
+ * (the same rule as the frontend's `src/engine/weekStart.ts`). This used to
+ * be the Sunday of the week in the process-local timezone, which on a UTC
+ * host disagreed with every Monday-based week the client shows, and put a
+ * Sunday roster column into the previous week.
+ */
+export function currentWeekStart(now: Date = new Date(), timezone: string = DEFAULT_VENUE_TIMEZONE): string {
+  return currentVenueWeekStart(now, timezone);
 }

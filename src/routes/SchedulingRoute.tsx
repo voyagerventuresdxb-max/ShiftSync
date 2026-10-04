@@ -62,12 +62,31 @@ export default function SchedulingContent() {
 
   // `weekStart` lives in AppStateContext, which sits ABOVE the router
   // (mounted in App.tsx wrapping <RouterProvider>), so it can't read the URL
-  // itself — this component, which IS inside the router, reconciles the two.
+  // itself — this component, which IS inside the router, is what reconciles
+  // the two, in both directions, in one effect:
+  //  - an incoming `?week=` differing from the current state (a hard
+  //    refresh, a shared/bookmarked link, OR — the case a two-effect
+  //    version of this got wrong — remounting via in-app client-side
+  //    navigation away from and back to /scheduling with no `?week=` in the
+  //    URL) adopts INTO state, and returns without also writing the URL in
+  //    this same pass;
+  //  - otherwise, whatever `weekStart` actually is gets written back to the
+  //    URL if it doesn't already match (Prev/Next-week clicks, template
+  //    application, or simply the URL having gone stale/bare on remount).
+  // The `return` after `setWeekStart` is what avoids the race a two-effect
+  // version of this had: `setWeekStart` doesn't land in this closure until a
+  // later render, so writing the URL in the SAME pass would write the STALE
+  // pre-adopt week; returning defers that write to the next run, by which
+  // point `weekStart` and the URL already agree (a no-op) or the effect
+  // naturally re-syncs. `replace` so paging through weeks doesn't spam
+  // browser history with a back-button entry per week.
   // The decision lives in engine/weekStart.ts's `reconcileWeekParam`
-  // (unit-tested); `lastSyncedWeek` is the week both sides last agreed on,
+  // (unit-tested): `lastSyncedWeek` is the week both sides last agreed on,
   // which is how a Prev/Next click (state moved) is told apart from a
-  // bookmark or back/forward (URL moved). `replace` so paging through weeks
-  // doesn't add a history entry per week.
+  // bookmark or back/forward (URL moved) — without it every Prev/Next click
+  // snapped straight back to the not-yet-updated `?week=`. A non-Monday
+  // `?week=` is adopted as its Monday: every rota week runs Monday to Sunday
+  // and the server refuses to publish anything else.
   const lastSyncedWeek = useRef<string | null>(null);
   useEffect(() => {
     const { adopt, write, lastSynced } = reconcileWeekParam(searchParams.get('week'), weekStart, lastSyncedWeek.current);
@@ -415,8 +434,10 @@ export default function SchedulingContent() {
                               </span>
                             )}
                           </span>
-                          {DAYS.map((d) => {
-                            const dayShifts = empShifts.filter((s) => weekdayOf(s.date) === d);
+                          {DAYS.map((d, dayIndex) => {
+                            // By DATE, not weekday: a committed upload row from another
+                            // week must not appear in this week's column.
+                            const dayShifts = empShifts.filter((s) => s.date === dates[dayIndex]);
                             return (
                               <span className={`cell shift ${dayShifts[0]?.type ?? ''}`} key={d}>
                                 {dayShifts.length > 1 ? (

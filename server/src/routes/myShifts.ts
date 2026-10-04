@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession } from '../middleware/requireSession.js';
-import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
+import { formatVenueTime, venueTimezoneFor, venueToday } from '../lib/venueTime.js';
 
 export const myShiftsRouter = Router();
 
@@ -17,10 +17,12 @@ export const myShiftsRouter = Router();
 myShiftsRouter.get('/', requireSession, async (req, res) => {
   try {
     const userId = req.user!.id;
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-
+    // "Today" is the VENUE's calendar day, not the UTC date: between 00:00 and
+    // 04:00 in Dubai the UTC date is still yesterday, which used to keep
+    // yesterday's shifts in "upcoming".
     const timezone = await venueTimezoneFor(req.user!.locationId);
+    const today = new Date(`${venueToday(timezone)}T00:00:00.000Z`);
+
     const shifts = await prisma.shift.findMany({
       // PUBLISHED only — a staff member never sees a draft (golden-path v0).
       where: { userId, date: { gte: today }, status: 'PUBLISHED' },
