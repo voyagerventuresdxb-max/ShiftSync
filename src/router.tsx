@@ -16,6 +16,8 @@ import MyShiftsContent from './routes/MyShiftsRoute';
 import WelcomeContent from './routes/WelcomeRoute';
 import OnboardingContent from './routes/OnboardingRoute';
 import LoginLinkContent from './routes/LoginLinkRoute';
+import KioskContent from './routes/KioskRoute';
+import { KIOSK_PATH } from '../shared/kioskLinks';
 import { PrivacyContent, TermsContent } from './routes/LegalRoute';
 
 /**
@@ -202,6 +204,7 @@ const handles = {
   welcome: { title: "You're in" },
   myShifts: { title: 'My Shifts' },
   onboarding: { title: 'Onboarding' },
+  kiosk: { title: 'Rota' },
 } satisfies Record<string, RouteHandle>;
 
 /**
@@ -282,6 +285,9 @@ export const router = createBrowserRouter([
       // still land somewhere real.
       { path: '/signup', element: <Navigate to="/onboarding" replace />, handle: handles.signup },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
+      // The venue's shared screen (kiosk link from People). Never behind
+      // RequireSession: the link's token, not a session, opens it. See KioskRoute.
+      { path: KIOSK_PATH, element: <KioskContent />, handle: handles.kiosk },
       // One-time "You're in" after a staff member's first sign-in; falls through to My Shifts otherwise.
       { path: '/welcome', element: <WelcomeContent />, handle: handles.welcome },
       // Deliberately NOT behind RequireSession (2026-09-16): account creation
