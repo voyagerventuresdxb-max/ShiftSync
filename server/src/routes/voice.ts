@@ -9,6 +9,7 @@ import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
+import { SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { decideJoinRequest, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
@@ -354,11 +355,18 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That staff member could not be found at your location.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
-        const created = await withAuditedTransaction(
-          prisma,
-          (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
-          (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
-        );
+        let created;
+        try {
+          created = await withAuditedTransaction(
+            prisma,
+            (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
+            (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
+          );
+        } catch (err) {
+          // The week's request window has closed (Wednesday 17:00, venue time) — same answer as the REST route.
+          if (err instanceof SwapWindowClosedError) return respond(409, { error: err.message, errorCode: 'swap_window_closed' }, 'REJECTED_VALIDATION', err.message);
+          throw err;
+        }
         // Same notification path as the REST route (routes/swapRequests.ts's
         // POST) — never inside the transaction above.
         void notifySwapRequested(created, locationId);
