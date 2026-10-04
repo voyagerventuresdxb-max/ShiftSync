@@ -1,0 +1,172 @@
+{
+  "id": "leave-codes",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-22",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-21",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-17",
+      "start": "10:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-18",
+      "start": "10:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-22",
+      "start": "10:00",
+      "end": "18:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-17",
+      "code": "UL"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-20",
+      "code": "OFF"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-23",
+      "code": "UL"
+    },
+    {
+      "name": "Jomar Santos",
+      "date": "2026-08-18",
+      "code": "UL"
+    },
+    {
+      "name": "Jomar Santos",
+      "date": "2026-08-19",
+      "code": "UL"
+    },
+    {
+      "name": "Jomar Santos",
+      "date": "2026-08-21",
+      "code": "PH"
+    },
+    {
+      "name": "Jomar Santos",
+      "date": "2026-08-23",
+      "code": "OFF"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-17",
+      "code": "OFF"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-20",
+      "code": "SL"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-22",
+      "code": "UL"
+    },
+    {
+      "name": "Rommel Pascual",
+      "date": "2026-08-19",
+      "code": "AL"
+    },
+    {
+      "name": "Rommel Pascual",
+      "date": "2026-08-20",
+      "code": "AL"
+    },
+    {
+      "name": "Rommel Pascual",
+      "date": "2026-08-21",
+      "code": "AL"
+    },
+    {
+      "name": "Rommel Pascual",
+      "date": "2026-08-23",
+      "code": "OFF"
+    }
+  ],
+  "flagged": [
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-18"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-19"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-21"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-22"
+    }
+  ],
+  "file": "leave-codes.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "leave codes UL/IN/CL/PH",
+    "Filipino names"
+  ]
+}

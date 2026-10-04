@@ -9,6 +9,7 @@ import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
+import { SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { decideJoinRequest, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
@@ -53,6 +54,10 @@ const TIME_RE = /^\d{2}:\d{2}$/;
  * only this generic line crosses the wire.
  */
 const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
+/** A retired/misspelled model is not fixed by retrying, so say so (and point at the buttons). */
+const VOICE_MODEL_UNAVAILABLE = "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile.";
+/** The in-app AI spend cap (lib/aiBudget.ts) refused the call before anything was sent. */
+const VOICE_PAUSED = "Voice commands are paused (AI spending limit reached). Use the app's buttons meanwhile.";
 
 /**
  * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
@@ -188,7 +193,7 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
       vocabulary = undefined;
     }
 
-    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
+    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary, req.user!.locationId);
     return res.status(200).json({ transcript });
   } catch (err) {
     if (err instanceof VoiceTranscriptionError && err.kind === 'format_rejected') {
@@ -200,6 +205,12 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
         error: `Your phone's recording format (${req.file?.mimetype ?? 'unknown'}) wasn't accepted by the transcription service. This is a bug on our side rather than an outage — please tell us your phone model.`,
         errorCode: 'voice_format_rejected',
       });
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'paused') {
+      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'model_unavailable') {
+      return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
     }
     if (err instanceof VoiceTranscriptionError) {
       console.error('[voice.transcribe] unavailable', err);
@@ -242,6 +253,12 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
       hasAdditionalRequest: shouldPromptForAdditionalRequest(resolution),
     });
   } catch (err) {
+    if (err instanceof VoiceIntentError && err.paused) {
+      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+    }
+    if (err instanceof VoiceIntentError && err.modelUnavailable) {
+      return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
+    }
     if (err instanceof VoiceIntentError) {
       console.error('[voice.parseIntent] unavailable', err);
       return res.status(503).json({ error: VOICE_UNAVAILABLE });
@@ -358,11 +375,18 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = 'That staff member could not be found at your location.';
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
-        const created = await withAuditedTransaction(
-          prisma,
-          (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
-          (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
-        );
+        let created;
+        try {
+          created = await withAuditedTransaction(
+            prisma,
+            (tx) => createSwapRequest({ shiftId: intent.shiftId, requestedById: actorId, targetUserId: intent.targetUserId, reason: intent.reason ?? null }, tx),
+            (request) => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SWAP_REQUESTED', entityType: 'ShiftSwapRequest', entityId: request.id, note }),
+          );
+        } catch (err) {
+          // The week's request window has closed (Wednesday 17:00, venue time) — same answer as the REST route.
+          if (err instanceof SwapWindowClosedError) return respond(409, { error: err.message, errorCode: 'swap_window_closed' }, 'REJECTED_VALIDATION', err.message);
+          throw err;
+        }
         // Same notification path as the REST route (routes/swapRequests.ts's
         // POST) — never inside the transaction above.
         void notifySwapRequested(created, locationId);
