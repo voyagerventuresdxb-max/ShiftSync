@@ -5,6 +5,7 @@ import { prisma } from '../prisma.js';
 import { withAuditedTransaction, writeAuditLog } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { formatVenueTime, venueTimezoneFor } from '../venueTime.js';
+import { DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
 
 dayjs.extend(utc);
 
@@ -20,18 +21,115 @@ export const SHIFT_INCLUDE = {
 
 export type ShiftWithRelations = Prisma.ShiftGetPayload<{ include: typeof SHIFT_INCLUDE }>;
 
+type Client = Prisma.TransactionClient | typeof prisma;
+
+/**
+ * Thrown by createShift/editShift when the person already has a shift that
+ * overlaps the new times (split shifts, 2026-10-02). Input validation, not a
+ * compliance rule — every caller answers it with a 409 `{ error: message }`.
+ */
+export class ShiftOverlapError extends Error {}
+
+// Through `client`, never the global pool: inside a transaction that would wait on the connection the transaction holds.
+async function timezoneOf(locationId: string, client: Client): Promise<string> {
+  const location = await client.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
+  return location?.timezone || DEFAULT_VENUE_TIMEZONE;
+}
+
+/** The message every overlap refusal returns, so REST, bulk, templates, voice and swaps all say the same thing. */
+export function overlapMessage(fullName: string | null | undefined, date: string, start: string, end: string): string {
+  return `${fullName ?? 'This staff member'} already works ${start}–${end} on ${date} — two shifts for one person can't overlap.`;
+}
+
+/**
+ * The refusal message if `userId` already has a shift overlapping
+ * [startTime, endTime), else null. Compared as instants, so an overnight
+ * segment running into the next day counts; segments that only touch
+ * (15:00 end, 15:00 start) don't. CANCELLED shifts and `excludeId` (the
+ * shift being edited) are ignored.
+ */
+export async function findShiftOverlap(
+  input: { userId: string; startTime: Date; endTime: Date; excludeId?: string },
+  client: Client = prisma,
+): Promise<string | null> {
+  const clash = await client.shift.findFirst({
+    where: {
+      userId: input.userId,
+      status: { not: 'CANCELLED' },
+      startTime: { lt: input.endTime },
+      endTime: { gt: input.startTime },
+      ...(input.excludeId ? { id: { not: input.excludeId } } : {}),
+    },
+    orderBy: { startTime: 'asc' },
+    include: { assignee: { select: { fullName: true } } },
+  });
+  if (!clash) return null;
+  const timezone = await timezoneOf(clash.locationId, client);
+  return overlapMessage(
+    clash.assignee?.fullName,
+    clash.date.toISOString().slice(0, 10),
+    formatVenueTime(clash.startTime, timezone),
+    formatVenueTime(clash.endTime, timezone),
+  );
+}
+
+/**
+ * Same rule for a batch about to be written in one go (bulk create / copy
+ * last week, template apply): the first person who would end up with
+ * overlapping shifts — against what's stored or another row of the batch —
+ * as a refusal message, else null. One query, however many rows.
+ */
+export async function findBatchOverlap(
+  locationId: string,
+  rows: { userId: string | null; date: string; startTime: Date; endTime: Date }[],
+  client: Client = prisma,
+): Promise<string | null> {
+  const assigned = rows.filter((r): r is typeof r & { userId: string } => Boolean(r.userId));
+  if (assigned.length === 0) return null;
+  const stored = await client.shift.findMany({
+    where: {
+      userId: { in: [...new Set(assigned.map((r) => r.userId))] },
+      status: { not: 'CANCELLED' },
+      startTime: { lt: new Date(Math.max(...assigned.map((r) => r.endTime.getTime()))) },
+      endTime: { gt: new Date(Math.min(...assigned.map((r) => r.startTime.getTime()))) },
+    },
+    select: { userId: true, date: true, startTime: true, endTime: true },
+  });
+  const seen = stored.map((s) => ({ userId: s.userId!, date: s.date.toISOString().slice(0, 10), startTime: s.startTime, endTime: s.endTime }));
+  for (const r of assigned) {
+    const clash = seen.find((s) => s.userId === r.userId && s.startTime < r.endTime && s.endTime > r.startTime);
+    if (clash) {
+      const timezone = await timezoneOf(locationId, client);
+      const user = await client.user.findUnique({ where: { id: r.userId }, select: { fullName: true } });
+      return overlapMessage(user?.fullName, clash.date, formatVenueTime(clash.startTime, timezone), formatVenueTime(clash.endTime, timezone));
+    }
+    seen.push(r);
+  }
+  return null;
+}
+
+async function assertNoOverlap(input: Parameters<typeof findShiftOverlap>[0], client: Client): Promise<void> {
+  const message = await findShiftOverlap(input, client);
+  if (message) throw new ShiftOverlapError(message);
+}
+
 /**
  * Raw create — exactly the `tx.shift.create(...)` call
  * `routes/shifts.ts`'s `POST /` made inline before this extraction.
  * Validation (role/user existence, same-location membership, date/time
  * shape) is the CALLER's responsibility, not this function's — mirrors
  * `lib/actions/swapActions.ts`'s `createSwapRequest`, which is the
- * established precedent for this split in this codebase.
+ * established precedent for this split in this codebase. The one exception
+ * is overlap (throws ShiftOverlapError), so REST POST and voice CREATE_SHIFT
+ * can never disagree on it.
  */
 export async function createShift(
   data: Prisma.ShiftCreateInput,
-  client: Prisma.TransactionClient | typeof prisma = prisma,
+  client: Client = prisma,
 ): Promise<ShiftWithRelations> {
+  // Callers pass the unchecked shape (userId, not an `assignee` relation).
+  const { userId, startTime, endTime } = data as unknown as { userId?: string | null; startTime: Date | string; endTime: Date | string };
+  if (userId) await assertNoOverlap({ userId, startTime: new Date(startTime), endTime: new Date(endTime) }, client);
   return client.shift.create({ data, include: SHIFT_INCLUDE });
 }
 
@@ -128,6 +226,9 @@ function weekStartOf(date: Date): Date {
  * to DRAFT (its staff member is told it was removed); moved into a published
  * week it stays live. A DRAFT shift stays DRAFT wherever it moves — nobody
  * has reviewed it, so it is never auto-published.
+ *
+ * A new person or new times must not overlap another of that person's
+ * shifts (throws ShiftOverlapError; split shifts, 2026-10-02).
  */
 export async function editShift(input: {
   id: string;
@@ -141,6 +242,14 @@ export async function editShift(input: {
     async (tx) => {
       const before = await tx.shift.findUniqueOrThrow({ where: { id: input.id } });
       const data = { ...input.data };
+      const next = data as unknown as { userId?: string | null; startTime?: Date; endTime?: Date };
+      const nextUserId = next.userId !== undefined ? next.userId : before.userId;
+      if (nextUserId && (next.userId !== undefined || next.startTime || next.endTime)) {
+        await assertNoOverlap(
+          { userId: nextUserId, startTime: next.startTime ?? before.startTime, endTime: next.endTime ?? before.endTime, excludeId: before.id },
+          tx,
+        );
+      }
       const nextDate = data.date instanceof Date ? data.date : typeof data.date === 'string' ? new Date(data.date) : null;
       if (before.status === 'PUBLISHED' && nextDate && weekStartOf(nextDate).getTime() !== weekStartOf(before.date).getTime()) {
         const targetWeekPublished = await tx.rotaPublish.findUnique({

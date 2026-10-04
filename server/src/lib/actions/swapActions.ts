@@ -7,6 +7,7 @@ import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
 import { findBlockingLeave, blockedByLeaveMessage } from './leaveActions.js';
+import { findShiftOverlap } from './shiftActions.js';
 import { formatVenueTime } from '../venueTime.js';
 import { DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
 
@@ -107,6 +108,7 @@ export async function decideSwapRequest(input: {
   | { result: 'not_found' }
   | { result: 'conflict' }
   | { result: 'target_on_leave'; message: string }
+  | { result: 'target_overlap'; message: string }
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
     where: { id: input.id },
@@ -123,16 +125,19 @@ export async function decideSwapRequest(input: {
     include: {
       requestedBy: SWAP_REQUEST_INCLUDE.requestedBy,
       targetUser: SWAP_REQUEST_INCLUDE.targetUser,
-      shift: { select: { userId: true, locationId: true, date: true } },
+      shift: { select: { userId: true, locationId: true, date: true, startTime: true, endTime: true } },
     },
   });
   if (!existing) return { result: 'not_found' };
 
   // The cover can't be handed a shift on a day they're on blocking leave
-  // (RotaLeave) — same rule as every other shift write.
+  // (RotaLeave), or one overlapping a shift they already work — same rules
+  // as every other shift write.
   if (input.decision === 'approved' && existing.targetUserId) {
     const leave = await findBlockingLeave(existing.targetUserId, existing.shift.date);
     if (leave) return { result: 'target_on_leave', message: blockedByLeaveMessage(leave, existing.targetUser?.fullName) };
+    const overlap = await findShiftOverlap({ userId: existing.targetUserId, startTime: existing.shift.startTime, endTime: existing.shift.endTime, excludeId: existing.shiftId });
+    if (overlap) return { result: 'target_overlap', message: overlap };
   }
 
   if (isRequestLocked({ status: existing.status }, { userId: existing.shift.userId }, existing.requestedById)) {

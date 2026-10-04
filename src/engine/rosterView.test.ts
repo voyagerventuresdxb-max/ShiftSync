@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickViewedEmployee } from './rosterView';
+import { pickViewedEmployee, totalHours } from './rosterView';
+import type { Shift } from './types';
 
 const employees = [
   { id: 'layla', name: 'Layla' },
@@ -29,4 +30,11 @@ test('a STAFF session not on this week’s roster, or no session at all, falls b
 
 test('a stale selection that is no longer on the roster is ignored in favour of the default', () => {
   assert.equal(pickViewedEmployee(employees, 'gone', { id: 'omar', systemRole: 'STAFF' })?.id, 'omar');
+});
+
+test('totalHours sums both segments of a split shift (per day) and every segment across the week', () => {
+  const seg = (id: string, date: string, start: string, end: string): Shift => ({ id, employeeId: 'sara', date, start, end, type: 'service', overnight: end <= start });
+  const tuesday = [seg('a', '2031-04-08', '11:00', '15:00'), seg('b', '2031-04-08', '18:00', '23:00')];
+  assert.equal(totalHours(tuesday), 9);
+  assert.equal(totalHours([...tuesday, seg('c', '2031-04-09', '22:00', '02:00')]), 13, 'an overnight segment counts its hours past midnight');
 });

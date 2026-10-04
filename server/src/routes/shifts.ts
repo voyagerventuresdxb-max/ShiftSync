@@ -9,7 +9,7 @@ import { visibleShiftFilter } from '../lib/shiftVisibility.js';
 import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
-import { createShift, editShift, removeShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { createShift, editShift, removeShift, SHIFT_INCLUDE, ShiftOverlapError, findBatchOverlap } from '../lib/actions/shiftActions.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
 
 export const shiftsRouter = Router();
@@ -156,6 +156,7 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     );
     return res.status(201).json({ shift: shiftToDto(created, timezone) });
   } catch (err) {
+    if (err instanceof ShiftOverlapError) return res.status(409).json({ error: err.message });
     console.error('[shifts.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while creating the shift.' });
   }
@@ -219,6 +220,7 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
     const updated = await editShift({ id, data: data as Prisma.ShiftUpdateInput, audit: { locationId: existing.locationId, actorId } });
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });
   } catch (err) {
+    if (err instanceof ShiftOverlapError) return res.status(409).json({ error: err.message });
     console.error('[shifts.update] failed', err);
     return res.status(500).json({ error: 'Unexpected error while updating the shift.' });
   }
@@ -291,24 +293,33 @@ shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
     }
 
     const timezone = await venueTimezone(locationId);
+    const timed = rows.map((r) => ({
+      ...r,
+      userId: r.userId ? String(r.userId) : null,
+      startTime: combineDateAndTime(r.date, r.start, timezone),
+      endTime: combineDateAndTime(r.date, r.end, timezone, r.end <= r.start),
+    }));
+    // Same all-or-nothing rule for overlapping shifts (split shifts, 2026-10-02).
+    const overlap = await findBatchOverlap(locationId, timed);
+    if (overlap) return res.status(409).json({ error: overlap });
+
     const created = await prisma.$transaction(
-      rows.map((r) => {
-        const overnight = r.end <= r.start;
-        return prisma.shift.create({
+      timed.map((r) =>
+        prisma.shift.create({
           data: {
             locationId,
             roleId: String(r.roleId),
-            userId: r.userId ? String(r.userId) : null,
+            userId: r.userId,
             createdById,
             date: new Date(`${r.date}T00:00:00.000Z`),
-            startTime: combineDateAndTime(r.date, r.start, timezone),
-            endTime: combineDateAndTime(r.date, r.end, timezone, overnight),
+            startTime: r.startTime,
+            endTime: r.endTime,
             breakMinutes: r.breakMinutes ?? 0,
             status: 'DRAFT',
           },
           include: SHIFT_INCLUDE,
-        });
-      }),
+        }),
+      ),
     );
     return res.status(201).json({ shifts: created.map((s) => shiftToDto(s, timezone)), createdCount: created.length });
   } catch (err) {
@@ -345,7 +356,7 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     // Real delivery on top of the flag-stamp above (never inside
     // publishRota's own transaction — a push failure must not roll back the
     // publish). Same call voice's /execute PUBLISH_ROTA case makes.
-    void notifySchedulePublished(result.affectedUserIds, weekStart);
+    void notifySchedulePublished(result.affectedUserIds, weekStart, result.summaries);
 
     return res.status(200).json({ publishedAt: result.publishedAt.toISOString(), notifiedCount: result.notifiedCount });
   } catch (err) {

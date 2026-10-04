@@ -146,7 +146,7 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (re
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const result = await applyRotaTemplate({ templateId: id, weekStart: start, createdById, actorId: req.user!.id });
     if (result.result !== 'ok') {
-      return res.status(result.result === 'blocked_by_leave' ? 409 : 404).json({ error: result.message });
+      return res.status(result.result === 'blocked_by_leave' || result.result === 'overlap' ? 409 : 404).json({ error: result.message });
     }
     return res.status(201).json({ createdCount: result.createdCount });
   } catch (err) {
