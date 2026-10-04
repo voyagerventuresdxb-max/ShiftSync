@@ -3,7 +3,7 @@
  * results computed under whatever `TZ` this process was started with.
  */
 import { currentVenueWeekStart, isMondayIso, venueDateOf, venueWeekRange } from './venueWeek.js';
-import { nextRequestWindowClose } from './swapRequestPolicy.js';
+import { isRequestWindowOpen, nextRequestWindowClose, requestWindowCloseForShift } from './swapRequestPolicy.js';
 import { shiftLabelOf } from './actions/swapActions.js';
 
 const DUBAI = 'Asia/Dubai';
@@ -24,6 +24,12 @@ const out = {
   close_wed_1701: nextRequestWindowClose(at('2026-10-07T13:01:00.000Z'), DUBAI).toISOString(),
   close_wed_1700: nextRequestWindowClose(at('2026-10-07T13:00:00.000Z'), DUBAI).toISOString(),
   close_wed_la_venue: nextRequestWindowClose(at('2026-10-07T12:59:00.000Z'), LA).toISOString(),
+  shift_window_mon_dubai: requestWindowCloseForShift('2026-10-05', DUBAI).toISOString(),
+  shift_window_sat_dubai: requestWindowCloseForShift(at('2026-10-10T00:00:00.000Z'), DUBAI).toISOString(),
+  shift_window_sun_dubai: requestWindowCloseForShift('2026-10-11', DUBAI).toISOString(),
+  shift_window_sat_la_venue: requestWindowCloseForShift('2026-10-10', LA).toISOString(),
+  shift_window_open_wed_1659: isRequestWindowOpen('2026-10-10', at('2026-10-07T12:59:00.000Z'), DUBAI),
+  shift_window_open_wed_1700: isRequestWindowOpen('2026-10-10', at('2026-10-07T13:00:00.000Z'), DUBAI),
   label_dubai_shift: shiftLabelOf({
     date: at('2026-10-05T00:00:00.000Z'),
     startTime: at('2026-10-05T05:00:00.000Z'),
