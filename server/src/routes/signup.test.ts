@@ -193,8 +193,6 @@ test('POST /api/signup/verify-otp: missing fullName or venueName gets a 400, not
   const { plainCode: codeA } = await createOtpCode(phoneA, 'SIGNUP');
   const { plainCode: codeB } = await createOtpCode(phoneB, 'SIGNUP');
 
-  const orgCountBefore = await prisma.organization.count();
-
   await withServer(async (baseUrl) => {
     const resNoFullName = await fetch(`${baseUrl}/api/signup/verify-otp`, {
       method: 'POST',
@@ -215,9 +213,13 @@ test('POST /api/signup/verify-otp: missing fullName or venueName gets a 400, not
     assert.match(bodyB.error, /venueName/i);
   });
 
-  assert.equal(await prisma.organization.count(), orgCountBefore, 'no Organization may be created on a 400');
+  // Scoped to this test's own names and phones, never a database-wide count: other test files
+  // create and delete organizations concurrently against the same database (the old global
+  // before/after count was this file's intermittent failure).
+  assert.equal(await prisma.organization.count({ where: { name: '__task-signup-test__ venue A' } }), 0, 'no Organization may be created on a 400');
+  assert.equal(await prisma.location.count({ where: { name: '__task-signup-test__ venue A' } }), 0, 'no Location may be created on a 400');
   const leaked = await prisma.user.findMany({
-    where: { fullName: { in: ['__task-signup-test__ Owner B'] } },
+    where: { OR: [{ fullName: { in: ['__task-signup-test__ Owner B'] } }, { phone: { in: [toE164(phoneA)!, toE164(phoneB)!] } }] },
   });
   assert.equal(leaked.length, 0, 'no User may be created on a 400');
 });
