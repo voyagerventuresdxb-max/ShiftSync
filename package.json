@@ -13,6 +13,7 @@
     "test": "node --import tsx --test src/engine/*.test.ts \"src/api/**/*.test.ts\" \"src/components/**/*.test.ts\" \"src/features/**/*.test.ts\" \"src/state/**/*.test.ts\" \"src/lib/**/*.test.ts\" scripts/*.test.mjs",
     "test:server": "node scripts/with-branch-schema.mjs --connection-limit=1 \"node --import tsx --test 'server/src/**/*.test.ts' 'server/eval/**/*.test.ts'\"",
     "test:e2e": "node scripts/with-branch-schema.mjs \"playwright test\"",
+    "test:e2e:live": "cross-env E2E_LIVE=1 node scripts/with-branch-schema.mjs \"playwright test\"",
     "swarm": "cross-env NODE_OPTIONS=--max-old-space-size=8192 claude-flow swarm",
     "sparc": "cross-env NODE_OPTIONS=--max-old-space-size=8192 claude-flow sparc",
     "local": "node ./scripts/ollama-exec.cjs",
