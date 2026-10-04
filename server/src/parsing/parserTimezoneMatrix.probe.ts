@@ -89,6 +89,17 @@ const synthetic: Record<string, Buffer> = {
       'Mona Said,,14-22,14-22,OFF,,10-18,10-18\n',
   ),
   'typed-cells.xlsx': typedWorkbook(),
+  // Day headers with a weekday before or after a DD/MM date; "Sat 21/08" is printed over a Friday.
+  'grid-weekday-date-headers.csv': Buffer.from(
+    ',Mon 17/08,MON 18-08,Wed 19 Aug,20/08 Thu,Sat 21/08
+' +
+      'SUPERVISORS,,,,,
+' +
+      'Ali Hassan,9-17,9-17,OFF,10-18,10-18
+' +
+      'Mona Said,14-22,,14-22,14-22,
+',
+  ),
 };
 
 const out: Record<string, unknown> = { tz: process.env.TZ ?? null };

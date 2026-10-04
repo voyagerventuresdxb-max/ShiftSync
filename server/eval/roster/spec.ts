@@ -7,7 +7,18 @@ export const WEEK_START = '2026-08-17';
 export const DATES = ['2026-08-17', '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22', '2026-08-23'];
 
 export type Layout = 'grid' | 'title-column' | 'long-format' | 'am-pm-merged' | 'csv' | 'pdf-text' | 'multi-sheet' | 'multi-sheet-notes-first';
-export type DayHeaderStyle = 'date' | 'weekday' | 'weekday-date' | 'short-weekday';
+export type DayHeaderStyle =
+  | 'date' // 17-Aug
+  | 'weekday' // Monday
+  | 'weekday-date' // Mon 17/08
+  | 'short-weekday' // Mon
+  | 'weekday-upper-dash' // MON 17-08
+  | 'weekday-day-month' // Mon 17 Aug
+  | 'date-weekday' // 17/08 Mon
+  | 'weekday-date-mismatch'; // Mon 17/08, but the third column says Thu 19/08 (19/08 is a Wednesday)
+
+/** The column whose printed weekday is wrong in 'weekday-date-mismatch'. */
+export const MISMATCH_DAY = 2;
 
 export interface StaffSpec {
   name: string;
@@ -68,6 +79,8 @@ export function truthOf(spec: CorpusSpec): Truth {
         if ('shifts' in t) for (const [start, end] of t.shifts) truth.shifts.push({ name: s.name, role, date: DATES[day]!, start, end });
         else if ('leave' in t) truth.leave.push({ name: s.name, date: DATES[day]!, code: t.leave });
         else truth.flagged.push({ name: s.name, date: DATES[day]! });
+        // A header whose weekday disagrees with its date: everything under it needs a look.
+        if (spec.dayHeader === 'weekday-date-mismatch' && day === MISMATCH_DAY && !('flagged' in t)) truth.flagged.push({ name: s.name, date: DATES[day]! });
       }
     });
   }
@@ -127,6 +140,14 @@ export const CORPUS: CorpusSpec[] = [
   { id: 'header-vocab-short-days', tags: ['"Team member" header', 'Mon/Tue day headers'], layout: 'grid', dayHeader: 'short-weekday', nameHeader: 'Team member', sectionHeaders: true,
     staff: staffOf(W, ['BARTENDERS', 'BARTENDERS', 'HOSTS', 'HOSTS']), expectEscalation: null },
   { id: 'header-vocab-weekday-date', tags: ['"Mon 17/08" day headers', 'Arabic names'], layout: 'grid', dayHeader: 'weekday-date', nameHeader: 'Staff', sectionHeaders: true,
+    staff: staffOf(A, ['SUPERVISORS', 'SUPERVISORS', 'RUNNERS', 'RUNNERS']), expectEscalation: null },
+  { id: 'header-vocab-weekday-upper-dash', tags: ['"MON 17-08" day headers', 'Filipino names'], layout: 'grid', dayHeader: 'weekday-upper-dash', nameHeader: 'Staff', sectionHeaders: true,
+    staff: staffOf(F, ['SUPERVISORS', 'SUPERVISORS', 'RUNNERS', 'RUNNERS']), expectEscalation: null },
+  { id: 'header-vocab-weekday-day-month', tags: ['"Mon 17 Aug" day headers', 'Indian names'], layout: 'grid', dayHeader: 'weekday-day-month', nameHeader: 'Name', sectionHeaders: true,
+    staff: staffOf(I, ['BARTENDERS', 'BARTENDERS', 'HOSTS', 'HOSTS']), expectEscalation: null },
+  { id: 'header-vocab-date-weekday', tags: ['"17/08 Mon" day headers', 'Western names'], layout: 'grid', dayHeader: 'date-weekday', nameHeader: 'Team member', sectionHeaders: true,
+    staff: staffOf(W, ['SUPERVISORS', 'SUPERVISORS', 'RUNNERS', 'RUNNERS']), expectEscalation: null },
+  { id: 'header-weekday-mismatch', tags: ['"Thu 19/08" printed over a Wednesday', 'Arabic names'], layout: 'grid', dayHeader: 'weekday-date-mismatch', nameHeader: 'Staff', sectionHeaders: true,
     staff: staffOf(A, ['SUPERVISORS', 'SUPERVISORS', 'RUNNERS', 'RUNNERS']), expectEscalation: null },
   { id: 'no-section-headers', tags: ['no roles printed', 'Western names'], layout: 'grid', dayHeader: 'date', nameHeader: '', sectionHeaders: false,
     staff: staffOf(W, ['', '', '', '']), expectEscalation: 'empty_roles' },
