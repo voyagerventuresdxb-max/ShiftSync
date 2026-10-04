@@ -37,6 +37,23 @@ export function employmentStatusRefusal(actor: StatusActor, target: StatusTarget
   return null;
 }
 
+/**
+ * Who may change whose phone number in the Staff Directory. The phone is the
+ * sign-in credential, so it follows the same reach as status changes: a
+ * MANAGER changes STAFF numbers only, an OWNER changes MANAGER and STAFF
+ * numbers, and anyone may change their own.
+ */
+export function phoneChangeRefusal(actor: StatusActor, target: StatusTarget): string | null {
+  if (actor.id === target.id) return null;
+  if (actor.systemRole === 'MANAGER' && target.systemRole !== 'STAFF') {
+    return "Managers can change staff phone numbers only. Ask the owner to change a manager's or owner's number.";
+  }
+  if (actor.systemRole === 'OWNER' && target.systemRole === 'OWNER') {
+    return "An owner's phone number can only be changed by that owner.";
+  }
+  return null;
+}
+
 /** Thrown by `assertNotLastActiveOwner`; the route answers 409. */
 export class LastOwnerError extends Error {
   constructor() {
