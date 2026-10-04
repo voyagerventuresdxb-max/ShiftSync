@@ -1,0 +1,173 @@
+{
+  "id": "title-column-filipino",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "Supervisor",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "Supervisor",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "Supervisor",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "Supervisor",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "Head Waiter",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-17",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-20",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "Waiter",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "Runner",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-19",
+      "code": "OFF"
+    },
+    {
+      "name": "Jomar Santos",
+      "date": "2026-08-21",
+      "code": "OFF"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-22",
+      "code": "AL"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-23",
+      "code": "AL"
+    },
+    {
+      "name": "Rommel Pascual",
+      "date": "2026-08-23",
+      "code": "SL"
+    }
+  ],
+  "flagged": [],
+  "file": "title-column-filipino.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "per-row title column",
+    "Filipino names"
+  ]
+}

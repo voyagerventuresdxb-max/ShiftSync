@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/engine/*.test.ts \"src/api/**/*.test.ts\" \"src/components/**/*.test.ts\" \"src/features/**/*.test.ts\" \"src/state/**/*.test.ts\" \"src/lib/**/*.test.ts\" scripts/*.test.mjs",
-    "test:server": "node scripts/with-branch-schema.mjs --connection-limit=1 \"node --import tsx --test 'server/src/**/*.test.ts'\"",
+    "test:server": "node scripts/with-branch-schema.mjs --connection-limit=1 \"node --import tsx --test 'server/src/**/*.test.ts' 'server/eval/**/*.test.ts'\"",
     "test:e2e": "node scripts/with-branch-schema.mjs \"playwright test\"",
     "swarm": "cross-env NODE_OPTIONS=--max-old-space-size=8192 claude-flow swarm",
     "sparc": "cross-env NODE_OPTIONS=--max-old-space-size=8192 claude-flow sparc",
@@ -36,7 +36,9 @@
     "cap:sync": "node -e \"if(!process.env.VITE_API_URL){console.error('cap:sync needs VITE_API_URL (the API origin), see docs/android.md');process.exit(1)}\" && vite build && cap sync android",
     "cap:open": "cap open android",
     "scan:secrets": "node scripts/scan-secrets.mjs",
-    "vlm:check": "tsx server/scripts/vlm-check.ts"
+    "vlm:check": "tsx server/scripts/vlm-check.ts",
+    "eval:roster": "tsx server/eval/roster/run.ts",
+    "eval:roster:generate": "tsx server/eval/roster/generate.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
