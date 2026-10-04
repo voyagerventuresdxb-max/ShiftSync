@@ -27,6 +27,7 @@ import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
 import { loginLinksRouter } from './routes/loginLinks.js';
 import { corsOptionsFromEnv } from './lib/corsOptions.js';
+import { isPushRecording, pushOutbox } from './lib/push.js';
 
 export function createApp() {
   const app = express();
@@ -35,6 +36,13 @@ export function createApp() {
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  // Dev/e2e only (PUSH_TRANSPORT=record, refused in production): what push would have delivered.
+  if (isPushRecording()) {
+    app.get('/api/dev/push-outbox', (req, res) => {
+      const userId = typeof req.query.userId === 'string' ? req.query.userId : undefined;
+      res.json({ sent: pushOutbox().filter((p) => !userId || p.userId === userId) });
+    });
+  }
 
   // Both uploaded-file subpaths are session-gated and location-scoped (see
   // policyDocuments.ts / floorPlan.ts), each mounted BEFORE the generic
