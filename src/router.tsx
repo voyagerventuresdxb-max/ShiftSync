@@ -1,22 +1,26 @@
 import { createBrowserRouter, Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { lazy, type ReactNode } from 'react';
 import { Pencil, Rocket } from 'lucide-react';
 import { AppShell, type RouteHandle } from './components/shiftsync/AppShell';
 import { useIdentity } from './state/IdentityContext';
 import { loadBoundVenue } from './api/venueBinding';
 import HomeContent from './routes/HomeRoute';
 import SchedulingContent from './routes/SchedulingRoute';
-import ScheduleEditorContent from './routes/ScheduleEditorRoute';
-import FloorPlanContent from './routes/FloorPlanRoute';
-import PeopleContent from './routes/PeopleRoute';
 import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
 import LoginContent from './routes/LoginRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
 import WelcomeContent from './routes/WelcomeRoute';
-import OnboardingContent from './routes/OnboardingRoute';
 import LoginLinkContent from './routes/LoginLinkRoute';
 import { PrivacyContent, TermsContent } from './routes/LegalRoute';
+
+// Manager-only and heavy screens load on first visit, so the staff screens
+// (Home, My Shifts, Scheduling's personal rota, sign-in) never download them.
+// AppShell wraps the route outlet in the Suspense boundary.
+const ScheduleEditorContent = lazy(() => import('./routes/ScheduleEditorRoute'));
+const FloorPlanContent = lazy(() => import('./routes/FloorPlanRoute'));
+const PeopleContent = lazy(() => import('./routes/PeopleRoute'));
+const OnboardingContent = lazy(() => import('./routes/OnboardingRoute'));
 
 /**
  * Gates the manager-dashboard pages (Scheduling/Approvals, Floor Plan,

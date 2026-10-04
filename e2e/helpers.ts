@@ -71,7 +71,9 @@ export async function gotoSettled(page: Page, url: string): Promise<void> {
  * (Account for a signed-out visitor, Venue for a signed-in manager).
  */
 export async function passWelcomeIntro(page: Page): Promise<void> {
-  await page.waitForSelector('text=ShiftSync', { timeout: 15000 });
+  // The Welcome screen itself (onboarding is a lazily-loaded route, so the app
+  // header's "ShiftSync" can be on screen before the intro is there to hold).
+  await page.locator('.ob-root').waitFor({ timeout: 30000 });
   const viewport = page.viewportSize()!;
   const cx = viewport.width / 2;
   const cy = viewport.height / 2;

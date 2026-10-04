@@ -1,0 +1,13 @@
+{
+  "note": "Gzipped JS each staff screen downloads; written by `node scripts/check-bundle-size.mjs --update`. The build fails above budget + tolerance.",
+  "tolerance": 0.1,
+  "staffScreensGzipBytes": {
+    "/": 132613,
+    "/my-shifts": 132613,
+    "/scheduling": 132613,
+    "/profile": 132613,
+    "/login": 132613,
+    "/join": 132613,
+    "/welcome": 132613
+  }
+}

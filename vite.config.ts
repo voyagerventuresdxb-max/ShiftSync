@@ -26,5 +26,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    // Read by scripts/check-bundle-size.mjs to work out which chunks each screen downloads.
+    manifest: true,
   },
 });
