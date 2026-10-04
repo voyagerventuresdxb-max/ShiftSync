@@ -915,8 +915,30 @@ SMS go-live; Railway config before 2026-12-01 (#52 follow-ups); VAPID go-live; n
 
 # Run 5 (started 2026-10-04 05:40 Dubai, after Run 4's final report)
 
-## Stage A — merge Run 4's PRs + one API deploy (in progress)
+## Stage A — merge Run 4's PRs + one API deploy: done (05:40–07:05 Dubai)
 - Merge set, in dependency order: #99 → #92 → #93 → #95 → #96 → #97 → #98 → #100. Each: master merged into the branch (merge commit, both sides kept), full gate (typecheck ×2, lint, unit, build, server, full e2e with `@live` excluded, secrets scan), then a merge commit.
 - Not merged: #94 (Run 4 opened it as prepare-only; merging it is tied to the owner's history decision), #91 (this log; still being written), #69/#78/#84 (owner review).
 - PR bodies reread before merging: outcome-only.
 - Rollback target before the deploy: `f5f3e49c` (code `64de660`).
+
+| PR | Merge commit | Conflicts (resolution) | Gate |
+|---|---|---|---|
+| #99 test stability | `db6979d` | none (already on master) | server 408/1, **full e2e 75/75** |
+| #92 AI config + vision provider | `4c4056b` | `MEMORY.md`, `ENV_VARS.md` checklist (keep both) | server 428/1, **full e2e 75/75** |
+| #93 escalation (retargeted to master) | `f986da9` | `MEMORY.md` | server 455/1, **full e2e 77/77** |
+| #95 eval harness (retargeted) | `c020900` | `MEMORY.md` | server 462/1, e2e (onboarding, AI consent) 6/6 |
+| #96 swap-request window | `73536db` | `MEMORY.md` | server 467/1, e2e (calendar, voice, zero-setup) 16/16 |
+| #97 health/ready + request ids | `45a447e` | `MEMORY.md`; `app.ts` readiness route + push-outbox route (keep both) | server 472/1, **full e2e 77/77** |
+| #98 account deletion | `ae8426b` | `MEMORY.md`; migration additive, drift clean | server 476/1, **full e2e 80/80** |
+| #100 SMS behind a flag | `1d56839` | `MEMORY.md`, `ENV_VARS.md` (keep both) | server 491/1, **full e2e 80/80** (its tree is master's final tree) |
+
+All gates also: typecheck ×2, lint 0 errors, unit 94/94, build, secrets scan clean; e2e `CI=1 --retries=0`, `@live` excluded. Narrow PRs ran their relevant e2e; the last PR's full run covers the final master tree.
+
+| Time (Dubai) | What | Deployment id | Code | Result |
+|---|---|---|---|---|
+| before | serving (rollback target) | `f5f3e49c-55dd-4247-bf1c-6f37f32646f0` | `64de660` | — |
+| 07:02–07:05 | API deploy (`railway redeploy --from-source`) | `806be2a0-7f9e-4c8d-9d13-038fd0777bd5` | `1d56839` | **SUCCESS**; nixpacks; 31 migrations found, `20261004100000_account_deletion` applied, API listening; `/api/health` 200 JSON ×2; `/api/health/ready` 200 (31/31 applied); `X-Request-Id` present; GitHub "Vercel" status for `1d56839`: success |
+
+- Pre-deploy (presence only): none of the settings the new boot rules refuse is set; `NODE_ENV=production`.
+- Smoke test without sign-in: unknown number on login → generic 404 only; allowlisted number on signup → code echoed; another number → no code. 3/3. No rollback needed.
+- Production is now frozen for the rest of Run 5 (no deploys, no Railway changes).
