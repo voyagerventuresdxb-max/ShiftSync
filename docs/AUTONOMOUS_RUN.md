@@ -828,3 +828,7 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 - `server/eval/roster/`: 14 synthetic rosters (layouts, ALL-CAPS, merged cells, multi-sheet, four name styles, split shifts, UL/AL/SL/PH/OFF and IN/CL cells, header vocabulary) with ground truth from an independent interpreter; `npm run eval:roster` scores name/day/start/end/role/leave/flagged, extra shifts and the escalation rate offline; vision path via mock (pipeline check), recorded or live (credentials only), with latency/tokens/cost. No names in logs or reports.
 - First result: day 88%, role 97%, leave 84%, escalation 4/14. **Gap found:** `Mon 17/08`-style day headers aren't recognised by the grid parser (reported, not fixed here).
 - Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 460 pass / 1 skip (+7), e2e 1/1, scan clean.
+
+## Stage 6 — swap-request window enforced: done, PR open
+- [#96](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/96). A cover request can be filed until Wednesday 17:00 venue time of the shift's own (Monday-based) week; after that REST and voice answer `409 swap_window_closed` with the close time and "ask your manager directly", and nothing is written. Managers can still decide requests already filed. `expiresAt` is now the shift-week's close.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 411 pass / 1 skip (+5, plus timezone-matrix cases), e2e 16/16, scan clean. One existing voice test used a fixed past date and now uses a shift a week ahead.
