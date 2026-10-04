@@ -59,7 +59,24 @@ for (const signal of PROD_SIGNALS) {
   test(`${label}: boots with every flag off`, () => {
     assert.deepEqual(checkProductionEnv({ ...signal, ALLOW_DEV_OTP_BYPASS: 'false', ALLOW_DEV_ERROR_INJECTION: '1' }), { warnings: [] });
   });
+
+  test(`${label}: refuses to start with SMS_OTP_ENABLED=true and the provider not configured (every sign-in would fail)`, () => {
+    assert.throws(
+      () => checkProductionEnv({ ...signal, SMS_OTP_ENABLED: 'true', TWILIO_ACCOUNT_SID: 'ACfake' }),
+      (err: unknown) => err instanceof Error && /SMS_OTP_ENABLED=true but TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID or SMS_SENDER_ID is not set/.test(err.message),
+    );
+    const configured = { SMS_OTP_ENABLED: 'true', TWILIO_ACCOUNT_SID: 'ACfake', TWILIO_AUTH_TOKEN: 'fake', SMS_SENDER_ID: 'ShiftSync' };
+    assert.deepEqual(checkProductionEnv({ ...signal, ...configured }), { warnings: [] });
+    // Off (the default), the provider settings are not needed.
+    assert.deepEqual(checkProductionEnv({ ...signal, SMS_OTP_ENABLED: 'false' }), { warnings: [] });
+  });
 }
+
+test('outside production, SMS on with the provider not configured is a warning', () => {
+  assert.deepEqual(checkProductionEnv({ SMS_OTP_ENABLED: 'true' }).warnings, [
+    'SMS_OTP_ENABLED=true but TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID or SMS_SENDER_ID is not set — every code request would fail.',
+  ]);
+});
 
 test('one error names every offending setting, so a single redeploy fixes all of them', () => {
   assert.throws(

@@ -1,4 +1,5 @@
 import { devOtpEchoEnabled, echoAllowedPhones } from './devOtpEcho.js';
+import { missingSmsSettings, smsOtpEnabled } from './sms.js';
 
 /**
  * Every variable that can redirect Gemini / Vertex traffic to another host:
@@ -38,9 +39,13 @@ export function checkProductionEnv(env: NodeJS.ProcessEnv = process.env): { warn
   const { phones, invalid } = echoAllowedPhones(env);
   const warnings = invalid.map((entry) => `ECHO_ALLOWED_PHONES entry "${entry}" is not a valid mobile number — ignored.`);
   const echoWithoutAllowlist = devOtpEchoEnabled(env) && phones.size === 0;
+  // SMS on but unconfigured would fail every request-otp, i.e. every sign-in.
+  const smsMissing = smsOtpEnabled(env) ? missingSmsSettings(env) : [];
+  const smsIncomplete = smsMissing.length > 0 ? `SMS_OTP_ENABLED=true but ${smsMissing.join(', ')} is not set — every code request would fail.` : null;
 
   if (!isProduction(env)) {
     if (echoWithoutAllowlist) warnings.push('ALLOW_DEV_OTP_ECHO=true but ECHO_ALLOWED_PHONES has no valid number — no code will be echoed.');
+    if (smsIncomplete) warnings.push(smsIncomplete);
     return { warnings };
   }
 
@@ -48,6 +53,7 @@ export function checkProductionEnv(env: NodeJS.ProcessEnv = process.env): { warn
   if (echoWithoutAllowlist) {
     fatal.push('ALLOW_DEV_OTP_ECHO=true needs at least one valid mobile number in ECHO_ALLOWED_PHONES (comma-separated).');
   }
+  if (smsIncomplete) fatal.push(smsIncomplete);
   for (const flag of FORBIDDEN_IN_PRODUCTION) {
     // The base-URL overrides are URLs, not boolean flags: any value at all is on.
     if (isBaseUrlOverride(flag) ? !env[flag]?.trim() : !isFlagOn(flag, env)) continue;
