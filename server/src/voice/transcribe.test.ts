@@ -83,3 +83,26 @@ test('a Gemini 429 becomes an "unavailable" error — distinguishable from a for
   } as unknown as GoogleGenAI);
   await expectFailure('unavailable');
 });
+
+test('a Gemini 404 (retired or misspelled VOICE_MODEL) becomes model_unavailable and is logged loudly with the model ID', async () => {
+  assert.equal(classifyGeminiFailure(new ApiError({ message: 'not found', status: 404 })), 'model_unavailable');
+  const savedModel = process.env.VOICE_MODEL;
+  process.env.VOICE_MODEL = 'gemini-retired-example';
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args.map(String).join(' '));
+  try {
+    __setVoiceClientForTests({
+      models: { generateContent: async () => { throw new ApiError({ message: 'models/x is not found', status: 404 }); } },
+    } as unknown as GoogleGenAI);
+    await expectFailure('model_unavailable');
+  } finally {
+    console.error = original;
+    if (savedModel === undefined) delete process.env.VOICE_MODEL;
+    else process.env.VOICE_MODEL = savedModel;
+  }
+  const line = logged.find((l) => l.includes('MODEL NOT AVAILABLE'));
+  assert.ok(line, 'a loud MODEL NOT AVAILABLE line is logged');
+  assert.match(line!, /"gemini-retired-example"/);
+  assert.ok(!line!.includes('test-key-never-used'), 'never logs the key');
+});

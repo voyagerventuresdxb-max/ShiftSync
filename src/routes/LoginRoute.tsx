@@ -8,6 +8,8 @@ import { postLoginDestination } from '../lib/postLoginDestination';
 import { hasStaffWelcome, shouldShowStaffWelcome, stashStaffWelcome, WELCOME_PATH } from '../lib/staffWelcome';
 import { cooldownAfterRefusal, useResendCooldown } from '../hooks/useResendCooldown';
 import { SESSION_ENDED_REASON } from '../components/shiftsync/SessionGuard';
+import { ACCOUNT_DELETED_REASON } from '../api/identity';
+import { LegalLinks } from './LegalRoute';
 
 type Phase = 'phone' | 'code';
 
@@ -26,6 +28,7 @@ export default function LoginContent() {
   const staffLook = searchParams.get('as') === 'staff';
   // Set by SessionGuard when a dead session bounced them here. Plain words, no mechanics.
   const sessionEnded = searchParams.get('reason') === SESSION_ENDED_REASON;
+  const accountDeleted = searchParams.get('reason') === ACCOUNT_DELETED_REASON;
   const resend = useResendCooldown();
   const [phase, setPhase] = useState<Phase>('phone');
   const [phone, setPhone] = useState('');
@@ -143,6 +146,12 @@ export default function LoginContent() {
               : "We'll text a code to the number your venue has on file."
             : `Enter the code we sent to ${phone}.`}
       </p>
+
+      {accountDeleted && !error && (
+        <div className="mt-3 rounded-lg border border-border bg-card p-4 text-sm" role="status" data-testid="account-deleted-notice">
+          Your account has been deleted. Your personal details are gone and you've been signed out everywhere.
+        </div>
+      )}
 
       {sessionEnded && !error && (
         <div className="mt-3 rounded-lg border border-border bg-card p-4 text-sm" role="status" data-testid="session-ended-notice">
@@ -283,6 +292,7 @@ export default function LoginContent() {
           </Link>
         </p>
       )}
+      <LegalLinks />
     </section>
   );
 }

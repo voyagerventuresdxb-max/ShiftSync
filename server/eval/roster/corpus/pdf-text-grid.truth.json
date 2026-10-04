@@ -1,0 +1,174 @@
+{
+  "id": "pdf-text-grid",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Priya Raghunathan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Priya Raghunathan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Arjun Nair",
+      "role": "SUPERVISORS",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Vikram Desai",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "Priya Raghunathan",
+      "date": "2026-08-19",
+      "code": "OFF"
+    },
+    {
+      "name": "Arjun Nair",
+      "date": "2026-08-21",
+      "code": "OFF"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "date": "2026-08-22",
+      "code": "AL"
+    },
+    {
+      "name": "Sneha Kulkarni",
+      "date": "2026-08-23",
+      "code": "AL"
+    },
+    {
+      "name": "Vikram Desai",
+      "date": "2026-08-23",
+      "code": "SL"
+    }
+  ],
+  "flagged": [],
+  "file": "pdf-text-grid.pdf",
+  "expectEscalation": null,
+  "tags": [
+    "text-layer PDF",
+    "day grid",
+    "Indian names"
+  ]
+}

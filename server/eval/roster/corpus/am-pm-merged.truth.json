@@ -1,0 +1,176 @@
+{
+  "id": "am-pm-merged",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "13:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "14:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "13:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "13:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-21",
+      "start": "14:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "10:00",
+      "end": "14:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "10:00",
+      "end": "14:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "10:00",
+      "end": "14:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-23",
+      "start": "17:00",
+      "end": "23:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "13:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "09:00",
+      "end": "13:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "13:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "18:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "18:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "18:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "18:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [],
+  "flagged": [],
+  "file": "am-pm-merged.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "merged day headers",
+    "AM/PM sub-columns",
+    "split shifts"
+  ]
+}

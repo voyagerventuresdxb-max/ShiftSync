@@ -1,0 +1,174 @@
+{
+  "id": "grid-western",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Emily Carter",
+      "role": "SUPERVISORS",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Lucas Brennan",
+      "role": "SUPERVISORS",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Oliver Grant",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "Emily Carter",
+      "date": "2026-08-19",
+      "code": "OFF"
+    },
+    {
+      "name": "Lucas Brennan",
+      "date": "2026-08-21",
+      "code": "OFF"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "date": "2026-08-22",
+      "code": "AL"
+    },
+    {
+      "name": "Hannah Whitlow",
+      "date": "2026-08-23",
+      "code": "AL"
+    },
+    {
+      "name": "Oliver Grant",
+      "date": "2026-08-23",
+      "code": "SL"
+    }
+  ],
+  "flagged": [],
+  "file": "grid-western.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "day grid",
+    "Western names",
+    "section headers"
+  ]
+}

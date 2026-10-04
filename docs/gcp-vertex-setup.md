@@ -1,5 +1,10 @@
 # GCP / Vertex AI setup — roster vision-fallback
 
+> **Superseded for production by [`vlm-go-live.md`](vlm-go-live.md)** (2026-10-04): Railway can't mount a key
+> file, so production uses `GOOGLE_SERVICE_ACCOUNT_JSON`; the default location is now `eu`, because the
+> default models are not offered in `europe-west4`; and `npm run vlm:check` verifies the setup. The
+> steps below still describe the Google Cloud side.
+
 The roster-upload vision-fallback path (image/scanned-PDF rosters) is fully
 coded to use Vertex AI (`server/src/parsing/parseVision.ts`, `getClient()`)
 and needs no further code changes once the values below exist — it currently
@@ -57,7 +62,7 @@ Do this once, in the Google Cloud Console (or `gcloud` CLI, noted per step):
    | Variable | Value | Notes |
    |---|---|---|
    | `GEMINI_VERTEX_PROJECT` | the Project ID from step 1 | required — this is what switches `getClient()` from the dev Gemini API fallback to real Vertex AI |
-   | `GEMINI_VERTEX_LOCATION` | `europe-west4` | optional — code already defaults to `europe-west4` if unset; set explicitly only to use a different EU region |
+   | `GEMINI_VERTEX_LOCATION` | `eu` | optional — the code defaults to the `eu` multi-region; the default models aren't offered in single EU regions such as `europe-west4` |
    | `GOOGLE_APPLICATION_CREDENTIALS` | absolute path to the JSON key file from step 6 | required for the server process to find its credentials — Application Default Credentials (ADC) picks this up automatically, no other code/config needed |
 
    If deploying on GCP infrastructure (Cloud Run, GKE with Workload
