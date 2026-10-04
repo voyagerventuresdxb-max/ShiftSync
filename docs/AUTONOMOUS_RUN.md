@@ -858,3 +858,57 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 - Tests, top of stack (#84): drift clean, typecheck ×2 ✔, lint 0 errors, unit 104/104, server 443 pass / 1 skip, **full e2e 75/76**. #69: unit 100/100, server 431/1, full e2e 74/75. #78: unit 104/104, relevant e2e green.
 - **The one red e2e, on all three:** the rota golden-path spec stops at its own precondition (VAPID keys), because master's e2e config now runs the API with push off. Not a code defect; #99's push outbox removes the need (switch its two push assertions once #99 is in master).
 - **Flaky test inherited from master:** `signup.test.ts` "missing fullName or venueName" compares a database-wide organization count while other test files create venues in parallel; failed once on #78 and once on #84, passed on rerun and alone.
+
+## Run 4 final report (2026-10-04)
+
+### 1. Stages
+| Stage | Status | PR | Tests | Merged / deployed? |
+|---|---|---|---|---|
+| 0 Preconditions | passed (owner decision on the Vercel check) | — | — | — |
+| 1A Secret scan + credential fragment | done | #89 | unit 79, server 363/1 skip | merged; deployed with 1B |
+| 1B Run-3 PRs | done | #80–#88, #70 | full e2e 74/74 at the end | merged; API `f0a10bb3`; #72/#76/#43 closed |
+| 2 xlsx 0.20.3 (CDN) | done, gate passed | #90 | tz matrix ×3, probe identical, server 406/1, e2e 9/9 | merged; API `f5f3e49c` (live) |
+| 3 Model config + vision provider | done | #92 | server 426/1, e2e 14/14 | open |
+| 4 Escalation + parser gaps | done | #93 (on #92) | server 453/1, e2e 13/13 | open |
+| 5A Fixture privacy | done (prepare only) | #94 | server 408/2, e2e 7/7 | open |
+| 5B Eval harness | done | #95 (on #93) | server 460/1, e2e 1/1 | open |
+| 6 Swap-request window | done | #96 | server 411/1, e2e 16/16 | open |
+| 7 Platform safety | done | #97 | server 411/1, full e2e 74/74 | open |
+| 8 Store readiness | done | #98 | server 410/1, e2e 22/22 | open |
+| 9 Test stability | done | #99 | server 408/1, e2e 4/4 | open |
+| 10 Rota stack refresh | done | #69, #78, #84 | top of stack: server 443/1, full e2e 75/76 (VAPID precondition) | pushed; not merged (as instructed) |
+| 11 SMS behind a flag + OTP doc | done | #100 | server 421/1, e2e 18/18 | open |
+
+Every gate also: typecheck ×2, lint 0 errors, unit green, build, secrets scan clean; e2e with `CI=1 --retries=0`.
+
+### 2. Production AI configuration
+- `VLM_MODEL`, `VLM_FALLBACK_MODEL`, `VOICE_MODEL`: not set on production; code defaults apply, no Gemini 2.5 ID anywhere.
+- Defaults verified against Google's docs: `gemini-3.6-flash` and `gemini-3.5-flash-lite` exist, are GA, no retirement before 2027. Fixed in #92: they are not offered in Vertex `europe-west4`, so the default location is `eu`.
+- No Gemini/Vertex credentials on production: **production vision and voice are not live** (`docs/vlm-go-live.md` on #92).
+- Production at the end of the run: API `f5f3e49c` (code `64de660`), `/api/health` 200; GitHub "Vercel" status for master: success. The Vercel production URL is behind Vercel Deployment Protection (not touched).
+
+### 3. Recommended merge order
+Each: merge master into the branch, rerun its gate, merge with a merge commit; retarget stacked PRs to master once their base is in.
+1. #99 test stability. 2. #92 → #93 → #95. 3. #94 fixture privacy. 4. #96, #97, #98 (additive migration). 5. #100 (SMS, off by default). 6. Rota stack #69 → #78 → #84 after the owner's review, then switch the rota golden-path spec to #99's outbox. 7. #91 (this log) last. One API redeploy after the server PRs land.
+
+### 4. Real-phone checklist (Android Chrome + iPhone Safari)
+- Sign in by code (allowlisted number) and by login link; sign out and back in.
+- Add to Home Screen: standalone, right icon; the back gesture closes sheets.
+- Join from a WhatsApp-shared invite link; the owner approves on People; staff land on My Shifts.
+- Build a week on the phone and publish; staff see venue times (also with the phone in another timezone).
+- Upload an Excel and a PDF roster from Files; the photo option shows the consent prompt.
+- Airplane mode: stale-data notice, publish disabled; recovers online.
+- After #96: a cover request before and after Wednesday 17:00. After #98: delete an account; privacy and terms links open.
+- After VAPID go-live: enable notifications (iPhone: installed app, iOS 16.4+), publish, receive the push.
+
+### 5. Blocked, skipped, risky
+- Vercel page-load smoke tests skipped (Deployment Protection; owner decision); local e2e covers those pages.
+- `vercel.json` routes every deployment's `/api` traffic, previews included, to the production API (#97 finding).
+- Parser gap: `Mon 17/08`-style day headers not recognised (#95 finding, not fixed).
+- #75 superseded by #90 (owner to close). One more fixture (a floor-plan PDF) may be real venue data; not in the 5A list, not moved.
+- Real staff names and the credential fragment remain in git history (owner's decision; rotate the key regardless).
+- Flaky server test inherited from master: `signup.test.ts` compares a database-wide count while other files run in parallel.
+- Twilio has paused new UAE sender-ID registrations; SMS go-live needs another provider or the hold to lift (`docs/otp-delivery-uae.md` on #100).
+
+### 6. Still not done
+SMS go-live; Railway config before 2026-12-01 (#52 follow-ups); VAPID go-live; native push and camera plugins; first Play upload.
