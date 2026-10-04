@@ -951,3 +951,8 @@ All gates also: typecheck ×2, lint 0 errors, unit 94/94, build, secrets scan cl
   - [#103](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/103): an on-behalf actor on shift and 86 routes must be a person at the caller's venue (the rule policy documents already used). #69 goes further; keep #69's lines when it is refreshed.
 - Other observations (by-design or low) are in the owner's chat report only.
 - Tests: each fix: typecheck ×2, lint 0 errors, unit 94/94, server 492–494 pass / 1 skip, relevant e2e (8/8, 4/4, 9/9), scan clean. Matrix branch (all fixes + suite): server 596 pass / 1 skip, **full e2e 80/80**, scan clean.
+
+## Stage C — review pack: done, PR open
+- [#105](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/105): `docs/rota-review-guide.md` (what #69/#78/#84 change, how to run them, a try-this checklist, known limits, screenshot index) and `docs/mvp-status.md` (what works end to end with its proving spec, what is mocked or unconfigured in production, known limits, a 5-minute demo). Facts taken from the PRs' code, tests and descriptions; the demo steps were checked against the screenshots.
+- Screenshots: 19 screens × 2 sizes (390×844, 1280×800) from the top of the rota stack, demo seed (made-up personas) plus a synthetic roster, in `C:\dev\_autonomous-run-artifacts\demo-screens\` (not committed). The capture script sits beside them; the first attempt stalled on the microphone prompt and was rerun with a fake media device.
+- **Review first:** `21-rota-draft-split-shift-leave` (split shift, leave chips, draft state) and the "Try these" list in the guide.
