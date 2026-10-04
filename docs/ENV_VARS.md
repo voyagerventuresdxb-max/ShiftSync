@@ -30,6 +30,9 @@ How values are loaded:
 | `CORS_ORIGINS` | Comma-separated browser origins allowed to call the API cross-origin (the Capacitor app at `https://localhost`, a staging frontend that uses `VITE_API_URL`). Unset or empty: any origin, as before it existed. The production web app never needs listing — it is same-origin through the Vercel rewrite. | no (staging: the staging frontend URL) | unset (any origin) | `server/src/lib/corsOptions.ts` |
 | `ALLOW_DEV_OTP_ECHO` | Returns the one-time code in the request-otp response (`devCode`) and logs it, but only for numbers in `ECHO_ALLOWED_PHONES`. It is the only way to receive a code while there is no SMS provider (#51). | conditional: `true` only for a demo with no SMS, and only together with `ECHO_ALLOWED_PHONES`. Remove it afterwards. | unset (off) | `server/src/lib/devOtpEcho.ts:12` |
 | `ECHO_ALLOWED_PHONES` | Comma-separated mobile numbers, in any format `toE164` accepts, whose code may be echoed. Invalid entries are ignored with a `[startup]` warning. | conditional: **required whenever `ALLOW_DEV_OTP_ECHO=true` in production** (otherwise boot is refused). Anyone who knows a listed number can sign in as it, so list only numbers you control. | empty (no number is echoed) | `server/src/lib/devOtpEcho.ts:19` |
+| `SMS_OTP_ENABLED` | `true` = every request-otp route also texts the code (Twilio Programmable Messaging); a failed send answers `503` with a retry message. Anything else: no SMS, exactly as before. See `docs/otp-delivery-uae.md` before turning it on. | no. Off until a UAE sender ID is registered. **If `true` in production, the three provider settings below are required (otherwise boot is refused).** | unset (off) | `server/src/lib/sms.ts` |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | Twilio account credentials for the SMS sender. The token is a secret. | only with `SMS_OTP_ENABLED=true` | unset | `server/src/lib/sms.ts` |
+| `TWILIO_MESSAGING_SERVICE_SID` or `SMS_SENDER_ID` | Who the text comes from: a Messaging Service (preferred; carries the registered UAE sender ID) or a sender ID / number used as `From`. One of the two. | only with `SMS_OTP_ENABLED=true` | unset | `server/src/lib/sms.ts` |
 | `ALLOW_DEV_OTP_BYPASS` | Makes the fixed code `000000` verify for **any** phone. | **must be absent.** Boot is refused if it is `true`. | unset (off) | `server/src/lib/identity.ts:26` |
 | `ALLOW_DEV_ERROR_INJECTION` | Arms a sentinel bearer token that makes `requireSession` throw. Used by the e2e error-handling spec. | **must be absent.** Boot is refused if it is `true`. | unset (off) | `server/src/middleware/requireSession.ts:33` |
 | `LOGIN_METHODS` | `links` = one-time login links only: the six phone-code routes answer `403 otp_disabled` and the app hides the phone forms. Any other value, or unset, allows both codes and links. | no. **Leave unset.** | unset (codes and links both on) | `server/src/lib/loginLinks.ts:24` |
@@ -126,9 +129,11 @@ before listening, so the deploy fails its health check. It does this when any of
 - any non-blank value in `GEMINI_BASE_URL` (our dev/e2e seam for the voice clients), `GOOGLE_GEMINI_BASE_URL` or
   `GOOGLE_VERTEX_BASE_URL` (the two overrides the `@google/genai` SDK itself honours for every client, roster
   vision included). Any of these would send Gemini/Vertex traffic to another host.
+- `SMS_OTP_ENABLED=true` without `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and one of
+  `TWILIO_MESSAGING_SERVICE_SID` / `SMS_SENDER_ID` (every code request would fail).
 - any non-blank value in `PUSH_TRANSPORT` (the e2e push seam: sends would be recorded in memory, never delivered).
 
-Outside production the same echo-without-allowlist case is only a `[startup]` warning, and
+Outside production the echo-without-allowlist and SMS-without-provider cases are only `[startup]` warnings, and
 invalid `ECHO_ALLOWED_PHONES` entries are always a warning, never fatal.
 
 ## 6. Production checklist
@@ -141,6 +146,7 @@ invalid `ECHO_ALLOWED_PHONES` entries are always a warning, never fatal.
 - [ ] `GEMINI_API_KEY`, if voice or image rosters should work (this environment's own key). Or Vertex for vision: `GEMINI_VERTEX_PROJECT` plus `GOOGLE_SERVICE_ACCOUNT_JSON` (see [`vlm-go-live.md`](vlm-go-live.md)). Voice still needs `GEMINI_API_KEY`.
 - [ ] Optional: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (`mailto:`/`https:`). Set all three or none.
 - [ ] Demo without SMS only: `ALLOW_DEV_OTP_ECHO=true` **and** `ECHO_ALLOWED_PHONES` (demo numbers you control). Remove both afterwards.
+- [ ] SMS go-live only (after the UAE sender ID is approved): `SMS_OTP_ENABLED=true`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` (or `SMS_SENDER_ID`).
 - `PORT` and `RAILWAY_ENVIRONMENT_NAME` are injected by Railway. Don't set them.
 
 **Railway API service: must be absent**
