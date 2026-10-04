@@ -56,18 +56,18 @@ test('single header row, 4-space-separated-number cells (AM start/end, PM start/
   // Also covers half-hour decimal notation ("18.5" = 18:30).
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', '11 17 18 25', '12 17 18 24'],
+    ['Kalim', '11 17 18 25', '12 17 18 24'],
     ['SUPERVISORS', 'SUPERVISORS', 'SUPERVISORS'],
-    ['Pratik', '16 18 18.5 26', '11 16 18 24'],
+    ['Mibru', '16 18 18.5 26', '11 16 18 24'],
   ];
 
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.anomalies.length, 0);
 
-  const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
-  assert.equal(andrea.length, 4);
+  const kalim = result.rows.filter((r) => r.employeeName === 'Kalim');
+  assert.equal(kalim.length, 4);
   assert.deepEqual(
-    andrea.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
+    kalim.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
     [
       '2026-08-17 11:00-17:00 overnight=false',
       '2026-08-17 18:00-01:00 overnight=true',
@@ -75,17 +75,17 @@ test('single header row, 4-space-separated-number cells (AM start/end, PM start/
       '2026-08-18 18:00-00:00 overnight=true',
     ].sort(),
   );
-  // Andrea sits above any role header -> role stays unresolved, never
+  // Kalim sits above any role header -> role stays unresolved, never
   // borrowed from elsewhere on the sheet — surfaced as a warning, not
   // silently guessed or silently dropped.
-  assert.ok(andrea.every((r) => r.roleName === ''));
-  assert.ok(result.issues.some((i) => i.severity === 'warning' && i.message.includes('Andrea')));
+  assert.ok(kalim.every((r) => r.roleName === ''));
+  assert.ok(result.issues.some((i) => i.severity === 'warning' && i.message.includes('Kalim')));
 
-  const pratik = result.rows.filter((r) => r.employeeName === 'Pratik');
-  assert.equal(pratik.length, 4);
-  assert.ok(pratik.every((r) => r.roleName === 'SUPERVISORS'));
+  const mibru = result.rows.filter((r) => r.employeeName === 'Mibru');
+  assert.equal(mibru.length, 4);
+  assert.ok(mibru.every((r) => r.roleName === 'SUPERVISORS'));
   assert.deepEqual(
-    pratik.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
+    mibru.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
     [
       '2026-08-17 16:00-18:00 overnight=false',
       '2026-08-17 18:30-02:00 overnight=true',
@@ -98,12 +98,12 @@ test('single header row, 4-space-separated-number cells (AM start/end, PM start/
 test('a numeric first cell (totals/headcount row) is never treated as a staff name', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', '9-17', '9-17'],
+    ['Kalim', '9-17', '9-17'],
     ['8', '5', '4'], // headcount summary row, as seen at the bottom of the real reference venue's rota
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 2);
-  assert.ok(result.rows.every((r) => r.employeeName === 'Andrea'));
+  assert.ok(result.rows.every((r) => r.employeeName === 'Kalim'));
 });
 
 test('unresolvable cell content becomes an anomaly, not a hallucinated shift', () => {
@@ -113,7 +113,7 @@ test('unresolvable cell content becomes an anomaly, not a hallucinated shift', (
   // even though only one is exercised.
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', 'XyzGarbage', ''],
+    ['Kalim', 'XyzGarbage', ''],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
@@ -124,7 +124,7 @@ test('unresolvable cell content becomes an anomaly, not a hallucinated shift', (
 test('leave/absence codes become leave records, not shifts or anomalies', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', 'OFF', 'PH'],
+    ['Kalim', 'OFF', 'PH'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
@@ -178,19 +178,19 @@ test('end-to-end: real .xlsx with actual merged cells (!merges), not a pre-expan
 test('a known leave code in a notes column outside the day-data range becomes a leave record for a shift-less employee', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday', 'Notes'],
-    ['Andrea', '9-17', '9-17', 'Closing'], // worked normally -> trailing note must NOT become a leave record
-    ['Sintia', '', '', 'PH'], // zero shifts, notes column has a known leave code -> surfaced as a leave record
-    ['Tomas', '', '', 'Request'],
-    ['Irma', '', '', ''], // zero shifts, no note at all -> correctly produces nothing
+    ['Kalim', '9-17', '9-17', 'Closing'], // worked normally -> trailing note must NOT become a leave record
+    ['Ruren', '', '', 'PH'], // zero shifts, notes column has a known leave code -> surfaced as a leave record
+    ['Rumur', '', '', 'Request'],
+    ['Lomur', '', '', ''], // zero shifts, no note at all -> correctly produces nothing
   ];
   const result = parseExcelGrid(grid, WEEK_START);
 
-  assert.equal(result.rows.length, 2); // Andrea's 2 days x 1 shift each
-  assert.ok(result.rows.every((r) => r.employeeName === 'Andrea'));
+  assert.equal(result.rows.length, 2); // Kalim's 2 days x 1 shift each
+  assert.ok(result.rows.every((r) => r.employeeName === 'Kalim'));
 
   assert.deepEqual(
     result.leaveRecords.map((r) => `${r.employeeName}:${r.leaveCode}:${r.category}`).sort(),
-    ['Sintia:PH:public_holiday', 'Tomas:Request:day_off'],
+    ['Rumur:Request:day_off', 'Ruren:PH:public_holiday'],
   );
 });
 
@@ -220,16 +220,16 @@ test('an ALL-CAPS caption before any real staff row is NOT mistaken for a role h
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
     ['COVERS', 'Sofia - 20pax', ''],
-    ['Andrea', '9-17', '9-17'],
+    ['Kalim', '9-17', '9-17'],
     ['RUNNERS', '', ''],
-    ['Bashkar', '13-21', '13-21'],
+    ['Kadak', '13-21', '13-21'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
-  const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
-  assert.equal(andrea.length, 2);
-  assert.ok(andrea.every((r) => r.roleName === ''));
-  const bashkar = result.rows.filter((r) => r.employeeName === 'Bashkar');
-  assert.ok(bashkar.every((r) => r.roleName === 'RUNNERS'));
+  const kalim = result.rows.filter((r) => r.employeeName === 'Kalim');
+  assert.equal(kalim.length, 2);
+  assert.ok(kalim.every((r) => r.roleName === ''));
+  const kadak = result.rows.filter((r) => r.employeeName === 'Kadak');
+  assert.ok(kadak.every((r) => r.roleName === 'RUNNERS'));
   // "COVERS" itself is treated as a (non-real) staff row, same as before,
   // producing an anomaly for its unparseable cell rather than a shift.
   assert.ok(result.anomalies.some((a) => a.employeeName === 'COVERS'));
@@ -241,36 +241,36 @@ test('per-row title column (Bar des Pres FOH style): role comes from column A, n
   // 0 is always the name.
   const grid: unknown[][] = [
     ['', '', 'Monday', 'Tuesday'],
-    ['RM', 'Robert Orgovan', '9-17', '9-17'],
-    ['Supervisor', 'Eugeniu Mihalas', '10-18', '10-18'],
+    ['RM', 'Nedak Mizon', '9-17', '9-17'],
+    ['Supervisor', 'Kagal Miren', '10-18', '10-18'],
     ['WAITER', '', '', ''], // section banner: title+name both blank, spans nothing useful
-    ['Waiter 1', 'Putri Rohmawati', '11-19', '11-19'],
+    ['Waiter 1', 'Neren Netel', '11-19', '11-19'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 6);
-  assert.ok(result.rows.filter((r) => r.employeeName === 'Robert Orgovan').every((r) => r.roleName === 'RM'));
-  assert.ok(result.rows.filter((r) => r.employeeName === 'Eugeniu Mihalas').every((r) => r.roleName === 'Supervisor'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Nedak Mizon').every((r) => r.roleName === 'RM'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Kagal Miren').every((r) => r.roleName === 'Supervisor'));
   // Per-row title takes precedence over the section banner above it, even
   // though "WAITER" was itself independently recognized as a header.
-  assert.ok(result.rows.filter((r) => r.employeeName === 'Putri Rohmawati').every((r) => r.roleName === 'Waiter 1'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Neren Netel').every((r) => r.roleName === 'Waiter 1'));
 });
 
 test('per-row title falls back to the section-derived role when a row has no title of its own', () => {
   const grid: unknown[][] = [
     ['', '', 'Monday', 'Tuesday'],
     ['RUNNER', '', '', ''],
-    ['', 'Fernanda Paiva', '9-17', '9-17'], // blank title cell -> should inherit "RUNNER"
+    ['', 'Kabru Migal', '9-17', '9-17'], // blank title cell -> should inherit "RUNNER"
   ];
   const result = parseExcelGrid(grid, WEEK_START);
-  const fernanda = result.rows.filter((r) => r.employeeName === 'Fernanda Paiva');
-  assert.equal(fernanda.length, 2);
-  assert.ok(fernanda.every((r) => r.roleName === 'RUNNER'));
+  const kabru = result.rows.filter((r) => r.employeeName === 'Kabru Migal');
+  assert.equal(kabru.length, 2);
+  assert.ok(kabru.every((r) => r.roleName === 'RUNNER'));
 });
 
 test('"UL" is recognized as Unpaid Leave', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Tony', 'UL', 'UL'],
+    ['Rutel', 'UL', 'UL'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
@@ -281,7 +281,7 @@ test('"UL" is recognized as Unpaid Leave', () => {
 test('open-ended ("<N>IN"), until-closing ("<N>CL"), and fully-flexible ("IN") shorthand are flagged with a clear reason, not forced into a fake shift', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday', 'Wednesday'],
-    ['Robert Orgovan', '10IN', '12CL', 'IN'],
+    ['Nedak Mizon', '10IN', '12CL', 'IN'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0, 'none of these should become a normal shift row');
@@ -299,7 +299,7 @@ test('open-ended ("<N>IN"), until-closing ("<N>CL"), and fully-flexible ("IN") s
 test('four hyphen-chained numbers with no slash ("10:30-4:00-8:00-12") split into two back-to-back shifts', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Leandro De Souza', '10:30-4:00-8:00-12', ''],
+    ['Tavo Kelrin', '10:30-4:00-8:00-12', ''],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 2);
@@ -594,7 +594,7 @@ test('unrecognized-section-header audit fixture: rows stay correctly grouped und
 });
 
 test('unrecognized-section-header promotion never overwrites an already-REAL recognized header (regression case: a blank-week employee sitting inside an existing section)', () => {
-  // Mirrors the real Gattopardo reference fixture's Irma/Rafael/Robert
+  // Mirrors the real Gattopardo reference fixture's Lomur/Nelim/Nedak
   // shape (see pdfTableExtractor.test.ts) in miniature: a blank-week
   // employee with no leave-code note either, sitting between two other
   // real HEAD WAITERS rows. The first version of this fix (no provisional/
@@ -604,15 +604,15 @@ test('unrecognized-section-header promotion never overwrites an already-REAL rec
   const grid: unknown[][] = [
     ['', 'Mon', 'Tue'],
     ['HEAD WAITERS', '', ''],
-    ['Rafael', '9-17', '9-17'],
+    ['Nelim', '9-17', '9-17'],
     ['Zara', '', ''], // blank week, no leave note — structurally identical to a novel header
-    ['Robert', '10-18', '10-18'],
+    ['Nedak', '10-18', '10-18'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
 
   const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
-  assert.deepEqual(roleOf('Rafael'), ['HEAD WAITERS']);
-  assert.deepEqual(roleOf('Robert'), ['HEAD WAITERS'], 'must NOT have been silently reassigned to "Zara"');
+  assert.deepEqual(roleOf('Nelim'), ['HEAD WAITERS']);
+  assert.deepEqual(roleOf('Nedak'), ['HEAD WAITERS'], 'must NOT have been silently reassigned to "Zara"');
   assert.equal(result.rows.some((r) => r.employeeName === 'Zara'), false, 'Zara herself produces zero rows, same as before this feature existed');
   assert.equal(result.anomalies.length, 0, 'Zara is never promoted to a header at all — currentRole was already REAL when her blank row was seen');
 });

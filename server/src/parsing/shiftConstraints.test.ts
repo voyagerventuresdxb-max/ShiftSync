@@ -20,8 +20,8 @@ function shift(over: Partial<ParsedShiftRow>): ParsedShiftRow {
 
 test('accepts a valid AM/PM split with an overnight PM shift', () => {
   const r = enforceNoDoubleShifts([
-    shift({ employeeName: 'Andrea', startTime: '11:00', endTime: '17:00', overnight: false, managerNotes: '[AM]' }),
-    shift({ employeeName: 'Andrea', startTime: '18:00', endTime: '01:00', overnight: true, managerNotes: '[PM]' }),
+    shift({ employeeName: 'Kalim', startTime: '11:00', endTime: '17:00', overnight: false, managerNotes: '[AM]' }),
+    shift({ employeeName: 'Kalim', startTime: '18:00', endTime: '01:00', overnight: true, managerNotes: '[PM]' }),
   ]);
   assert.equal(r.accepted.length, 2);
   assert.equal(r.anomalies.length, 0);

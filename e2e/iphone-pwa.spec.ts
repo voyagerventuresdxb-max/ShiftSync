@@ -102,7 +102,7 @@ test.describe('iPhone / PWA', () => {
     expect(body.preview).toBeUndefined();
     expect(body.errorCode).toBe('vision_unconfigured');
     expect(body.error).toMatch(/Excel|CSV|try again|unavailable|not configured/i);
-    expect(JSON.stringify(body)).not.toMatch(/Andrea|Fallback sample/);
+    expect(JSON.stringify(body)).not.toMatch(/Kalim|Fallback sample/);
     expect(await prisma.shift.count({ where: { locationId: location.id } })).toBe(0);
   });
 });
