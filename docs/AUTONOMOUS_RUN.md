@@ -967,3 +967,22 @@ All gates also: typecheck ×2, lint 0 errors, unit 94/94, build, secrets scan cl
 - Lazy: /schedule, /floor-plan, /people, /onboarding (one Suspense around the route outlet, skeleton fallback); rota builder and roster upload load and render for managers/owners only; the voice confirm sheet loads with the first voice result. No 3D/shader libraries exist in the app.
 - `scripts/check-bundle-size.mjs` (no dependencies) + `bundle-budget.json`: `npm run build` fails when a staff screen exceeds its budget by more than 10% (verified with a shrunken budget).
 - Tests: typecheck ×2 ✔, lint 0 errors, unit 97/97 (+3), server 491 pass / 1 skip, **full e2e 80/80**, scan clean. The first full run timed out in specs that start at the Welcome intro: the e2e helper waited for any "ShiftSync" text, which the app header now shows before the onboarding chunk arrives; it now waits for the Welcome screen itself.
+
+## Stage F (stretch) — rota builder scope audit + completion: done, PRs open (stacked on #84, none merged)
+Audit of #69 → #78 → #84 against the scope list (evidence = implementing file + test):
+
+| Item | Before | Now |
+|---|---|---|
+| Split shifts | DONE-VERIFIED (`shiftActions.ts` overlap + DB guard; `splitShifts.test.ts`, `shiftOverlapGuard.test.ts`, `rota-split-shift.spec.ts`) | same |
+| Copy last week | engine/API tested (`copyWeek.test.ts`), no UI test | DONE-VERIFIED (UI test, #110) |
+| Save as template / apply | API + voice tested, no UI test | DONE-VERIFIED (UI test, #110) |
+| Department-grouped collapsible rows | PARTIAL: grouping tested, collapse untested; sections are a fixed front-of-house role list (Bartender, Host, Chef fall under "Other") | collapse UI-tested (#110); department model still PARTIAL |
+| Uncovered-shift flags | MISSING (neutral "Open shifts" row only) | built: header badge, per-day count, second tap to publish (#108) |
+| Per-shift notes | PARTIAL: implemented, untested; not on My Shifts | UI-tested through to the staff view (#110); My Shifts still lacks the note |
+| Bulk actions | MISSING | built: select mode, assign to a person / nobody, delete with confirm; refusals reported (#111); publish-selected not included |
+| Staff availability visibility | PARTIAL: only people already on shift; staff can mark only the current week | everyone in the grid via one manager-only read, with the note (#109); next-week marking still current-week-only |
+| Draft vs published + notifications | DONE-VERIFIED (`shiftVisibility.test.ts`, `shiftNotifications.test.ts`, `golden-path-rota.spec.ts`) | same |
+| Leave chips (Sick, Unpaid, Half Day, Annual, Day Off) | DONE-VERIFIED (`rotaLeaves.test.ts` all five; golden path clicks Annual Leave) | same |
+
+- PRs (base `feat/split-shift-db-guard`): [#108](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/108) uncovered flags, [#109](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/109) availability for everyone (new manager-only read; add it to the access matrix #104 once both are on master), [#110](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/110) builder UI tests, [#111](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/111) bulk actions. Each with unit + Playwright tests; screenshots at 390 and 1280 in `C:\dev\_autonomous-run-artifacts\stage-f-screens\` (not committed).
+- Gates: #108 unit 107/107, server 443/1, e2e green (the bad-network rota spec now confirms the second publish tap); #109 unit 104/104, server 444/1, e2e 13/13; #110 4/4 and 8/8 repeated; #111 unit 106/106, server 443/1, e2e 11/11; all lint 0 errors, scan clean.
