@@ -66,6 +66,7 @@ model Location {
   inviteLinks          InviteLink[]
   policyDocuments      PolicyDocument[]
   floorFeedback        FloorFeedback[]
+  aiUsage              AiUsage[]
 
   @@index([organizationId])
   @@map("locations")
@@ -129,6 +130,10 @@ model User {
   hiredAt           DateTime?  @map("hired_at")
   terminatedAt      DateTime?  @map("terminated_at")
   isActive          Boolean    @default(true) @map("is_active")
+  // Set when the person deleted their own account (in-app, self-service): personal details are
+  // cleared, sessions ended, and the de-identified row stays so past shifts and attendance keep
+  // their history. A deleted account can't be signed in to or reactivated.
+  deletedAt         DateTime?  @map("deleted_at")
   // Platform operator (us), not a venue role: may issue login links to any
   // venue's owners/managers. Deliberately a flag rather than a SystemRole
   // value so it never collides with the OWNER/MANAGER/STAFF permission
@@ -329,6 +334,7 @@ enum AuditAction {
   ROTA_PUBLISHED
   ANNOUNCEMENT_POSTED
   SHOUTOUT_POSTED
+  ACCOUNT_DELETED
 }
 
 model AuditLog {
@@ -966,4 +972,45 @@ model PolicyDocument {
 
   @@index([locationId, category])
   @@map("policy_documents")
+}
+
+/// AI spend guard (server/src/lib/aiBudget.ts): the deployment-wide counter the
+/// monthly cap is enforced against, one row per UTC month. Every model call
+/// reserves its worst-case cost here first (a conditional update) and settles
+/// to the real cost after. Amounts only — never content.
+model AiSpendMonth {
+  month       String   @id // YYYY-MM (UTC)
+  spentUsd    Decimal  @default(0) @map("spent_usd") @db.Decimal(12, 6)
+  reservedUsd Decimal  @default(0) @map("reserved_usd") @db.Decimal(12, 6)
+  warned80    Boolean  @default(false) @map("warned_80")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("ai_spend_months")
+}
+
+/// AI spend guard: deployment-wide model calls per UTC day (the daily call limit).
+model AiCallDay {
+  day   String @id // YYYY-MM-DD (UTC)
+  calls Int    @default(0)
+
+  @@map("ai_call_days")
+}
+
+/// AI usage ledger per venue, feature and UTC month: call and token counts and
+/// the estimated cost. Never content, names, phone numbers or audio.
+model AiUsage {
+  id           String   @id @default(cuid())
+  locationId   String   @map("location_id")
+  feature      String
+  month        String // YYYY-MM (UTC)
+  calls        Int      @default(0)
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  estimatedUsd Decimal  @default(0) @map("estimated_usd") @db.Decimal(12, 6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, feature, month])
+  @@map("ai_usage")
 }

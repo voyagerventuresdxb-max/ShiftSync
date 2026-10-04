@@ -9,7 +9,7 @@ test('preserves AM/PM period labels on split shifts', () => {
     legend: [],
     employees: [
       {
-        rawName: 'Andrea',
+        rawName: 'Kalim',
         role: 'Floor',
         cells: [
           {
@@ -109,13 +109,13 @@ test('the fixture VLM response maps to a valid result (no Gemini call)', () => {
   assert.ok(managers.length >= 3, 'management staff present in fixture');
 
   // AM/PM split shifts are preserved with their period labels.
-  const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
-  assert.equal(andrea.length, 2, 'Andrea has AM+PM split');
-  assert.ok(andrea.some((r) => r.managerNotes?.includes('[AM]')));
-  assert.ok(andrea.some((r) => r.managerNotes?.includes('[PM]')));
+  const kalim = result.rows.filter((r) => r.employeeName === 'Kalim');
+  assert.equal(kalim.length, 2, 'Kalim has AM+PM split');
+  assert.ok(kalim.some((r) => r.managerNotes?.includes('[AM]')));
+  assert.ok(kalim.some((r) => r.managerNotes?.includes('[PM]')));
 
   // Leave records (day off) are captured.
-  assert.ok(result.leaveRecords.some((l) => l.employeeName === 'Tomas' && l.category === 'day_off'));
+  assert.ok(result.leaveRecords.some((l) => l.employeeName === 'Rumur' && l.category === 'day_off'));
 });
 
 // --- Legend-code shift resolution -----------------------------------------

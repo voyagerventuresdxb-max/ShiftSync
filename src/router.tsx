@@ -16,6 +16,7 @@ import MyShiftsContent from './routes/MyShiftsRoute';
 import WelcomeContent from './routes/WelcomeRoute';
 import OnboardingContent from './routes/OnboardingRoute';
 import LoginLinkContent from './routes/LoginLinkRoute';
+import { PrivacyContent, TermsContent } from './routes/LegalRoute';
 
 /**
  * Gates the manager-dashboard pages (Scheduling/Approvals, Floor Plan,
@@ -195,6 +196,8 @@ const handles = {
   scheduleEditor: { title: 'Shift Editor' },
   join: { title: 'Join' },
   login: { title: 'Log in' },
+  privacy: { title: 'Privacy (draft)' },
+  terms: { title: 'Terms (draft)' },
   signup: { title: 'Sign up' },
   welcome: { title: "You're in" },
   myShifts: { title: 'My Shifts' },
@@ -267,6 +270,9 @@ export const router = createBrowserRouter([
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
       { path: '/login', element: <LoginContent />, handle: handles.login },
+      // Public drafts, linked from sign-in and join (never behind RequireSession).
+      { path: '/privacy', element: <PrivacyContent />, handle: handles.privacy },
+      { path: '/terms', element: <TermsContent />, handle: handles.terms },
       // One-time login links land here (token in the fragment). Never behind
       // RequireSession — this IS how a session is obtained. See LoginLinkRoute.
       { path: '/login/link', element: <LoginLinkContent />, handle: handles.login },

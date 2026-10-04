@@ -9,6 +9,11 @@ import {
   __setVoiceClientForTests,
 } from './transcribe.js';
 
+// These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
+// (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
+process.env.AI_MONTHLY_BUDGET_USD = '1000000';
+process.env.AI_DAILY_CALL_LIMIT = '1000000';
+
 /**
  * The only mock is the Gemini client (a real 400/429 cannot be produced on
  * demand and every real call is paid). Everything from the mimetype
@@ -82,4 +87,27 @@ test('a Gemini 429 becomes an "unavailable" error — distinguishable from a for
     models: { generateContent: async () => { throw new ApiError({ message: 'Resource exhausted', status: 429 }); } },
   } as unknown as GoogleGenAI);
   await expectFailure('unavailable');
+});
+
+test('a Gemini 404 (retired or misspelled VOICE_MODEL) becomes model_unavailable and is logged loudly with the model ID', async () => {
+  assert.equal(classifyGeminiFailure(new ApiError({ message: 'not found', status: 404 })), 'model_unavailable');
+  const savedModel = process.env.VOICE_MODEL;
+  process.env.VOICE_MODEL = 'gemini-retired-example';
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void logged.push(args.map(String).join(' '));
+  try {
+    __setVoiceClientForTests({
+      models: { generateContent: async () => { throw new ApiError({ message: 'models/x is not found', status: 404 }); } },
+    } as unknown as GoogleGenAI);
+    await expectFailure('model_unavailable');
+  } finally {
+    console.error = original;
+    if (savedModel === undefined) delete process.env.VOICE_MODEL;
+    else process.env.VOICE_MODEL = savedModel;
+  }
+  const line = logged.find((l) => l.includes('MODEL NOT AVAILABLE'));
+  assert.ok(line, 'a loud MODEL NOT AVAILABLE line is logged');
+  assert.match(line!, /"gemini-retired-example"/);
+  assert.ok(!line!.includes('test-key-never-used'), 'never logs the key');
 });
