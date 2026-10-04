@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { buildMergeExpandedGrid } from './parseWorkbook.js';
+import { printedWeekdayMismatch, resolveDayMonthDate } from './normalize.js';
 
 const WEEK_START = '2026-08-17'; // Monday
 
@@ -827,4 +828,40 @@ test('per-row title shape: a trailing caption with nobody below it produces no a
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 2);
   assert.equal(result.anomalies.filter((a) => a.kind === 'unrecognized_section_header').length, 0);
+});
+
+test('day headers with a weekday: "Mon 17/08", "MON 17-08", "Mon 17 Aug", "Monday, 17/08", "17/08 Mon" all read as 17 August (DD/MM)', () => {
+  for (const header of ['Mon 17/08', 'MON 17-08', 'Mon 17 Aug', 'Monday, 17/08', '17/08 Mon', '17-Aug MONDAY']) {
+    assert.equal(resolveDayMonthDate(header, '2026-08-17'), '2026-08-17', header);
+    assert.equal(printedWeekdayMismatch(header, '2026-08-17'), null, header);
+  }
+  // Day first, always: 08/17 is not a date (there is no month 17).
+  assert.equal(resolveDayMonthDate('Mon 08/17', '2026-08-17'), null);
+  // A weekday alone, or a name that starts like one, is not a day-month date.
+  assert.equal(resolveDayMonthDate('Monday', '2026-08-17'), null);
+  assert.equal(resolveDayMonthDate('Sun Li', '2026-08-17'), null);
+});
+
+test('day headers with a weekday: the year comes from the roster week, across New Year too', () => {
+  assert.equal(resolveDayMonthDate('Fri 01/01', '2026-12-28'), '2027-01-01');
+  assert.equal(printedWeekdayMismatch('Fri 01/01', '2027-01-01'), null);
+  assert.equal(resolveDayMonthDate('Wed 31/12', '2026-01-05'), '2025-12-31');
+  assert.equal(printedWeekdayMismatch('Wed 31/12', '2025-12-31'), null);
+});
+
+test('a header whose weekday disagrees with its date keeps the date and flags every entry under it', () => {
+  assert.deepEqual(printedWeekdayMismatch('Thu 19/08', '2026-08-19'), { printed: 'Thursday', actual: 'Wednesday' });
+  const grid = [
+    ['', 'Mon 17/08', 'Tue 18/08', 'Thu 19/08'],
+    ['SUPERVISORS', '', '', ''],
+    ['Test Alpha', '9-17', '9-17', '9-17'],
+    ['Test Beta', '', 'OFF', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}`), ['Test Alpha|2026-08-17', 'Test Alpha|2026-08-18', 'Test Alpha|2026-08-19']);
+  const flagged = result.anomalies.filter((a) => a.reason.includes('day header says Thursday'));
+  assert.deepEqual(flagged.map((a) => `${a.employeeName}|${a.date}|${a.rawText}`), ['Test Alpha|2026-08-19|Thu 19/08', 'Test Beta|2026-08-19|Thu 19/08']);
+  const alphaRow = result.rows.find((r) => r.date === '2026-08-19')!;
+  assert.equal(flagged[0]!.rowNumber, alphaRow.rowNumber, 'the flag is linked to the shift row it applies to');
+  assert.equal(flagged[1]!.rowNumber, null, 'a leave entry has no shift row to link to');
 });

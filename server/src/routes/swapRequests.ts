@@ -199,6 +199,9 @@ swapRequestsRouter.patch('/:id', requireSession, requireManager, async (req, res
 
     if (outcome.result === 'not_found') return res.status(404).json({ error: `Swap request "${id}" not found.` });
     if (outcome.result === 'target_on_leave') return res.status(409).json({ error: outcome.message });
+    if (outcome.result === 'already_decided') {
+      return res.status(409).json({ error: `This swap request was already ${outcome.status.toLowerCase()}.`, errorCode: 'swap_already_decided' });
+    }
     if (outcome.result === 'conflict') {
       return res.status(409).json({
         error: 'This shift was already reassigned by another approved request — this one can no longer be approved.',
