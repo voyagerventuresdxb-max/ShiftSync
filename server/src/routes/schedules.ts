@@ -12,6 +12,7 @@ import { parseRosterGrid, parseRosterImage, VisionIngestionError } from '../pars
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
 import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName } from '../parsing/resolveRows.js';
 import { persistShifts } from '../parsing/persistShifts.js';
+import { ShiftOverlapError } from '../lib/actions/shiftActions.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
 import { uploadCache } from '../store/uploadCache.js';
 import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
@@ -604,6 +605,7 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
       rows: result.rows,
     });
   } catch (err) {
+    if (err instanceof ShiftOverlapError) return res.status(409).json({ error: err.message });
     console.error('[schedules.confirm] failed', err);
     return res.status(500).json({ error: 'Unexpected error while saving shifts.' });
   }

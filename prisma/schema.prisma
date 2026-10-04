@@ -220,6 +220,10 @@ model Shift {
   @@index([locationId, date])
   @@index([userId])
   @@index([roleId])
+  // Not expressible here: migration 20261003140000_shift_no_overlap_per_user adds
+  // the EXCLUDE constraint "shifts_no_overlap_per_user" (btree_gist): no two
+  // non-CANCELLED shifts of one user may have overlapping [startTime, endTime).
+  // shiftActions.ts maps its violation to ShiftOverlapError (409).
   @@map("shifts")
 }
 
