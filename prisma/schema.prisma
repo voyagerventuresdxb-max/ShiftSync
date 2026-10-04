@@ -128,6 +128,10 @@ model User {
   hiredAt           DateTime?  @map("hired_at")
   terminatedAt      DateTime?  @map("terminated_at")
   isActive          Boolean    @default(true) @map("is_active")
+  // Set when the person deleted their own account (in-app, self-service): personal details are
+  // cleared, sessions ended, and the de-identified row stays so past shifts and attendance keep
+  // their history. A deleted account can't be signed in to or reactivated.
+  deletedAt         DateTime?  @map("deleted_at")
   // Platform operator (us), not a venue role: may issue login links to any
   // venue's owners/managers. Deliberately a flag rather than a SystemRole
   // value so it never collides with the OWNER/MANAGER/STAFF permission
@@ -324,6 +328,7 @@ enum AuditAction {
   ROTA_PUBLISHED
   ANNOUNCEMENT_POSTED
   SHOUTOUT_POSTED
+  ACCOUNT_DELETED
 }
 
 model AuditLog {
