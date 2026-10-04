@@ -942,3 +942,12 @@ All gates also: typecheck ×2, lint 0 errors, unit 94/94, build, secrets scan cl
 - Pre-deploy (presence only): none of the settings the new boot rules refuse is set; `NODE_ENV=production`.
 - Smoke test without sign-in: unknown number on login → generic 404 only; allowlisted number on signup → code echoed; another number → no code. 3/3. No rollback needed.
 - Production is now frozen for the rest of Run 5 (no deploys, no Railway changes).
+
+## Stage B — cross-venue access audit: done, PRs open (local only; nothing merged, nothing deployed)
+- [#104](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/104): an automated access matrix for every API route (about 90, plus voice intents acting on another venue's records). Two venues in two organizations; anonymous, deactivated, same-venue staff, other-venue staff and other-venue manager callers must be refused; a positive control proves each request is otherwise valid; a database check proves nothing changed; a coverage guard fails on any new unlisted route. Deliberately public reads are listed and asserted explicitly. Includes the three fixes below; merge them first.
+- Proven gaps, each fixed at the root in its own PR with a regression test that fails before and passes after:
+  - [#101](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/101): uploaded files are served only through their session-gated routes; any other `/uploads` request is a 404.
+  - [#102](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/102): Staff Directory phone-number changes follow the same who-may-change-whom rule as employment status.
+  - [#103](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/103): an on-behalf actor on shift and 86 routes must be a person at the caller's venue (the rule policy documents already used). #69 goes further; keep #69's lines when it is refreshed.
+- Other observations (by-design or low) are in the owner's chat report only.
+- Tests: each fix: typecheck ×2, lint 0 errors, unit 94/94, server 492–494 pass / 1 skip, relevant e2e (8/8, 4/4, 9/9), scan clean. Matrix branch (all fixes + suite): server 596 pass / 1 skip, **full e2e 80/80**, scan clean.
