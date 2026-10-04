@@ -71,19 +71,63 @@ export function cellToText(cell: unknown): string {
 }
 
 
+const WEEKDAY_NUMBER: Record<string, number> = {
+  sunday: 0, sun: 0,
+  monday: 1, mon: 1,
+  tuesday: 2, tues: 2, tue: 2,
+  wednesday: 3, wed: 3,
+  thursday: 4, thurs: 4, thu: 4,
+  friday: 5, fri: 5,
+  saturday: 6, sat: 6,
+};
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Longer spellings first, so "Monday" isn't read as "Mon" + "day".
+const WEEKDAY_WORD = Object.keys(WEEKDAY_NUMBER).join('|');
+const PRINTED_WEEKDAY = new RegExp(`^(?:(${WEEKDAY_WORD})\\.?,?\\s+)?(.*?)(?:[\\s,]+(${WEEKDAY_WORD})\\.?)?$`, 'i');
+
+/**
+ * Splits a weekday printed before or after a date ("Mon 17/08", "MON 17-08",
+ * "Mon, 17 Aug", "17/08 Mon") from the date text. `weekday` is 0 (Sunday) to
+ * 6, or null when none is printed.
+ */
+function splitPrintedWeekday(value: string): { rest: string; weekday: number | null } {
+  const m = value.trim().match(PRINTED_WEEKDAY);
+  if (!m) return { rest: value.trim(), weekday: null };
+  const word = (m[1] ?? m[3])?.toLowerCase();
+  return { rest: m[2]!.trim(), weekday: word ? WEEKDAY_NUMBER[word]! : null };
+}
+
+/**
+ * When a header prints both a weekday and a day-month ("Thu 19/08") and the
+ * weekday isn't the one `isoDate` falls on, the printed and actual weekday
+ * names; otherwise null. Computed on the calendar date alone (UTC), so the
+ * host's timezone can't change the answer.
+ */
+export function printedWeekdayMismatch(value: unknown, isoDate: string): { printed: string; actual: string } | null {
+  if (typeof value !== 'string') return null;
+  const { rest, weekday } = splitPrintedWeekday(value);
+  if (weekday === null || !rest) return null;
+  const [y, m, d] = isoDate.split('-').map(Number) as [number, number, number];
+  const actual = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return actual === weekday ? null : { printed: WEEKDAY_NAMES[weekday]!, actual: WEEKDAY_NAMES[actual]! };
+}
+
 /**
  * Resolves a day-month date that has no year (e.g. "18-Aug", "17-Aug MONDAY",
- * "18 Aug") to a full ISO date, using a reference week to infer the year.
- * Gemini often returns dates as "D-MMM" without a year; the roster week
- * (weekStart, the week's Monday) anchors the correct year.
+ * "18 Aug", "Mon 17/08", "MON 17-08", "Mon 17 Aug", "17/08 Mon") to a full ISO
+ * date, using a reference week to infer the year. Numeric dates are always
+ * day first (DD/MM). A printed weekday is ignored here; see
+ * printedWeekdayMismatch. Gemini often returns dates as "D-MMM" without a
+ * year; the roster week (weekStart, the week's Monday) anchors the correct
+ * year.
  */
 export function resolveDayMonthDate(value: unknown, weekStart: string): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  // Strip a trailing day name ("17-Aug MONDAY" -> "17-Aug").
-  const withoutDay = trimmed.replace(/\s+(?:sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat)\s*$/i, '').trim();
+  // Strip a leading or trailing day name ("Mon 17/08", "17-Aug MONDAY" -> "17/08", "17-Aug").
+  const withoutDay = splitPrintedWeekday(trimmed).rest;
   if (!withoutDay) return null;
 
   // Accept "18-Aug", "18 Aug", "18/Aug", "18.08" (day.month).

@@ -60,6 +60,9 @@ export type SwapRequestWithRelations = Prisma.ShiftSwapRequestGetPayload<{
  */
 export class ShiftAlreadyReassignedError extends Error {}
 
+/** Thrown inside the decide transaction when the request is no longer PENDING (decided concurrently). */
+class SwapAlreadyDecidedError extends Error {}
+
 /**
  * Creates a PENDING cover-swap request. Mirrors the POST /api/swap-requests
  * body shape. Accepts either the top-level `prisma` client or a `tx` — a
@@ -116,6 +119,7 @@ export async function decideSwapRequest(input: {
   | { result: 'ok'; request: SwapRequestWithRelations }
   | { result: 'not_found' }
   | { result: 'conflict' }
+  | { result: 'already_decided'; status: string }
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
     where: { id: input.id },
@@ -136,6 +140,9 @@ export async function decideSwapRequest(input: {
     },
   });
   if (!existing) return { result: 'not_found' };
+  // A decided request stays decided: re-deciding would reassign (or strand) a
+  // shift after both people were already told the outcome.
+  if (existing.status !== 'PENDING') return { result: 'already_decided', status: existing.status };
 
   if (isRequestLocked({ status: existing.status }, { userId: existing.shift.userId }, existing.requestedById)) {
     return { result: 'conflict' };
@@ -150,6 +157,14 @@ export async function decideSwapRequest(input: {
   const updated = await withAuditedTransaction(
     prisma,
     async (tx) => {
+      // Atomic counterpart of the PENDING check above: two decisions racing on
+      // the same request can both read PENDING, but only one of these matches.
+      const claimed = await tx.shiftSwapRequest.updateMany({
+        where: { id: input.id, status: 'PENDING' },
+        data: { status, reviewedById: input.reviewedById, reviewedAt: new Date(), managerNote },
+      });
+      if (claimed.count === 0) throw new SwapAlreadyDecidedError();
+
       // Atomic guard: only reassign the shift if it is still owned by the
       // same user who requested the swap. This is the real source of truth
       // against the TOCTOU race — two managers approving two different
@@ -171,13 +186,7 @@ export async function decideSwapRequest(input: {
         }
       }
 
-      const updatedRequest = await tx.shiftSwapRequest.update({
-        where: { id: input.id },
-        data: { status, reviewedById: input.reviewedById, reviewedAt: new Date(), managerNote },
-        include: SWAP_REQUEST_INCLUDE,
-      });
-
-      return updatedRequest;
+      return tx.shiftSwapRequest.findUniqueOrThrow({ where: { id: input.id }, include: SWAP_REQUEST_INCLUDE });
     },
     () => ({
       locationId: existing.shift.locationId,
@@ -189,11 +198,16 @@ export async function decideSwapRequest(input: {
       note: managerNote,
     }),
   ).catch((err) => {
-    if (err instanceof ShiftAlreadyReassignedError) return null;
+    if (err instanceof ShiftAlreadyReassignedError) return 'conflict' as const;
+    if (err instanceof SwapAlreadyDecidedError) return 'already_decided' as const;
     throw err;
   });
 
-  if (!updated) return { result: 'conflict' };
+  if (updated === 'conflict') return { result: 'conflict' };
+  if (updated === 'already_decided') {
+    const now = await prisma.shiftSwapRequest.findUnique({ where: { id: input.id }, select: { status: true } });
+    return { result: 'already_decided', status: now?.status ?? 'decided' };
+  }
   return { result: 'ok', request: updated };
 }
 
