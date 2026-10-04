@@ -4,18 +4,21 @@ import { prisma } from '../lib/prisma.js';
 import { intentSchemaFor, type ParsedIntent } from './intentSchema.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
-import { voiceClientOptions, voiceModel } from './model.js';
+import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
 import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
 import { bestMatch } from '../lib/textSimilarity.js';
 
 export class VoiceIntentError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
   cause?: unknown;
+  /** True when Gemini answered 404 for the configured model (retired/misspelled): an operator fix, not a retry. */
+  modelUnavailable: boolean;
 
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, modelUnavailable = false) {
     super(message);
     this.name = 'VoiceIntentError';
     this.cause = cause;
+    this.modelUnavailable = modelUnavailable;
     // Preserve the original stack so the server log shows the real failure
     // point instead of only the wrapper's message.
     if (cause instanceof Error && cause.stack) {
@@ -197,7 +200,8 @@ export async function parseVoiceIntent(
     return { response: clientResponse, attempted, hasAdditionalRequest };
   } catch (err) {
     if (err instanceof ApiError) {
-      throw new VoiceIntentError(`Intent parsing failed (${err.status ?? 'unknown'}): ${err.message}`, err);
+      const modelUnavailable = reportIfModelUnavailable('parse-intent', err);
+      throw new VoiceIntentError(`Intent parsing failed (${err.status ?? 'unknown'}): ${err.message}`, err, modelUnavailable);
     }
     if (err instanceof VoiceIntentError) throw err;
     throw new VoiceIntentError('Unexpected error while parsing the voice command.', err);

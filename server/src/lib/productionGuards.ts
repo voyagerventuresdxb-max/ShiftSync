@@ -14,8 +14,11 @@ export function isBaseUrlOverride(name: string): name is (typeof GEMINI_BASE_URL
   return (GEMINI_BASE_URL_OVERRIDES as readonly string[]).includes(name);
 }
 
-/** Settings that must never be on in production — a login bypass, a deliberate crash trigger, and a redirect of voice AI traffic. */
-export const FORBIDDEN_IN_PRODUCTION = ['ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION', ...GEMINI_BASE_URL_OVERRIDES] as const;
+/** The dev/e2e push seam (lib/push.ts): any value replaces real delivery with an in-memory outbox. */
+export const PUSH_TRANSPORT = 'PUSH_TRANSPORT';
+
+/** Settings that must never be on in production — a login bypass, a deliberate crash trigger, a redirect of voice AI traffic, and fake push delivery. */
+export const FORBIDDEN_IN_PRODUCTION = ['ALLOW_DEV_OTP_BYPASS', 'ALLOW_DEV_ERROR_INJECTION', ...GEMINI_BASE_URL_OVERRIDES, PUSH_TRANSPORT] as const;
 
 /**
  * NODE_ENV=production, or Railway's own environment name: this repo's start
@@ -49,14 +52,16 @@ export function checkProductionEnv(env: NodeJS.ProcessEnv = process.env): { warn
     fatal.push('ALLOW_DEV_OTP_ECHO=true needs at least one valid mobile number in ECHO_ALLOWED_PHONES (comma-separated).');
   }
   for (const flag of FORBIDDEN_IN_PRODUCTION) {
-    // The base-URL overrides are URLs, not boolean flags: any value at all is on.
-    if (isBaseUrlOverride(flag) ? !env[flag]?.trim() : !isFlagOn(flag, env)) continue;
+    // The base-URL overrides and the push transport are values, not boolean flags: any value at all is on.
+    if (isBaseUrlOverride(flag) || flag === PUSH_TRANSPORT ? !env[flag]?.trim() : !isFlagOn(flag, env)) continue;
     fatal.push(
       flag === 'ALLOW_DEV_OTP_BYPASS'
         ? `${flag}=true makes the fixed code 000000 log in as ANY phone number.`
         : flag === 'ALLOW_DEV_ERROR_INJECTION'
           ? `${flag}=true lets a sentinel bearer token crash session auth on demand.`
-          : `${flag} is set — Gemini/Vertex traffic (voice audio, transcripts, roster images) would go to that URL instead of Google.`,
+          : flag === PUSH_TRANSPORT
+            ? `${flag} is set — push notifications would be recorded in memory instead of delivered (a dev/e2e seam).`
+            : `${flag} is set — Gemini/Vertex traffic (voice audio, transcripts, roster images) would go to that URL instead of Google.`,
     );
   }
   if (fatal.length > 0) {
