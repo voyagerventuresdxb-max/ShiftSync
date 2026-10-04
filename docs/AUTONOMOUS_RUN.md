@@ -1066,3 +1066,54 @@ SMS go-live; Railway config before 2026-12-01; VAPID go-live; native push/camera
 - [#115](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/115) (owner review). Each venue gets a kiosk link for a shared screen: a 256-bit token stored only as its sha256 (additive migration `20261004140000_kiosk_token`), shown once, regenerable and revocable by the venue's owner or managers (People → Kiosk link). Without a session, the rota, publish status, announcements and shoutouts reads need the venue's current token; with it they return the published rota (names, roles, times) and the board without user ids. Signed-in users of the venue keep full access. Refused token attempts are rate-limited (20 per 15 minutes per client). The reads are in the access matrix, with e2e tests for valid, regenerated, revoked and venue-id-only links.
 - Behaviour changes for the owner to check are listed in the PR (existing `/?venue=` screens need a kiosk link; no audit row, since no audit action fits).
 - Gate: typecheck ×2, lint 0 errors, unit 96/96, server 632 / 3 skip, build, scan clean. Full e2e 83/84: `bad-network`'s rota test went offline before the rota had loaded (the reads now check the session and take slightly longer). Fixed at the root: the test now waits for the loaded rota. It then passed 3/3 alone, and 5/5 on master before the change. The four new kiosk e2e tests passed on their first run.
+
+## Stage F — rota stack refresh: done, not merged (15:26 Dubai)
+- Current master merged into #69, then up the stack (#78 ← #69, #84 ← #78, #108–#111 ← #84), merge commits only, no force-push. A first pass was redone after #113 and #114 landed, so the stack carries the signup-test root-cause fix.
+- #69 keeps its own lines where #103 changed shift writes (the actor is always the signed-in manager); the 86 routes keep #103's venue check. The access matrix covers #69's rota-leave routes, and its on-behalf shift cases became a check that the audit trail names the signed-in manager.
+- `golden-path-rota` now checks pushes in #99's record-mode outbox; no VAPID keys, push receiver or certificate needed.
+- #109's venue-week availability read is in the #104 matrix.
+- #84: the new decided-swap test now gives each request its own day (#84's overlap guard).
+- Full gates, each branch: #69 server 643/3 skip, e2e 81/81; #78 650, 82/82; #84 655, 82/82; #108 655, 83/83; #109 657, 83/83; #110 655, 86/86; #111 655, 84/84; scans clean. Each PR has a comment with its results.
+
+## Run 6 final report (15:26 on 2026-10-04 Dubai)
+
+### 1. Production
+
+- **The AI spend cap is live in production** (deployment `32f13663`, code `ff9934c`). It runs on its defaults: USD 5 per month and 60 calls per day. Production still has no Gemini/Vertex credentials, so AI reading and voice remain off.
+- Health 200 twice, readiness 200 (32/32 migrations), `ai_spend_guard` applied. GitHub "Vercel" status for master: success. Smoke test without sign-in: 4/4 pass. No rollback needed. The previous deployment, `806be2a0`, remains the rollback target.
+- Newly live in this deploy: the access fixes (#101, #102, #103), fixture privacy (#94), the AI cap (#112), day headers (#113), and decided-swap/availability fixes (#114).
+
+### 2. Stages
+
+| Stage | Status | PR | Tests |
+|---|---|---|---|
+| Preconditions | passed | — | settings presence-only; health and ready 200 |
+| A — fixes + housekeeping | done | #102, #101, #103, #104, #94, #105 merged; #75 closed; **#91 not merged** | #104: server 596/1 skip (whole matrix), e2e 80/80; #94: server 598/2 skip with the private fixtures, e2e 80/80 |
+| B — AI spend cap | merged | #112 | server 610/3 skip; e2e 79/80 (load-induced sign-up timeout; the spec passed 2/2 alone) |
+| C — roster day headers | merged | #113 | server 614/3 skip; e2e 80/80; eval day 88→94%, no regressions |
+| D — swaps, availability, signup flake + deploy | merged, deployed | #114 | server 618/3 skip; e2e 80/80 |
+| E — kiosk links | PR only | #115 | server 632/3 skip; e2e 83/84, then the fix passed 3/3 |
+| F — rota stack refresh | refreshed, not merged | #69, #78, #84, #108–#111 (commented) | each: server 643–657 pass / 3 skip, e2e 81–86 all passing |
+
+### 3. Real-phone checklist (after this deploy)
+
+1. Sign in by code (demo account) and by login link; sign out and back in.
+2. Join: open the invite link on a second phone, request to join; the manager approves, and the staff member lands on Home and My Shifts.
+3. Upload an Excel or CSV roster with `Mon 17/08`-style day headers. The review screen shows the right dates. A header whose weekday is wrong appears as a review item that must be marked reviewed.
+4. Upload a roster photo. Expect "AI roster reading isn't set up on this server", which is correct until Google credentials are added.
+5. Staff asks for cover; the manager approves. Approving or declining it again (from another phone) says it was already decided.
+6. Staff marks and removes "unavailable" on a day.
+7. Rota view in airplane mode: the loaded rota stays, and Publish is disabled with a reason; it works again online.
+8. After #115 is merged and deployed: create a kiosk link on People, open it on a tablet, then regenerate it and check the old link stops working.
+
+### 4. Blocked, skipped or risky
+
+- **#91 (this log) was not merged.** Its earlier commits hold older wording, and only merge commits were allowed. The owner decides: squash-merge or close.
+- **#115 changes existing shared screens.** Any screen using a plain venue link needs a kiosk link once #115 is deployed. The PR lists the behaviour changes.
+- **`vlm:check` must run inside the service** (`railway ssh`, which needs an SSH key) because production's database is private. Without SSH, the phone photo test covers the same path.
+- **Sign-up code requests use a 5-second database transaction.** Under heavy load it timed out once in a local gate. Recorded for Run 7's flake work.
+- Rota stack: refreshed onto current master and green, but still unreviewed; #69 deliberately keeps its session-only actor on the shift routes, and #84's database overlap guard needed one test adjusted.
+
+### 5. Still not done
+
+Google billing and credentials (AI reading and voice not live); Vercel settings review; API key rotation; SMS go-live; Railway config before 2026-12-01; VAPID; native plugins; Play upload; rota stack review (#69 → #78 → #84 → #108–#111) and kiosk links (#115).
