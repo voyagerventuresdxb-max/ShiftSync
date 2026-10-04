@@ -1,6 +1,5 @@
 import express, { type ErrorRequestHandler } from 'express';
 import cors from 'cors';
-import { join } from 'node:path';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
 import { floorPlanRouter, floorPlanFilesRouter } from './routes/floorPlan.js';
@@ -54,21 +53,12 @@ export function createApp() {
   }
 
   // Both uploaded-file subpaths are session-gated and location-scoped (see
-  // policyDocuments.ts / floorPlan.ts), each mounted BEFORE the generic
-  // static fallback below so it intercepts its own subpath first. Anything
-  // under /uploads NOT matching one of these two known subdirectories still
-  // falls through to the unauthenticated static mount below — there are
-  // none today (only floor-plans/ and policy-documents/ exist), but a
-  // future third upload type would need the exact same treatment, not a
-  // silent ride on the generic fallback.
+  // policyDocuments.ts / floorPlan.ts). They are the only way to read an
+  // upload: anything else under /uploads is a 404, never a static file. A
+  // future third upload type needs its own authenticated route like these.
   app.use('/uploads/policy-documents', policyDocumentFilesRouter);
   app.use('/uploads/floor-plans', floorPlanFilesRouter);
-
-  // Kept only as a defensive fallback for the two known subpaths above (both
-  // now intercepted before reaching here) and as an explicit trip-wire for
-  // any future /uploads/<new-subdir> that hasn't been given its own
-  // authenticated route yet — see the comment above.
-  app.use('/uploads', express.static(join(import.meta.dirname, '..', 'uploads')));
+  app.use('/uploads', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 
   app.use('/api/schedules', schedulesRouter);
   app.use('/api/staff-directory', staffDirectoryRouter);
