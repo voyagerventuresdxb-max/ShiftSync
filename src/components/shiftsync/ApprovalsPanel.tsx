@@ -140,7 +140,7 @@ export function ApprovalsPanel({
       {open && (
         <>
           <p className="border-b border-border px-4 pb-4 text-xs text-muted-foreground sm:px-5">
-            Requests close Wednesday 17:00 GST. Overlapping requests auto-lock to protect published coverage.
+            Cover requests for a week close Wednesday 17:00 (venue time). Overlapping requests auto-lock to protect published coverage.
           </p>
 
           {!online && requests.length > 0 && <StaleDataNotice />}

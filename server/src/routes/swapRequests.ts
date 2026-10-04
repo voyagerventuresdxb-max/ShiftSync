@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { isRequestLocked } from '../lib/swapRequestPolicy.js';
+import { isRequestLocked, SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
@@ -160,6 +160,9 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
 
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {
+    if (err instanceof SwapWindowClosedError) {
+      return res.status(409).json({ error: err.message, errorCode: 'swap_window_closed' });
+    }
     console.error('[swapRequests.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while creating the swap request.' });
   }

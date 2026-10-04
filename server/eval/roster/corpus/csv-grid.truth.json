@@ -1,0 +1,174 @@
+{
+  "id": "csv-grid",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Maricel Dela Cruz",
+      "role": "SUPERVISORS",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Jomar Santos",
+      "role": "SUPERVISORS",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Liezel Bautista",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Rommel Pascual",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "Maricel Dela Cruz",
+      "date": "2026-08-19",
+      "code": "OFF"
+    },
+    {
+      "name": "Jomar Santos",
+      "date": "2026-08-21",
+      "code": "OFF"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-22",
+      "code": "AL"
+    },
+    {
+      "name": "Liezel Bautista",
+      "date": "2026-08-23",
+      "code": "AL"
+    },
+    {
+      "name": "Rommel Pascual",
+      "date": "2026-08-23",
+      "code": "SL"
+    }
+  ],
+  "flagged": [],
+  "file": "csv-grid.csv",
+  "expectEscalation": null,
+  "tags": [
+    "CSV",
+    "day grid",
+    "Filipino names"
+  ]
+}

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from './pdfTableExtractor.js';
 import { parseExcelGrid } from './deterministicGridParser.js';
+import { privateFixture, privateFixtureSkipMessage } from './privateFixtures.js';
 
 const WEEK_START = '2026-08-17';
 
@@ -29,8 +30,16 @@ async function buildMultiPagePdf(pages: { text: string; x: number; y: number }[]
   return Buffer.from(await doc.save());
 }
 
-test('real reference-venue PDF: full pipeline (extractPdfGrid -> parseExcelGrid) reproduces the known-correct structure', async () => {
-  const buffer = readFileSync('server/test-fixtures/real-roster.pdf');
+test('real reference-venue PDF (private, local only): full pipeline (extractPdfGrid -> parseExcelGrid) reproduces the known-correct structure', async (t) => {
+  // The real file carries real staff names, so it lives outside the repository and this
+  // test asserts only structure (counts and section labels), never names. The synthetic
+  // equivalent below covers the same layout for everyone.
+  const path = privateFixture('real-roster.pdf');
+  if (!path) {
+    t.skip(privateFixtureSkipMessage('real-roster.pdf'));
+    return;
+  }
+  const buffer = readFileSync(path);
 
   assert.equal(await hasPdfTextLayer(buffer), true);
 
@@ -44,59 +53,68 @@ test('real reference-venue PDF: full pipeline (extractPdfGrid -> parseExcelGrid)
   // run-to-run variance since there's no model call involved.
   assert.equal(result.rows.length, 160);
 
-  const roleByStaff: Record<string, Set<string>> = {};
+  const rolesByStaff = new Map<string, Set<string>>();
   for (const r of result.rows) {
-    (roleByStaff[r.employeeName] ??= new Set()).add(r.roleName);
+    if (!rolesByStaff.has(r.employeeName)) rolesByStaff.set(r.employeeName, new Set());
+    rolesByStaff.get(r.employeeName)!.add(r.roleName);
   }
-  const roleOf = (name: string) => [...(roleByStaff[name] ?? [])];
+  // 16 staff with shifts; nobody ends up under two sections.
+  assert.equal(rolesByStaff.size, 16);
+  assert.ok([...rolesByStaff.values()].every((roles) => roles.size === 1));
+  const staffPerRole: Record<string, number> = {};
+  for (const roles of rolesByStaff.values()) for (const role of roles) staffPerRole[role] = (staffPerRole[role] ?? 0) + 1;
+  // The 3 unlabeled management rows (no section header above them in the source file)
+  // resolve to "" (flagged for manual review), never a borrowed label — the original
+  // "COVERS" bug. Section-headered staff resolve to their real printed section, even though
+  // on this reconstructed grid the header text lands in a middle column beside a stray number.
+  assert.deepEqual(staffPerRole, { '': 3, SUPERVISORS: 2, 'HEAD WAITERS': 3, WAITERS: 1, RUNNERS: 7 });
 
-  // The 3 unlabeled management rows (no section header above them in the
-  // source file) must resolve to "" (flagged for manual review), never a
-  // borrowed label from elsewhere on the sheet — the original "COVERS" bug.
-  assert.deepEqual(roleOf('Andrea'), ['']);
-  assert.deepEqual(roleOf('Roberto'), ['']);
-  assert.deepEqual(roleOf('Alessandro'), ['']);
+  // Two shiftless staff share a row with entries of a static legend box in the trailing
+  // column, surfaced as leave records (a manager can dismiss a coincidence in seconds;
+  // silently dropping a person is worse). Staff with a fully blank week and no such
+  // coincidence produce nothing — never a section header, never shift rows.
+  assert.deepEqual(result.leaveRecords.map((r) => r.leaveCode).sort(), ['PH', 'Request']);
 
-  // Section-headered staff resolve to their real printed section, even
-  // though on this reconstructed PDF grid the header text lands in a
-  // middle column (not the name column) and shares a row with an unrelated
-  // stray number.
-  assert.deepEqual(roleOf('Pratik'), ['SUPERVISORS']);
-  assert.deepEqual(roleOf('Derrick'), ['SUPERVISORS']);
-  assert.deepEqual(roleOf('Rojina'), ['HEAD WAITERS']);
-  assert.deepEqual(roleOf('Hefny'), ['WAITERS']);
-  assert.deepEqual(roleOf('Bashkar'), ['RUNNERS']);
-
-  // Staff with zero shifts this week (on leave/PH all week) must never be
-  // mistaken for a role-section header and must not appear as shift rows.
-  for (const shiftless of ['Sintia', 'Tomas', 'Irma', 'Tatenda', 'Rowel']) {
-    assert.equal(roleByStaff[shiftless], undefined, `${shiftless} should have 0 shift rows`);
-  }
-
-  // Sintia and Tomas both have a recognizable leave code sharing their row
-  // in the reconstructed grid's trailing column ("PH", "Request") and zero
-  // shift data, so they're surfaced as leave records instead of silently
-  // vanishing. NOTE: on this specific real file, that trailing column is
-  // actually a static legend/key box (11 fixed entries, independently
-  // confirmed against the earlier VLM-extracted legend) that coincidentally
-  // shares row-alignment with these two employees, not a genuine per-row
-  // annotation — even the Gemini vision path (reading real cell colours)
-  // produced 0 leave records for this exact file. Surfacing it anyway is
-  // the correct tradeoff: a manager reviewing "Sintia — PH" can dismiss a
-  // coincidence in a few seconds, which is strictly better than the
-  // previous behaviour of Sintia disappearing from the roster with zero
-  // explanation. Irma/Tatenda/Rowel have no such coincidence and correctly
-  // produce no leave record at all.
-  assert.deepEqual(
-    result.leaveRecords.map((r) => `${r.employeeName}:${r.leaveCode}`).sort(),
-    ['Sintia:PH', 'Tomas:Request'],
-  );
-
-  // The only 2 anomalies should be the non-employee "COVERS" covers-count
-  // row's two unparseable annotation cells, correctly flagged rather than
-  // silently dropped or misread as a real shift.
+  // The only 2 anomalies are the non-employee "COVERS" covers-count row's two unparseable
+  // annotation cells, flagged rather than dropped or misread as a real shift.
   assert.equal(result.anomalies.length, 2);
   assert.ok(result.anomalies.every((a) => a.employeeName === 'COVERS'));
+});
+
+test('synthetic reference-layout PDF (public stand-in for the real file): the same structure comes through', async () => {
+  // server/test-fixtures/synthetic/text-roster.pdf — made-up names, the real file's layout
+  // features (server/scripts/make-synthetic-roster-fixtures.mjs): a COVERS caption above the
+  // listing, 3 unlabeled management rows, section headers printed in a middle column beside a
+  // stray headcount number, AM/PM "11 17 18 25" cells, a blank-week employee inside a section,
+  // and a legend box in a trailing column that lines up with staff rows.
+  const buffer = readFileSync('server/test-fixtures/synthetic/text-roster.pdf');
+  assert.equal(await hasPdfTextLayer(buffer), true);
+  const result = parseExcelGrid(await extractPdfGrid(buffer), WEEK_START);
+
+  assert.equal(result.templateLabel, 'Deterministic Grid Parser');
+  assert.equal(result.rows.length, 69);
+  const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
+  for (const name of ['Test Manager Avery', 'Test Manager Blake', 'Test Manager Casey']) assert.deepEqual(roleOf(name), ['']);
+  assert.deepEqual(roleOf('Test Supervisor Dana'), ['SUPERVISORS']);
+  assert.deepEqual(roleOf('Test Supervisor Ellis'), ['SUPERVISORS']);
+  assert.deepEqual(roleOf('Test Head Finley'), ['HEAD WAITERS']);
+  assert.deepEqual(roleOf('Test Head Harper'), ['HEAD WAITERS']); // the blank-week row above did not become a header
+  assert.deepEqual(roleOf('Test Waiter Indigo'), ['WAITERS']);
+  assert.deepEqual(roleOf('Test Runner Morgan'), ['RUNNERS']);
+  // Blank-week staff produce no shift rows.
+  for (const name of ['Test Head Gray', 'Test Runner Kai', 'Test Runner Lee']) assert.deepEqual(roleOf(name), []);
+  // AM/PM pairs become two shifts, the evening one overnight.
+  const firstDay = result.rows.filter((r) => r.employeeName === 'Test Manager Avery' && r.date === '2026-08-17');
+  assert.deepEqual(firstDay.map((r) => `${r.startTime}-${r.endTime}${r.overnight ? '+' : ''}`), ['11:00-17:00', '18:00-01:00+']);
+  // Legend entries beside shiftless staff surface as leave records; beside working staff they are ignored.
+  assert.deepEqual(result.leaveRecords.map((r) => `${r.employeeName}:${r.leaveCode}`).sort(), ['Test Runner Kai:PH', 'Test Runner Lee:Request']);
+  // The covers caption's two annotations are anomalies, not shifts.
+  assert.deepEqual(result.anomalies.map((a) => a.employeeName), ['COVERS', 'COVERS']);
+});
+
+test('synthetic scanned roster (public stand-in for the real scan): image-only, no text layer, not malformed', async () => {
+  const buffer = readFileSync('server/test-fixtures/synthetic/scanned-roster.pdf');
+  assert.equal(await hasPdfTextLayer(buffer), false);
 });
 
 test('multi-line cell: a role header wrapped across two lines is reconstructed as one label', async () => {
