@@ -1166,3 +1166,16 @@ Real-phone checklist additions: on a real iPhone, the onboarding welcome's press
 ### 5. Blocked or risky
 - Nothing blocked.
 - iPhone Safari can only be partly automated here; the checklist above covers the gaps.
+
+# Run 8 — Vertex credentials into production (2026-10-04, ended 17:42 Dubai)
+
+| Stage | Result |
+|---|---|
+| Preconditions | Runs 6 and 7 have final reports; the AI spend cap is live in production; health and readiness 200; the expected Google account signed in; the expected project verified |
+| A — allow key creation for the project only | the Vertex AI API was already on. The Organization Policy API was off, so it was switched on for this project to manage the policy, then switched off again afterwards. A temporary policy-administrator role was granted for the change. The key-creation restriction was overridden at the project level only; the managed variant was already not enforced there |
+| B — one key | exactly one key created, written straight to a private folder outside every repository; the project override removed at once (back to inheriting the enforced organization policy, verified); the temporary role removed (verified) |
+| C — production | the two variables named in `docs/vlm-go-live.md` set on the API service with deploys skipped, values read from files, never shown; no other variable changed (the AI cap keeps its defaults). One source redeploy: SUCCESS, health 200 twice, readiness 200, no vision setup error in the log. Variables present |
+| C — vlm:check | from the linked deploy checkout at current master through `railway run`: configuration resolved to Vertex, EU, the default model, then **FAIL (paused)**: the spend cap refused the call because production's database isn't reachable from a laptop (the cap failing closed, as designed). The same credential checked locally: **PASS** (the default model answered, all expected rows read). Because the instructed check didn't pass, the key file was kept for the owner |
+| D — sign out | Google credentials revoked; no active account |
+
+Production can now read roster photos and scans through Vertex, under the in-app spend cap.
