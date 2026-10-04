@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as XLSXNS from 'xlsx';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { CORPUS, DATES, truthOf, type CorpusSpec, type DayHeaderStyle } from './spec.js';
+import { CORPUS, DATES, MISMATCH_DAY, truthOf, type CorpusSpec, type DayHeaderStyle } from './spec.js';
 
 const XLSX: typeof XLSXNS = ((XLSXNS as unknown as { default?: typeof XLSXNS }).default ?? XLSXNS) as typeof XLSXNS;
 export const CORPUS_DIR = join('server', 'eval', 'roster', 'corpus');
@@ -22,7 +22,13 @@ function dayHeaders(style: DayHeaderStyle): string[] {
     if (style === 'date') return `${d}-${MON[m - 1]}`;
     if (style === 'weekday') return WEEKDAYS[i]!;
     if (style === 'short-weekday') return SHORT[i]!;
-    return `${SHORT[i]} ${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`;
+    const dd = String(d).padStart(2, '0');
+    const mm = String(m).padStart(2, '0');
+    if (style === 'weekday-upper-dash') return `${SHORT[i]!.toUpperCase()} ${dd}-${mm}`;
+    if (style === 'weekday-day-month') return `${SHORT[i]} ${d} ${MON[m - 1]}`;
+    if (style === 'date-weekday') return `${dd}/${mm} ${SHORT[i]}`;
+    if (style === 'weekday-date-mismatch' && i === MISMATCH_DAY) return `${SHORT[(i + 1) % 7]} ${dd}/${mm}`;
+    return `${SHORT[i]} ${dd}/${mm}`;
   });
 }
 

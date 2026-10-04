@@ -70,6 +70,24 @@ test('CSV and HTML text dates and times: month names, AM/PM, seconds, "9 AM" (th
   assert.deepEqual(html.issues, []);
 });
 
+test('day headers with a weekday ("Mon 17/08", "TUE 18-08", "Wed 19 Aug", "20/08 Thu") read as DD/MM in every zone; a wrong weekday is flagged', () => {
+  // The first test proves every zone gives the same document; Los Angeles is the zone furthest behind UTC.
+  const grid = runProbe('America/Los_Angeles')['synthetic/grid-weekday-date-headers.csv']!.deterministicGrid;
+  assert.equal(grid.error, undefined, grid.error ?? '');
+  assert.deepEqual(grid.rows!.map(key).sort(), [
+    'Ali Hassan|2026-08-17|09:00-17:00',
+    'Ali Hassan|2026-08-18|09:00-17:00',
+    'Ali Hassan|2026-08-20|10:00-18:00',
+    'Ali Hassan|2026-08-21|10:00-18:00',
+    'Mona Said|2026-08-17|14:00-22:00',
+    'Mona Said|2026-08-19|14:00-22:00',
+    'Mona Said|2026-08-20|14:00-22:00',
+  ]);
+  const flagged = (grid.anomalies as { employeeName: string; date: string; reason: string }[]).filter((a) => /day header says/.test(a.reason));
+  assert.deepEqual(flagged.map((a) => `${a.employeeName}|${a.date}`), ['Ali Hassan|2026-08-21']);
+  assert.match(flagged[0]!.reason, /says Saturday, but 2026-08-21 is a Friday/);
+});
+
 test('a grid CSV of hour ranges ("10-18") is a roster, not a row of 2001 dates', () => {
   const probe = runProbe('UTC');
   const grid = probe['synthetic/grid-hour-ranges.csv']!.deterministicGrid;

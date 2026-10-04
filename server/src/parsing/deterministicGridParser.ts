@@ -22,7 +22,7 @@
  *    passed through as a literal invalid time.
  */
 import { isAllCapsLabel } from './escalation.js';
-import { parseDateCell, resolveDayMonthDate, isOvernight, cellToText } from './normalize.js';
+import { parseDateCell, resolveDayMonthDate, printedWeekdayMismatch, isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -101,7 +101,7 @@ function isBlank(value: unknown): boolean {
   return s === '' || s === '-';
 }
 
-/** Resolves a day-header cell (day name, "17-Aug", ISO date, Excel date) to an ISO date anchored to weekStart. */
+/** Resolves a day-header cell (day name, "17-Aug", "Mon 17/08", ISO date, Excel date) to an ISO date anchored to weekStart. */
 function resolveHeaderDate(cell: unknown, weekStart: string): string | null {
   const iso = parseDateCell(cell);
   if (iso) return iso;
@@ -627,6 +627,8 @@ interface DayColumn {
   colIndex: number;
   date: string;
   period: 'AM' | 'PM' | null;
+  /** The header prints a weekday that `date` doesn't fall on ("Thu 19/08" when 19/08 is a Wednesday). */
+  weekdayMismatch?: { header: string; printed: string; actual: string };
 }
 
 /**
@@ -720,7 +722,8 @@ function buildDayColumns(grid: unknown[][], header: { dayRowIdx: number; periodR
     if (!date) continue;
     const periodCell = periodRow ? normalizeCell(periodRow[c]).toUpperCase() : '';
     const period = periodCell === 'AM' || periodCell === 'PM' ? (periodCell as 'AM' | 'PM') : null;
-    columns.push({ colIndex: c, date, period });
+    const mismatch = printedWeekdayMismatch(dayRow[c], date);
+    columns.push({ colIndex: c, date, period, ...(mismatch ? { weekdayMismatch: { header: normalizeCell(dayRow[c]), ...mismatch } } : {}) });
   }
   return columns;
 }
@@ -926,6 +929,21 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     for (const col of columns) {
       const parsed = parseCellValue(row[col.colIndex], fileLegend);
       if (parsed.kind === 'blank') continue;
+
+      // The date wins (it's the more specific of the two), but a weekday that
+      // disagrees with it means the column may be the wrong day: flag every
+      // entry under it for the manager rather than guess.
+      if (col.weekdayMismatch) {
+        const { header, printed, actual } = col.weekdayMismatch;
+        anomalies.push({
+          employeeName,
+          date: col.date,
+          rawText: header,
+          reason: `The day header says ${printed}, but ${col.date} is a ${actual}. Check which day this is before confirming.`,
+          confidence: 0.5,
+          rowNumber: parsed.kind === 'shifts' ? rowNumber : null,
+        });
+      }
 
       if (parsed.kind === 'leave') {
         hasShiftOrLeaveThisRow = true;
