@@ -7,6 +7,7 @@ import { requireSession, bearerToken } from '../middleware/requireSession.js';
 import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
 import { loginMethods } from '../lib/loginLinks.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
+import { sendOtpSms, SMS_SEND_FAILED_ERROR } from '../lib/sms.js';
 import { getApproverNameForLocation } from '../lib/managers.js';
 import { canReapplyToJoin, joinDeclinedMessage } from '../lib/actions/joinActions.js';
 
@@ -61,7 +62,8 @@ identityRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, asyn
     }
 
     const { plainCode, expiresAt } = await requestOtpCode(phone, 'LOGIN');
-    // No SMS integration exists; this is a stand-in until one is added.
+    if ((await sendOtpSms(phone, plainCode, 'identity')) === 'failed') return res.status(503).json({ error: SMS_SEND_FAILED_ERROR });
+    // Dev stand-in for SMS: echoes the code, for allowlisted numbers only.
     const echo = devOtpEchoFor(phone);
     if (echo) logDevOtpEcho('identity', phone, 'LOGIN', plainCode);
 
