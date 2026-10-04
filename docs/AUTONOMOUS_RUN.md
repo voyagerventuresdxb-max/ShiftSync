@@ -1117,3 +1117,52 @@ SMS go-live; Railway config before 2026-12-01; VAPID go-live; native push/camera
 ### 5. Still not done
 
 Google billing and credentials (AI reading and voice not live); Vercel settings review; API key rotation; SMS go-live; Railway config before 2026-12-01; VAPID; native plugins; Play upload; rota stack review (#69 → #78 → #84 → #108–#111) and kiosk links (#115).
+
+# Run 7 — stabilization (2026-10-04, ended 17:23 Dubai)
+
+Stabilization only: no merges, no deploys, no Railway or Vercel access. Fresh worktrees from `origin/master @ ff9934c`, each removed once its PR was pushed and green.
+
+## Final report
+
+### 1. Stages
+
+| Stage | Status | PR | Tests |
+|---|---|---|---|
+| A — regression on master | done | — | 3 consecutive full runs: unit 94/94, server 618 pass / 3 skip, e2e 80/80 each; no flakes. Key flows under emulation: Android Chrome 31/31; iPhone WebKit 26/31 (the 5 are test-harness limits, below). Debug APK workflow (dispatched): success, artifact `shiftsync-debug-apk` |
+| B — demo pack | PR open | #118 | demo recorded 3×, 8/8 each; reset 1.0–1.5 s; full take ≈ 38 s; videos kept outside the repo |
+| C — mobile sweep | PR open | #119 | 360/390/414 on every route; 3 mechanical fixes; full gate e2e 80/80 |
+| D — load and abuse smoke | PR open | #120 | 20 and 50 concurrent venues: 0 problems, no 5xx, limits answer 429, memory bounded |
+| E — scale check | done, no change needed | — | 10 venues × 150 staff × 26 weeks: hot reads under 1 ms; one query is slow by shape, not by a missing index |
+| F — dependencies and licences | PR open | #117 | lockfile-only patch/minor updates; advisories 80 → 36; full gate e2e 80/80 |
+| G, H — runbooks and pilot materials | PR open | #116 | docs only |
+
+### 2. Findings (details in the owner's report)
+- Rota: the venue's swap-request list reads the venue's whole history (no paging); fine at this scale, worth bounding later.
+- Mobile at 360 px only: onboarding emirate chips and the My Shifts 7-day availability strip are below the comfortable tap size (design call; fine at 390 and 414).
+- Every page logs React Router's v7 "future flag" warning (moving to v7 is a separate, tested change).
+- The onboarding Invite step says the join link lives in Roster; it is on People → Join link.
+- Publishing a week is one tap with no confirm step (pilot observation item).
+- The debug APK builds on push need the `VITE_API_URL` repository variable (owner setting); a manual run with the input works.
+- Remaining dependency advisories need major upgrades or upstream fixes; most sit in development-only tooling. No copyleft licence in the shipped code.
+- Account-control and link-revocation follow-ups: owner's report.
+
+### 3. Flakes found and fixed
+- Master: none in three full runs.
+- Fixed at the root earlier today: the signup test's database-wide count (#114, merged) and the bad-network rota test going offline before the rota loaded (#115).
+- Seen once under heavy machine load in Run 6 and not reproduced in Run 7: a sign-up code request whose database transaction passed its 5 s limit.
+- Not flakes: under iPhone WebKit emulation, four invite-link tests use a browser permission WebKit doesn't have, and the onboarding welcome's press-and-hold isn't reproduced by the emulated mouse. Both are on the real-phone checklist.
+
+### 4. Next, in order
+1. Review #115 (kiosk links), then merge and deploy it.
+2. Review and merge #119 (mobile fixes) and #117 (dependency updates); #116, #118 and #120 are docs and tooling.
+3. Google credentials and the AI key (Run 8, queued).
+4. Decide #91 (squash-merge or close).
+5. Set the `VITE_API_URL` repository variable so APK builds on push succeed.
+6. Rota stack review (#69 → #78 → #84 → #108–#111).
+7. Answer the backup questions in `docs/backup-restore.md`.
+
+Real-phone checklist additions: on a real iPhone, the onboarding welcome's press-and-hold and copying the invite link; on a small (360-wide) Android phone, the My Shifts availability strip; install the debug APK from the workflow run and sign in.
+
+### 5. Blocked or risky
+- Nothing blocked.
+- iPhone Safari can only be partly automated here; the checklist above covers the gaps.
