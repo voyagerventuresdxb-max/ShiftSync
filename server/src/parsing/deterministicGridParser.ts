@@ -21,7 +21,8 @@
  *    normalized by subtracting 24 and marking the shift overnight — never
  *    passed through as a literal invalid time.
  */
-import { parseDateCell, resolveDayMonthDate, isOvernight } from './normalize.js';
+import { isAllCapsLabel } from './escalation.js';
+import { parseDateCell, resolveDayMonthDate, printedWeekdayMismatch, isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -89,7 +90,9 @@ function hasOwnKey<T extends object>(obj: T, key: string): key is Extract<keyof 
 }
 
 function normalizeCell(value: unknown): string {
-  return String(value ?? '').trim();
+  // A Date here is a typed date/time cell (see parseWorkbook.ts `readWorkbook`);
+  // its text must not depend on the host's zone, so never `String(date)`.
+  return cellToText(value).trim();
 }
 
 /** True when every cell in a row (besides the given column range) is blank. */
@@ -98,7 +101,7 @@ function isBlank(value: unknown): boolean {
   return s === '' || s === '-';
 }
 
-/** Resolves a day-header cell (day name, "17-Aug", ISO date, Excel date) to an ISO date anchored to weekStart. */
+/** Resolves a day-header cell (day name, "17-Aug", "Mon 17/08", ISO date, Excel date) to an ISO date anchored to weekStart. */
 function resolveHeaderDate(cell: unknown, weekStart: string): string | null {
   const iso = parseDateCell(cell);
   if (iso) return iso;
@@ -624,6 +627,8 @@ interface DayColumn {
   colIndex: number;
   date: string;
   period: 'AM' | 'PM' | null;
+  /** The header prints a weekday that `date` doesn't fall on ("Thu 19/08" when 19/08 is a Wednesday). */
+  weekdayMismatch?: { header: string; printed: string; actual: string };
 }
 
 /**
@@ -717,7 +722,8 @@ function buildDayColumns(grid: unknown[][], header: { dayRowIdx: number; periodR
     if (!date) continue;
     const periodCell = periodRow ? normalizeCell(periodRow[c]).toUpperCase() : '';
     const period = periodCell === 'AM' || periodCell === 'PM' ? (periodCell as 'AM' | 'PM') : null;
-    columns.push({ colIndex: c, date, period });
+    const mismatch = printedWeekdayMismatch(dayRow[c], date);
+    columns.push({ colIndex: c, date, period, ...(mismatch ? { weekdayMismatch: { header: normalizeCell(dayRow[c]), ...mismatch } } : {}) });
   }
   return columns;
 }
@@ -758,7 +764,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
 
   // Most rosters have exactly one leading column (the staff name). Some
   // print an explicit per-row title in its own column before the name
-  // (e.g. "RM" | "Robert Orgovan" | ... — Bar des Pres FOH style), on top
+  // (e.g. "RM" | "Nedak Mizon" | ... — Bar des Pres FOH style), on top
   // of (or instead of) grouping staff under section headers. Inferred from
   // where the day columns actually start, rather than hardcoded, so both
   // shapes work without knowing in advance which one a given file uses.
@@ -861,6 +867,26 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     }
   }
 
+  // An "ALL-CAPS venue": every row that carries real shift data has its staff name in capitals.
+  // There, "written in caps" says nothing about a label being a section header (a staff member
+  // with a blank week looks exactly like one), so a header recognised ONLY by that pattern is
+  // treated like an unrecognised header below — provisional and flagged for the manager —
+  // instead of silently relabelling everyone beneath it. Vocabulary matches are unaffected.
+  const allCapsVenue = (() => {
+    if (columnOrderAmbiguous) return false;
+    const labelCol = hasTitleColumn ? nameColIndex : 0;
+    const labels: string[] = [];
+    for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+      const row = grid[r] ?? [];
+      const label = normalizeCell(row[labelCol]);
+      if (!label || /^d+(.d+)?$/.test(label) || !rowHasShiftShapedData(row, columns, fileLegend)) continue;
+      labels.push(label);
+    }
+    return labels.length >= 2 && labels.every(isAllCapsLabel);
+  })();
+  /** A header that only the ALL-CAPS pattern recognised, in a sheet where that pattern proves nothing. */
+  const isPatternOnlyHeaderInCapsVenue = (label: string) => allCapsVenue && canonicalRoleName(label) === label;
+
   let currentRole = '';
   // True whenever `currentRole` was set by the unrecognized-section-header
   // promotion below (or hasn't been set to anything real yet), false once
@@ -871,10 +897,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // "Valet & Door") each correctly take over from the last. A REAL role
   // must never be silently overwritten by an ambiguous blank row, though
   // — see the promotion site below for why (a blank-week employee sitting
-  // INSIDE an already-correct section, e.g. Gattopardo's Irma between
-  // Rafael and Robert under HEAD WAITERS, is structurally indistinguishable
+  // INSIDE an already-correct section, e.g. Gattopardo's Lomur between
+  // Nelim and Nedak under HEAD WAITERS, is structurally indistinguishable
   // from a genuine new header at that one row; only refusing to touch an
-  // already-real currentRole prevents that from corrupting Robert's role).
+  // already-real currentRole prevents that from corrupting Nedak's role).
   let currentRoleIsProvisional = true;
   let rowNumber = 1;
   let hasSeenAnyStaffRow = false;
@@ -903,6 +929,21 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     for (const col of columns) {
       const parsed = parseCellValue(row[col.colIndex], fileLegend);
       if (parsed.kind === 'blank') continue;
+
+      // The date wins (it's the more specific of the two), but a weekday that
+      // disagrees with it means the column may be the wrong day: flag every
+      // entry under it for the manager rather than guess.
+      if (col.weekdayMismatch) {
+        const { header, printed, actual } = col.weekdayMismatch;
+        anomalies.push({
+          employeeName,
+          date: col.date,
+          rawText: header,
+          reason: `The day header says ${printed}, but ${col.date} is a ${actual}. Check which day this is before confirming.`,
+          confidence: 0.5,
+          rowNumber: parsed.kind === 'shifts' ? rowNumber : null,
+        });
+      }
 
       if (parsed.kind === 'leave') {
         hasShiftOrLeaveThisRow = true;
@@ -1045,7 +1086,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       const roleMatch = rowHasData ? undefined : nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
       if (roleMatch) {
         currentRole = roleMatch;
-        currentRoleIsProvisional = false;
+        currentRoleIsProvisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
+        if (currentRoleIsProvisional) unrecognizedHeaderTexts.add(roleMatch);
         continue;
       }
 
@@ -1090,7 +1132,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
 
       // Try the normal staff-row path first, completely unchanged — this
       // is what still lets a blank-day-columns employee with a note-column
-      // leave code (e.g. Gattopardo's Sintia/Tomas — see the "leave
+      // leave code (e.g. Gattopardo's Ruren/Rumur — see the "leave
       // detection" fallback inside processStaffRow) produce their real
       // LeaveRecord exactly as before. Only when this produces genuinely
       // NOTHING do we consider the row for header promotion below.
@@ -1119,12 +1161,12 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       //
       // Known, accepted ambiguity, NEUTRALIZED rather than just documented:
       // a genuinely blank-week employee with no note-column code either (a
-      // real pattern — see the Gattopardo reference fixture's Irma, who
-      // sits between Rafael and Robert inside the already-correct HEAD
+      // real pattern — see the Gattopardo reference fixture's Lomur, who
+      // sits between Nelim and Nedak inside the already-correct HEAD
       // WAITERS section) is structurally indistinguishable from a genuine
       // new header at this one row alone. The `currentRoleIsProvisional`
       // guard is what makes this safe either way: if a REAL header already
-      // applies here (Irma's case), this block never touches it, so Robert
+      // applies here (Lomur's case), this block never touches it, so Nedak
       // still correctly inherits HEAD WAITERS unchanged — confirmed against
       // both real reference fixtures (Gattopardo, Bar des Pres), not just
       // reasoned about; the first version of this fix (no provisional
@@ -1188,7 +1230,28 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         if (v) headerCandidates.push(v);
       }
       const roleMatch = headerCandidates.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
-      if (roleMatch) currentRole = roleMatch;
+      if (roleMatch) {
+        currentRole = roleMatch;
+        currentRoleIsProvisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
+        if (currentRoleIsProvisional) unrecognizedHeaderTexts.add(roleMatch);
+        continue;
+      }
+      // One unrecognised label on an otherwise blank row (no staff name, no day data): a novel
+      // section header — possibly the very first one, with no staff above it, which neither
+      // the vocabulary nor the caps signal can catch. Group the untitled rows below under it
+      // provisionally and flag it, exactly like the single-label shape does; per-row titles
+      // still take precedence. Never replaces a real (recognised) header.
+      const label = headerCandidates.length === 1 ? headerCandidates[0]! : null;
+      if (
+        label &&
+        currentRoleIsProvisional &&
+        !/^d+(.d+)?$/.test(label) &&
+        !SUMMARY_ROW_LABELS.has(label.toLowerCase()) &&
+        columns.every((col) => isBlank(row[col.colIndex]))
+      ) {
+        currentRole = label;
+        unrecognizedHeaderTexts.add(label);
+      }
       continue;
     }
 

@@ -25,7 +25,7 @@ function fakePrisma(roles: FakeRole[], users: FakeUser[]): PrismaClient {
 function row(overrides: Partial<ParsedShiftRow>): ParsedShiftRow {
   return {
     rowNumber: 1,
-    employeeName: 'Andrea',
+    employeeName: 'Kalim',
     roleName: '',
     date: '2026-08-17',
     startTime: '09:00',
@@ -39,14 +39,14 @@ function row(overrides: Partial<ParsedShiftRow>): ParsedShiftRow {
 
 test('falls back to an existing employee\'s own role when the file specifies no role at all', async () => {
   const roles = [{ id: 'role-mgmt', name: 'Management' }];
-  const users = [{ id: 'user-andrea', fullName: 'Andrea', roleId: 'role-mgmt' }];
+  const users = [{ id: 'user-kalim', fullName: 'Kalim', roleId: 'role-mgmt' }];
   const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
-    row({ employeeName: 'Andrea', roleName: '' }),
+    row({ employeeName: 'Kalim', roleName: '' }),
   ]);
 
   assert.equal(previewRows[0].status, 'matched');
   assert.equal(previewRows[0].resolvedRoleId, 'role-mgmt');
-  assert.equal(previewRows[0].resolvedUserId, 'user-andrea');
+  assert.equal(previewRows[0].resolvedUserId, 'user-kalim');
   const infoIssue = previewRows[0].issues.find((i) => i.severity === 'info');
   assert.ok(infoIssue, 'expected an informational issue noting the inferred role');
   assert.match(infoIssue!.message, /inferred from their existing staff record/i);
@@ -54,9 +54,9 @@ test('falls back to an existing employee\'s own role when the file specifies no 
 
 test('does NOT apply the fallback when the file specifies a role that simply fails to resolve (typo/unknown role) — stays blocked', async () => {
   const roles = [{ id: 'role-mgmt', name: 'Management' }];
-  const users = [{ id: 'user-andrea', fullName: 'Andrea', roleId: 'role-mgmt' }];
+  const users = [{ id: 'user-kalim', fullName: 'Kalim', roleId: 'role-mgmt' }];
   const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
-    row({ employeeName: 'Andrea', roleName: 'Bartander' }), // typo, not blank
+    row({ employeeName: 'Kalim', roleName: 'Bartander' }), // typo, not blank
   ]);
 
   assert.equal(previewRows[0].status, 'unmatched_role');
@@ -73,9 +73,9 @@ test('does NOT apply the fallback when the file specifies a role that simply fai
 
 test('does NOT apply the fallback when the employee has no existing role on file either — stays blocked', async () => {
   const roles = [{ id: 'role-mgmt', name: 'Management' }];
-  const users = [{ id: 'user-andrea', fullName: 'Andrea', roleId: null }];
+  const users = [{ id: 'user-kalim', fullName: 'Kalim', roleId: null }];
   const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
-    row({ employeeName: 'Andrea', roleName: '' }),
+    row({ employeeName: 'Kalim', roleName: '' }),
   ]);
 
   assert.equal(previewRows[0].status, 'unmatched_role');
@@ -311,7 +311,7 @@ test('canonicalRoleName/isRecognizedRoleAlias do not resolve inherited Object.pr
 test('nameKey: plain English/French-service names and headers are unaffected by the Unicode widening', () => {
   // \p{L}/\p{N} is a superset of a-z/0-9, so already-ASCII input must
   // normalize identically to before.
-  assert.equal(nameKey('Andrea'), 'andrea');
+  assert.equal(nameKey('Kalim'), 'kalim');
   assert.equal(nameKey('Employee Name'), 'employee name');
   assert.equal(nameKey('Chef de Rang'), 'chef de rang');
 });

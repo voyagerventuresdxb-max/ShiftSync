@@ -1,6 +1,10 @@
 import 'dotenv/config';
 import { createApp } from './app.js';
 import { checkProductionEnv } from './lib/productionGuards.js';
+import { installLogContext } from './lib/requestContext.js';
+
+// Request ids on every log line written while handling a request; phone numbers masked in all logs.
+installLogContext();
 
 const PORT = Number(process.env.PORT ?? 4000);
 

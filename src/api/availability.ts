@@ -2,8 +2,10 @@
  * Client for the Availability API (server/src/routes/availability.ts) — a
  * staff member's per-day unavailable/preferred-off marks for a given week.
  */
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
 export interface AvailabilityMarkDto {
@@ -14,7 +16,7 @@ export interface AvailabilityMarkDto {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -58,7 +60,7 @@ export async function setAvailability(
   });
 }
 
-/** DELETE /api/availability/:id — session-gated; the server 403s on someone else's mark. */
+/** DELETE /api/availability/:id — session-gated; someone else's mark answers 404, like a missing one. */
 export async function removeAvailability(token: string, id: string): Promise<void> {
   await request(`/api/availability/${id}`, { method: 'DELETE', headers: withAuth(token) });
 }

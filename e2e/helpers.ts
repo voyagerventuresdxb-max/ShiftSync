@@ -24,6 +24,11 @@ export function nextEchoPhone(): string {
   return phones[used]!;
 }
 
+/** Ages a phone's OTP codes by 60s so its next code request clears the per-phone 30s resend cap without sleeping. */
+export async function skipOtpResendWait(phone: string): Promise<void> {
+  await prisma.$executeRaw`UPDATE otp_codes SET created_at = created_at - interval '60 seconds' WHERE phone = ${phone}`;
+}
+
 export const TEST_ORG_PREFIX = '__e2e-test__';
 
 /** Marks a real org name as e2e-owned so teardown can find and delete it, and no
@@ -38,6 +43,25 @@ export function testVenueName(label: string): string {
  * real DB between runs. */
 export async function cleanupTestOrgs(): Promise<void> {
   await prisma.organization.deleteMany({ where: { name: { startsWith: TEST_ORG_PREFIX } } });
+}
+
+/**
+ * Waits until the app has released every overlay history entry. Closing a sheet or modal pops
+ * its history sentinel one macrotask later (src/lib/backNavigation.ts, so an overlay opening in
+ * the same tick can adopt it). A real person can't navigate inside that window, but a test can:
+ * a `page.goto` issued right after the close click races the pending `history.back()` and the
+ * navigation is aborted (net::ERR_ABORTED) — the touch-targets flake.
+ */
+export async function settleOverlayHistory(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 })
+    .catch(() => {});
+}
+
+/** `page.goto` that first lets the app finish any pending overlay-history release (see settleOverlayHistory). */
+export async function gotoSettled(page: Page, url: string): Promise<void> {
+  await settleOverlayHistory(page);
+  await page.goto(url);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { isRequestLocked } from '../lib/swapRequestPolicy.js';
+import { isRequestLocked, SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import {
@@ -27,7 +27,7 @@ function toDto(
     reviewedAt: Date | null;
     requestedBy: { fullName: string };
     targetUser: { fullName: string } | null;
-    shift: { userId: string | null; date: Date; startTime: Date; endTime: Date };
+    shift: { userId: string | null; date: Date; startTime: Date; endTime: Date; location?: { timezone: string | null } | null };
   },
 ) {
   const statusMap: Record<string, 'pending' | 'approved' | 'denied'> = {
@@ -156,6 +156,9 @@ swapRequestsRouter.post('/', requireSession, async (req, res) => {
 
     return res.status(201).json({ request: toDto(created) });
   } catch (err) {
+    if (err instanceof SwapWindowClosedError) {
+      return res.status(409).json({ error: err.message, errorCode: 'swap_window_closed' });
+    }
     console.error('[swapRequests.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while creating the swap request.' });
   }
@@ -191,6 +194,9 @@ swapRequestsRouter.patch('/:id', requireSession, requireManager, async (req, res
     });
 
     if (outcome.result === 'not_found') return res.status(404).json({ error: `Swap request "${id}" not found.` });
+    if (outcome.result === 'already_decided') {
+      return res.status(409).json({ error: `This swap request was already ${outcome.status.toLowerCase()}.`, errorCode: 'swap_already_decided' });
+    }
     if (outcome.result === 'conflict') {
       return res.status(409).json({
         error: 'This shift was already reassigned by another approved request — this one can no longer be approved.',

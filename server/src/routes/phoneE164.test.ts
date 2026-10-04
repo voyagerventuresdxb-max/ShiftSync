@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { createOtpCode, issueSession } from '../lib/identity.js';
 import { INVALID_PHONE_ERROR } from '../lib/phone.js';
+import { generateInviteToken } from '../lib/inviteLinks.js';
 
 const prisma = new PrismaClient();
 
@@ -85,11 +86,12 @@ test('join: stores E.164 on the request; a number held at another venue, or by a
   await prisma.user.create({
     data: { locationId: here.id, fullName: '__phone-e164-test__ left', systemRole: 'STAFF', phone: e164Of(deactivated), isActive: false },
   });
+  const { token: inviteToken } = await prisma.inviteLink.create({ data: { locationId: here.id, token: generateInviteToken(), expiresAt: new Date(Date.now() + 86_400_000) } });
   try {
     await withServer(async (baseUrl) => {
       const join = async (phone: string) => {
         const { plainCode } = await createOtpCode(phone, 'JOIN');
-        return post(baseUrl, '/api/join/verify-otp', { locationId: here.id, phone, code: plainCode, fullName: '__phone-e164-test__ applicant' });
+        return post(baseUrl, '/api/join/verify-otp', { inviteToken, phone, code: plainCode, fullName: '__phone-e164-test__ applicant' });
       };
       const filed = await join(`050 ${fresh.slice(3)}`);
       assert.equal(filed.status, 201);

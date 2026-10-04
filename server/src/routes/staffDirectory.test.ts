@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
-import { issueSession } from '../lib/identity.js';
+import { createOtpCode, hashOtp, issueSession, resolveSession } from '../lib/identity.js';
+import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError, phoneChangeRefusal } from '../lib/actions/employmentStatusActions.js';
 
 const prisma = new PrismaClient();
 
@@ -53,10 +55,14 @@ test('GET /api/staff-directory/:locationId redacts personal fields for a STAFF c
   const manager = await prisma.user.create({
     data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager', systemRole: 'MANAGER' },
   });
+  // The caller has to be active: a deactivated user's session no longer authenticates.
+  const viewer = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Viewer', systemRole: 'STAFF' },
+  });
 
   try {
     await withServer(async (baseUrl) => {
-      const staffToken = await sessionFor(staff.id);
+      const staffToken = await sessionFor(viewer.id);
       const staffRes = await fetch(`${baseUrl}/api/staff-directory/${location.id}`, {
         headers: { Authorization: `Bearer ${staffToken}` },
       });
@@ -344,4 +350,389 @@ test('PATCH /api/staff-directory/:userId: roleId assigns one of the venue\'s act
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
     await prisma.location.delete({ where: { id: other.id } }).catch(() => {});
   }
+});
+
+/** A live login link for `userId`, stored the way the route stores it (hash only). */
+async function liveLinkFor(userId: string, locationId: string) {
+  const token = randomBytes(32).toString('base64url');
+  const row = await prisma.loginLink.create({
+    data: { tokenHash: hashOtp(token), userId, locationId, expiresAt: new Date(Date.now() + 3600_000) },
+  });
+  return { token, id: row.id };
+}
+
+function myShifts(baseUrl: string, token: string) {
+  return fetch(`${baseUrl}/api/my-shifts`, { headers: { Authorization: `Bearer ${token}` } });
+}
+
+function setActive(baseUrl: string, managerToken: string, userId: string, isActive: boolean) {
+  return fetch(`${baseUrl}/api/staff-directory/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${managerToken}` },
+    body: JSON.stringify({ isActive }),
+  });
+}
+
+async function testLocation(label: string) {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  return prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: `__staffdirectory-test__ ${label}`, timezone: 'Asia/Dubai' },
+  });
+}
+
+test('PATCH isActive:false ends every session of that person at once and revokes their unspent login links; nobody else is touched', async () => {
+  const location = await testLocation('deactivate');
+  const leaver = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Leaver', systemRole: 'STAFF' } });
+  const stayer = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Stayer', systemRole: 'STAFF' } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager D', systemRole: 'MANAGER' } });
+
+  try {
+    const phoneToken = await sessionFor(leaver.id);
+    const laptopToken = await sessionFor(leaver.id);
+    const stayerToken = await sessionFor(stayer.id);
+    const managerToken = await sessionFor(manager.id);
+    const live = await liveLinkFor(leaver.id, location.id);
+    const spent = await prisma.loginLink.create({
+      data: {
+        tokenHash: hashOtp(randomBytes(32).toString('base64url')),
+        userId: leaver.id,
+        locationId: location.id,
+        expiresAt: new Date(Date.now() + 3600_000),
+        consumedAt: new Date(),
+      },
+    });
+    const stayerLink = await liveLinkFor(stayer.id, location.id);
+
+    await withServer(async (baseUrl) => {
+      assert.equal((await myShifts(baseUrl, phoneToken)).status, 200);
+
+      // An edit that isn't a status change leaves sessions alone.
+      const rename = await fetch(`${baseUrl}/api/staff-directory/${leaver.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${managerToken}` },
+        body: JSON.stringify({ jobTitle: 'Runner' }),
+      });
+      assert.equal(rename.status, 200);
+      assert.equal((await myShifts(baseUrl, phoneToken)).status, 200);
+
+      const res = await setActive(baseUrl, managerToken, leaver.id, false);
+      assert.equal(res.status, 200);
+      assert.equal(((await res.json()) as { isActive: boolean }).isActive, false);
+
+      for (const token of [phoneToken, laptopToken]) {
+        const after = await myShifts(baseUrl, token);
+        assert.equal(after.status, 401, "the deactivated person's very next request must be refused");
+        assert.equal(((await after.json()) as { error: string }).error, 'Session is invalid or has expired.');
+      }
+      assert.equal(await prisma.session.count({ where: { userId: leaver.id } }), 0, 'every session row is gone');
+
+      assert.ok((await prisma.loginLink.findUniqueOrThrow({ where: { id: live.id } })).revokedAt, 'the unspent link is revoked');
+      assert.equal((await prisma.loginLink.findUniqueOrThrow({ where: { id: spent.id } })).revokedAt, null, 'an already-used link is left as it was');
+      const redeem = await fetch(`${baseUrl}/api/login-links/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: live.token }),
+      });
+      assert.equal(redeem.status, 410);
+      const audit = await prisma.auditLog.findFirst({ where: { action: 'LOGIN_LINK_REVOKED', entityId: leaver.id } });
+      assert.ok(audit, 'the revocation is audited');
+      assert.equal(audit!.actorId, manager.id);
+      assert.equal(audit!.locationId, location.id);
+
+      assert.equal((await myShifts(baseUrl, stayerToken)).status, 200, "a colleague's session is untouched");
+      assert.equal((await myShifts(baseUrl, managerToken)).status, 200, "the manager's own session is untouched");
+      assert.equal((await prisma.loginLink.findUniqueOrThrow({ where: { id: stayerLink.id } })).revokedAt, null, "a colleague's link is untouched");
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('a session row whose user is inactive never authenticates; reactivating does not revive it, a fresh sign-in works', async () => {
+  const location = await testLocation('reactivate');
+  const phone = `+97150${(Date.now() + 7).toString().slice(-7)}`;
+  // Inactive yet holding a session row: what a sign-in racing a deactivation could leave behind.
+  const returner = await prisma.user.create({
+    data: { locationId: location.id, fullName: '__staffdirectory-test__ Returner', systemRole: 'STAFF', phone, isActive: false, terminatedAt: new Date() },
+  });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager E', systemRole: 'MANAGER' } });
+
+  try {
+    const stale = await sessionFor(returner.id);
+    const managerToken = await sessionFor(manager.id);
+    assert.equal(await resolveSession(stale), null, 'resolveSession refuses an inactive user');
+
+    await withServer(async (baseUrl) => {
+      assert.equal((await myShifts(baseUrl, stale)).status, 401);
+
+      assert.equal((await setActive(baseUrl, managerToken, returner.id, true)).status, 200);
+      assert.equal((await myShifts(baseUrl, stale)).status, 401, 'reactivation must not bring the old session back');
+      assert.equal(await prisma.session.count({ where: { userId: returner.id } }), 0);
+
+      const { plainCode } = await createOtpCode(phone, 'LOGIN');
+      const login = await fetch(`${baseUrl}/api/identity/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, code: plainCode }),
+      });
+      assert.equal(login.status, 200);
+      const { token } = (await login.json()) as { token: string };
+      assert.equal((await myShifts(baseUrl, token)).status, 200, 'a fresh sign-in after reactivation works');
+    });
+  } finally {
+    await prisma.otpCode.deleteMany({ where: { phone } });
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('nobody can deactivate themselves: a manager\'s self-PATCH is a 403 and their session keeps working', async () => {
+  const location = await testLocation('self');
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager F', systemRole: 'MANAGER' } });
+
+  try {
+    const token = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const res = await setActive(baseUrl, token, manager.id, false);
+      assert.equal(res.status, 403);
+      assert.match(((await res.json()) as { error: string }).error, /own employment status/);
+      assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: manager.id } })).isActive, true);
+      const next = await fetch(`${baseUrl}/api/staff-directory/${location.id}`, { headers: { Authorization: `Bearer ${token}` } });
+      assert.equal(next.status, 200, 'a refused self-deactivation leaves the session alone');
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('role rules: a MANAGER may change STAFF only; an OWNER may change MANAGERs and STAFF; nobody changes an OWNER (403s change nothing)', async () => {
+  const location = await testLocation('role-rules');
+  const owner = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Owner G', systemRole: 'OWNER' } });
+  const owner2 = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Owner G2', systemRole: 'OWNER' } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager G', systemRole: 'MANAGER' } });
+  const manager2 = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager G2', systemRole: 'MANAGER' } });
+  const staff = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Staff G', systemRole: 'STAFF' } });
+
+  try {
+    const ownerToken = await sessionFor(owner.id);
+    const managerToken = await sessionFor(manager.id);
+    const manager2Token = await sessionFor(manager2.id);
+    const staffToken = await sessionFor(staff.id);
+    await withServer(async (baseUrl) => {
+      const refused = async (res: Response, pattern: RegExp, userId: string) => {
+        assert.equal(res.status, 403);
+        assert.match(((await res.json()) as { error: string }).error, pattern);
+        assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).isActive, true, 'a refusal changes nothing');
+      };
+      // MANAGER → MANAGER / OWNER: refused; their sessions keep working.
+      await refused(await setActive(baseUrl, managerToken, manager2.id, false), /staff only/, manager2.id);
+      await refused(await setActive(baseUrl, managerToken, owner.id, false), /staff only/, owner.id);
+      assert.equal((await myShifts(baseUrl, manager2Token)).status, 200);
+      // OWNER → OWNER: refused even with another active owner around.
+      await refused(await setActive(baseUrl, ownerToken, owner2.id, false), /owner's status/, owner2.id);
+      // STAFF → anyone: still the requireManager 403.
+      assert.equal((await setActive(baseUrl, staffToken, manager.id, false)).status, 403);
+      // MANAGER → STAFF: allowed.
+      assert.equal((await setActive(baseUrl, managerToken, staff.id, false)).status, 200);
+      assert.equal((await myShifts(baseUrl, staffToken)).status, 401);
+      // A MANAGER may also reactivate STAFF; a refused direction is refused both ways.
+      assert.equal((await setActive(baseUrl, managerToken, staff.id, true)).status, 200);
+      await prisma.user.update({ where: { id: manager2.id }, data: { isActive: false, terminatedAt: new Date() } });
+      assert.equal((await setActive(baseUrl, managerToken, manager2.id, true)).status, 403, 'a manager cannot reactivate a manager either');
+      // OWNER → MANAGER: allowed, both directions.
+      assert.equal((await setActive(baseUrl, ownerToken, manager2.id, true)).status, 200);
+      assert.equal((await setActive(baseUrl, ownerToken, manager2.id, false)).status, 200);
+      assert.equal((await myShifts(baseUrl, manager2Token)).status, 401, 'the deactivated manager is signed out');
+      // Re-sending the current value is a no-op for everyone, as before.
+      assert.equal((await setActive(baseUrl, managerToken, owner.id, true)).status, 200, 'no transition, no rule check');
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('last-owner invariant: two transactions deactivating the two remaining owners at once leave at least one active (advisory lock)', async () => {
+  const location = await testLocation('last-owner');
+  const ownerA = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Owner H1', systemRole: 'OWNER' } });
+  const ownerB = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Owner H2', systemRole: 'OWNER' } });
+
+  const deactivateOwner = (userId: string) =>
+    prisma.$transaction(async (tx) => {
+      await assertNotLastActiveOwner(tx, location.id, userId);
+      await tx.user.update({ where: { id: userId }, data: { isActive: false, terminatedAt: new Date() } });
+    });
+
+  try {
+    // Single owner: refused outright.
+    await prisma.user.update({ where: { id: ownerB.id }, data: { isActive: false } });
+    await assert.rejects(deactivateOwner(ownerA.id), LastOwnerError);
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: ownerA.id } })).isActive, true);
+
+    // Two owners, both deactivated concurrently: exactly one succeeds, five times over.
+    for (let round = 0; round < 5; round++) {
+      await prisma.user.updateMany({ where: { id: { in: [ownerA.id, ownerB.id] } }, data: { isActive: true, terminatedAt: null } });
+      const outcomes = await Promise.allSettled([deactivateOwner(ownerA.id), deactivateOwner(ownerB.id)]);
+      const fulfilled = outcomes.filter((o) => o.status === 'fulfilled').length;
+      assert.equal(fulfilled, 1, `round ${round}: exactly one of the two deactivations may win`);
+      const rejected = outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult;
+      assert.ok(rejected.reason instanceof LastOwnerError);
+      const active = await prisma.user.count({ where: { locationId: location.id, systemRole: 'OWNER', isActive: true } });
+      assert.equal(active, 1, `round ${round}: one active owner remains`);
+    }
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('concurrency: six simultaneous deactivations of one person give exactly one 200 (rest 409), and they are signed out everywhere', async () => {
+  const location = await testLocation('concurrent-deactivate');
+  const leaver = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Leaver I', systemRole: 'STAFF' } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager I', systemRole: 'MANAGER' } });
+  const owner = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Owner I', systemRole: 'OWNER' } });
+
+  try {
+    const tokens = await Promise.all([sessionFor(leaver.id), sessionFor(leaver.id), sessionFor(leaver.id)]);
+    const managerToken = await sessionFor(manager.id);
+    const ownerToken = await sessionFor(owner.id);
+    const link = await liveLinkFor(leaver.id, location.id);
+    await withServer(async (baseUrl) => {
+      const results = await Promise.all(
+        Array.from({ length: 6 }, (_, i) => setActive(baseUrl, i % 2 ? managerToken : ownerToken, leaver.id, false)),
+      );
+      // Each request is either the one real transition (200), a loser that
+      // read "active" and then found the row moved under it (409), or a late
+      // arrival that read "inactive" already and PATCHed a no-op (200, as a
+      // repeated isActive:false always was). Never a 500, never a double
+      // transition.
+      const statuses = results.map((r) => r.status);
+      assert.ok(statuses.every((s) => s === 200 || s === 409), `only 200/409: ${statuses.join(',')}`);
+      assert.ok(statuses.includes(200), 'the deactivation itself went through');
+      for (const token of tokens) assert.equal((await myShifts(baseUrl, token)).status, 401);
+      assert.equal(await prisma.session.count({ where: { userId: leaver.id } }), 0);
+      const row = await prisma.user.findUniqueOrThrow({ where: { id: leaver.id } });
+      assert.equal(row.isActive, false);
+      assert.ok(row.terminatedAt, 'terminatedAt written by the one real transition');
+      assert.ok((await prisma.loginLink.findUniqueOrThrow({ where: { id: link.id } })).revokedAt, 'the unspent link is revoked');
+      assert.equal(
+        await prisma.auditLog.count({ where: { action: 'LOGIN_LINK_REVOKED', entityId: leaver.id } }),
+        1,
+        'revokeUserAccess ran exactly once: only the real transition revokes',
+      );
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('concurrency: a sign-in racing the deactivation never ends with a usable session', async () => {
+  const location = await testLocation('race-login');
+  const phone = `+97150${(Date.now() + 11).toString().slice(-7)}`;
+  const leaver = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Racer J', systemRole: 'STAFF', phone } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__staffdirectory-test__ Manager J', systemRole: 'MANAGER' } });
+
+  try {
+    const managerToken = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      for (let round = 0; round < 4; round++) {
+        await prisma.user.update({ where: { id: leaver.id }, data: { isActive: true, terminatedAt: null } });
+        await prisma.session.deleteMany({ where: { userId: leaver.id } });
+        const { plainCode } = await createOtpCode(phone, 'LOGIN');
+        const [login, deactivate] = await Promise.all([
+          fetch(`${baseUrl}/api/identity/verify-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone, code: plainCode }),
+          }),
+          setActive(baseUrl, managerToken, leaver.id, false),
+        ]);
+        assert.equal(deactivate.status, 200, `round ${round}: the deactivation goes through`);
+        if (login.status === 200) {
+          const { token } = (await login.json()) as { token: string };
+          assert.equal((await myShifts(baseUrl, token)).status, 401, `round ${round}: a session issued during the race does not authenticate`);
+        } else {
+          assert.equal(login.status, 403, `round ${round}: otherwise the sign-in is refused as deactivated`);
+        }
+      }
+    });
+  } finally {
+    await prisma.otpCode.deleteMany({ where: { phone } });
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('employmentStatusRefusal: the pure rule table', () => {
+  const actor = (id: string, systemRole: 'OWNER' | 'MANAGER' | 'STAFF') => ({ id, systemRole });
+  assert.match(employmentStatusRefusal(actor('a', 'OWNER'), actor('a', 'OWNER'))!, /own/);
+  assert.match(employmentStatusRefusal(actor('a', 'MANAGER'), actor('a', 'MANAGER'))!, /own/);
+  assert.equal(employmentStatusRefusal(actor('a', 'MANAGER'), actor('b', 'STAFF')), null);
+  assert.match(employmentStatusRefusal(actor('a', 'MANAGER'), actor('b', 'MANAGER'))!, /staff only/);
+  assert.match(employmentStatusRefusal(actor('a', 'MANAGER'), actor('b', 'OWNER'))!, /staff only/);
+  assert.equal(employmentStatusRefusal(actor('a', 'OWNER'), actor('b', 'STAFF')), null);
+  assert.equal(employmentStatusRefusal(actor('a', 'OWNER'), actor('b', 'MANAGER')), null);
+  assert.match(employmentStatusRefusal(actor('a', 'OWNER'), actor('b', 'OWNER'))!, /owner's status/);
+  assert.match(employmentStatusRefusal(actor('a', 'STAFF'), actor('b', 'STAFF'))!, /manager or owner/);
+});
+
+test("phone rules: the sign-in phone follows the status reach — a MANAGER changes STAFF numbers only, an OWNER not another OWNER's; anyone their own", async () => {
+  const location = await testLocation('phone-rules');
+  const phone = () => `+97150${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
+  const mk = (label: string, systemRole: 'OWNER' | 'MANAGER' | 'STAFF') =>
+    prisma.user.create({ data: { locationId: location.id, fullName: `__staffdirectory-test__ ${label}`, systemRole, phone: phone() } });
+  const owner = await mk('Owner P', 'OWNER');
+  const owner2 = await mk('Owner P2', 'OWNER');
+  const manager = await mk('Manager P', 'MANAGER');
+  const manager2 = await mk('Manager P2', 'MANAGER');
+  const staff = await mk('Staff P', 'STAFF');
+  try {
+    const ownerToken = await sessionFor(owner.id);
+    const managerToken = await sessionFor(manager.id);
+    await withServer(async (baseUrl) => {
+      const setPhone = (token: string, userId: string, value: string | null) =>
+        fetch(`${baseUrl}/api/staff-directory/${userId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ phone: value }),
+        });
+      const phoneOf = async (id: string) => (await prisma.user.findUniqueOrThrow({ where: { id } })).phone;
+      // MANAGER → OWNER / MANAGER: refused, nothing changes (also clearing it).
+      for (const target of [owner, manager2]) {
+        const before = await phoneOf(target.id);
+        for (const value of [phone(), null]) {
+          const res = await setPhone(managerToken, target.id, value);
+          assert.equal(res.status, 403);
+          assert.match(((await res.json()) as { error: string }).error, /staff phone numbers only/);
+          assert.equal(await phoneOf(target.id), before, 'a refusal changes nothing');
+        }
+      }
+      // OWNER → another OWNER: refused.
+      assert.equal((await setPhone(ownerToken, owner2.id, phone())).status, 403);
+      // Allowed: MANAGER → STAFF, OWNER → MANAGER, anyone → themselves.
+      assert.equal((await setPhone(managerToken, staff.id, phone())).status, 200);
+      assert.equal((await setPhone(ownerToken, manager2.id, phone())).status, 200);
+      assert.equal((await setPhone(managerToken, manager.id, phone())).status, 200);
+      assert.equal((await setPhone(ownerToken, owner.id, phone())).status, 200);
+      // Re-sending the current number is a no-op for everyone, and other fields stay editable.
+      assert.equal((await setPhone(managerToken, owner.id, (await phoneOf(owner.id))!)).status, 200, 'no change, no rule check');
+      const rename = await fetch(`${baseUrl}/api/staff-directory/${owner.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${managerToken}` },
+        body: JSON.stringify({ jobTitle: 'General manager' }),
+      });
+      assert.equal(rename.status, 200, 'non-credential fields are unaffected');
+    });
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('phoneChangeRefusal: the pure rule table', () => {
+  const actor = (id: string, systemRole: 'OWNER' | 'MANAGER' | 'STAFF') => ({ id, systemRole });
+  assert.equal(phoneChangeRefusal(actor('a', 'MANAGER'), actor('a', 'MANAGER')), null);
+  assert.equal(phoneChangeRefusal(actor('a', 'OWNER'), actor('a', 'OWNER')), null);
+  assert.equal(phoneChangeRefusal(actor('a', 'MANAGER'), actor('b', 'STAFF')), null);
+  assert.match(phoneChangeRefusal(actor('a', 'MANAGER'), actor('b', 'MANAGER'))!, /staff phone numbers only/);
+  assert.match(phoneChangeRefusal(actor('a', 'MANAGER'), actor('b', 'OWNER'))!, /staff phone numbers only/);
+  assert.equal(phoneChangeRefusal(actor('a', 'OWNER'), actor('b', 'STAFF')), null);
+  assert.equal(phoneChangeRefusal(actor('a', 'OWNER'), actor('b', 'MANAGER')), null);
+  assert.match(phoneChangeRefusal(actor('a', 'OWNER'), actor('b', 'OWNER'))!, /only be changed by that owner/);
 });

@@ -1,3 +1,6 @@
+> Real venue rosters are **not** kept here. See [`docs/test-fixtures.md`](../../docs/test-fixtures.md): private files live in
+> `server/test-fixtures/private/` (gitignored); public synthetic stand-ins are in `synthetic/`.
+
 # Manual end-to-end upload test
 
 1. Set `DATABASE_URL` in `.env` (Supabase pooler connection string — see `.env.example`).

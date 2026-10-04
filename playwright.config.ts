@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { FAKE_GEMINI_URL } from './e2e/fakeGemini';
 
 // The API echoes OTPs only for ECHO_ALLOWED_PHONES, so each run gets its own pool of
 // numbers (handed out by e2e/helpers.ts `nextEchoPhone`). Workers re-evaluate this file;
@@ -26,6 +27,10 @@ export default defineConfig({
   // absorbs that one-time cost instead of the whole suite intermittently
   // failing on a fresh invocation.
   retries: 1,
+  // Tests tagged @live call real external services (paid, rate-limited): never part of a normal run.
+  // `npm run test:e2e:live` runs only them.
+  grepInvert: process.env.E2E_LIVE ? undefined : /@live/,
+  grep: process.env.E2E_LIVE ? /@live/ : undefined,
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'retain-on-failure',
@@ -53,8 +58,18 @@ export default defineConfig({
       // (see require-session-error-handling.spec.ts) — same dev-only-flag
       // shape as ALLOW_DEV_OTP_ECHO, inert for any real token.
       // A reused (already running) API won't have this run's ECHO_ALLOWED_PHONES.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true' },
+      // GEMINI_BASE_URL sends only the voice pipeline's Gemini calls to e2e/fakeGemini.ts
+      // (no key, no quota); roster vision parsing never reads it.
+      // Empty VAPID_* keep push off whatever the local .env holds (push-unavailable.spec.ts relies on it).
+      // PUSH_TRANSPORT=record: push sends land in /api/dev/push-outbox instead of a push service, so no spec needs VAPID keys or a push sink.
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: FAKE_GEMINI_URL, VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '', PUSH_TRANSPORT: 'record', AI_MONTHLY_BUDGET_USD: '1000000', AI_DAILY_CALL_LIMIT: '1000000' },
       timeout: 60_000,
+    },
+    {
+      command: 'node --import tsx e2e/fakeGemini.ts --serve',
+      url: `${FAKE_GEMINI_URL}/__health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
     },
     {
       command: 'npm run dev',

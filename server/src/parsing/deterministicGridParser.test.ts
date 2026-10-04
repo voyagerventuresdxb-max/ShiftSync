@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { buildMergeExpandedGrid } from './parseWorkbook.js';
+import { printedWeekdayMismatch, resolveDayMonthDate } from './normalize.js';
 
 const WEEK_START = '2026-08-17'; // Monday
 
@@ -56,18 +57,18 @@ test('single header row, 4-space-separated-number cells (AM start/end, PM start/
   // Also covers half-hour decimal notation ("18.5" = 18:30).
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', '11 17 18 25', '12 17 18 24'],
+    ['Kalim', '11 17 18 25', '12 17 18 24'],
     ['SUPERVISORS', 'SUPERVISORS', 'SUPERVISORS'],
-    ['Pratik', '16 18 18.5 26', '11 16 18 24'],
+    ['Mibru', '16 18 18.5 26', '11 16 18 24'],
   ];
 
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.anomalies.length, 0);
 
-  const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
-  assert.equal(andrea.length, 4);
+  const kalim = result.rows.filter((r) => r.employeeName === 'Kalim');
+  assert.equal(kalim.length, 4);
   assert.deepEqual(
-    andrea.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
+    kalim.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
     [
       '2026-08-17 11:00-17:00 overnight=false',
       '2026-08-17 18:00-01:00 overnight=true',
@@ -75,17 +76,17 @@ test('single header row, 4-space-separated-number cells (AM start/end, PM start/
       '2026-08-18 18:00-00:00 overnight=true',
     ].sort(),
   );
-  // Andrea sits above any role header -> role stays unresolved, never
+  // Kalim sits above any role header -> role stays unresolved, never
   // borrowed from elsewhere on the sheet — surfaced as a warning, not
   // silently guessed or silently dropped.
-  assert.ok(andrea.every((r) => r.roleName === ''));
-  assert.ok(result.issues.some((i) => i.severity === 'warning' && i.message.includes('Andrea')));
+  assert.ok(kalim.every((r) => r.roleName === ''));
+  assert.ok(result.issues.some((i) => i.severity === 'warning' && i.message.includes('Kalim')));
 
-  const pratik = result.rows.filter((r) => r.employeeName === 'Pratik');
-  assert.equal(pratik.length, 4);
-  assert.ok(pratik.every((r) => r.roleName === 'SUPERVISORS'));
+  const mibru = result.rows.filter((r) => r.employeeName === 'Mibru');
+  assert.equal(mibru.length, 4);
+  assert.ok(mibru.every((r) => r.roleName === 'SUPERVISORS'));
   assert.deepEqual(
-    pratik.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
+    mibru.map((r) => `${r.date} ${r.startTime}-${r.endTime} overnight=${r.overnight}`).sort(),
     [
       '2026-08-17 16:00-18:00 overnight=false',
       '2026-08-17 18:30-02:00 overnight=true',
@@ -98,12 +99,12 @@ test('single header row, 4-space-separated-number cells (AM start/end, PM start/
 test('a numeric first cell (totals/headcount row) is never treated as a staff name', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', '9-17', '9-17'],
+    ['Kalim', '9-17', '9-17'],
     ['8', '5', '4'], // headcount summary row, as seen at the bottom of the real reference venue's rota
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 2);
-  assert.ok(result.rows.every((r) => r.employeeName === 'Andrea'));
+  assert.ok(result.rows.every((r) => r.employeeName === 'Kalim'));
 });
 
 test('unresolvable cell content becomes an anomaly, not a hallucinated shift', () => {
@@ -113,7 +114,7 @@ test('unresolvable cell content becomes an anomaly, not a hallucinated shift', (
   // even though only one is exercised.
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', 'XyzGarbage', ''],
+    ['Kalim', 'XyzGarbage', ''],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
@@ -124,7 +125,7 @@ test('unresolvable cell content becomes an anomaly, not a hallucinated shift', (
 test('leave/absence codes become leave records, not shifts or anomalies', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Andrea', 'OFF', 'PH'],
+    ['Kalim', 'OFF', 'PH'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
@@ -178,19 +179,19 @@ test('end-to-end: real .xlsx with actual merged cells (!merges), not a pre-expan
 test('a known leave code in a notes column outside the day-data range becomes a leave record for a shift-less employee', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday', 'Notes'],
-    ['Andrea', '9-17', '9-17', 'Closing'], // worked normally -> trailing note must NOT become a leave record
-    ['Sintia', '', '', 'PH'], // zero shifts, notes column has a known leave code -> surfaced as a leave record
-    ['Tomas', '', '', 'Request'],
-    ['Irma', '', '', ''], // zero shifts, no note at all -> correctly produces nothing
+    ['Kalim', '9-17', '9-17', 'Closing'], // worked normally -> trailing note must NOT become a leave record
+    ['Ruren', '', '', 'PH'], // zero shifts, notes column has a known leave code -> surfaced as a leave record
+    ['Rumur', '', '', 'Request'],
+    ['Lomur', '', '', ''], // zero shifts, no note at all -> correctly produces nothing
   ];
   const result = parseExcelGrid(grid, WEEK_START);
 
-  assert.equal(result.rows.length, 2); // Andrea's 2 days x 1 shift each
-  assert.ok(result.rows.every((r) => r.employeeName === 'Andrea'));
+  assert.equal(result.rows.length, 2); // Kalim's 2 days x 1 shift each
+  assert.ok(result.rows.every((r) => r.employeeName === 'Kalim'));
 
   assert.deepEqual(
     result.leaveRecords.map((r) => `${r.employeeName}:${r.leaveCode}:${r.category}`).sort(),
-    ['Sintia:PH:public_holiday', 'Tomas:Request:day_off'],
+    ['Rumur:Request:day_off', 'Ruren:PH:public_holiday'],
   );
 });
 
@@ -220,16 +221,16 @@ test('an ALL-CAPS caption before any real staff row is NOT mistaken for a role h
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
     ['COVERS', 'Sofia - 20pax', ''],
-    ['Andrea', '9-17', '9-17'],
+    ['Kalim', '9-17', '9-17'],
     ['RUNNERS', '', ''],
-    ['Bashkar', '13-21', '13-21'],
+    ['Kadak', '13-21', '13-21'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
-  const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
-  assert.equal(andrea.length, 2);
-  assert.ok(andrea.every((r) => r.roleName === ''));
-  const bashkar = result.rows.filter((r) => r.employeeName === 'Bashkar');
-  assert.ok(bashkar.every((r) => r.roleName === 'RUNNERS'));
+  const kalim = result.rows.filter((r) => r.employeeName === 'Kalim');
+  assert.equal(kalim.length, 2);
+  assert.ok(kalim.every((r) => r.roleName === ''));
+  const kadak = result.rows.filter((r) => r.employeeName === 'Kadak');
+  assert.ok(kadak.every((r) => r.roleName === 'RUNNERS'));
   // "COVERS" itself is treated as a (non-real) staff row, same as before,
   // producing an anomaly for its unparseable cell rather than a shift.
   assert.ok(result.anomalies.some((a) => a.employeeName === 'COVERS'));
@@ -241,36 +242,36 @@ test('per-row title column (Bar des Pres FOH style): role comes from column A, n
   // 0 is always the name.
   const grid: unknown[][] = [
     ['', '', 'Monday', 'Tuesday'],
-    ['RM', 'Robert Orgovan', '9-17', '9-17'],
-    ['Supervisor', 'Eugeniu Mihalas', '10-18', '10-18'],
+    ['RM', 'Nedak Mizon', '9-17', '9-17'],
+    ['Supervisor', 'Kagal Miren', '10-18', '10-18'],
     ['WAITER', '', '', ''], // section banner: title+name both blank, spans nothing useful
-    ['Waiter 1', 'Putri Rohmawati', '11-19', '11-19'],
+    ['Waiter 1', 'Neren Netel', '11-19', '11-19'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 6);
-  assert.ok(result.rows.filter((r) => r.employeeName === 'Robert Orgovan').every((r) => r.roleName === 'RM'));
-  assert.ok(result.rows.filter((r) => r.employeeName === 'Eugeniu Mihalas').every((r) => r.roleName === 'Supervisor'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Nedak Mizon').every((r) => r.roleName === 'RM'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Kagal Miren').every((r) => r.roleName === 'Supervisor'));
   // Per-row title takes precedence over the section banner above it, even
   // though "WAITER" was itself independently recognized as a header.
-  assert.ok(result.rows.filter((r) => r.employeeName === 'Putri Rohmawati').every((r) => r.roleName === 'Waiter 1'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Neren Netel').every((r) => r.roleName === 'Waiter 1'));
 });
 
 test('per-row title falls back to the section-derived role when a row has no title of its own', () => {
   const grid: unknown[][] = [
     ['', '', 'Monday', 'Tuesday'],
     ['RUNNER', '', '', ''],
-    ['', 'Fernanda Paiva', '9-17', '9-17'], // blank title cell -> should inherit "RUNNER"
+    ['', 'Kabru Migal', '9-17', '9-17'], // blank title cell -> should inherit "RUNNER"
   ];
   const result = parseExcelGrid(grid, WEEK_START);
-  const fernanda = result.rows.filter((r) => r.employeeName === 'Fernanda Paiva');
-  assert.equal(fernanda.length, 2);
-  assert.ok(fernanda.every((r) => r.roleName === 'RUNNER'));
+  const kabru = result.rows.filter((r) => r.employeeName === 'Kabru Migal');
+  assert.equal(kabru.length, 2);
+  assert.ok(kabru.every((r) => r.roleName === 'RUNNER'));
 });
 
 test('"UL" is recognized as Unpaid Leave', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Tony', 'UL', 'UL'],
+    ['Rutel', 'UL', 'UL'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0);
@@ -281,7 +282,7 @@ test('"UL" is recognized as Unpaid Leave', () => {
 test('open-ended ("<N>IN"), until-closing ("<N>CL"), and fully-flexible ("IN") shorthand are flagged with a clear reason, not forced into a fake shift', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday', 'Wednesday'],
-    ['Robert Orgovan', '10IN', '12CL', 'IN'],
+    ['Nedak Mizon', '10IN', '12CL', 'IN'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 0, 'none of these should become a normal shift row');
@@ -299,7 +300,7 @@ test('open-ended ("<N>IN"), until-closing ("<N>CL"), and fully-flexible ("IN") s
 test('four hyphen-chained numbers with no slash ("10:30-4:00-8:00-12") split into two back-to-back shifts', () => {
   const grid: unknown[][] = [
     ['', 'Monday', 'Tuesday'],
-    ['Leandro De Souza', '10:30-4:00-8:00-12', ''],
+    ['Tavo Kelrin', '10:30-4:00-8:00-12', ''],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 2);
@@ -594,7 +595,7 @@ test('unrecognized-section-header audit fixture: rows stay correctly grouped und
 });
 
 test('unrecognized-section-header promotion never overwrites an already-REAL recognized header (regression case: a blank-week employee sitting inside an existing section)', () => {
-  // Mirrors the real Gattopardo reference fixture's Irma/Rafael/Robert
+  // Mirrors the real Gattopardo reference fixture's Lomur/Nelim/Nedak
   // shape (see pdfTableExtractor.test.ts) in miniature: a blank-week
   // employee with no leave-code note either, sitting between two other
   // real HEAD WAITERS rows. The first version of this fix (no provisional/
@@ -604,15 +605,15 @@ test('unrecognized-section-header promotion never overwrites an already-REAL rec
   const grid: unknown[][] = [
     ['', 'Mon', 'Tue'],
     ['HEAD WAITERS', '', ''],
-    ['Rafael', '9-17', '9-17'],
+    ['Nelim', '9-17', '9-17'],
     ['Zara', '', ''], // blank week, no leave note — structurally identical to a novel header
-    ['Robert', '10-18', '10-18'],
+    ['Nedak', '10-18', '10-18'],
   ];
   const result = parseExcelGrid(grid, WEEK_START);
 
   const roleOf = (name: string) => [...new Set(result.rows.filter((r) => r.employeeName === name).map((r) => r.roleName))];
-  assert.deepEqual(roleOf('Rafael'), ['HEAD WAITERS']);
-  assert.deepEqual(roleOf('Robert'), ['HEAD WAITERS'], 'must NOT have been silently reassigned to "Zara"');
+  assert.deepEqual(roleOf('Nelim'), ['HEAD WAITERS']);
+  assert.deepEqual(roleOf('Nedak'), ['HEAD WAITERS'], 'must NOT have been silently reassigned to "Zara"');
   assert.equal(result.rows.some((r) => r.employeeName === 'Zara'), false, 'Zara herself produces zero rows, same as before this feature existed');
   assert.equal(result.anomalies.length, 0, 'Zara is never promoted to a header at all — currentRole was already REAL when her blank row was seen');
 });
@@ -754,4 +755,113 @@ test('a header row that labels its own name column ("Name | Monday | Tuesday | W
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.deepEqual(keys(result.rows), ['Fatima|2026-08-17|09:00-17:00', 'Fatima|2026-08-18|09:00-17:00']);
+});
+
+test('ALL-CAPS venue: a blank-week staff member is never silently taken as a real section header', () => {
+  // Every name is in capitals, so "written in caps" can't tell a header from a person. Before
+  // the fix, the blank-week row below became a REAL role and relabelled the next staff member
+  // with no warning; now it is grouped provisionally and flagged for the manager.
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['SUPERVISORS', '', ''],
+    ['TEST ALPHA', '9-17', '9-17'],
+    ['TEST BLANKWEEK', '', ''],
+    ['TEST GAMMA', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 4);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'TEST ALPHA').every((r) => r.roleName === 'Supervisor' || r.roleName === 'SUPERVISORS'));
+  const flagged = result.anomalies.find((a) => a.kind === 'unrecognized_section_header' && a.rawText === 'TEST BLANKWEEK');
+  assert.ok(flagged, 'the ambiguous caps label is surfaced as a blocking anomaly');
+  assert.match(flagged!.reason, /TEST GAMMA/);
+});
+
+test('ALL-CAPS venue: vocabulary headers still apply normally (no new anomalies)', () => {
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['SUPERVISORS', '', ''],
+    ['TEST ALPHA', '9-17', '9-17'],
+    ['RUNNERS', '', ''],
+    ['TEST BETA', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 4);
+  assert.equal(result.anomalies.length, 0);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'TEST BETA').every((r) => /RUNNER/i.test(r.roleName)));
+});
+
+test('mixed-case venue: an ALL-CAPS header inside the listing is still a real header (unchanged)', () => {
+  const grid: unknown[][] = [
+    ['', 'Monday', 'Tuesday'],
+    ['Test Alpha', '9-17', '9-17'],
+    ['FOH TEAM', '', ''],
+    ['Test Beta', '10-18', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Beta').every((r) => r.roleName === 'FOH TEAM'));
+  assert.equal(result.anomalies.filter((a) => a.kind === 'unrecognized_section_header').length, 0);
+});
+
+test('per-row title shape: a novel first section header with no staff above groups the untitled rows below and is flagged', () => {
+  const grid: unknown[][] = [
+    ['', '', 'Monday', 'Tuesday'],
+    ['Poolside Crew', '', '', ''], // novel vocabulary, title case, very first label
+    ['', 'Test Person One', '9-17', '9-17'],
+    ['', 'Test Person Two', '10-18', ''],
+    ['Supervisor', 'Test Person Three', '11-19', '11-19'], // own title wins
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Person One').every((r) => r.roleName === 'Poolside Crew'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Person Two').every((r) => r.roleName === 'Poolside Crew'));
+  assert.ok(result.rows.filter((r) => r.employeeName === 'Test Person Three').every((r) => r.roleName === 'Supervisor'));
+  const flagged = result.anomalies.find((a) => a.kind === 'unrecognized_section_header' && a.rawText === 'Poolside Crew');
+  assert.ok(flagged);
+  assert.equal(flagged!.affectedRowNumbers?.length, 3);
+});
+
+test('per-row title shape: a trailing caption with nobody below it produces no anomaly', () => {
+  const grid: unknown[][] = [
+    ['', '', 'Monday', 'Tuesday'],
+    ['Supervisor', 'Test Person One', '9-17', '9-17'],
+    ['Prepared by the office', '', '', ''],
+  ];
+  const result = parseExcelGrid(grid, WEEK_START);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.anomalies.filter((a) => a.kind === 'unrecognized_section_header').length, 0);
+});
+
+test('day headers with a weekday: "Mon 17/08", "MON 17-08", "Mon 17 Aug", "Monday, 17/08", "17/08 Mon" all read as 17 August (DD/MM)', () => {
+  for (const header of ['Mon 17/08', 'MON 17-08', 'Mon 17 Aug', 'Monday, 17/08', '17/08 Mon', '17-Aug MONDAY']) {
+    assert.equal(resolveDayMonthDate(header, '2026-08-17'), '2026-08-17', header);
+    assert.equal(printedWeekdayMismatch(header, '2026-08-17'), null, header);
+  }
+  // Day first, always: 08/17 is not a date (there is no month 17).
+  assert.equal(resolveDayMonthDate('Mon 08/17', '2026-08-17'), null);
+  // A weekday alone, or a name that starts like one, is not a day-month date.
+  assert.equal(resolveDayMonthDate('Monday', '2026-08-17'), null);
+  assert.equal(resolveDayMonthDate('Sun Li', '2026-08-17'), null);
+});
+
+test('day headers with a weekday: the year comes from the roster week, across New Year too', () => {
+  assert.equal(resolveDayMonthDate('Fri 01/01', '2026-12-28'), '2027-01-01');
+  assert.equal(printedWeekdayMismatch('Fri 01/01', '2027-01-01'), null);
+  assert.equal(resolveDayMonthDate('Wed 31/12', '2026-01-05'), '2025-12-31');
+  assert.equal(printedWeekdayMismatch('Wed 31/12', '2025-12-31'), null);
+});
+
+test('a header whose weekday disagrees with its date keeps the date and flags every entry under it', () => {
+  assert.deepEqual(printedWeekdayMismatch('Thu 19/08', '2026-08-19'), { printed: 'Thursday', actual: 'Wednesday' });
+  const grid = [
+    ['', 'Mon 17/08', 'Tue 18/08', 'Thu 19/08'],
+    ['SUPERVISORS', '', '', ''],
+    ['Test Alpha', '9-17', '9-17', '9-17'],
+    ['Test Beta', '', 'OFF', 'OFF'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}`), ['Test Alpha|2026-08-17', 'Test Alpha|2026-08-18', 'Test Alpha|2026-08-19']);
+  const flagged = result.anomalies.filter((a) => a.reason.includes('day header says Thursday'));
+  assert.deepEqual(flagged.map((a) => `${a.employeeName}|${a.date}|${a.rawText}`), ['Test Alpha|2026-08-19|Thu 19/08', 'Test Beta|2026-08-19|Thu 19/08']);
+  const alphaRow = result.rows.find((r) => r.date === '2026-08-19')!;
+  assert.equal(flagged[0]!.rowNumber, alphaRow.rowNumber, 'the flag is linked to the shift row it applies to');
+  assert.equal(flagged[1]!.rowNumber, null, 'a leave entry has no shift row to link to');
 });

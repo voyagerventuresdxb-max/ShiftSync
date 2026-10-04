@@ -30,6 +30,7 @@ export function formatVapidInstructions({ publicKey, privateKey }) {
     '  - Rotating (replacing) this pair later invalidates every existing browser',
     '    subscription: everyone has to turn notifications off and on again on each device.',
     '    Generate once per environment and keep the pair until it is compromised.',
+    '  - Full steps (verify, phone test, rollback): docs/push-go-live.md',
     '',
   ].join('\n');
 }
