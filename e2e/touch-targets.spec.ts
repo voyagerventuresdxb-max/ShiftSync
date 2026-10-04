@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
-import { cleanupTestOrgs, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
+import { cleanupTestOrgs, gotoSettled, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
 import { EXCLUDED_SELECTORS, TOUCH_TARGET_EXCEPTIONS } from './touch-targets.allowlist';
 
 /**
@@ -182,11 +182,6 @@ async function assertTouchTargets(page: Page, screen: string): Promise<void> {
   expect(failures, `${failures.length} touch-target failure(s):\n${failures.join('\n')}`).toEqual([]);
 }
 
-/** A sheet closed by button pops its history sentinel a macrotask later (src/lib/backNavigation.ts); a page.goto racing that pop gets ERR_ABORTED. */
-async function settleOverlayHistory(page: Page): Promise<void> {
-  await page.waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 }).catch(() => {});
-}
-
 /** Reads the real session the UI stored after signup, for seeding via the API. */
 async function sessionToken(page: Page): Promise<{ token: string; locationId: string; userId: string }> {
   const raw = await page.evaluate(() => localStorage.getItem('shiftsync.session'));
@@ -262,23 +257,22 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
 
     await seedVenueContent(page);
 
-    await page.goto('/');
+    await gotoSettled(page, '/');
     await page.waitForSelector('text=Direct Floor Feedback');
     await assertTouchTargets(page, 'Home');
     await page.getByRole('button', { name: /notifications/i }).first().click();
     await page.waitForSelector('text=Notifications');
     await assertTouchTargets(page, 'Home › NotificationBell open');
 
-    await page.goto('/scheduling');
+    await gotoSettled(page, '/scheduling');
     await page.waitForSelector('text=Weekly rota builder');
     await assertTouchTargets(page, 'Scheduling');
     await page.getByRole('button', { name: /Save as template/ }).first().click();
     await page.waitForSelector('text=Save week as template');
     await assertTouchTargets(page, 'Scheduling › RotaBuilder sheet');
     await page.getByRole('button', { name: 'Close' }).first().click();
-    await settleOverlayHistory(page);
 
-    await page.goto('/floor-plan');
+    await gotoSettled(page, '/floor-plan');
     await page.waitForSelector('.fp-canvas-wrap img');
     await assertTouchTargets(page, 'Floor plan › Daily Assignment');
     await page.getByRole('button', { name: /^Area 1,/ }).click();
@@ -288,9 +282,8 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForSelector('text=Assign to Area 1');
     await assertTouchTargets(page, 'Floor plan › SectionPicker');
     await page.getByRole('button', { name: 'Close' }).first().click();
-    await settleOverlayHistory(page);
 
-    await page.goto('/people');
+    await gotoSettled(page, '/people');
     await page.waitForSelector('text=Staff Directory');
     await assertTouchTargets(page, 'People');
     await page.getByRole('button', { name: 'Generate link' }).click();
@@ -306,11 +299,11 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await staffRow.getByTestId('login-link-url').waitFor();
     await assertTouchTargets(page, 'People › Staff Directory › login link');
 
-    await page.goto('/profile');
+    await gotoSettled(page, '/profile');
     await page.waitForSelector('text=Sign out');
     await assertTouchTargets(page, 'Profile');
 
-    await page.goto('/my-shifts');
+    await gotoSettled(page, '/my-shifts');
     await page.waitForSelector('text=Tap to change', { timeout: 15000 }).catch(() => {});
     await assertTouchTargets(page, 'My Shifts');
 
@@ -321,7 +314,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await prisma.loginLink.create({
       data: { tokenHash: createHash('sha256').update(linkToken).digest('hex'), userId: linkStaff.id, locationId, expiresAt: new Date(Date.now() + 3_600_000) },
     });
-    await page.goto(`/login/link#${linkToken}`);
+    await gotoSettled(page, `/login/link#${linkToken}`);
     await page.waitForSelector('text=Sign in as E2E Staff Member');
     await assertTouchTargets(page, 'Login link');
   });
@@ -334,7 +327,7 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
 
     // Sign out of the manager session and log in as the staff member through the real UI.
     await page.evaluate(() => localStorage.removeItem('shiftsync.session'));
-    await page.goto('/login');
+    await gotoSettled(page, '/login');
     await page.waitForSelector('text=Have a login link? Paste it here');
     await assertTouchTargets(page, 'Login');
     await page.getByPlaceholder('Phone number').fill(staffPhone);
@@ -346,16 +339,16 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForURL('**/my-shifts**');
 
     await assertTouchTargets(page, 'staff › My Shifts');
-    await page.goto('/scheduling');
+    await gotoSettled(page, '/scheduling');
     await page.waitForSelector('text=Personal Rota');
     await assertTouchTargets(page, 'staff › Scheduling');
-    await page.goto('/floor-plan');
+    await gotoSettled(page, '/floor-plan');
     await page.waitForSelector('.fp-canvas-wrap img');
     await assertTouchTargets(page, 'staff › Floor plan');
     await page.getByRole('button', { name: /^Area 1,/ }).click();
     await page.waitForSelector('text=pax assigned');
     await assertTouchTargets(page, 'staff › SectionDetail (read-only)');
-    await page.goto('/people');
+    await gotoSettled(page, '/people');
     await page.waitForSelector('text=Staff Directory');
     await assertTouchTargets(page, 'staff › People');
   });

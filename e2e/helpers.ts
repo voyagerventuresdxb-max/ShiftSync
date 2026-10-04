@@ -46,6 +46,25 @@ export async function cleanupTestOrgs(): Promise<void> {
 }
 
 /**
+ * Waits until the app has released every overlay history entry. Closing a sheet or modal pops
+ * its history sentinel one macrotask later (src/lib/backNavigation.ts, so an overlay opening in
+ * the same tick can adopt it). A real person can't navigate inside that window, but a test can:
+ * a `page.goto` issued right after the close click races the pending `history.back()` and the
+ * navigation is aborted (net::ERR_ABORTED) — the touch-targets flake.
+ */
+export async function settleOverlayHistory(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 })
+    .catch(() => {});
+}
+
+/** `page.goto` that first lets the app finish any pending overlay-history release (see settleOverlayHistory). */
+export async function gotoSettled(page: Page, url: string): Promise<void> {
+  await settleOverlayHistory(page);
+  await page.goto(url);
+}
+
+/**
  * Drives the Welcome intro (hold gesture → settled reveal → 3-card
  * carousel → "Let's set up your venue") the way a real thumb would. Ends
  * with the intro's Continue click, which hands over to the next step
