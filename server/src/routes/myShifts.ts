@@ -24,7 +24,8 @@ myShiftsRouter.get('/', requireSession, async (req, res) => {
     const today = new Date(`${venueToday(timezone)}T00:00:00.000Z`);
 
     const shifts = await prisma.shift.findMany({
-      where: { userId, date: { gte: today } },
+      // PUBLISHED only — a staff member never sees a draft (golden-path v0).
+      where: { userId, date: { gte: today }, status: 'PUBLISHED' },
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
       take: 5,
       include: { role: { select: { name: true } } },
@@ -48,10 +49,11 @@ myShiftsRouter.get('/', requireSession, async (req, res) => {
         date: s.date.toISOString().slice(0, 10),
         startTime: s.startTime.toISOString(),
         endTime: s.endTime.toISOString(),
-        // Venue wall-clock "HH:mm", so a phone in another timezone (or a
-        // browser whose clock is wrong) still shows the venue's shift times.
-        startLabel: formatVenueTime(s.startTime, timezone),
-        endLabel: formatVenueTime(s.endTime, timezone),
+        // Wall-clock times in the VENUE's timezone — the client renders these,
+        // not the instants above, so a phone set to another timezone (or a
+        // test browser in UTC) still shows the shift as it's actually worked.
+        start: formatVenueTime(s.startTime, timezone),
+        end: formatVenueTime(s.endTime, timezone),
         roleName: s.role.name,
         status: s.status,
       })),

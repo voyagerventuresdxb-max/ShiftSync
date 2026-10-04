@@ -132,6 +132,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Nine columns can't fit a phone: scroll the table, never the page. */
+  overflow-x: auto;
 }
 
 .grid-head,
@@ -139,6 +141,7 @@ body {
   display: grid;
   grid-template-columns: 1.4fr repeat(7, 1fr) 0.8fr;
   gap: 2px;
+  min-width: 36rem;
 }
 
 .cell {
