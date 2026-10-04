@@ -1,4 +1,4 @@
-import { GoogleGenAI, ApiError } from '@google/genai';
+import { GoogleGenAI, ApiError, ThinkingLevel, type GenerateContentResponseUsageMetadata } from '@google/genai';
 import {
   developerApiKey,
   vertexCredentials,
@@ -7,6 +7,7 @@ import {
   type VisionConfig,
 } from '../lib/aiConfig.js';
 import { ROSTER_VLM_GEMINI_SCHEMA, ROSTER_VLM_SYSTEM_PROMPT } from './vlmPrompt.js';
+import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, visionInputEstimate, withAiBudget } from '../lib/aiBudget.js';
 
 /**
  * What reads a roster the deterministic parsers couldn't: one interface, one real
@@ -15,7 +16,12 @@ import { ROSTER_VLM_GEMINI_SCHEMA, ROSTER_VLM_SYSTEM_PROMPT } from './vlmPrompt.
  * JSON text; parseVision.ts owns the fallbacks, the mapping to rows and the user-facing errors.
  */
 
-export type VisionInput = { originalFilename: string; weekStart?: string } & (
+export type VisionInput = {
+  originalFilename: string;
+  weekStart?: string;
+  /** The venue the read is for (AI usage ledger); null for operator diagnostics. */
+  locationId?: string | null;
+} & (
   | { kind: 'file'; data: Buffer; mimeType: string }
   | { kind: 'grid'; text: string }
 );
@@ -38,7 +44,8 @@ export interface VisionOutput {
  *  - model_unavailable  every model answered 404: retired, misspelled, or not offered in this region
  *  - failed             anything else (auth, bad request, empty answer, network)
  */
-export type VisionProviderErrorKind = 'busy' | 'model_unavailable' | 'failed';
+/** `paused`: the in-app AI spend cap (lib/aiBudget.ts) refused the call; nothing was sent. */
+export type VisionProviderErrorKind = 'busy' | 'model_unavailable' | 'failed' | 'paused';
 
 export class VisionProviderError extends Error {
   kind: VisionProviderErrorKind;
@@ -157,16 +164,25 @@ export class GeminiVisionProvider implements VisionProvider {
     for (const [i, attempt] of attempts.entries()) {
       if (attempt.delayMs > 0) await this.wait(attempt.delayMs);
       try {
-        const response = await genai.models.generateContent({
-          model: attempt.model,
-          contents: [{ role: 'user', parts: userParts(input) }],
-          config: {
-            systemInstruction: ROSTER_VLM_SYSTEM_PROMPT,
-            temperature: 0,
-            responseMimeType: 'application/json',
-            responseSchema: ROSTER_VLM_GEMINI_SCHEMA,
+        // Every attempt is its own model call, so each one goes through the spend cap.
+        const response = await withAiBudget(
+          { locationId: input.locationId ?? null, feature: 'roster_vision', inputTokensEstimate: visionInputEstimate(input) },
+          async () => {
+            const r = await genai.models.generateContent({
+              model: attempt.model,
+              contents: [{ role: 'user', parts: userParts(input) }],
+              config: {
+                systemInstruction: ROSTER_VLM_SYSTEM_PROMPT,
+                temperature: 0,
+                responseMimeType: 'application/json',
+                responseSchema: ROSTER_VLM_GEMINI_SCHEMA,
+                maxOutputTokens: MAX_OUTPUT_TOKENS.roster_vision,
+                thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+              },
+            });
+            return { value: r, usage: { inputTokens: r.usageMetadata?.promptTokenCount ?? null, outputTokens: billedOutputTokens(r.usageMetadata) } };
           },
-        });
+        );
         const raw = response?.text;
         if (!raw) throw new VisionProviderError('Vision model returned an empty response.', 'failed');
         return {
@@ -178,6 +194,10 @@ export class GeminiVisionProvider implements VisionProvider {
           },
         };
       } catch (err) {
+        if (err instanceof AiBudgetExceededError) {
+          console.warn(`[vision] AI spend cap reached (${err.limit}) — no call made.`);
+          throw new VisionProviderError('The AI spend cap for this period has been reached.', 'paused', err);
+        }
         lastError = err;
         const status = err instanceof ApiError ? err.status : undefined;
         const next = attempts[i + 1]?.model;
@@ -207,6 +227,12 @@ export class GeminiVisionProvider implements VisionProvider {
     if (sawNotFound) throw new VisionProviderError('No configured vision model is available.', 'model_unavailable', lastError);
     throw new VisionProviderError('Vision model request failed.', 'failed', lastError);
   }
+}
+
+/** Output tokens Gemini bills: the answer plus any "thinking" tokens. Null when the response carried no counts. */
+export function billedOutputTokens(usage: GenerateContentResponseUsageMetadata | undefined): number | null {
+  if (usage?.candidatesTokenCount == null) return null;
+  return usage.candidatesTokenCount + (usage.thoughtsTokenCount ?? 0);
 }
 
 /** Test/eval double: answers from a function (or a fixed raw JSON string) without any network call. */

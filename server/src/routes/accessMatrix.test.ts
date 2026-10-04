@@ -23,6 +23,7 @@ import { uploadCache } from '../store/uploadCache.js';
  *   staffA        staff of the same venue                   → 403 on manager routes
  *   staffB        staff of the other venue                  → 403 / 404
  *   managerB      manager of the other venue                → 403 / 404
+ *   ownerB        owner of the other venue                  → 403 on owner-only routes
  *   managerA / staffA / ownerA  the positive control        → 2xx, run after every refusal
  *
  * Routes that are anonymous by documented decision (the kiosk-access reads,
@@ -37,7 +38,7 @@ const prisma = new PrismaClient();
 const TAG = '__access-matrix__';
 const UPLOADS = join(import.meta.dirname, '..', '..', 'uploads');
 
-type Actor = 'anon' | 'deactivatedA' | 'staffA' | 'managerA' | 'ownerA' | 'staffB' | 'managerB';
+type Actor = 'anon' | 'deactivatedA' | 'staffA' | 'managerA' | 'ownerA' | 'staffB' | 'managerB' | 'ownerB';
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
 interface Fx {
@@ -128,7 +129,6 @@ before(async () => {
   const ownerB = await user(locB.id, 'OWNER', 'owner B');
   const managerB = await user(locB.id, 'MANAGER', 'manager B');
   const staffB = await user(locB.id, 'STAFF', 'staff B');
-  void ownerB;
 
   for (const [actor, id] of [
     ['deactivatedA', deactivatedA.id],
@@ -137,6 +137,7 @@ before(async () => {
     ['ownerA', ownerA.id],
     ['staffB', staffB.id],
     ['managerB', managerB.id],
+    ['ownerB', ownerB.id],
   ] as const) {
     tokens[actor] = (await issueSession(id)).plainToken;
   }
@@ -265,6 +266,8 @@ interface Case extends Call {
 
 /** Every route that touches venue A's data, with everyone who must be refused. */
 const CASES: Case[] = [
+  // AI spend cap (owner only)
+  { name: 'GET /api/ai/usage', method: 'GET', path: (f) => `/api/ai/usage?locationId=${f.locA}`, refuse: ['anon', 'deactivatedA', 'staffA', 'managerA', 'staffB', 'managerB', 'ownerB'] },
   // announcements
   { name: 'POST /api/announcements', method: 'POST', path: () => '/api/announcements', body: () => ({ body: `${TAG} new` }), refuse: ['anon', 'deactivatedA'] },
   { name: 'PATCH /api/announcements/:id', method: 'PATCH', path: (f) => `/api/announcements/${f.annA}`, body: () => ({ body: 'tampered' }), refuse: NOT_MANAGERS_OF_A },
@@ -578,6 +581,7 @@ test("nothing of venue A's changed after every refused request", async () => {
  * after every refusal; order matters only where a control consumes a fixture.
  */
 const CONTROLS: [Actor, string][] = [
+  ['ownerA', 'GET /api/ai/usage'],
   ['staffA', 'POST /api/announcements'],
   ['managerA', 'PATCH /api/announcements/:id'],
   ['managerA', 'DELETE /api/announcements/:id'],

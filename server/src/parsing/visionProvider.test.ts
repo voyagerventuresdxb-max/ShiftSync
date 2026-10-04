@@ -1,23 +1,30 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiError, type GoogleGenAI } from '@google/genai';
+import { ApiError, ThinkingLevel, type GoogleGenAI } from '@google/genai';
 import { visionConfig } from '../lib/aiConfig.js';
+import { MAX_OUTPUT_TOKENS } from '../lib/aiBudget.js';
 import {
   GeminiVisionProvider,
   MockVisionProvider,
   VisionProviderError,
+  billedOutputTokens,
   getVisionProvider,
   __setVisionProviderForTests,
   type VisionInput,
 } from './visionProvider.js';
 
+// These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
+// (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
+process.env.AI_MONTHLY_BUDGET_USD = '1000000';
+process.env.AI_DAILY_CALL_LIMIT = '1000000';
+
 /** A fake SDK client: answers each call from `script` in order (a status number throws an ApiError). */
 function fakeClient(script: (number | { text: string; usage?: { promptTokenCount: number; candidatesTokenCount: number } })[]) {
-  const calls: { model: string; parts: unknown[] }[] = [];
+  const calls: { model: string; parts: unknown[]; config?: Record<string, unknown> }[] = [];
   const client = {
     models: {
-      generateContent: async (req: { model: string; contents: { parts: unknown[] }[] }) => {
-        calls.push({ model: req.model, parts: req.contents[0]!.parts });
+      generateContent: async (req: { model: string; contents: { parts: unknown[] }[]; config?: Record<string, unknown> }) => {
+        calls.push({ model: req.model, parts: req.contents[0]!.parts, config: req.config });
         const step = script[Math.min(calls.length - 1, script.length - 1)]!;
         if (typeof step === 'number') throw new ApiError({ message: `simulated ${step}`, status: step });
         return { text: step.text, usageMetadata: step.usage };
@@ -59,6 +66,16 @@ test('success: returns the raw JSON, the model that answered and token usage; an
   assert.deepEqual(out, { raw: '{"employees":[]}', model: 'primary-m', usage: { promptTokens: 812, outputTokens: 95 } });
   assert.equal(calls.length, 1);
   assert.ok(JSON.stringify(calls[0]!.parts).includes('"inlineData"'));
+});
+
+test('every call caps its output and asks for the lowest thinking level; billed output counts thinking tokens', async () => {
+  const { client, calls } = fakeClient([{ text: '{}' }]);
+  await new GeminiVisionProvider(config, { client, wait: noWait }).readRoster(image);
+  assert.equal(calls[0]!.config?.maxOutputTokens, MAX_OUTPUT_TOKENS.roster_vision);
+  assert.deepEqual(calls[0]!.config?.thinkingConfig, { thinkingLevel: ThinkingLevel.MINIMAL });
+  assert.equal(billedOutputTokens({ candidatesTokenCount: 90, thoughtsTokenCount: 10 }), 100);
+  assert.equal(billedOutputTokens({ candidatesTokenCount: 90 }), 90);
+  assert.equal(billedOutputTokens({ promptTokenCount: 5 }), null, 'no output count: charged the conservative reservation');
 });
 
 test('a grid is sent as text with the reference week', async () => {
