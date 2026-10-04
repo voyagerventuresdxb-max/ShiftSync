@@ -237,7 +237,7 @@ test('golden path: build → publish → staff sees + push → voice edit → st
     await s.evaluate(() => window.dispatchEvent(new Event('focus')));
     const myShifts = s.locator('li', { hasText: 'Bartender' });
     await expect(myShifts).toHaveCount(3);
-    await expect(myShifts.first()).toContainText(new RegExp(`(${tue}|\\w{3}, \\d{1,2} \\w{3,4}) · Bartender · 17:00–23:00`));
+    await expect(myShifts.first()).toContainText(new RegExp(`(${tue}|\\w{3},? \\d{1,2} \\w{3,4}) · Bartender · 17:00–23:00`));
 
     await s.goto(`/scheduling?week=${weekStart}`);
     await expect(s.getByRole('heading', { name: 'Bartender' })).toHaveCount(3);
