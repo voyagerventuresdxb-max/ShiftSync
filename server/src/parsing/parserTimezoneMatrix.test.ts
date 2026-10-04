@@ -70,7 +70,7 @@ test('CSV and HTML text dates and times: month names, AM/PM, seconds, "9 AM" (th
   assert.deepEqual(html.issues, []);
 });
 
-test('day headers with a weekday ("Mon 17/08", "MON 18-08", "Wed 19 Aug", "20/08 Thu") read as DD/MM in every zone; a wrong weekday is flagged', () => {
+test('day headers with a weekday ("Mon 17/08", "TUE 18-08", "Wed 19 Aug", "20/08 Thu") read as DD/MM in every zone; a wrong weekday is flagged', () => {
   // The first test proves every zone gives the same document; Los Angeles is the zone furthest behind UTC.
   const grid = runProbe('America/Los_Angeles')['synthetic/grid-weekday-date-headers.csv']!.deterministicGrid;
   assert.equal(grid.error, undefined, grid.error ?? '');
