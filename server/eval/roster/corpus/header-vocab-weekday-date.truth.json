@@ -1,0 +1,173 @@
+{
+  "id": "header-vocab-weekday-date",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "Omar Al Haddad",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Omar Al Haddad",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Omar Al Haddad",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Omar Al Haddad",
+      "role": "SUPERVISORS",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Layla Al Nuaimi",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Layla Al Nuaimi",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Layla Al Nuaimi",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Layla Al Nuaimi",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Layla Al Nuaimi",
+      "role": "SUPERVISORS",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "Mariam Al Kaabi",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Mariam Al Kaabi",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Mariam Al Kaabi",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "Mariam Al Kaabi",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "Omar Al Haddad",
+      "date": "2026-08-19",
+      "code": "OFF"
+    },
+    {
+      "name": "Layla Al Nuaimi",
+      "date": "2026-08-21",
+      "code": "OFF"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "date": "2026-08-22",
+      "code": "AL"
+    },
+    {
+      "name": "Yousef Bin Saleh",
+      "date": "2026-08-23",
+      "code": "AL"
+    },
+    {
+      "name": "Mariam Al Kaabi",
+      "date": "2026-08-23",
+      "code": "SL"
+    }
+  ],
+  "flagged": [],
+  "file": "header-vocab-weekday-date.xlsx",
+  "expectEscalation": null,
+  "tags": [
+    "\"Mon 17/08\" day headers",
+    "Arabic names"
+  ]
+}
