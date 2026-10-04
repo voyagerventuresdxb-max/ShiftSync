@@ -1,0 +1,174 @@
+{
+  "id": "grid-arabic-caps",
+  "weekStart": "2026-08-17",
+  "shifts": [
+    {
+      "name": "OMAR AL HADDAD",
+      "role": "SUPERVISORS",
+      "date": "2026-08-17",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "OMAR AL HADDAD",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "OMAR AL HADDAD",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "OMAR AL HADDAD",
+      "role": "SUPERVISORS",
+      "date": "2026-08-21",
+      "start": "09:00",
+      "end": "17:00"
+    },
+    {
+      "name": "LAYLA AL NUAIMI",
+      "role": "SUPERVISORS",
+      "date": "2026-08-18",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "LAYLA AL NUAIMI",
+      "role": "SUPERVISORS",
+      "date": "2026-08-19",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "LAYLA AL NUAIMI",
+      "role": "SUPERVISORS",
+      "date": "2026-08-20",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "LAYLA AL NUAIMI",
+      "role": "SUPERVISORS",
+      "date": "2026-08-22",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "LAYLA AL NUAIMI",
+      "role": "SUPERVISORS",
+      "date": "2026-08-23",
+      "start": "14:00",
+      "end": "22:00"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "role": "RUNNERS",
+      "date": "2026-08-19",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "11:00",
+      "end": "17:00"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "role": "RUNNERS",
+      "date": "2026-08-20",
+      "start": "18:00",
+      "end": "01:00"
+    },
+    {
+      "name": "MARIAM AL KAABI",
+      "role": "RUNNERS",
+      "date": "2026-08-17",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "MARIAM AL KAABI",
+      "role": "RUNNERS",
+      "date": "2026-08-18",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "MARIAM AL KAABI",
+      "role": "RUNNERS",
+      "date": "2026-08-21",
+      "start": "16:00",
+      "end": "00:00"
+    },
+    {
+      "name": "MARIAM AL KAABI",
+      "role": "RUNNERS",
+      "date": "2026-08-22",
+      "start": "16:00",
+      "end": "00:00"
+    }
+  ],
+  "leave": [
+    {
+      "name": "OMAR AL HADDAD",
+      "date": "2026-08-19",
+      "code": "OFF"
+    },
+    {
+      "name": "LAYLA AL NUAIMI",
+      "date": "2026-08-21",
+      "code": "OFF"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "date": "2026-08-22",
+      "code": "AL"
+    },
+    {
+      "name": "YOUSEF BIN SALEH",
+      "date": "2026-08-23",
+      "code": "AL"
+    },
+    {
+      "name": "MARIAM AL KAABI",
+      "date": "2026-08-23",
+      "code": "SL"
+    }
+  ],
+  "flagged": [],
+  "file": "grid-arabic-caps.xlsx",
+  "expectEscalation": "all_caps_venue",
+  "tags": [
+    "day grid",
+    "ALL-CAPS names",
+    "Arabic names"
+  ]
+}

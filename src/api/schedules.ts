@@ -85,6 +85,11 @@ export interface UploadResponse {
   leaveRecords: LeaveRecord[];
   /** Populated only for image/VLM uploads — the shift-code legend the model inferred. */
   legend: { code: string; meaning: string }[];
+  /**
+   * Present when the AI reader was used ('used'), would help but needs the manager's
+   * go-ahead ('needs_consent'), or couldn't run ('unavailable'). See server parsing/escalation.ts.
+   */
+  escalation?: { reason: string; status: 'used' | 'needs_consent' | 'unavailable'; message: string };
   preview: PreviewRow[];
 }
 
@@ -101,6 +106,8 @@ export class ApiError extends Error {
     public readonly status: number,
     /** From a 429's `Retry-After` header, when the server sent one. */
     public readonly retryAfterSeconds?: number,
+    /** The server's machine-readable `errorCode`, when it sent one (e.g. `ai_consent_required`). */
+    public readonly errorCode?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -111,21 +118,27 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    let errorCode: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as { error?: string; errorCode?: string };
       if (body?.error) message = body.error;
+      errorCode = body?.errorCode;
     } catch {
       // non-JSON error body; keep the generic message
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, undefined, errorCode);
   }
   return (await res.json()) as T;
 }
 
-/** POST /api/schedules/upload — parse + preview an Excel/CSV roster. */
-export async function uploadRoster(token: string, file: File): Promise<UploadResponse> {
+/**
+ * POST /api/schedules/upload — parse + preview a roster. `aiConsent`: the manager agreed to send
+ * THIS file to the third-party AI reader (the server asks with `ai_consent_required` first).
+ */
+export async function uploadRoster(token: string, file: File, options: { aiConsent?: boolean } = {}): Promise<UploadResponse> {
   const form = new FormData();
   form.append('file', file);
+  if (options.aiConsent) form.append('aiConsent', 'true');
   return request<UploadResponse>('/api/schedules/upload', {
     method: 'POST',
     headers: withAuth(token),

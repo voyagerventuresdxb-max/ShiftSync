@@ -1,19 +1,28 @@
-/**
- * The single source of truth for which Gemini model the voice pipeline uses.
- *
- * Both halves of the pipeline (transcribe.ts and parseIntent.ts) hit the same
- * model, and previously each read `process.env.VOICE_MODEL` with its own
- * independent hardcoded default — two literals that would silently drift
- * apart the first time one of them was bumped without the other.
- *
- * This is a function rather than a top-level `const` on purpose: the env is
- * read at CALL time, exactly as before, so it still honours a `VOICE_MODEL`
- * set after this module is first imported (dotenv load order, tests).
- */
-export const DEFAULT_VOICE_MODEL = 'gemini-3.6-flash';
+import { ApiError } from '@google/genai';
+import { voiceConfig } from '../lib/aiConfig.js';
 
+/**
+ * Which Gemini model both halves of the voice pipeline (transcribe.ts and
+ * parseIntent.ts) use. The ID and its default live in lib/aiConfig.ts, the one
+ * place model IDs are configured; this reads it at CALL time, so a
+ * `VOICE_MODEL` set after import (dotenv load order, tests) is still honoured.
+ */
 export function voiceModel(): string {
-  return process.env.VOICE_MODEL || DEFAULT_VOICE_MODEL;
+  return voiceConfig().model;
+}
+
+/**
+ * A 404 from Gemini means the configured model isn't available (retired,
+ * misspelled, or not offered to this key) — an operator fix, not a retry.
+ * Logs it loudly with the model ID (never any credential) and returns true.
+ */
+export function reportIfModelUnavailable(stage: 'transcribe' | 'parse-intent', err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 404) return false;
+  console.error(
+    `[voice.${stage}] MODEL NOT AVAILABLE: Gemini answered 404 for model "${voiceModel()}". It may be retired or misspelled. ` +
+      'Set VOICE_MODEL to a current model (see docs/ENV_VARS.md). Voice commands fail until then.',
+  );
+  return true;
 }
 
 /**

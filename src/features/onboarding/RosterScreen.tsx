@@ -31,7 +31,9 @@ type ZoneState =
   | { phase: 'empty' }
   | { phase: 'uploading'; fileName: string }
   | { phase: 'ready'; fileName: string; ext: string; sizeLabel: string; result: UploadResponse; viaPhoto: boolean }
-  | { phase: 'error'; fileName: string; message: string };
+  | { phase: 'error'; fileName: string; message: string }
+  // The server needs the manager's go-ahead before this file goes to the third-party AI reader; nothing was sent yet.
+  | { phase: 'consent'; fileName: string; message: string };
 
 function extOf(name: string) {
   const m = /\.([a-z0-9]+)$/i.exec(name);
@@ -73,8 +75,11 @@ export default function RosterScreen({
   const [viaPhoto, setViaPhoto] = useState(uploadFile?.viaPhoto ?? false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  // The file being read, so "Send to the AI reader" doesn't make the manager pick it again.
+  const pickedRef = useRef<{ file: File; viaPhoto: boolean } | null>(null);
 
-  const handlePick = async (file: File, pickedViaPhoto: boolean) => {
+  const handlePick = async (file: File, pickedViaPhoto: boolean, aiConsent = false) => {
+    pickedRef.current = { file, viaPhoto: pickedViaPhoto };
     setViaPhoto(pickedViaPhoto);
     setZone({ phase: 'uploading', fileName: file.name });
     if (!session) {
@@ -82,7 +87,7 @@ export default function RosterScreen({
       return;
     }
     try {
-      const result = await uploadRoster(session.token, file);
+      const result = await uploadRoster(session.token, file, { aiConsent });
       setZone({ phase: 'ready', fileName: file.name, ext: extOf(file.name), sizeLabel: sizeLabel(file.size), result, viaPhoto: pickedViaPhoto });
       // Reflected into shared state the moment parsing succeeds, not deferred
       // to Continue — this is already-fetched, side-effect-free preview data
@@ -91,13 +96,22 @@ export default function RosterScreen({
       // correct from Review's perspective, not just this screen's.
       setUploadResult(result, { name: file.name, size: file.size, viaPhoto: pickedViaPhoto });
     } catch (err) {
+      if (err instanceof ApiError && err.errorCode === 'ai_consent_required') {
+        setZone({ phase: 'consent', fileName: file.name, message: err.message });
+        return;
+      }
       const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Could not read that file.';
       setZone({ phase: 'error', fileName: file.name, message });
     }
   };
 
+  const sendToAiReader = () => {
+    if (pickedRef.current) void handlePick(pickedRef.current.file, pickedRef.current.viaPhoto, true);
+  };
+
   const clear = () => {
     setZone({ phase: 'empty' });
+    pickedRef.current = null;
     setUploadResult(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (photoInputRef.current) photoInputRef.current.value = '';
@@ -331,7 +345,11 @@ export default function RosterScreen({
             {uploading && viaPhoto ? `Reading ${zone.fileName}…` : photoZoneFilled ? zone.fileName : 'Photograph a printed roster'}
           </div>
           <div style={{ font: "400 11px/1.45 'Manrope'", color: 'var(--ob-bronze)', marginTop: 3 }}>
-            {zone.phase === 'error' && viaPhoto ? zone.message : photoZoneFilled ? zone.sizeLabel : 'Printed or handwritten — creases and pen are fine.'}
+            {zone.phase === 'error' && viaPhoto
+              ? zone.message
+              : photoZoneFilled
+                ? zone.sizeLabel
+                : 'Printed or handwritten. Read by a third-party AI reader, only if you agree.'}
           </div>
         </div>
         {photoZoneFilled ? (
@@ -355,6 +373,46 @@ export default function RosterScreen({
           </svg>
         )}
       </div>
+
+      {(zone.phase === 'consent' || (zone.phase === 'ready' && zone.result.escalation)) && (
+        <div
+          role={zone.phase === 'consent' ? 'alertdialog' : 'status'}
+          data-testid={zone.phase === 'consent' ? 'ai-consent-panel' : 'escalation-banner'}
+          style={{ border: '1px solid rgba(201,166,107,.35)', borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}
+        >
+          <div style={{ font: "400 12px/1.55 'Manrope'", color: 'var(--ob-bone)' }}>
+            {zone.phase === 'consent' ? zone.message : zone.phase === 'ready' ? zone.result.escalation!.message : null}
+          </div>
+          {(zone.phase === 'consent' || (zone.phase === 'ready' && zone.result.escalation?.status === 'needs_consent')) && (
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="hit-44"
+                onClick={sendToAiReader}
+                data-testid="ai-consent-send"
+                style={{ padding: '0 14px', borderRadius: 10, border: '1px solid var(--ob-champagne)', color: 'var(--ob-champagne)', font: "500 13px 'Manrope'" }}
+              >
+                Send to the AI reader
+              </button>
+              {zone.phase === 'consent' && (
+                <button
+                  type="button"
+                  className="hit-44"
+                  onClick={clear}
+                  style={{ padding: '0 14px', borderRadius: 10, border: '1px solid rgba(239,234,224,.10)', color: 'var(--ob-bronze)', font: "500 13px 'Manrope'" }}
+                >
+                  Choose another file
+                </button>
+              )}
+            </div>
+          )}
+          {zone.phase === 'consent' && (
+            <div style={{ font: "400 11px/1.45 'Manrope'", color: 'var(--ob-bronze)' }}>
+              Or skip this step and add staff by hand later: People → Add staff member.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Expectation line */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '2px 4px 0' }}>

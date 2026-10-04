@@ -69,6 +69,32 @@ export async function verifyLoginOtp(phone: string, code: string): Promise<Login
  * Without this the 30-day token stays valid even after the browser forgets
  * it, which matters on the shared venue devices this app actually runs on.
  */
+/** `/login?reason=…` value after a person deleted their own account. */
+export const ACCOUNT_DELETED_REASON = 'account-deleted';
+
+/**
+ * DELETE /api/identity/account — deletes the signed-in person's own account, immediately
+ * (server: personal details removed, every session ended, past shifts kept de-identified).
+ * A venue's last owner gets the server's 409 message as the ApiError.
+ */
+export async function deleteAccount(token: string): Promise<void> {
+  const res = await apiFetch(apiUrl('/api/identity/account'), {
+    method: 'DELETE',
+    headers: { ...withAuth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // non-JSON error body; keep the generic message
+    }
+    throw new ApiError(message, res.status);
+  }
+}
+
 export async function revokeSession(token: string): Promise<void> {
   const res = await apiFetch(apiUrl('/api/identity/session'), {
     method: 'DELETE',
