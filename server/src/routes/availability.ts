@@ -1,10 +1,38 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 
 export const availabilityRouter = Router();
+
+/**
+ * GET /api/availability?weekStart=YYYY-MM-DD — every availability mark at the
+ * caller's own venue for that week, in one read, for the rota builder (so a
+ * manager sees who is unavailable before assigning anyone). Manager/owner
+ * only; the venue always comes from the session.
+ */
+availabilityRouter.get('/', requireSession, requireManager, async (req, res) => {
+  try {
+    const weekStart = String(req.query.weekStart ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
+      return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
+    }
+    const start = new Date(`${weekStart}T00:00:00.000Z`);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 7);
+    const marks = await prisma.availabilityMark.findMany({
+      where: { user: { locationId: req.user!.locationId }, date: { gte: start, lt: end } },
+      orderBy: [{ date: 'asc' }],
+    });
+    return res.status(200).json({
+      marks: marks.map((m) => ({ id: m.id, userId: m.userId, date: m.date.toISOString().slice(0, 10), type: m.type, note: m.note })),
+    });
+  } catch (err) {
+    console.error('[availability.venueWeek] failed', err);
+    return res.status(500).json({ error: 'Unexpected error while loading availability.' });
+  }
+});
 
 /**
  * GET /api/availability/:userId?weekStart=YYYY-MM-DD
