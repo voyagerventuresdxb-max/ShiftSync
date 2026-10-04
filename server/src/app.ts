@@ -27,15 +27,24 @@ import { rolesRouter } from './routes/roles.js';
 import { voiceRouter } from './routes/voice.js';
 import { loginLinksRouter } from './routes/loginLinks.js';
 import { corsOptionsFromEnv } from './lib/corsOptions.js';
+import { requestIdMiddleware } from './lib/requestContext.js';
+import { checkReadiness } from './lib/readiness.js';
 import { isPushRecording, pushOutbox } from './lib/push.js';
 
 export function createApp() {
   const app = express();
 
+  // First, so every later log line (and the error handler's) carries this request's id.
+  app.use(requestIdMiddleware);
   app.use(cors(corsOptionsFromEnv()));
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+  // Readiness, for deploys and uptime checks: database reachable and every shipped migration applied.
+  app.get('/api/health/ready', async (_req, res) => {
+    const readiness = await checkReadiness();
+    res.status(readiness.ok ? 200 : 503).json(readiness);
+  });
   // Dev/e2e only (PUSH_TRANSPORT=record, refused in production): what push would have delivered.
   if (isPushRecording()) {
     app.get('/api/dev/push-outbox', (req, res) => {
