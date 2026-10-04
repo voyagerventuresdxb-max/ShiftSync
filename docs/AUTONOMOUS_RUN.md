@@ -794,3 +794,129 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 - Closed as superseded (replacements verified merged): #72 → #80, #76 → #85, #43 → #86. #42 left open.
 - Docs: #70 merged after this entry (reread: outcome-only). **#75 skipped**: it names which upload path consumes the library with the open advisories; Stage 2's PR replaces it.
 - Not merged (as instructed): #69, #78, #84 (rota stack). No PR body in #80–#88 contained security specifics.
+
+## Stage 2 — xlsx 0.20.3 from the SheetJS CDN: done, merged and deployed (2026-10-04, 03:15–03:31 Dubai)
+- [#90](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/90) → `64de660`. `xlsx` now installs from `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` (current build); lockfile pins URL + sha512, matching #75's recorded hash and an independent download. Lockfile diff limited to the `xlsx` entry and eight transitive packages it no longer uses.
+- What the upgrade needed: `UTC: true` on both `sheet_to_json` calls (0.20 re-expresses Date cells in host-local time). Found and fixed on the way (test-only): the timezone probe fed `parseRotaFile` a mis-sliced pooled `Buffer`, so that field parsed truncated bytes on both versions and could vary between runs.
+- **Gate, all passed:** timezone matrix (UTC / Asia/Dubai / America/Los_Angeles) green; the probe document (21 fixtures + 4 synthetic CSV/HTML/typed-cell inputs, every parser entry point, now including `22-Aug-26`, `1:00 PM`, `9:00:00 PM`, `21:00:00`) is byte-identical between 0.18.5 and 0.20.3 in all three zones and across reruns; server 406 pass / 1 skip; roster-upload e2e 9/9; typecheck ×2, lint 0 errors, build; scan clean. Vercel built the merge commit (`success`), so a CDN-sourced install works in a hosted build.
+- Deploy: `f5f3e49c-55dd-4247-bf1c-6f37f32646f0` (code `64de660`), nixpacks, no pending migrations, API listening; `/api/health` 200 JSON ×2; smoke 3/3. Previous: `f0a10bb3` (rollback target, not needed).
+- #75 (draft, docs) left open; superseded by #90 for the owner to close.
+
+## Stage 3 — model config + vision provider: done, PR open (not merged)
+- [#92](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/92). `server/src/lib/aiConfig.ts` is the only reader of model IDs, Vertex project/location and timeout (a test fails on any model-ID literal elsewhere). `VisionProvider` interface with `GeminiVisionProvider` (Vertex AI in production, Developer API for local dev) and `MockVisionProvider`; no new dependencies.
+- **Model IDs verified (Google docs, 2026-10-04):** `gemini-3.6-flash` and `gemini-3.5-flash-lite` exist with those exact strings, are GA, and have no retirement before 2027. **Fixed:** neither is offered in Vertex `europe-west4` (only `global`, `us`, `eu`), so the Vertex location default is now `eu`. Gemini 2.5 retires on Vertex on 2026-10-20; nothing in the app uses it.
+- Retired model: loud server log naming the model, fallback model tried, then a clear manager message (`vision_model_unavailable`); voice answers `503 voice_model_unavailable` with its own message.
+- `npm run vlm:check` prints backend, model, region, latency, tokens, PASS/FAIL and nothing secret; `check-env-load.ts` prints presence only. The model's raw answer (staff names) is no longer logged. `docs/vlm-go-live.md` has the owner's steps.
+- Production: no model overrides set (3c: nothing to change) and no Vertex credentials (3h: skipped). **Production vision and voice are not live.**
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 426 pass / 1 skip (+20), e2e (voice 8, uploads 6) 14/14, scan clean.
+
+## Stage 4 — escalation + parser gaps: done, PR open (stacked on #92)
+- [#93](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/93), base `feat/ai-config-vision-provider` (#92) because escalation uses #92's provider; retarget after #92 merges.
+- Deterministic parsers first; the AI reader only for an image/scan, a proven parse data-loss, an unrecognised layout, an ALL-CAPS-only roster, or an empty-role share above `ROSTER_ESCALATE_EMPTY_ROLE_SHARE` (0.3). Every AI read needs the manager's per-file consent (nothing is sent without it), then the 5 MB cap and the weekly allowance (now recorded only when the AI actually answered). Unavailable AI → messages name "People → Add staff member". Upload is manager/owner only, like confirm. Review screen unchanged and still mandatory.
+- Parser: ALL-CAPS-only sheets no longer let a blank-week staff row silently relabel the people below (flagged instead); the per-row-title layout now groups a novel first section header (flagged). All audit fixtures keep their row counts.
+- Client: consent prompt + escalation notice in Scheduling and the onboarding Roster step; the photo option now states the third-party AI reader.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 453 pass / 1 skip (+27), e2e 13/13 (new consent spec), scan clean.
+
+## Stage 5A — fixture privacy: done, PR open (prepare only, not merged)
+- [#94](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/94). The real reference rosters (text-layer PDF, its PNG plus a byte-identical render, the scanned PDF) leave git for a gitignored private directory (`server/test-fixtures/private/`, or `SHIFTSYNC_PRIVATE_FIXTURES_DIR`); `npm run fixtures:restore-private` re-extracts them from commit `64de660` (verified byte-identical). Tests that use them skip cleanly when absent and assert structure only.
+- Synthetic stand-ins with made-up names and the same layout features (`server/test-fixtures/synthetic/`, generated by a script) keep those layouts covered in the public suite.
+- Real staff names that had spread from those rosters into source (a transcription test, other tests, a fixture, a seed script, comments, `MEMORY.md`) were replaced with made-up ones, consistently. Git history is unchanged; the owner has the rewrite steps (chat only).
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 408 pass / 2 skip (live Docling, no sidecar), e2e 7/7, scan clean.
+
+## Stage 5B — eval harness: done, PR open (stacked on #93)
+- [#95](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/95), base `feat/roster-escalation` (#93): uses #93's escalation rules and #92's vision provider seam.
+- `server/eval/roster/`: 14 synthetic rosters (layouts, ALL-CAPS, merged cells, multi-sheet, four name styles, split shifts, UL/AL/SL/PH/OFF and IN/CL cells, header vocabulary) with ground truth from an independent interpreter; `npm run eval:roster` scores name/day/start/end/role/leave/flagged, extra shifts and the escalation rate offline; vision path via mock (pipeline check), recorded or live (credentials only), with latency/tokens/cost. No names in logs or reports.
+- First result: day 88%, role 97%, leave 84%, escalation 4/14. **Gap found:** `Mon 17/08`-style day headers aren't recognised by the grid parser (reported, not fixed here).
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 460 pass / 1 skip (+7), e2e 1/1, scan clean.
+
+## Stage 6 — swap-request window enforced: done, PR open
+- [#96](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/96). A cover request can be filed until Wednesday 17:00 venue time of the shift's own (Monday-based) week; after that REST and voice answer `409 swap_window_closed` with the close time and "ask your manager directly", and nothing is written. Managers can still decide requests already filed. `expiresAt` is now the shift-week's close.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 411 pass / 1 skip (+5, plus timezone-matrix cases), e2e 16/16, scan clean. One existing voice test used a fixed past date and now uses a shift a week ahead.
+
+## Stage 7 — platform safety: done, PR open
+- [#97](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/97). `GET /api/health/ready` (database answers + every shipped migration applied → 200, else 503; counts only); `/api/health` unchanged. `X-Request-Id` on every response, `[rid=…]` on log lines written during a request, and phone-number shapes masked in every server log line. `docs/staging-setup.md` (Railway staging environment, separate Supabase project, Vercel Preview with `VITE_API_URL`); `docs/ENV_VARS.md` updated.
+- **Finding:** `vercel.json` sends every Vercel deployment's `/api` traffic, previews included, to the production API.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 411 pass / 1 skip (+5), **full e2e 74/74**, scan clean (the scan caught a placeholder-password example in the first draft of the staging guide; fixed).
+
+## Stage 8 — app-store readiness: done, PR open
+- [#98](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/98). Profile → Delete account (confirm step) → immediate deletion: sessions and links end, push subscriptions, notifications, voice transcripts and sign-in codes deleted, personal details cleared, the row kept de-identified so past shifts and attendance stay; the venue's last owner is refused with advice. Deleted accounts leave the Staff Directory and can't be reactivated. Additive migration (`users.deleted_at`, one audit value).
+- `/privacy` and `/terms` clearly labelled DRAFT (legal review needed), linked from sign-in and join. `docs/store-readiness.md`: Apple/Google requirements, the wrapped-website risk and the native-feature plan.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 410 pass / 1 skip (+4), e2e 22/22 (the touch-target gate caught 15px footer links in the first version; fixed with 44px hit areas), scan clean.
+
+## Stage 9 — test stability: done, PR open
+- [#99](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/99). Push mocked at the boundary: with `PUSH_TRANSPORT=record` (e2e API only; production refuses to boot with it set) sends are recorded in memory and readable at a dev-only route, so push flows are testable with no VAPID keys or push sink (new `push-outbox` spec). `@live` specs are opt-in (`npm run test:e2e:live`). Touch-targets flake: root cause was a test navigation inside the app's overlay-history release window; every navigation in that spec now waits for it.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 408 pass / 1 skip, e2e 4/4 (`CI=1`, no retries), scan clean. First e2e attempt hit a port still held by the previous stage's test servers; reran clean.
+
+## Stage 11 — SMS sign-in codes behind a flag: done, PR open
+- [#100](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/100). `SMS_OTP_ENABLED` (off unless exactly `true`): login, join and signup also text the code through Twilio Programmable Messaging (REST over `fetch`, no new dependency); a failed send answers `503` with a retry message. `SmsSender` is the seam for a UAE aggregator. Production refuses to boot with the flag on and the provider unconfigured. Nothing was sent for real: the provider is mocked at `fetch` in every test.
+- `docs/otp-delivery-uae.md`: SMS vs WhatsApp authentication templates for the UAE (per-code price, fixed fees, registration, sender-ID lead time, message rules, fallback, sources). **Current state found:** Twilio has put new UAE alphanumeric sender-ID registrations on hold (page updated 2026-06-15); Vonage has international (not domestic) UAE registrations on hold. Recommendation: start a domestic registration now (needs a UAE trade licence), WhatsApp templates as the default channel later, SMS as the fallback.
+- Tests: typecheck ×2 ✔, lint 0 errors, unit 94/94, server 421 pass / 1 skip (+13), e2e (login, resend cooldown, staff flow, join approval) 18/18, scan clean.
+
+## Stage 10 — rota stack refresh: done, pushed, not merged (as instructed)
+- [#69](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/69) ← `origin/master` (merge `4da0bba`, follow-up `656f35d`); [#78](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/78) ← refreshed #69 (merge `cd4125f`); [#84](https://github.com/voyagerventuresdxb-max/ShiftSync/pull/84) ← refreshed #78 (merge `bdd0933`). Merge commits only, all pushes fast-forward. A summary comment is on each PR.
+- Documented resolutions applied: 12 textual (both sides kept, or master's side where it superseded), 3 compile fixes (duplicate `reconcileWeekParam` import, duplicate `timezone` const in My Shifts, unused `writeAuditLog` import), 2 spec fixes (staff phone from `nextEchoPhone()`, My Shifts date pattern). **One adjustment:** the documented date pattern expected `Tue, 6 Oct`; Chromium renders `Tue 6 Oct`, so the comma is optional (caught by the split-shift spec on #78).
+- Tests, top of stack (#84): drift clean, typecheck ×2 ✔, lint 0 errors, unit 104/104, server 443 pass / 1 skip, **full e2e 75/76**. #69: unit 100/100, server 431/1, full e2e 74/75. #78: unit 104/104, relevant e2e green.
+- **The one red e2e, on all three:** the rota golden-path spec stops at its own precondition (VAPID keys), because master's e2e config now runs the API with push off. Not a code defect; #99's push outbox removes the need (switch its two push assertions once #99 is in master).
+- **Flaky test inherited from master:** `signup.test.ts` "missing fullName or venueName" compares a database-wide organization count while other test files create venues in parallel; failed once on #78 and once on #84, passed on rerun and alone.
+
+## Run 4 final report (2026-10-04)
+
+### 1. Stages
+| Stage | Status | PR | Tests | Merged / deployed? |
+|---|---|---|---|---|
+| 0 Preconditions | passed (owner decision on the Vercel check) | — | — | — |
+| 1A Secret scan + credential fragment | done | #89 | unit 79, server 363/1 skip | merged; deployed with 1B |
+| 1B Run-3 PRs | done | #80–#88, #70 | full e2e 74/74 at the end | merged; API `f0a10bb3`; #72/#76/#43 closed |
+| 2 xlsx 0.20.3 (CDN) | done, gate passed | #90 | tz matrix ×3, probe identical, server 406/1, e2e 9/9 | merged; API `f5f3e49c` (live) |
+| 3 Model config + vision provider | done | #92 | server 426/1, e2e 14/14 | open |
+| 4 Escalation + parser gaps | done | #93 (on #92) | server 453/1, e2e 13/13 | open |
+| 5A Fixture privacy | done (prepare only) | #94 | server 408/2, e2e 7/7 | open |
+| 5B Eval harness | done | #95 (on #93) | server 460/1, e2e 1/1 | open |
+| 6 Swap-request window | done | #96 | server 411/1, e2e 16/16 | open |
+| 7 Platform safety | done | #97 | server 411/1, full e2e 74/74 | open |
+| 8 Store readiness | done | #98 | server 410/1, e2e 22/22 | open |
+| 9 Test stability | done | #99 | server 408/1, e2e 4/4 | open |
+| 10 Rota stack refresh | done | #69, #78, #84 | top of stack: server 443/1, full e2e 75/76 (VAPID precondition) | pushed; not merged (as instructed) |
+| 11 SMS behind a flag + OTP doc | done | #100 | server 421/1, e2e 18/18 | open |
+
+Every gate also: typecheck ×2, lint 0 errors, unit green, build, secrets scan clean; e2e with `CI=1 --retries=0`.
+
+### 2. Production AI configuration
+- `VLM_MODEL`, `VLM_FALLBACK_MODEL`, `VOICE_MODEL`: not set on production; code defaults apply, no Gemini 2.5 ID anywhere.
+- Defaults verified against Google's docs: `gemini-3.6-flash` and `gemini-3.5-flash-lite` exist, are GA, no retirement before 2027. Fixed in #92: they are not offered in Vertex `europe-west4`, so the default location is `eu`.
+- No Gemini/Vertex credentials on production: **production vision and voice are not live** (`docs/vlm-go-live.md` on #92).
+- Production at the end of the run: API `f5f3e49c` (code `64de660`), `/api/health` 200; GitHub "Vercel" status for master: success. The Vercel production URL is behind Vercel Deployment Protection (not touched).
+
+### 3. Recommended merge order
+Each: merge master into the branch, rerun its gate, merge with a merge commit; retarget stacked PRs to master once their base is in.
+1. #99 test stability. 2. #92 → #93 → #95. 3. #94 fixture privacy. 4. #96, #97, #98 (additive migration). 5. #100 (SMS, off by default). 6. Rota stack #69 → #78 → #84 after the owner's review, then switch the rota golden-path spec to #99's outbox. 7. #91 (this log) last. One API redeploy after the server PRs land.
+
+### 4. Real-phone checklist (Android Chrome + iPhone Safari)
+- Sign in by code (allowlisted number) and by login link; sign out and back in.
+- Add to Home Screen: standalone, right icon; the back gesture closes sheets.
+- Join from a WhatsApp-shared invite link; the owner approves on People; staff land on My Shifts.
+- Build a week on the phone and publish; staff see venue times (also with the phone in another timezone).
+- Upload an Excel and a PDF roster from Files; the photo option shows the consent prompt.
+- Airplane mode: stale-data notice, publish disabled; recovers online.
+- After #96: a cover request before and after Wednesday 17:00. After #98: delete an account; privacy and terms links open.
+- After VAPID go-live: enable notifications (iPhone: installed app, iOS 16.4+), publish, receive the push.
+
+### 5. Blocked, skipped, risky
+- Vercel page-load smoke tests skipped (Deployment Protection; owner decision); local e2e covers those pages.
+- `vercel.json` routes every deployment's `/api` traffic, previews included, to the production API (#97 finding).
+- Parser gap: `Mon 17/08`-style day headers not recognised (#95 finding, not fixed).
+- #75 superseded by #90 (owner to close). One more fixture (a floor-plan PDF) may be real venue data; not in the 5A list, not moved.
+- Real staff names and the credential fragment remain in git history (owner's decision; rotate the key regardless).
+- Flaky server test inherited from master: `signup.test.ts` compares a database-wide count while other files run in parallel.
+- Twilio has paused new UAE sender-ID registrations; SMS go-live needs another provider or the hold to lift (`docs/otp-delivery-uae.md` on #100).
+
+### 6. Still not done
+SMS go-live; Railway config before 2026-12-01 (#52 follow-ups); VAPID go-live; native push and camera plugins; first Play upload.
+
+# Run 5 (started 2026-10-04 05:40 Dubai, after Run 4's final report)
+
+## Stage A — merge Run 4's PRs + one API deploy (in progress)
+- Merge set, in dependency order: #99 → #92 → #93 → #95 → #96 → #97 → #98 → #100. Each: master merged into the branch (merge commit, both sides kept), full gate (typecheck ×2, lint, unit, build, server, full e2e with `@live` excluded, secrets scan), then a merge commit.
+- Not merged: #94 (Run 4 opened it as prepare-only; merging it is tied to the owner's history decision), #91 (this log; still being written), #69/#78/#84 (owner review).
+- PR bodies reread before merging: outcome-only.
+- Rollback target before the deploy: `f5f3e49c` (code `64de660`).
