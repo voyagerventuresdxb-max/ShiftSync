@@ -1,10 +1,4 @@
 import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { createServer, type Server } from 'node:https';
-import { createECDH, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { AddressInfo } from 'node:net';
 import { cleanupTestOrgs, continueThroughVenue, nextEchoPhone, prisma, signupNewVenue, testVenueName } from './helpers';
 
 /**
@@ -17,24 +11,16 @@ import { cleanupTestOrgs, continueThroughVenue, nextEchoPhone, prisma, signupNew
  *   4. manager edits one shift by voice (EDIT_SHIFT)
  *   5. staff sees the change without a reload, and a push is delivered
  *
- * Only two things are intercepted, both at the network layer:
- *  - push DELIVERY: the staff member's PushSubscription points at an HTTPS
- *    receiver this spec runs on localhost (headless Chromium has no real
- *    push service). Everything up to the HTTP POST — Notification row,
- *    VAPID signing, payload encryption — is the real server code.
+ * Only two things are mocked, both at the boundary:
+ *  - push DELIVERY: the e2e API runs with PUSH_TRANSPORT=record
+ *    (playwright.config.ts), so each send lands in GET /api/dev/push-outbox
+ *    instead of a push service. Who is notified, with what, is the real
+ *    server code; no VAPID keys or push receiver are needed.
  *  - voice /transcribe and /parse-intent (Gemini) are faked in the browser;
  *    /execute runs for real. golden-path.live.spec.ts (@live) covers real
  *    Gemini and is excluded from the regular gate.
- *
- * Needs, besides the usual e2e setup:
- *  - VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY in .env (`npx web-push generate-vapid-keys`)
- *  - the push receiver's certificate trusted by the API server, via the TEST
- *    COMMAND's env only (see scripts/e2e-push-sink-cert.mjs):
- *      node scripts/e2e-push-sink-cert.mjs
- *      NODE_EXTRA_CA_CERTS="<cert path>" npm run test:e2e -- golden-path --grep-invert @live
  */
 
-const PUSH_SINK_DIR = join(tmpdir(), 'shiftsync-e2e-push-sink');
 const API = 'http://localhost:4000';
 const PHONE = { width: 380, height: 822 };
 
@@ -49,34 +35,9 @@ test.use({
 });
 test.describe.configure({ mode: 'serial' });
 
-interface PushHit {
-  path: string;
-  authorization: string;
-  encoding: string;
-  bytes: number;
-}
-
-function startPushSink(): Promise<{ server: Server; port: number; hits: PushHit[] }> {
-  const certPath = join(PUSH_SINK_DIR, 'cert.pem');
-  const keyPath = join(PUSH_SINK_DIR, 'key.pem');
-  if (!existsSync(certPath) || !existsSync(keyPath)) {
-    throw new Error('Push receiver certificate missing — run `node scripts/e2e-push-sink-cert.mjs` first (see this spec\'s header).');
-  }
-  const hits: PushHit[] = [];
-  const server = createServer({ cert: readFileSync(certPath), key: readFileSync(keyPath) }, (req, res) => {
-    let bytes = 0;
-    req.on('data', (c: Buffer) => (bytes += c.length));
-    req.on('end', () => {
-      hits.push({
-        path: req.url ?? '',
-        authorization: String(req.headers.authorization ?? ''),
-        encoding: String(req.headers['content-encoding'] ?? ''),
-        bytes,
-      });
-      res.writeHead(201).end();
-    });
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, port: (server.address() as AddressInfo).port, hits })));
+/** Pushes recorded for one user by the e2e API's record-mode transport (PUSH_TRANSPORT=record). */
+async function pushesTo(userId: string): Promise<{ endpoint: string; payload: { title?: string } }[]> {
+  return ((await (await fetch(`${API}/api/dev/push-outbox?userId=${userId}`)).json()) as { sent: { endpoint: string; payload: { title?: string } }[] }).sent;
 }
 
 async function phoneContext(browser: Browser): Promise<BrowserContext> {
@@ -124,11 +85,6 @@ test('golden path: build → publish → staff sees + push → voice edit → st
   test.setTimeout(240_000);
   const errors: string[] = [];
 
-  // Preconditions that would otherwise surface as a confusing failure later.
-  const vapid = (await (await fetch(`${API}/api/push/vapid-public-key`)).json()) as { publicKey?: string };
-  expect(vapid.publicKey, 'VAPID keys must be set in .env for push delivery (see spec header)').toBeTruthy();
-  const sink = await startPushSink();
-
   const managerCtx = await phoneContext(browser);
   const staffCtx = await phoneContext(browser);
   try {
@@ -164,11 +120,9 @@ test('golden path: build → publish → staff sees + push → voice edit → st
     const sara = (await prisma.user.findFirst({ where: { locationId: location.id, fullName: 'Sara Staff' } }))!;
     await expectNoHorizontalPageScroll(m);
 
-    // Staff member's device subscription → our HTTPS receiver (real P-256 keys, so the server's encryption really runs).
-    const ecdh = createECDH('prime256v1');
-    ecdh.generateKeys();
+    // Staff member's device subscription; sends to it are recorded in the outbox.
     await prisma.pushSubscription.create({
-      data: { userId: sara.id, endpoint: `https://localhost:${sink.port}/push/${sara.id}`, p256dh: ecdh.getPublicKey('base64url'), auth: randomBytes(16).toString('base64url') },
+      data: { userId: sara.id, endpoint: `https://push.invalid/${sara.id}`, p256dh: 'test-key', auth: 'test-auth' },
     });
 
     // ---- 1. manager builds NEXT week (future days, so /my-shifts lists them) ----
@@ -236,9 +190,9 @@ test('golden path: build → publish → staff sees + push → voice edit → st
 
     // ---- 3. staff: digest notification + push delivered; shifts visible ----
     await expect.poll(async () => (await prisma.notification.findMany({ where: { userId: sara.id } })).map((n) => n.title)).toEqual(['Schedule updated']);
-    await expect.poll(() => sink.hits.length, { message: 'no push reached the receiver — was the API server started with NODE_EXTRA_CA_CERTS? (spec header)' }).toBe(1);
-    expect(sink.hits[0]).toMatchObject({ path: `/push/${sara.id}`, encoding: 'aes128gcm' });
-    expect(sink.hits[0]!.authorization).toMatch(/^vapid t=.+, k=.+/);
+    await expect
+      .poll(async () => (await pushesTo(sara.id)).map((p) => [p.endpoint, p.payload.title]), { message: 'no push recorded — is the e2e API running with PUSH_TRANSPORT=record (playwright.config.ts)?' })
+      .toEqual([[`https://push.invalid/${sara.id}`, 'Schedule updated']]);
 
     // Coming back to the app (focus) refetches /my-shifts — no reload.
     await s.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -295,7 +249,7 @@ test('golden path: build → publish → staff sees + push → voice edit → st
     ]);
     const change = await prisma.notification.findFirst({ where: { userId: sara.id, title: 'Shift changed' } });
     expect(change?.body).toMatch(/17:00–23:00 is now .*18:00–23:30\.$/);
-    await expect.poll(() => sink.hits.length).toBe(2);
+    await expect.poll(async () => (await pushesTo(sara.id)).map((p) => p.payload.title)).toEqual(['Schedule updated', 'Shift changed']);
 
     const urlBefore = s.url();
     await s.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -307,6 +261,5 @@ test('golden path: build → publish → staff sees + push → voice edit → st
   } finally {
     await managerCtx.close().catch(() => {});
     await staffCtx.close().catch(() => {});
-    await new Promise<void>((r) => sink.server.close(() => r()));
   }
 });

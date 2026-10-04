@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 const timeout = (ms: number) => new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms));
 
 const targets = [
-  'server/test-fixtures/rendered-page-1.png',
-  'server/test-fixtures/real-roster.png',
+  'server/test-fixtures/private/rendered-page-1.png', // local only, see docs/test-fixtures.md
+  'server/test-fixtures/private/real-roster.png',
 ];
 
 const worker = await Promise.race([

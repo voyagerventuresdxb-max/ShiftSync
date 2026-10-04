@@ -47,6 +47,15 @@ test('server date logic is identical under TZ=UTC, Asia/Dubai and America/Los_An
     close_wed_1700: '2026-10-14T13:00:00.000Z',
     // A Los Angeles venue closes Wednesday 17:00 LA (PDT, 00:00Z Thursday).
     close_wed_la_venue: '2026-10-08T00:00:00.000Z',
+    // A shift's request window: Wednesday 17:00 venue-local of the shift's own Monday-based week
+    // (Monday, Saturday and Sunday of the week of Oct 5 all close Wed Oct 7, 17:00 Dubai = 13:00Z).
+    shift_window_mon_dubai: '2026-10-07T13:00:00.000Z',
+    shift_window_sat_dubai: '2026-10-07T13:00:00.000Z',
+    shift_window_sun_dubai: '2026-10-07T13:00:00.000Z',
+    shift_window_sat_la_venue: '2026-10-08T00:00:00.000Z',
+    // Open at 16:59, closed at exactly 17:00.
+    shift_window_open_wed_1659: true,
+    shift_window_open_wed_1700: false,
     // A 09:00–17:00 Dubai shift labels as 09:00–17:00, never 05:00 (UTC) or the host's zone.
     label_dubai_shift: 'Mon 5 Oct · 09:00–17:00',
     // Week range as instants in the venue's zone: Monday 00:00 Dubai = Sunday 20:00Z.
