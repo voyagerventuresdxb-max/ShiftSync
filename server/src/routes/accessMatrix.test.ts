@@ -39,7 +39,7 @@ const TAG = '__access-matrix__';
 const UPLOADS = join(import.meta.dirname, '..', '..', 'uploads');
 
 type Actor = 'anon' | 'deactivatedA' | 'staffA' | 'managerA' | 'ownerA' | 'staffB' | 'managerB' | 'ownerB';
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 interface Fx {
   locA: string;
@@ -71,6 +71,8 @@ interface Fx {
   itemOnBehalf: string;
   fbA: string;
   markA: string;
+  leaveA: string;
+  leaveDel: string;
   notifA: string;
   jrA: string;
   tplA: string;
@@ -179,6 +181,8 @@ before(async () => {
   const itemA = await prisma.eightySixItem.create({ data: { locationId: locA.id, itemName: `${TAG} lime`, station: 'Bar' } });
   const itemOnBehalf = await prisma.eightySixItem.create({ data: { locationId: locA.id, itemName: `${TAG} mint`, station: 'Bar' } });
   const fbA = await prisma.floorFeedback.create({ data: { locationId: locA.id, userId: staffA.id, content: `${TAG} feedback` } });
+  const leaveA = await prisma.rotaLeave.create({ data: { locationId: locA.id, userId: staffA2.id, date: new Date(`${addDays(monday, 3)}T00:00:00.000Z`), type: 'ANNUAL_LEAVE', status: 'PUBLISHED' } });
+  const leaveDel = await prisma.rotaLeave.create({ data: { locationId: locA.id, userId: staffA2.id, date: new Date(`${addDays(monday, 4)}T00:00:00.000Z`), type: 'DAY_OFF' } });
   const markA = await prisma.availabilityMark.create({ data: { userId: staffA.id, date: new Date(`${tuesday}T00:00:00.000Z`), type: 'UNAVAILABLE' } });
   const notifA = await prisma.notification.create({ data: { userId: staffA.id, title: `${TAG} title`, body: `${TAG} body` } });
   const jrA = await prisma.joinRequest.create({ data: { locationId: locA.id, phone: randomPhone(), fullName: `${TAG} applicant` } });
@@ -199,7 +203,7 @@ before(async () => {
     roleA: roleA.id, roleA2: roleA2.id, roleDel: roleDel.id, shiftA: shiftA.id, shiftA2: shiftA2.id, shiftDel: shiftDel.id,
     annA: annA.id, annDel: annDel.id, shoutDel: shoutDel.id, imgA: imgA.id, imgFile, secA: secA.id, secDel: secDel.id,
     asgA: asgA.id, asgDel: asgDel.id, docA: docA.id, docFile, docDel: docDel.id, itemA: itemA.id, itemOnBehalf: itemOnBehalf.id,
-    fbA: fbA.id, markA: markA.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
+    fbA: fbA.id, markA: markA.id, leaveA: leaveA.id, leaveDel: leaveDel.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
     linkA: linkA.id, batchA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday,
   };
 
@@ -373,6 +377,9 @@ const CASES: Case[] = [
   // push
   { name: 'POST /api/push/subscribe', method: 'POST', path: () => '/api/push/subscribe', body: () => ({ endpoint: `https://push.invalid/${TAG}/${randomUUID()}`, keys: { p256dh: 'k', auth: 'a' } }), refuse: ['anon', 'deactivatedA'] },
   { name: 'DELETE /api/push/subscribe', method: 'DELETE', path: () => '/api/push/subscribe', body: (f) => ({ endpoint: f.pushEndpointA }), refuse: ['anon', 'deactivatedA'] },
+  // rota leave
+  { name: 'PUT /api/rota-leaves', method: 'PUT', path: () => '/api/rota-leaves', body: (f) => ({ userId: f.staffA2, date: addDays(f.monday, 2), type: 'DAY_OFF' }), refuse: NOT_MANAGERS_OF_A },
+  { name: 'DELETE /api/rota-leaves/:id', method: 'DELETE', path: (f) => `/api/rota-leaves/${f.leaveDel}`, refuse: NOT_MANAGERS_OF_A },
   // roles
   { name: 'GET /api/roles', method: 'GET', path: () => '/api/roles', refuse: ['anon', 'deactivatedA'] },
   { name: 'POST /api/roles', method: 'POST', path: () => '/api/roles', body: () => ({ name: `${TAG} Barback` }), refuse: ['anon', 'deactivatedA', 'staffA', 'staffB'] },
@@ -469,6 +476,8 @@ const PUBLIC_BY_DESIGN: Call[] = [
   { method: 'GET', path: () => '/api/push/vapid-public-key' },
   { method: 'GET', path: (f) => `/api/announcements/${f.locA}` },
   { method: 'GET', path: (f) => `/api/shoutouts/${f.locA}` },
+  // Answers everyone, but only a venue member ever sees leave (checked in the self-scoped test below).
+  { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` },
   { method: 'GET', path: (f) => `/api/shifts/${f.locA}?weekStart=${f.monday}` },
   { method: 'GET', path: (f) => `/api/shifts/${f.locA}/publish-status?weekStart=${f.monday}` },
 ];
@@ -505,6 +514,9 @@ test('self-scoped lists never include the other venue\'s records', async () => {
     ['managerB', { method: 'GET', path: () => '/api/floor-feedback' }, [fx.fbA]],
     ['managerB', { method: 'GET', path: () => '/api/voice/interactions' }, [fx.locA]],
     ['managerB', { method: 'GET', path: (f) => `/api/availability?weekStart=${f.monday}` }, [fx.markA, fx.staffA]],
+    ['anon', { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` }, [fx.leaveA, fx.leaveDel]],
+    ['staffB', { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` }, [fx.leaveA, fx.leaveDel]],
+    ['managerB', { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` }, [fx.leaveA, fx.leaveDel]],
   ];
   for (const [actor, c, mustNotContain] of lists) {
     const { status, text } = await call(actor, c);
@@ -614,6 +626,8 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'POST /api/roles'],
   ['managerA', 'PATCH /api/roles/:id'],
   ['managerA', 'DELETE /api/roles/:id'],
+  ['managerA', 'PUT /api/rota-leaves'],
+  ['managerA', 'DELETE /api/rota-leaves/:id'],
   ['staffA', 'GET /api/rota-templates/:locationId'],
   ['managerA', 'POST /api/rota-templates'],
   ['managerA', 'POST /api/rota-templates/:id/apply'],
@@ -686,6 +700,7 @@ test('every route the API mounts is covered by this matrix (or listed as public 
     'GET /api/push/vapid-public-key',
     'GET /api/announcements/:locationId',
     'GET /api/shoutouts/:locationId',
+    'GET /api/rota-leaves/:locationId',
     'GET /api/shifts/:locationId',
     'GET /api/shifts/:locationId/publish-status',
   ]);
