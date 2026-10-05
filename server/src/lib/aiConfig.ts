@@ -37,8 +37,13 @@ export interface VisionConfig {
   timeoutMs: number;
 }
 
+/** Voice uses the same backend, project, region and timeout as vision; only the model is its own. */
 export interface VoiceConfig {
+  backend: VisionBackend | null;
   model: string;
+  project: string | null;
+  location: string | null;
+  timeoutMs: number;
 }
 
 function trimmed(value: string | undefined): string {
@@ -60,7 +65,8 @@ export function visionConfig(env: NodeJS.ProcessEnv = process.env): VisionConfig
 }
 
 export function voiceConfig(env: NodeJS.ProcessEnv = process.env): VoiceConfig {
-  return { model: trimmed(env.VOICE_MODEL) || DEFAULT_VOICE_MODEL };
+  const { backend, project, location, timeoutMs } = visionConfig(env);
+  return { backend, model: trimmed(env.VOICE_MODEL) || DEFAULT_VOICE_MODEL, project, location, timeoutMs };
 }
 
 /** The Gemini Developer API key, or null. Never log the return value. */
@@ -105,6 +111,13 @@ export function describeVisionConfig(config: VisionConfig = visionConfig()): str
   if (!config.backend) return 'vision: not configured (set GEMINI_VERTEX_PROJECT for Vertex AI, or GEMINI_API_KEY)';
   const where = config.backend === 'vertex' ? `vertex location=${config.location}` : 'developer-api';
   return `vision: ${where} model=${config.model} fallback=${config.fallbackModel}`;
+}
+
+/** Same as describeVisionConfig, for voice. */
+export function describeVoiceConfig(config: VoiceConfig = voiceConfig()): string {
+  if (!config.backend) return 'voice: not configured (set GEMINI_VERTEX_PROJECT for Vertex AI, or GEMINI_API_KEY)';
+  const where = config.backend === 'vertex' ? `vertex location=${config.location}` : 'developer-api';
+  return `voice: ${where} model=${config.model}`;
 }
 
 /** Share of a deterministic grid result's shift rows with no role above which the roster is escalated to vision. */

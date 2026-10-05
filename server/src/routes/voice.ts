@@ -6,6 +6,7 @@ import { requireSession, requireManager } from '../middleware/requireSession.js'
 import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
+import type { AiBudgetExceededError } from '../lib/aiBudget.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
 import { createSwapRequest, decideSwapRequest, notifySwapRequested, notifySwapDecided } from '../lib/actions/swapActions.js';
@@ -54,8 +55,18 @@ const TIME_RE = /^\d{2}:\d{2}$/;
 const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
 /** A retired/misspelled model is not fixed by retrying, so say so (and point at the buttons). */
 const VOICE_MODEL_UNAVAILABLE = "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile.";
+/** No AI backend on this server at all (no Vertex project, no key). */
+export const VOICE_NOT_CONFIGURED = "Voice commands aren't set up on this server yet. Use the app's buttons meanwhile.";
 /** The in-app AI spend cap (lib/aiBudget.ts) refused the call before anything was sent. */
-const VOICE_PAUSED = "Voice commands are paused (AI spending limit reached). Use the app's buttons meanwhile.";
+export const VOICE_PAUSED_MONTH = "Voice commands are paused for the rest of this month (AI spending limit reached). Use the app's buttons meanwhile.";
+export const VOICE_PAUSED_TODAY = "Voice commands have reached today's limit and are back tomorrow. Use the app's buttons meanwhile.";
+
+/** 503 body for a refusal by the spend cap; an unreachable ledger is an outage, not a limit. */
+function pausedBody(limit: AiBudgetExceededError['limit'] | undefined): { error: string; errorCode: string } {
+  if (limit === 'daily_calls') return { error: VOICE_PAUSED_TODAY, errorCode: 'ai_paused' };
+  if (limit === 'monthly_budget') return { error: VOICE_PAUSED_MONTH, errorCode: 'ai_paused' };
+  return { error: VOICE_UNAVAILABLE, errorCode: 'voice_unavailable' };
+}
 
 /**
  * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
@@ -205,7 +216,10 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
       });
     }
     if (err instanceof VoiceTranscriptionError && err.kind === 'paused') {
-      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+      return res.status(503).json(pausedBody(err.limit));
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'not_configured') {
+      return res.status(503).json({ error: VOICE_NOT_CONFIGURED, errorCode: 'voice_not_configured' });
     }
     if (err instanceof VoiceTranscriptionError && err.kind === 'model_unavailable') {
       return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
@@ -252,7 +266,10 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
     });
   } catch (err) {
     if (err instanceof VoiceIntentError && err.paused) {
-      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+      return res.status(503).json(pausedBody(err.limit));
+    }
+    if (err instanceof VoiceIntentError && err.notConfigured) {
+      return res.status(503).json({ error: VOICE_NOT_CONFIGURED, errorCode: 'voice_not_configured' });
     }
     if (err instanceof VoiceIntentError && err.modelUnavailable) {
       return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });

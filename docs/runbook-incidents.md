@@ -145,10 +145,11 @@ entry and the app's buttons keep working with AI off.
 
 | Action (Railway → `shiftsync-api` → Variables) | Effect | When it starts |
 |---|---|---|
-| Set `AI_MONTHLY_BUDGET_USD=0` | Every Gemini / Vertex call is refused before anything is sent (`server/src/lib/aiBudget.ts`). Roster upload shows "AI reading is paused for this month; upload Excel/CSV or add staff manually." Voice shows "Voice commands are paused (AI spending limit reached). Use the app's buttons meanwhile." | After the next deploy |
-| Set `AI_DAILY_CALL_LIMIT=0` | Same refusal, by call count. | After the next deploy |
-| Delete `GEMINI_VERTEX_PROJECT` and `GOOGLE_SERVICE_ACCOUNT_JSON` | Photo and scan reading is off: "AI roster reading isn't set up on this server. Upload an Excel/CSV export instead." ([`vlm-go-live.md`](vlm-go-live.md) §7) | After the next deploy |
-| Delete `GEMINI_API_KEY` | Voice is off. Vision is off too if it was using this key instead of Vertex. | After the next deploy |
+| Set `AI_MONTHLY_BUDGET_USD=0` | Every Gemini / Vertex call is refused before anything is sent (`server/src/lib/aiBudget.ts`). Roster upload shows "AI reading is paused for this month; upload Excel/CSV or add staff manually." Voice shows "Voice commands are paused for the rest of this month (AI spending limit reached). Use the app's buttons meanwhile." | After the next deploy |
+| Set `AI_DAILY_CALL_LIMIT=0` | Same refusal for every feature, by call count ("…today's limit…"). | After the next deploy |
+| Set `AI_VOICE_DAILY_CALL_LIMIT=0` (or `AI_VISION_DAILY_CALL_LIMIT=0`) | Only voice (or only photo reading) is refused; the other keeps working. | After the next deploy |
+| Delete `GEMINI_VERTEX_PROJECT` and `GOOGLE_SERVICE_ACCOUNT_JSON` | Photo and scan reading **and voice** are off (unless a `GEMINI_API_KEY` is also set): "AI roster reading isn't set up on this server. Upload an Excel/CSV export instead." and "Voice commands aren't set up on this server yet." ([`vlm-go-live.md`](vlm-go-live.md) §7) | After the next deploy |
+| Delete `GEMINI_API_KEY` | Only matters without Vertex: vision and voice were using this key. | After the next deploy |
 | Disable or delete the key in Google Cloud | Google refuses the calls. Users see the app's "not available" messages. | At once, no deploy. Then remove the variable on the next deploy. |
 
 How variables take effect:

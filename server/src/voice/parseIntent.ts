@@ -15,8 +15,11 @@ export class VoiceIntentError extends Error {
   cause?: unknown;
   /** True when Gemini answered 404 for the configured model (retired/misspelled): an operator fix, not a retry. */
   modelUnavailable: boolean;
-  /** True when the in-app AI spend cap refused the call (nothing was sent). */
+  /** True when the in-app AI spend cap refused the call (nothing was sent); `limit` says which. */
   paused = false;
+  limit?: AiBudgetExceededError['limit'];
+  /** True when no AI backend is set on this server (no Vertex project, no key). */
+  notConfigured = false;
 
   constructor(message: string, cause?: unknown, modelUnavailable = false) {
     super(message);
@@ -156,11 +159,20 @@ export async function parseVoiceIntent(
   transcript: string,
   user: { id: string; systemRole: SystemRole; fullName: string; locationId: string },
 ): Promise<VoiceIntentResolution> {
-  const options = voiceClientOptions();
-  if (!options) {
-    throw new VoiceIntentError('GEMINI_API_KEY is not configured on the server — voice intent parsing is unavailable.');
+  if (!client) {
+    let options: ReturnType<typeof voiceClientOptions>;
+    try {
+      options = voiceClientOptions();
+    } catch (err) {
+      throw new VoiceIntentError(err instanceof Error ? err.message : 'Voice AI credentials could not be read.', err);
+    }
+    if (!options) {
+      const unconfigured = new VoiceIntentError('No AI backend is configured (GEMINI_VERTEX_PROJECT or GEMINI_API_KEY) — voice intent parsing is unavailable.');
+      unconfigured.notConfigured = true;
+      throw unconfigured;
+    }
+    client = new GoogleGenAI(options);
   }
-  if (!client) client = new GoogleGenAI(options);
 
   const context = await buildContext(user);
   const systemPrompt = buildSystemPrompt(user.systemRole, context);
@@ -215,6 +227,7 @@ export async function parseVoiceIntent(
     if (err instanceof AiBudgetExceededError) {
       const paused = new VoiceIntentError(`AI spend cap reached (${err.limit}); no call made.`, err);
       paused.paused = true;
+      paused.limit = err.limit;
       throw paused;
     }
     if (err instanceof ApiError) {

@@ -14,6 +14,26 @@ import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voice
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
+const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
+
+const voiceConsentKey = (userId: string) => `shiftsync.voiceConsent.${userId}`;
+
+/** Unreadable storage (private mode, blocked site data) means the notice is shown again — never skipped. */
+function hasVoiceConsent(userId: string): boolean {
+  try {
+    return localStorage.getItem(voiceConsentKey(userId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveVoiceConsent(userId: string): void {
+  try {
+    localStorage.setItem(voiceConsentKey(userId), '1');
+  } catch {
+    // Not remembered: the notice is shown again next time.
+  }
+}
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -149,6 +169,9 @@ export function AppShell() {
   } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
   const [voiceSheetNeeded, setVoiceSheetNeeded] = useState(false);
+  const [voiceConsentOpen, setVoiceConsentOpen] = useState(false);
+  const [voiceConsentNeeded, setVoiceConsentNeeded] = useState(false);
+  if (voiceConsentOpen && !voiceConsentNeeded) setVoiceConsentNeeded(true);
   if (voiceResult && !voiceSheetNeeded) setVoiceSheetNeeded(true);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
@@ -283,10 +306,20 @@ export function AppShell() {
     if (voiceProcessing || voiceStarting) return;
     if (voiceOn) {
       stopVoiceRecording();
+    } else if (session && !hasVoiceConsent(session.user.id)) {
+      setVoiceConsentOpen(true);
     } else {
       void startVoiceRecording();
     }
-  }, [voiceOn, voiceProcessing, voiceStarting, startVoiceRecording, stopVoiceRecording]);
+  }, [voiceOn, voiceProcessing, voiceStarting, session, startVoiceRecording, stopVoiceRecording]);
+
+  const handleVoiceConsentAccept = useCallback(() => {
+    setVoiceConsentOpen(false);
+    if (session) saveVoiceConsent(session.user.id);
+    void startVoiceRecording();
+  }, [session, startVoiceRecording]);
+
+  const handleVoiceConsentCancel = useCallback(() => setVoiceConsentOpen(false), []);
 
   const handleVoiceCancel = useCallback(() => {
     setVoiceResult(null);
@@ -401,6 +434,12 @@ export function AppShell() {
             onCancel={handleVoiceCancel}
             executing={voiceExecuting}
           />
+        </Suspense>
+      )}
+
+      {voiceConsentNeeded && (
+        <Suspense fallback={null}>
+          <VoiceConsentSheet open={voiceConsentOpen} onAccept={handleVoiceConsentAccept} onCancel={handleVoiceConsentCancel} />
         </Suspense>
       )}
 
