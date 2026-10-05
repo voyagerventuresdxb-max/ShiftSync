@@ -5,6 +5,11 @@ import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 
+// These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
+// (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
+process.env.AI_MONTHLY_BUDGET_USD = '1000000';
+process.env.AI_DAILY_CALL_LIMIT = '1000000';
+
 const prisma = new PrismaClient();
 
 /** Starts the real Express app on an ephemeral port and hands the caller its base URL. */
@@ -281,14 +286,16 @@ test('POST /api/voice/execute: REQUEST_SWAP from a STAFF session creates a real 
   const target = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task6-test__ request-swap target', systemRole: 'STAFF' },
   });
+  // A shift a week from now: its week's cover-request window (Wednesday 17:00 of that week) is still open.
+  const day = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
   const shift = await prisma.shift.create({
     data: {
       locationId: location!.id,
       roleId: role!.id,
       userId: requester.id,
-      date: new Date('2026-09-03T00:00:00.000Z'),
-      startTime: new Date('2026-09-03T09:00:00.000Z'),
-      endTime: new Date('2026-09-03T17:00:00.000Z'),
+      date: new Date(`${day}T00:00:00.000Z`),
+      startTime: new Date(`${day}T09:00:00.000Z`),
+      endTime: new Date(`${day}T17:00:00.000Z`),
       status: 'PUBLISHED',
     },
   });
@@ -1734,6 +1741,94 @@ test('POST /api/voice/execute: POST_SHOUTOUT from a MANAGER session posts a note
     if (createdId) await prisma.shoutout.delete({ where: { id: createdId } }).catch(() => {});
     await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
     await prisma.user.delete({ where: { id: employee.id } }).catch(() => {});
+  }
+});
+
+/** An isolated venue, so a whole-week publish can't touch rows other tests own at the seed location. */
+async function isolatedVenue(label: string) {
+  const org = await prisma.organization.create({ data: { name: `__voice-test__ ${label} ${Date.now()}` } });
+  const location = await prisma.location.create({ data: { organizationId: org.id, name: org.name } });
+  const role = await prisma.role.create({ data: { locationId: location.id, name: 'Bartender' } });
+  return { orgId: org.id, locationId: location.id, roleId: role.id };
+}
+
+function postExecute(baseUrl: string, token: string, transcript: string, intent: Record<string, unknown>) {
+  return fetch(`${baseUrl}/api/voice/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ transcript, intent }),
+  });
+}
+
+test('POST /api/voice/execute: PUBLISH_ROTA — STAFF gets 403 and nothing moves; a MANAGER publishes exactly that week via publishRota', async () => {
+  const { orgId, locationId, roleId } = await isolatedVenue('publish-rota');
+  try {
+    const manager = await prisma.user.create({ data: { locationId, fullName: 'Publish Manager', systemRole: 'MANAGER' } });
+    const staffA = await prisma.user.create({ data: { locationId, fullName: 'Publish Staff A', systemRole: 'STAFF' } });
+    const staffB = await prisma.user.create({ data: { locationId, fullName: 'Publish Staff B', systemRole: 'STAFF' } });
+    for (const [date, userId] of [['2031-03-03', staffA.id], ['2031-03-04', staffB.id], ['2031-03-10', staffA.id]] as const) {
+      await prisma.shift.create({
+        data: { locationId, roleId, userId, date: new Date(`${date}T00:00:00.000Z`), startTime: new Date(`${date}T14:00:00.000Z`), endTime: new Date(`${date}T22:00:00.000Z`) },
+      });
+    }
+    const intent = { intent: 'PUBLISH_ROTA', weekStart: '2031-03-03', confidence: 0.9, summary: 'This will publish 2 shifts across 2 staff members.' };
+
+    await withServer(async (baseUrl) => {
+      const denied = await postExecute(baseUrl, await sessionFor(staffA.id), 'publish the rota', intent);
+      assert.equal(denied.status, 403);
+      assert.equal(await prisma.shift.count({ where: { locationId, status: 'PUBLISHED' } }), 0);
+      assert.equal(await prisma.rotaPublish.count({ where: { locationId } }), 0);
+
+      const res = await postExecute(baseUrl, await sessionFor(manager.id), 'publish the rota', intent);
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { executed: boolean; result: { notifiedCount: number } };
+      assert.deepEqual([body.executed, body.result.notifiedCount], [true, 2]);
+    });
+
+    const shifts = await prisma.shift.findMany({ where: { locationId }, orderBy: { date: 'asc' } });
+    assert.deepEqual(shifts.map((s) => s.status), ['PUBLISHED', 'PUBLISHED', 'DRAFT'], 'only the requested week is published');
+    const publish = await prisma.rotaPublish.findFirst({ where: { locationId } });
+    assert.equal(publish?.publishedById, manager.id);
+    assert.equal(publish?.weekStart.toISOString().slice(0, 10), '2031-03-03');
+  } finally {
+    await prisma.organization.delete({ where: { id: orgId } }).catch(() => {});
+  }
+});
+
+test('POST /api/voice/execute: APPLY_ROTA_TEMPLATE from a MANAGER creates the template\'s shifts via applyRotaTemplate, with its one SHIFT_CREATED audit row', async () => {
+  const { orgId, locationId, roleId } = await isolatedVenue('apply-template');
+  try {
+    const manager = await prisma.user.create({ data: { locationId, fullName: 'Template Manager', systemRole: 'MANAGER' } });
+    const template = await prisma.rotaTemplate.create({
+      data: {
+        locationId,
+        name: 'Weekend Bar',
+        entries: [
+          { dayOffset: 5, roleId, userId: null, start: '18:00', end: '02:00' },
+          { dayOffset: 6, roleId, userId: manager.id, start: '12:00', end: '20:00' },
+        ],
+      },
+    });
+
+    await withServer(async (baseUrl) => {
+      const res = await postExecute(baseUrl, await sessionFor(manager.id), 'apply weekend bar to next week', {
+        intent: 'APPLY_ROTA_TEMPLATE', templateId: template.id, templateName: 'Weekend Bar', weekStart: '2031-03-03', confidence: 0.9, summary: 'Apply it.',
+      });
+      assert.equal(res.status, 201);
+      const body = (await res.json()) as { result: { createdCount: number; templateName: string } };
+      assert.deepEqual(body.result, { createdCount: 2, templateName: 'Weekend Bar' });
+    });
+
+    const shifts = await prisma.shift.findMany({ where: { locationId }, orderBy: { date: 'asc' } });
+    assert.deepEqual(
+      shifts.map((s) => [s.date.toISOString().slice(0, 10), s.userId, s.status, s.createdById]),
+      [['2031-03-08', null, 'DRAFT', manager.id], ['2031-03-09', manager.id, 'DRAFT', manager.id]],
+    );
+    const audits = await prisma.auditLog.findMany({ where: { locationId, action: 'SHIFT_CREATED' } });
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0]!.actorId, manager.id);
+  } finally {
+    await prisma.organization.delete({ where: { id: orgId } }).catch(() => {});
   }
 });
 

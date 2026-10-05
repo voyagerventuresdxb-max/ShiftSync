@@ -841,6 +841,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                     </button>
                     <div style={{ textAlign: 'center', marginTop: 14 }}>
                       <button
+                        className="hit-44"
                         onClick={() => setCardIdx(2)}
                         style={{ font: "500 12px/1 'Manrope'", letterSpacing: '.005em', color: 'var(--ob-bronze)', borderBottom: '1px solid rgba(139,117,80,.35)', paddingBottom: 2, background: 'transparent', border: 0 }}
                       >
@@ -885,6 +886,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
               Continue
             </button>
             <button
+              className="hit-44"
               onClick={resetToHold}
               style={{ marginTop: 18, font: "500 11px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-dim-2)', borderBottom: '1px solid rgba(85,81,74,.5)', paddingBottom: 3, background: 'transparent', border: 0 }}
             >

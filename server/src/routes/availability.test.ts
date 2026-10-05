@@ -83,3 +83,36 @@ test('POST /api/availability upserts the mark AND writes a matching AVAILABILITY
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+test("DELETE /api/availability/:id answers someone else's mark exactly like a missing one (404), and the owner can delete it", async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  const location = await prisma.location.create({
+    data: { organizationId: seedLocation!.organizationId, name: '__availability-test__ delete', timezone: 'Asia/Dubai' },
+  });
+  const owner = await prisma.user.create({ data: { locationId: location.id, fullName: '__availability-test__ Owner of mark', systemRole: 'STAFF' } });
+  const other = await prisma.user.create({ data: { locationId: location.id, fullName: '__availability-test__ Other', systemRole: 'STAFF' } });
+  const mark = await prisma.availabilityMark.create({ data: { userId: owner.id, date: new Date('2031-05-02T00:00:00.000Z'), type: 'UNAVAILABLE' } });
+
+  try {
+    await withServer(async (baseUrl) => {
+      const del = async (userId: string, id: string) => {
+        const res = await fetch(`${baseUrl}/api/availability/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${await sessionFor(userId)}` } });
+        return { status: res.status, body: res.status === 204 ? '' : await res.text() };
+      };
+      const someoneElses = await del(other.id, mark.id);
+      const missing = await del(other.id, '00000000-0000-0000-0000-000000000000');
+      assert.equal(someoneElses.status, 404);
+      assert.deepEqual(someoneElses, missing, 'no difference between "not yours" and "does not exist"');
+      assert.ok(await prisma.availabilityMark.findUnique({ where: { id: mark.id } }), 'the mark is untouched');
+
+      assert.equal((await del(owner.id, mark.id)).status, 204);
+      assert.equal(await prisma.availabilityMark.findUnique({ where: { id: mark.id } }), null);
+    });
+  } finally {
+    await prisma.availabilityMark.deleteMany({ where: { userId: { in: [owner.id, other.id] } } }).catch(() => {});
+    await prisma.session.deleteMany({ where: { userId: { in: [owner.id, other.id] } } }).catch(() => {});
+    await prisma.user.deleteMany({ where: { id: { in: [owner.id, other.id] } } }).catch(() => {});
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});

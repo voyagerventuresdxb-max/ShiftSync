@@ -1,7 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Stage, Layer, Image as KonvaImage, Line, Circle, Text as KonvaText, Group } from 'react-konva';
-import type { KonvaEventObject } from 'konva/lib/Node';
-import useImage from 'use-image';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import {
   ApiError,
   createFloorSection,
@@ -10,10 +7,12 @@ import {
   uploadFloorPlanImage,
   type FloorPlanImageDto,
   type FloorSectionDto,
-  type Point,
 } from '../../api/floorPlan';
 import { useIdentity } from '../../state/IdentityContext';
 import { useAuthenticatedBlobUrl } from '../../hooks/useAuthenticatedBlobUrl';
+import { useCloseOnBack } from '../../lib/backNavigation';
+import { PlanZoomViewport } from './planZoom';
+import { SectionPin } from './SectionPin';
 
 interface Props {
   locationId: string;
@@ -24,11 +23,12 @@ interface Props {
 }
 
 /**
- * Phase 1 — one-time-per-venue setup. Manager draws freeform polygons over
- * the uploaded floor plan (Konva) and labels each one with a pax capacity.
- * Konva is only used here, for drawing — the daily assignment screen
- * (AssignmentBoard) re-renders the same saved polygons as plain DOM
- * overlays instead, since Konva shapes can't be dnd-kit drop targets.
+ * One-time-per-venue setup. A section is a named pin on the uploaded floor
+ * plan (2026-09-29 — drawn polygon boundaries were removed: managers know
+ * their own floor, and a pin at each section's approximate spot is enough).
+ * Tap the plan to drop a pin, drag a pin to move it, tap a pin to rename it,
+ * change its pax or note, or delete it. Pins are the same `SectionPin` the
+ * Daily Assignment board renders, and the plan zooms/pans the same way.
  */
 export default function SectionEditor({ locationId, image, sections, onChanged, onDone }: Props) {
   const { session } = useIdentity();
@@ -87,7 +87,21 @@ export default function SectionEditor({ locationId, image, sections, onChanged, 
   return <FloorPlanCanvas locationId={locationId} image={image} sections={sections} onChanged={onChanged} onDone={onDone} />;
 }
 
-const CLOSE_RADIUS = 12; // px in stage space — click near the first point to close the loop
+const TAP_SLOP = 8; // px a pin may move and still count as a tap (same as planZoom.tsx)
+const NUDGE_STEP = 0.01; // arrow-key move, as a fraction of the plan (Shift = 5x)
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+/** The plan fraction (0-1) under a pointer. `plan` is inside the zoom layer, so its box already includes the zoom/pan. */
+function planFraction(plan: Element, clientX: number, clientY: number): { x: number; y: number } {
+  const r = plan.getBoundingClientRect();
+  return { x: clamp01((clientX - r.left) / r.width), y: clamp01((clientY - r.top) / r.height) };
+}
+
+type SectionValues = { label: string; paxCapacity: number; notes: string | null };
+type DialogState = { mode: 'new'; x: number; y: number } | { mode: 'edit'; section: FloorSectionDto };
 
 function FloorPlanCanvas({
   locationId,
@@ -103,159 +117,121 @@ function FloorPlanCanvas({
   onDone: () => void;
 }) {
   const { session } = useIdentity();
-  // Floor-plan images are now session-gated (see MEMORY.md) — `useImage`
-  // just needs a URL string to load from, so a fetched `blob:` URL works
-  // exactly like the old plain `image.fileUrl` did, once it's ready.
   const imageBlobUrl = useAuthenticatedBlobUrl(image.fileUrl, session?.token);
-  const [img] = useImage(imageBlobUrl ?? '');
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [stageWidth, setStageWidth] = useState(800);
   const [error, setError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<DialogState | null>(null);
+  // While a pin is being dragged (and until its move is saved), its live position.
+  const [dragPos, setDragPos] = useState<{ id: string; x: number; y: number } | null>(null);
+  const drag = useRef<{ id: string; pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
 
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width;
-      if (width) setStageWidth(Math.min(width, 900));
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  const aspect = img ? img.naturalHeight / img.naturalWidth : 0.6;
-  const stageHeight = stageWidth * aspect;
-
-  const [drawing, setDrawing] = useState<Point[]>([]); // pixel coords, stage space
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [labeling, setLabeling] = useState(false);
-  const [labelText, setLabelText] = useState('');
-  const [paxText, setPaxText] = useState('');
-  const [notesText, setNotesText] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const startDrawing = () => {
-    setDrawing([]);
-    setIsDrawing(true);
-    setLabeling(false);
+  // Section writes are manager-only server-side; with no session there is no
+  // token to send and the request could only ever 401.
+  const tokenOrError = (): string | null => {
+    if (session) return session.token;
+    setError('Your session has expired. Please sign in again.');
+    return null;
   };
 
-  const cancelDrawing = () => {
-    setDrawing([]);
-    setIsDrawing(false);
-    setLabeling(false);
-    setNotesText('');
-  };
-
-  const closeShape = () => {
-    if (drawing.length >= 3) setLabeling(true);
-  };
-
-  const handleStagePoint = (evt: KonvaEventObject<MouseEvent | TouchEvent | PointerEvent>) => {
-    if (!isDrawing || labeling) return;
-    const stage = evt.target.getStage();
-    const pos = stage?.getPointerPosition();
-    if (!pos) return;
-    if (drawing.length >= 3) {
-      const first = drawing[0];
-      const dx = pos.x - first.x;
-      const dy = pos.y - first.y;
-      if (Math.sqrt(dx * dx + dy * dy) <= CLOSE_RADIUS) {
-        setLabeling(true);
-        return;
-      }
+  const run = async (write: (token: string) => Promise<FloorSectionDto[]>, failure: string): Promise<boolean> => {
+    const token = tokenOrError();
+    if (!token) return false;
+    try {
+      onChanged(image, await write(token));
+      setError(null);
+      return true;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : failure);
+      return false;
     }
-    setDrawing((prev) => [...prev, { x: pos.x, y: pos.y }]);
   };
 
-  const saveSection = async () => {
-    const label = labelText.trim();
-    const pax = Number(paxText);
-    if (!label) {
-      setError('Give the section a label.');
+  const createSection = (at: { x: number; y: number }, values: SectionValues) =>
+    run(
+      async (token) => [
+        ...sections,
+        await createFloorSection(token, { locationId, floorPlanImageId: image.id, pinX: at.x, pinY: at.y, ...values }),
+      ],
+      'Could not save the section.',
+    );
+
+  const updateSection = (sectionId: string, updates: Partial<SectionValues> & { pinX?: number; pinY?: number }) =>
+    run(async (token) => {
+      const updated = await updateFloorSection(token, sectionId, updates);
+      return sections.map((s) => (s.id === sectionId ? updated : s));
+    }, 'Could not update the section.');
+
+  const deleteSection = (sectionId: string) =>
+    run(async (token) => {
+      await deleteFloorSection(token, sectionId);
+      return sections.filter((s) => s.id !== sectionId);
+    }, 'Could not delete the section.');
+
+  // Tap on the plan (not on a pin) drops a new pin there. The click that
+  // ends a pan never arrives: planZoom swallows it.
+  const onPlanClick = (e: MouseEvent<HTMLDivElement>) => {
+    if ((e.target as Element).closest('[data-section-pin]')) return;
+    setDialog({ mode: 'new', ...planFraction(e.currentTarget, e.clientX, e.clientY) });
+  };
+
+  // Pin drag, via pointer capture on the pin. planZoom never one-finger pans
+  // from a `data-plan-drag-handle`, so dragging a pin doesn't move the plan;
+  // a second finger turns it into a pinch, which takes the pointer capture
+  // away from the pin and so cancels the drag (onLostPointerCapture).
+  const onPinPointerDown = (s: FloorSectionDto) => (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { id: s.id, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, moved: false };
+  };
+  const onPinPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < TAP_SLOP) return;
+    d.moved = true;
+    setDragPos({ id: d.id, ...planFraction(e.currentTarget.parentElement!, e.clientX, e.clientY) });
+  };
+  const onPinPointerUp = (s: FloorSectionDto) => (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+    drag.current = null;
+    if (!d.moved) {
+      setDialog({ mode: 'edit', section: s });
       return;
     }
-    if (!Number.isFinite(pax) || pax < 0) {
-      setError('Pax capacity must be a non-negative number.');
-      return;
-    }
-    // Section writes are manager-only server-side; with no session there is
-    // no token to send and the request could only ever 401.
-    if (!session) {
-      setError('Your session has expired. Please sign in again.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      const polygon: Point[] = drawing.map((p) => ({ x: p.x / stageWidth, y: p.y / stageHeight }));
-      const section = await createFloorSection(session.token, {
-        locationId,
-        floorPlanImageId: image.id,
-        label,
-        polygon,
-        paxCapacity: Math.round(pax),
-        notes: notesText.trim() || null,
-      });
-      onChanged(image, [...sections, section]);
-      setLabelText('');
-      setPaxText('');
-      setNotesText('');
-      cancelDrawing();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not save the section.');
-    } finally {
-      setSaving(false);
-    }
+    const to = planFraction(e.currentTarget.parentElement!, e.clientX, e.clientY);
+    setDragPos({ id: s.id, ...to });
+    void updateSection(s.id, { pinX: to.x, pinY: to.y }).finally(() => setDragPos(null));
+  };
+  // Only a drag still in progress is cancelled: a normal release also fires
+  // lostpointercapture, after pointerup has already cleared `drag`.
+  const onPinPointerCancel = () => {
+    if (!drag.current) return;
+    drag.current = null;
+    setDragPos(null);
   };
 
-  const handleDeleteSection = async (sectionId: string) => {
-    // Section writes are manager-only server-side; with no session there is
-    // no token to send and the request could only ever 401.
-    if (!session) return;
-    try {
-      await deleteFloorSection(session.token, sectionId);
-      onChanged(image, sections.filter((s) => s.id !== sectionId));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not delete the section.');
+  // Keyboard: Enter/Space edits; arrow keys move the pin (Shift = bigger steps).
+  const onPinKeyDown = (s: FloorSectionDto) => (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setDialog({ mode: 'edit', section: s });
+      return;
     }
-  };
-
-  const handleQuickEdit = async (sectionId: string, updates: { label?: string; paxCapacity?: number; notes?: string | null }) => {
-    // Section writes are manager-only server-side; with no session there is
-    // no token to send and the request could only ever 401.
-    if (!session) return;
-    try {
-      const updated = await updateFloorSection(session.token, sectionId, updates);
-      onChanged(image, sections.map((s) => (s.id === sectionId ? updated : s)));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not update the section.');
-    }
+    const step = e.shiftKey ? NUDGE_STEP * 5 : NUDGE_STEP;
+    const move = ({ ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] } as Record<string, [number, number]>)[e.key];
+    if (!move) return;
+    e.preventDefault();
+    void updateSection(s.id, { pinX: clamp01(s.pinX + move[0]), pinY: clamp01(s.pinY + move[1]) });
   };
 
   return (
     <div className="fp-editor">
       <div className="fp-toolbar">
-        {!isDrawing ? (
-          <button className="btn btn-primary" onClick={startDrawing}>
-            + Draw section
-          </button>
-        ) : (
-          <>
-            <button className="btn btn-primary" onClick={closeShape} disabled={drawing.length < 3}>
-              Close shape ({drawing.length} pts)
-            </button>
-            <button className="btn btn-ghost" onClick={cancelDrawing}>
-              Cancel
-            </button>
-          </>
-        )}
         <button className="btn btn-ghost" onClick={onDone} disabled={sections.length === 0}>
           Done — go to daily assignment
         </button>
       </div>
 
-      <p className="hint">Click to place each corner of the section. Click the first point again (or "Close shape") to finish.</p>
+      <p className="hint">Tap the plan to drop a section pin. Drag a pin to move it; tap it to rename or delete.</p>
 
       {error && (
         <div className="error-block" role="alert">
@@ -263,152 +239,182 @@ function FloorPlanCanvas({
         </div>
       )}
 
-      <div ref={containerRef} className="fp-canvas-wrap fp-canvas-wrap-editor">
-        <Stage
-          width={stageWidth}
-          height={stageHeight}
-          onClick={handleStagePoint}
-          onTap={handleStagePoint}
-          style={{ cursor: isDrawing ? 'crosshair' : 'default' }}
-        >
-          <Layer>
-            {img && <KonvaImage image={img} width={stageWidth} height={stageHeight} />}
-
-            {sections.map((s) => {
-              const points = s.polygon.flatMap((p) => [p.x * stageWidth, p.y * stageHeight]);
-              const centroidX = (s.polygon.reduce((sum, p) => sum + p.x, 0) / s.polygon.length) * stageWidth;
-              const centroidY = (s.polygon.reduce((sum, p) => sum + p.y, 0) / s.polygon.length) * stageHeight;
-              return (
-                <Group key={s.id}>
-                  <Line points={points} closed fill="rgba(229,169,60,0.22)" stroke="#e5a93c" strokeWidth={2} />
-                  <KonvaText x={centroidX - 30} y={centroidY - 8} text={s.label} fontSize={13} fill="#f5eadb" align="center" width={60} />
-                </Group>
-              );
-            })}
-
-            {isDrawing && drawing.length > 0 && (
-              <>
-                <Line points={drawing.flatMap((p) => [p.x, p.y])} stroke="#e5a93c" strokeWidth={2} closed={false} dash={[6, 4]} />
-                {drawing.map((p, idx) => (
-                  <Circle
-                    key={idx}
-                    x={p.x}
-                    y={p.y}
-                    radius={idx === 0 ? CLOSE_RADIUS : 4}
-                    fill={idx === 0 ? 'rgba(229,169,60,0.25)' : '#e5a93c'}
-                    stroke="#e5a93c"
-                  />
-                ))}
-              </>
-            )}
-          </Layer>
-        </Stage>
-      </div>
-
-      {labeling && (
-        <div className="fp-picker-backdrop" onClick={() => setLabeling(false)}>
-          <div className="fp-picker" onClick={(e) => e.stopPropagation()}>
-            <header className="fp-picker-head">
-              <h3>New section</h3>
-            </header>
-            <input
-              className="staff-directory-input"
-              placeholder="Label (e.g. Section 1)"
-              value={labelText}
-              onChange={(e) => setLabelText(e.target.value)}
-              autoFocus
-            />
-            <input
-              className="staff-directory-input"
-              placeholder="Pax capacity"
-              type="number"
-              min={0}
-              value={paxText}
-              onChange={(e) => setPaxText(e.target.value)}
-            />
-            <textarea
-              className="staff-directory-input fp-notes-input"
-              placeholder="Note (optional, e.g. Shade after 17:00)"
-              value={notesText}
-              onChange={(e) => setNotesText(e.target.value)}
-              rows={2}
-            />
-            <div className="preview-actions">
-              <button className="btn btn-ghost" onClick={() => setLabeling(false)}>
-                Cancel
-              </button>
-              <button className="btn btn-primary" onClick={() => void saveSection()} disabled={saving}>
-                {saving ? 'Saving…' : 'Save section'}
-              </button>
-            </div>
-          </div>
+      <PlanZoomViewport className="fp-canvas-wrap fp-canvas-wrap-editor">
+        <div className="relative" onClick={onPlanClick}>
+          {imageBlobUrl && <img src={imageBlobUrl} alt="Venue floor plan" className="fp-image" draggable={false} />}
+          {sections.map((s) => {
+            const pos = dragPos?.id === s.id ? dragPos : { x: s.pinX, y: s.pinY };
+            return (
+              <SectionPin
+                key={s.id}
+                label={s.label}
+                x={pos.x}
+                y={pos.y}
+                secondary={s.label}
+                tertiary={`${s.paxCapacity} pax`}
+                tone={dragPos?.id === s.id ? 'active' : 'default'}
+                note={s.notes}
+                role="button"
+                tabIndex={0}
+                aria-label={`${s.label}, ${s.paxCapacity} pax. Drag or use the arrow keys to move; Enter to edit.`}
+                data-plan-drag-handle
+                className="cursor-grab touch-none select-none"
+                onPointerDown={onPinPointerDown(s)}
+                onPointerMove={onPinPointerMove}
+                onPointerUp={onPinPointerUp(s)}
+                onPointerCancel={onPinPointerCancel}
+                onLostPointerCapture={onPinPointerCancel}
+                onKeyDown={onPinKeyDown(s)}
+              />
+            );
+          })}
         </div>
+      </PlanZoomViewport>
+
+      {dialog && (
+        <SectionDialog
+          key={dialog.mode === 'edit' ? dialog.section.id : `new-${dialog.x}-${dialog.y}`}
+          editing={dialog.mode === 'edit' ? dialog.section : null}
+          suggestedLabel={`Section ${sections.length + 1}`}
+          onClose={() => setDialog(null)}
+          onSubmit={async (values) => {
+            const ok =
+              dialog.mode === 'new' ? await createSection({ x: dialog.x, y: dialog.y }, values) : await updateSection(dialog.section.id, values);
+            if (ok) setDialog(null);
+          }}
+          onDelete={async () => {
+            if (dialog.mode === 'edit' && (await deleteSection(dialog.section.id))) setDialog(null);
+          }}
+        />
       )}
 
       <div className="fp-section-list">
         <h3 className="section-title">Sections ({sections.length})</h3>
-        {sections.length === 0 && <p className="hint">No sections drawn yet.</p>}
+        {sections.length === 0 && <p className="hint">No sections yet — tap the plan to add one.</p>}
         {sections.map((s) => (
-          <SectionListRow
-            key={s.id}
-            section={s}
-            onDelete={() => void handleDeleteSection(s.id)}
-            onEdit={(updates) => void handleQuickEdit(s.id, updates)}
-          />
+          <button key={s.id} className="fp-picker-item" onClick={() => setDialog({ mode: 'edit', section: s })}>
+            <span className="min-w-0 flex-1 truncate">{s.label}</span>
+            <span className="cell-num shrink-0">{s.paxCapacity} pax</span>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-function SectionListRow({
-  section,
+/**
+ * New / edit form for one section pin: name, pax, note — and, when editing, a
+ * two-step Delete (the first tap asks, the second deletes; deleting a section
+ * also removes its assignments server-side).
+ */
+function SectionDialog({
+  editing,
+  suggestedLabel,
+  onClose,
+  onSubmit,
   onDelete,
-  onEdit,
 }: {
-  section: FloorSectionDto;
-  onDelete: () => void;
-  onEdit: (updates: { label?: string; paxCapacity?: number; notes?: string | null }) => void;
+  editing: FloorSectionDto | null;
+  suggestedLabel: string;
+  onClose: () => void;
+  onSubmit: (values: SectionValues) => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
-  const [label, setLabel] = useState(section.label);
-  const [pax, setPax] = useState(String(section.paxCapacity));
-  const [notes, setNotes] = useState(section.notes ?? '');
-
+  const [label, setLabel] = useState(editing?.label ?? suggestedLabel);
+  const [pax, setPax] = useState(editing ? String(editing.paxCapacity) : '');
+  const [notes, setNotes] = useState(editing?.notes ?? '');
+  const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useCloseOnBack(true, onClose);
+  const labelRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    setLabel(section.label);
-    setPax(String(section.paxCapacity));
-    setNotes(section.notes ?? '');
-  }, [section.label, section.paxCapacity, section.notes]);
+    labelRef.current?.select();
+  }, []);
+
+  const submit = async () => {
+    const trimmed = label.trim();
+    const paxNumber = Number(pax);
+    if (!trimmed) return setError('Give the section a name.');
+    if (!Number.isFinite(paxNumber) || paxNumber < 0) return setError('Pax capacity must be a non-negative number.');
+    setBusy(true);
+    setError(null);
+    await onSubmit({ label: trimmed, paxCapacity: Math.round(paxNumber), notes: notes.trim() || null });
+    setBusy(false);
+  };
 
   return (
-    <div className="fp-section-row">
-      <input
-        className="staff-directory-input staff-directory-input-inline"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        onBlur={() => label.trim() && label !== section.label && onEdit({ label: label.trim() })}
-      />
-      <input
-        className="staff-directory-input staff-directory-input-inline fp-pax-input"
-        type="number"
-        min={0}
-        value={pax}
-        onChange={(e) => setPax(e.target.value)}
-        onBlur={() => {
-          const n = Number(pax);
-          if (Number.isFinite(n) && n >= 0 && n !== section.paxCapacity) onEdit({ paxCapacity: Math.round(n) });
-        }}
-      />
-      <input
-        className="staff-directory-input staff-directory-input-inline fp-notes-input"
-        placeholder="Note (optional)"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        onBlur={() => notes.trim() !== (section.notes ?? '') && onEdit({ notes: notes.trim() || null })}
-      />
-      <button className="btn btn-ghost" onClick={onDelete}>
-        Delete
-      </button>
+    <div className="fp-picker-backdrop" onClick={onClose}>
+      <div className="fp-picker" role="dialog" aria-label={editing ? `Edit ${editing.label}` : 'New section'} onClick={(e) => e.stopPropagation()}>
+        <header className="fp-picker-head">
+          <h3>{editing ? 'Edit section' : 'New section'}</h3>
+          <button className="btn btn-ghost" onClick={onClose}>
+            Close
+          </button>
+        </header>
+        <input
+          ref={labelRef}
+          className="staff-directory-input"
+          aria-label="Section name"
+          placeholder="Name (e.g. Section 1, Terrace)"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          autoFocus
+        />
+        <input
+          className="staff-directory-input"
+          aria-label="Pax capacity"
+          placeholder="Pax capacity"
+          type="number"
+          inputMode="numeric"
+          min={0}
+          value={pax}
+          onChange={(e) => setPax(e.target.value)}
+        />
+        <textarea
+          className="staff-directory-input fp-notes-input"
+          aria-label="Note"
+          placeholder="Note (optional, e.g. Shade after 17:00)"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={2}
+        />
+        {error && (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        {confirmingDelete ? (
+          <div className="preview-actions" role="group" aria-label="Confirm delete">
+            <span className="mr-auto self-center text-xs text-muted-foreground">Delete {editing?.label} and its assignments?</span>
+            <button className="btn btn-ghost" onClick={() => setConfirmingDelete(false)} disabled={busy}>
+              Keep
+            </button>
+            <button
+              className="btn btn-ghost border-destructive/50 text-destructive"
+              onClick={async () => {
+                setBusy(true);
+                await onDelete();
+                setBusy(false);
+              }}
+              disabled={busy}
+            >
+              {busy ? 'Deleting…' : 'Delete'}
+            </button>
+          </div>
+        ) : (
+          <div className="preview-actions">
+            {editing && (
+              <button className="btn btn-ghost mr-auto" onClick={() => setConfirmingDelete(true)} disabled={busy}>
+                Delete…
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={() => void submit()} disabled={busy}>
+              {busy ? 'Saving…' : editing ? 'Save' : 'Add section'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

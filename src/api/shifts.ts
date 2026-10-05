@@ -1,5 +1,7 @@
+import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
+import { apiUrl } from '../lib/apiUrl';
 
 export interface ShiftDto {
   id: string;
@@ -17,8 +19,11 @@ export interface ShiftDto {
   updatedAt: string;
 }
 
+/** What a kiosk screen (no session, `X-Kiosk-Token`) gets for a shift: published shifts only, names but no ids or notes. */
+export type KioskShiftDto = Pick<ShiftDto, 'id' | 'employeeName' | 'roleName' | 'date' | 'start' | 'end' | 'status'>;
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -33,8 +38,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function fetchWeekShifts(locationId: string, weekStart: string): Promise<ShiftDto[]> {
-  const data = await request<{ shifts: ShiftDto[] }>(`/api/shifts/${locationId}?weekStart=${weekStart}`);
+/** GET /api/shifts/:locationId — `headers` from `venueReadHeaders` (api/venueBinding.ts); a kiosk token gets `KioskShiftDto`s. */
+export async function fetchWeekShifts(locationId: string, weekStart: string, headers: Record<string, string>): Promise<ShiftDto[]> {
+  const data = await request<{ shifts: ShiftDto[] }>(`/api/shifts/${locationId}?weekStart=${weekStart}`, { headers });
   return data.shifts;
 }
 
@@ -123,6 +129,7 @@ export async function publishWeek(
 export async function fetchPublishStatus(
   locationId: string,
   weekStart: string,
+  headers: Record<string, string>,
 ): Promise<{ publishedAt: string | null; notifiedCount: number; hasUnpublishedChanges: boolean }> {
-  return request(`/api/shifts/${locationId}/publish-status?weekStart=${weekStart}`);
+  return request(`/api/shifts/${locationId}/publish-status?weekStart=${weekStart}`, { headers });
 }

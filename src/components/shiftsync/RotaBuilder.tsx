@@ -20,7 +20,9 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useCloseOnBack } from '@/lib/backNavigation';
 import { weekDates, weekdayOf } from '@/engine/rosterView';
+import { weekRangeLabel } from '@/engine/weekMath';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
@@ -91,6 +93,7 @@ export function RotaBuilder() {
     refreshPublishInfo,
     refetchWeekShifts,
     currentEmployeeId,
+    readHeaders,
   } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
@@ -150,7 +153,7 @@ export function RotaBuilder() {
     // page with no locationId has nothing else to render anyway.
     if (!locationId) return;
     let cancelled = false;
-    fetchWeekShifts(locationId, weekStart)
+    fetchWeekShifts(locationId, weekStart, readHeaders)
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
@@ -169,7 +172,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, dataVersion, locationId]);
+  }, [weekStart, dataVersion, locationId, readHeaders]);
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
@@ -467,10 +470,10 @@ export function RotaBuilder() {
         <>
           <header className="flex flex-wrap items-center gap-3 border-y border-border p-4">
             <div className="flex items-center gap-1.5">
-              <button onClick={() => setWeekStart(shiftWeek(weekStart, -1))} aria-label="Previous week" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
+              <button onClick={() => setWeekStart(shiftWeek(weekStart, -1))} aria-label="Previous week" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="px-1 text-sm font-semibold tracking-tight">{weekdayOf(days[0])} {days[0].slice(8)} – {weekdayOf(days[6])} {days[6].slice(8)}</span>
+              <span className="px-1 text-sm font-semibold tracking-tight" data-testid="rota-week-label">{weekRangeLabel(days[0]!, days[6]!)}</span>
               <button onClick={() => setWeekStart(shiftWeek(weekStart, 1))} aria-label="Next week" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
                 <ChevronRight className="h-4 w-4" />
               </button>
@@ -491,6 +494,13 @@ export function RotaBuilder() {
                 <Save className="h-3.5 w-3.5" /> Save as template
               </button>
             </div>
+            {/* The publish button is disabled offline; say why, right where the manager is looking, instead of a greyed button with no reason (bad-network audit, 2026-10-03). */}
+            {!online && (
+              <div className="basis-full" data-testid="rota-offline-notice">
+                <OfflineActionNotice />
+              </div>
+            )}
+
           </header>
 
           {flash && <p className="border-b border-border/60 bg-accent/10 px-4 py-2 text-xs text-accent">{flash}</p>}
@@ -720,8 +730,10 @@ function Cell({
       {shifts.map((s) => (
         <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
       ))}
+      {/* hit-44 only on an empty cell: with a chip 4px above, the expanded
+          area would overlap that chip (touch-target audit category b). */}
       {!locked && (
-        <button onClick={onAdd} aria-label={`Add shift on ${date}`} className="grid h-6 w-full place-items-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:border-accent hover:text-accent">
+        <button onClick={onAdd} aria-label={`Add shift on ${date}`} className={cn('grid h-6 w-full place-items-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:border-accent hover:text-accent', shifts.length === 0 && 'hit-44')}>
           <Plus className="h-3 w-3" />
         </button>
       )}
@@ -755,12 +767,14 @@ function AvailabilityBadge({ mark }: { mark: AvailabilityMarkDto }) {
 }
 
 function SheetShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  // Mounted means open: browser/hardware back closes the sheet (see backNavigation.ts).
+  useCloseOnBack(true, onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-background/70 p-3 backdrop-blur-sm sm:p-6">
       <div className="panel w-full max-w-lg shadow-lux">
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-2xl border-b border-border bg-surface/95 p-4 backdrop-blur">
           <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
-          <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
+          <button onClick={onClose} aria-label="Close" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </header>
@@ -884,8 +898,8 @@ function TemplateSheet({
                 <p className="text-[11px] text-muted-foreground">{t.entryCount} shifts</p>
               </div>
               <div className="flex shrink-0 gap-2">
-                <button onClick={() => onApply(t)} disabled={!online} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">Apply</button>
-                <button onClick={() => onDelete(t.id)} disabled={!online} aria-label="Delete template" className="grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60">
+                <button onClick={() => onApply(t)} disabled={!online} className="hit-44 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">Apply</button>
+                <button onClick={() => onDelete(t.id)} disabled={!online} aria-label="Delete template" className="hit-44 grid h-8 w-8 place-items-center rounded-lg border border-border text-muted-foreground hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60">
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>

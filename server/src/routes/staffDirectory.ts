@@ -3,6 +3,10 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
+import { findUserByPhone } from './identity.js';
+import { revokeUserAccess } from '../lib/identity.js';
+import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError, phoneChangeRefusal } from '../lib/actions/employmentStatusActions.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -30,6 +34,23 @@ export const staffDirectoryRouter = Router();
 class StaffRecordChangedConcurrentlyError extends Error {}
 
 /** The one place "does this caller get personal fields?" is decided — every route derives `redactPersonal` from this, never a literal. */
+const PHONE_TAKEN_ERROR = 'This phone number is already registered to another staff member.';
+
+/**
+ * `User.phone` is globally unique (it doubles as the login credential — see
+ * the schema's own comment on that column), deactivated users included.
+ * Saving a number another user holds hits Prisma's P2002, a real,
+ * anticipatable conflict (409), not a server fault. Exact `meta.target`
+ * match (not just the P2002 code), mirroring attendance.ts: a loose check
+ * would also swallow a P2002 from some unrelated future unique constraint
+ * on this table and misreport it as a phone conflict.
+ */
+function isPhoneConflict(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') return false;
+  const target = err.meta?.target as unknown;
+  return Array.isArray(target) && target.length === 1 && target[0] === 'phone';
+}
+
 function redactPersonalFor(req: Request): boolean {
   return req.user!.systemRole === 'STAFF';
 }
@@ -92,7 +113,8 @@ staffDirectoryRouter.get('/:locationId', requireSession, async (req, res) => {
     const { locationId } = req.params;
     if (!assertOwnsLocation(req, res, locationId)) return;
     const users = await prisma.user.findMany({
-      where: { locationId },
+      // Accounts their owners deleted are gone from the directory (their past shifts keep "Deleted user").
+      where: { locationId, deletedAt: null },
       orderBy: { fullName: 'asc' },
       include: { role: true, location: { select: { name: true } } },
     });
@@ -115,10 +137,12 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
     const locationId = req.user!.locationId;
     const fullName = String(req.body?.fullName ?? '').trim();
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
-    const phone = req.body?.phone ? String(req.body.phone).trim() : null;
+    const rawPhone = req.body?.phone ? String(req.body.phone).trim() : '';
+    const phone = rawPhone ? toE164(rawPhone) : null;
     const preferredLanguage = req.body?.preferredLanguage ? String(req.body.preferredLanguage).trim() : null;
     const hiredAtStr = req.body?.hiredAt ? String(req.body.hiredAt).trim() : null;
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
+    if (rawPhone && !phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
     if (hiredAtStr && !/^\d{4}-\d{2}-\d{2}$/.test(hiredAtStr)) {
       return res.status(400).json({ error: 'hiredAt must be formatted as YYYY-MM-DD.' });
     }
@@ -126,6 +150,8 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     if (!location) return res.status(404).json({ error: `Location "${locationId}" not found.` });
+    // Any holder counts (deactivated too); the P2002 catch below covers the race.
+    if (phone && (await findUserByPhone(phone))) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
 
     const user = await withAuditedTransaction(
       prisma,
@@ -146,6 +172,7 @@ staffDirectoryRouter.post('/', requireSession, requireManager, async (req, res) 
     );
     return res.status(201).json(toDto(user, redactPersonalFor(req)));
   } catch (err) {
+    if (isPhoneConflict(err)) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
     console.error('[staffDirectory.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while adding the staff member.' });
   }
@@ -185,8 +212,10 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
       data.jobTitle = jobTitle || null;
     }
     if (req.body?.phone !== undefined) {
-      const phone = req.body.phone === null ? null : String(req.body.phone).trim();
-      data.phone = phone || null;
+      const rawPhone = req.body.phone === null ? '' : String(req.body.phone).trim();
+      const phone = rawPhone ? toE164(rawPhone) : null;
+      if (rawPhone && !phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
+      data.phone = phone;
     }
     if (req.body?.preferredLanguage !== undefined) {
       const preferredLanguage = req.body.preferredLanguage === null ? null : String(req.body.preferredLanguage).trim();
@@ -215,6 +244,9 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
 
     const existing = await prisma.user.findUnique({ where: { id: userId } });
     if (!ownedOrNotFound(req, res, existing, `Staff member "${userId}" not found.`)) return;
+    if (existing!.deletedAt) {
+      return res.status(409).json({ error: "This person deleted their account, so it can't be changed or reactivated.", errorCode: 'account_deleted' });
+    }
 
     // The role must be one of THIS venue's active roles — same check
     // shifts.ts applies to a shift's roleId. Another venue's role id (or a
@@ -230,7 +262,20 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
     // to move both — otherwise terminatedAt stays permanently null and the two
     // fields disagree about the same fact. Only a real transition writes it, so
     // re-sending isActive:false doesn't overwrite the original termination date.
-    if (data.isActive !== undefined && data.isActive !== existing.isActive) {
+    // The phone is the sign-in credential: only a real change is checked, so
+    // re-sending the current number stays a no-op for everyone.
+    if (data.phone !== undefined && data.phone !== existing.phone) {
+      const refusal = phoneChangeRefusal(req.user!, existing);
+      if (refusal) return res.status(403).json({ error: refusal });
+    }
+
+    const statusChanges = data.isActive !== undefined && data.isActive !== existing.isActive;
+    if (statusChanges) {
+      // Who may change whose status (see employmentStatusActions.ts). Checked
+      // on a real transition only, so re-sending the current value is a no-op
+      // for everyone, as before.
+      const refusal = employmentStatusRefusal(req.user!, existing);
+      if (refusal) return res.status(403).json({ error: refusal });
       data.terminatedAt = data.isActive ? null : new Date();
     }
 
@@ -256,6 +301,17 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
           if (result.count === 0) {
             throw new StaffRecordChangedConcurrentlyError();
           }
+          // Either direction: deactivation must lock them out now, and
+          // reactivation clears anything a sign-in racing the deactivation
+          // left behind, so they always come back through a fresh sign-in.
+          if (statusChanges) {
+            // Invariant: a venue keeps at least one active owner, whatever
+            // the caller's role (defence in depth behind the 403 above).
+            if (data.isActive === false && existing.systemRole === 'OWNER') {
+              await assertNotLastActiveOwner(tx, existing.locationId, existing.id);
+            }
+            await revokeUserAccess(tx, existing, req.user!.id);
+          }
           // `updateMany` doesn't return the row, so re-fetch it (inside the
           // same transaction) for the response's `toDto`.
           const updated = await tx.user.findUnique({
@@ -277,26 +333,8 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
         throw err;
       });
     } catch (err) {
-      // `User.phone` is globally unique (it doubles as the login credential —
-      // see the schema's own comment on that column). Setting it to a number
-      // already claimed by a different user hits Prisma's P2002 here; this
-      // used to fall through to the generic 500 handler below with an
-      // "Unexpected error" message, which is both the wrong status (this is
-      // a real, anticipatable conflict, not a server fault) and unhelpful to
-      // whoever's looking at it. Exact `meta.target` match (not just the
-      // P2002 code), mirroring attendance.ts's identical reasoning: a loose
-      // check would also swallow a P2002 from some unrelated future unique
-      // constraint on this table and misreport it as a phone conflict.
-      const target = err instanceof Prisma.PrismaClientKnownRequestError ? (err.meta?.target as unknown) : undefined;
-      const isPhoneConflict =
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002' &&
-        Array.isArray(target) &&
-        target.length === 1 &&
-        target[0] === 'phone';
-      if (isPhoneConflict) {
-        return res.status(409).json({ error: 'This phone number is already registered to another staff member.' });
-      }
+      if (isPhoneConflict(err)) return res.status(409).json({ error: PHONE_TAKEN_ERROR });
+      if (err instanceof LastOwnerError) return res.status(409).json({ error: err.message });
       throw err;
     }
     if (!user) {

@@ -46,7 +46,12 @@ html,
 body,
 #root {
   margin: 0;
+  /* 100vh on iOS Safari is the height with the toolbars HIDDEN, so a
+     100vh page always scrolls a little and anything pinned to its bottom
+     sits under the toolbar. dvh tracks the real visible height. The vh
+     line is the fallback for browsers without dvh. */
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 body {
@@ -106,6 +111,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Nine columns don't fit a phone: scroll sideways rather than cut Sun and Hours off. */
+  overflow-x: auto;
 }
 
 .grid-head,
@@ -831,6 +838,13 @@ body {
   overflow: hidden;
 }
 
+/* .staff-directory-input's `flex: 1 1 12rem` is meant for row layouts; in
+   this column flexbox it made each field ~12rem TALL and pushed the dialog's
+   actions out of reach at phone size (#47). */
+.fp-picker > .staff-directory-input {
+  flex: 0 0 auto;
+}
+
 .fp-picker-head {
   display: flex;
   align-items: center;
@@ -982,4 +996,27 @@ body {
 .staff-directory-role-row .staff-directory-input-inline {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/*
+ * Phones: every text control at least 16px. Below that, iOS Safari zooms
+ * the whole page in when the field is focused and never zooms back out.
+ * Kept at the END of this sheet: an equal-specificity rule after it (e.g.
+ * `.staff-directory-input`'s 0.85rem) would otherwise win.
+ * One rule instead of a fix per file: this beats every Tailwind size
+ * utility (those live in @layer utilities; this sheet is unlayered) and
+ * the named classes in it are the unlayered ones in this file that set a
+ * smaller size explicitly. Inline styles (the onboarding wizard's 20px
+ * serif fields) are already above the floor and are untouched.
+ */
+@media (max-width: 640px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+  select,
+  textarea,
+  .staff-directory-input,
+  .staff-directory-input-inline,
+  .fp-pax-input,
+  .fp-notes-input {
+    font-size: 1rem;
+  }
 }

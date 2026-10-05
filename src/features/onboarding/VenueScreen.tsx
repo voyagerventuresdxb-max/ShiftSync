@@ -156,6 +156,7 @@ export default function VenueScreen({
             <span style={{ font: "400 20px/1.2 'Instrument Serif'", color: 'var(--ob-bone)' }}>{name}</span>
             <button
               type="button"
+              className="hit-44"
               onClick={() => setEditingName(true)}
               disabled={disabled}
               style={{
@@ -184,6 +185,11 @@ export default function VenueScreen({
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
+              // The fallback input (name empty, editingName false) must become
+              // a real edit session on focus — otherwise the first keystroke
+              // makes the name non-empty and swaps the input for the summary
+              // mid-typing, leaving the manager with a one-letter venue name.
+              onFocus={() => setEditingName(true)}
               onBlur={() => setEditingName(false)}
               placeholder="e.g. Sefarina, DIFC"
               disabled={disabled}
@@ -211,6 +217,7 @@ export default function VenueScreen({
           {CITY_OPTIONS.map((label) => (
             <button
               key={label}
+              className="hit-44"
               disabled={disabled}
               onClick={() => {
                 setCityTouched(true);
@@ -317,6 +324,7 @@ export default function VenueScreen({
               </svg>
             </button>
             <button
+              className="hit-44"
               disabled={disabled}
               onClick={() => setLater((v) => !v)}
               style={{

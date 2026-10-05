@@ -3,11 +3,14 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
+import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
+import { onBehalfUserId } from '../lib/onBehalf.js';
+import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
 
 export const shiftsRouter = Router();
 
@@ -46,6 +49,22 @@ function shiftToDto(
   };
 }
 
+/** A kiosk screen's view of a published shift: who, which role, when — no user ids, notes or anything else. */
+function shiftToKioskDto(
+  s: { id: string; date: Date; startTime: Date; endTime: Date; assignee: { fullName: string } | null; role: { name: string } },
+  timezone: string,
+) {
+  return {
+    id: s.id,
+    employeeName: s.assignee?.fullName ?? null,
+    roleName: s.role.name,
+    date: s.date.toISOString().slice(0, 10),
+    start: formatVenueTime(s.startTime, timezone),
+    end: formatVenueTime(s.endTime, timezone),
+    status: 'published' as const,
+  };
+}
+
 async function venueTimezone(locationId: string): Promise<string> {
   const location = await prisma.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
   return location?.timezone || DEFAULT_VENUE_TIMEZONE;
@@ -53,14 +72,11 @@ async function venueTimezone(locationId: string): Promise<string> {
 
 /**
  * GET /api/shifts/:locationId?weekStart=YYYY-MM-DD — the 7 days starting weekStart.
- * Deliberately NOT behind `requireSession` — the kiosk-access-fork decision
- * (Option 3, 2026-08-31 — see MEMORY.md): Home's anonymous glance board
- * needs this (via `AppStateContext.tsx`'s shared `refetchWeekShifts`, which
- * every consumer — signed-in or not — reads from). `/schedule` (the write
- * surface) requires a session; this read does not. Confirmed still correct
- * by the follow-up anonymous-read sweep.
+ * A session of this venue gets every shift, drafts included. A kiosk screen
+ * (the venue's current `X-Kiosk-Token`, see middleware/kioskAccess.ts) gets
+ * only PUBLISHED shifts, as `shiftToKioskDto`. A venue id alone gets 401.
  */
-shiftsRouter.get('/:locationId', async (req, res) => {
+shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();
@@ -71,13 +87,14 @@ shiftsRouter.get('/:locationId', async (req, res) => {
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 7);
 
+    const kiosk = req.kioskLocationId !== undefined;
     const timezone = await venueTimezone(locationId);
     const shifts = await prisma.shift.findMany({
-      where: { locationId, date: { gte: start, lt: end } },
+      where: { locationId, date: { gte: start, lt: end }, ...(kiosk ? { status: 'PUBLISHED' as const } : {}) },
       include: SHIFT_INCLUDE,
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
     });
-    return res.status(200).json({ shifts: shifts.map((s) => shiftToDto(s, timezone)) });
+    return res.status(200).json({ shifts: shifts.map((s) => (kiosk ? shiftToKioskDto(s, timezone) : shiftToDto(s, timezone))) });
   } catch (err) {
     console.error('[shifts.list] failed', err);
     return res.status(500).json({ error: 'Unexpected error while loading shifts.' });
@@ -112,10 +129,8 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     const breakMinutes = Number(req.body?.breakMinutes ?? 0);
     const briefingNote = req.body?.briefingNote ? String(req.body.briefingNote).trim() : null;
     const sidework = Array.isArray(req.body?.sidework) ? req.body.sidework.map(String) : [];
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    const createdById = await onBehalfUserId(req, res, 'createdById');
+    if (!createdById) return;
 
     if (!roleId) return res.status(400).json({ error: 'roleId is required.' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date is required, as YYYY-MM-DD.' });
@@ -201,10 +216,8 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
     }
 
-    const actorId =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    const actorId = await onBehalfUserId(req, res, 'actorId');
+    if (!actorId) return;
     const updated = await withAuditedTransaction(
       prisma,
       (tx) => updateShift(id, data as Prisma.ShiftUpdateInput, tx),
@@ -223,10 +236,8 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
     const { id } = req.params;
     const existing = await prisma.shift.findUnique({ where: { id } });
     if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
-    const actorId =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.actorId ? String(req.body.actorId).trim() : '') || req.user!.id;
+    const actorId = await onBehalfUserId(req, res, 'actorId');
+    if (!actorId) return;
     await withAuditedTransaction(
       prisma,
       async (tx) => {
@@ -254,10 +265,8 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
 shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
-    const createdById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.createdById ? String(req.body.createdById).trim() : '') || req.user!.id;
+    const createdById = await onBehalfUserId(req, res, 'createdById');
+    if (!createdById) return;
     type BulkShiftRow = { roleId?: unknown; userId?: unknown; date: string; start: string; end: string; breakMinutes?: number };
     const rows = (Array.isArray(req.body?.shifts) ? req.body.shifts : []) as BulkShiftRow[];
     if (rows.length === 0) return res.status(400).json({ error: 'shifts must be a non-empty array.' });
@@ -327,10 +336,11 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     if (!assertOwnsLocation(req, res, locationId)) return;
     const weekStart = String(req.body?.weekStart ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: 'weekStart is required, as YYYY-MM-DD.' });
-    const publishedById =
-      req.user!.systemRole === 'STAFF'
-        ? req.user!.id
-        : (req.body?.publishedById ? String(req.body.publishedById).trim() : '') || req.user!.id;
+    // RotaPublish is keyed on the Monday; a non-Monday would publish a
+    // misaligned 7 days and leave an orphan publish row no status read finds.
+    if (!isMondayIso(weekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
+    const publishedById = await onBehalfUserId(req, res, 'publishedById');
+    if (!publishedById) return;
 
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const result = await publishRota({ locationId, weekStart: start, publishedById });
@@ -351,13 +361,10 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
 
 /**
  * GET /api/shifts/:locationId/publish-status?weekStart=YYYY-MM-DD
- * Deliberately NOT behind `requireSession` — same kiosk-access-fork
- * reasoning as the GET above (`AppStateContext.tsx`'s `refreshPublishInfo`
- * also runs for every consumer regardless of session). No sensitive content
- * either way: just a publish timestamp and a count. Confirmed still correct
- * by the follow-up anonymous-read sweep.
+ * A session of this venue, or a kiosk screen with the venue's current kiosk
+ * token (same gate as the GET above): a publish timestamp and a count.
  */
-shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
+shiftsRouter.get('/:locationId/publish-status', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();

@@ -1,6 +1,10 @@
-import * as XLSX from 'xlsx';
+import * as XLSXNS from 'xlsx';
 import { detectTemplate, describeExpectedTemplates } from './templates.js';
-import { parseDateCell, parseTimeCell, parseTimeRangeCell, parseBreakMinutes, isOvernight } from './normalize.js';
+import { parseDateCell, parseTimeCell, parseTimeRangeCell, parseBreakMinutes, isOvernight, excelSerialToUtcDate, cellToText } from './normalize.js';
+
+// The CommonJS build exposes `SSF` only on the default export under Node's
+// ESM interop (the namespace import carries `read`/`utils` but not `SSF`).
+const XLSX: typeof XLSXNS = ((XLSXNS as unknown as { default?: typeof XLSXNS }).default ?? XLSXNS) as typeof XLSXNS;
 import type { ParsedShiftRow, ParsedWorkbookResult, RowIssue, TemplateField } from './types.js';
 
 export class TemplateDetectionError extends Error {
@@ -11,6 +15,41 @@ export class TemplateDetectionError extends Error {
 }
 
 const MAX_ROWS = 5000;
+
+/**
+ * The one way this app reads a spreadsheet, chosen so the result is byte-for-
+ * byte the same whatever the host's timezone:
+ *
+ *  - `cellDates: false`: SheetJS hands typed date/time cells back as their
+ *    Excel SERIALS (the pure numbers in the file) instead of building JS Dates
+ *    through the host's local clock, which shifted every typed time by the
+ *    host offset (17:00 read as 13:18 on an Asia/Dubai host, 01:00 the next
+ *    day in Los Angeles).
+ *  - `cellNF: true`: keeps each cell's number format so `materializeDateCells`
+ *    can tell a date/time serial from a plain number and turn it into a UTC
+ *    Date itself (`excelSerialToUtcDate`, pure arithmetic).
+ *  - `raw: true`: text formats (CSV, and HTML saved as .xls) are left as the
+ *    text they are; `normalize.ts` parses them with its own locale-free
+ *    formats. SheetJS's guesser used to turn `20-Aug-2026` into a host-local
+ *    Date and `10-18` (a shift range) into the date 2001-10-18.
+ */
+export function readWorkbook(data: Buffer | ArrayBuffer | string, type: 'buffer' | 'array' | 'string' = 'buffer'): XLSXNS.WorkBook {
+  const workbook = XLSX.read(data, { type, cellDates: false, cellNF: true, raw: true });
+  for (const name of workbook.SheetNames) materializeDateCells(workbook.Sheets[name]!);
+  return workbook;
+}
+
+/** Turns every date/time-formatted numeric cell into a UTC Date (see `readWorkbook`). Mutates in place. */
+export function materializeDateCells(sheet: XLSXNS.WorkSheet): void {
+  for (const addr of Object.keys(sheet)) {
+    if (addr.startsWith('!')) continue;
+    const cell = sheet[addr] as XLSXNS.CellObject | undefined;
+    if (!cell || cell.t !== 'n' || typeof cell.v !== 'number' || !Number.isFinite(cell.v)) continue;
+    if (!cell.z || !XLSX.SSF.is_date(String(cell.z))) continue;
+    cell.v = excelSerialToUtcDate(cell.v);
+    cell.t = 'd';
+  }
+}
 
 /**
  * Expands every HORIZONTAL merged range in a worksheet (spanning multiple
@@ -36,7 +75,7 @@ const MAX_ROWS = 5000;
  * cell, which deterministicGridParser.ts's 'unrecognized_merged_name_cell'
  * handling then surfaces explicitly instead of silently dropping.
  */
-function expandMergedCells(sheet: XLSX.WorkSheet): void {
+function expandMergedCells(sheet: XLSXNS.WorkSheet): void {
   const merges = sheet['!merges'] ?? [];
   for (const range of merges) {
     if (range.e.r > range.s.r) continue; // vertical merge — never auto-expanded, see above
@@ -61,9 +100,9 @@ function expandMergedCells(sheet: XLSX.WorkSheet): void {
  * any of the 3 master templates.
  */
 export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string): unknown[][] {
-  let workbook: XLSX.WorkBook;
+  let workbook: XLSXNS.WorkBook;
   try {
-    workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    workbook = readWorkbook(buffer, 'buffer');
   } catch (err) {
     throw new TemplateDetectionError(
       `Could not read "${originalFilename}" as an Excel or CSV file: ${(err as Error).message}`,
@@ -80,6 +119,9 @@ export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string)
     range: sheet['!ref'],
     blankrows: false,
     defval: null,
+    // SheetJS ≥ 0.20 re-expresses Date cells in host-local time unless told otherwise;
+    // materializeDateCells already built them as UTC, so keep them as they are.
+    UTC: true,
   });
 }
 
@@ -96,7 +138,7 @@ export function buildMergeExpandedGrid(buffer: Buffer, originalFilename: string)
  * look exactly like a normal successful import.
  */
 export function listOtherSheetNames(buffer: Buffer, originalFilename: string): string[] {
-  let workbook: XLSX.WorkBook;
+  let workbook: XLSXNS.WorkBook;
   try {
     workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
   } catch (err) {
@@ -109,9 +151,7 @@ export function listOtherSheetNames(buffer: Buffer, originalFilename: string): s
 
 /** Serializes a 2D grid into a tab-separated text block for the VLM text-ingestion path. */
 export function gridToTsvText(grid: unknown[][]): string {
-  return grid
-    .map((row) => row.map((cell) => (cell === null || cell === undefined ? '' : String(cell))).join('\t'))
-    .join('\n');
+  return grid.map((row) => row.map(cellToText).join('\t')).join('\n');
 }
 
 /**

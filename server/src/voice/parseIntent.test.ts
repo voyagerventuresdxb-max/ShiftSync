@@ -9,6 +9,7 @@ import {
   refineApplyRotaTemplateResponse,
 } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
+import { venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 
 const prisma = new PrismaClient();
 
@@ -24,17 +25,23 @@ test("buildContext never includes another caller's shifts in callerShifts", asyn
     data: { locationId: location!.id, fullName: '__task7-test__ query-schedule caller B', systemRole: 'STAFF' },
   });
 
-  const shiftDate = new Date('2026-09-25T00:00:00.000Z');
+  // callerShifts only includes shifts dated on/after the venue's own
+  // "today" (see buildContext), so the fixture date must be derived from the
+  // real current date in that same venue timezone — a fixed literal silently
+  // turns this test red the day it slips into the past (it did: 2026-09-25).
+  const today = venueToday(await venueTimezoneFor(location!.id));
+  const shiftDateStr = new Date(Date.parse(`${today}T00:00:00.000Z`) + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const shiftDate = new Date(`${shiftDateStr}T00:00:00.000Z`);
   const shiftA = await prisma.shift.create({
     data: {
       locationId: location!.id, roleId: role!.id, userId: callerA.id,
-      date: shiftDate, startTime: new Date('2026-09-25T09:00:00.000Z'), endTime: new Date('2026-09-25T17:00:00.000Z'), status: 'PUBLISHED',
+      date: shiftDate, startTime: new Date(`${shiftDateStr}T09:00:00.000Z`), endTime: new Date(`${shiftDateStr}T17:00:00.000Z`), status: 'PUBLISHED',
     },
   });
   const shiftB = await prisma.shift.create({
     data: {
       locationId: location!.id, roleId: role!.id, userId: callerB.id,
-      date: shiftDate, startTime: new Date('2026-09-25T10:00:00.000Z'), endTime: new Date('2026-09-25T18:00:00.000Z'), status: 'PUBLISHED',
+      date: shiftDate, startTime: new Date(`${shiftDateStr}T10:00:00.000Z`), endTime: new Date(`${shiftDateStr}T18:00:00.000Z`), status: 'PUBLISHED',
     },
   });
 

@@ -29,6 +29,27 @@ function sendTooManyRequests(_req: Request, res: Response): void {
   res.status(429).json({ error: 'Too many requests — please wait a few minutes and try again.' });
 }
 
+function describeWait(seconds: number): string {
+  if (seconds < 90) return `${seconds} second${seconds === 1 ? '' : 's'}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 90) return `${minutes} minutes`;
+  return `${Math.ceil(minutes / 60)} hours`;
+}
+
+/**
+ * The request-otp routes' 429 for `OtpRateLimitError` (thrown by
+ * `requestOtpCode`): same JSON shape as `sendTooManyRequests`, plus
+ * `Retry-After`. The frontend shows `error` as-is, so the wait is in the text.
+ */
+export function sendOtpRateLimited(res: Response, scope: 'phone' | 'global', retryAfterSeconds: number): void {
+  res.set('Retry-After', String(retryAfterSeconds));
+  const error =
+    scope === 'phone'
+      ? `Too many code requests for this number — try again in ${describeWait(retryAfterSeconds)}.`
+      : 'Sign-in codes are temporarily unavailable — please try again in a few minutes.';
+  res.status(429).json({ error });
+}
+
 /**
  * Shared shape for every session-keyed, AI-provider-backed route limiter
  * (voice transcription/intent parsing, roster-upload vision extraction, and
@@ -111,3 +132,114 @@ export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
  * per-call cost this limiter exists to cap.
  */
 export const rosterUploadRateLimiter = makeAiRouteLimiter(10, false);
+
+/** One header value as an ipKeyGenerator-normalised key part (first entry of a list, length-capped). */
+function ipPart(value: string): string {
+  return ipKeyGenerator(value.split(',')[0]!.trim().slice(0, 64));
+}
+
+function isLoopback(addr: string): boolean {
+  return addr === '::1' || addr.startsWith('127.') || addr.startsWith('::ffff:127.');
+}
+
+/**
+ * Who is asking for a code, as measured on production on 2026-10-01 (#54),
+ * not as either vendor's docs describe it:
+ * - Railway's edge OVERWRITES `X-Real-IP` with the address that connected to
+ *   it (a forged value never survives), so that half can't be faked.
+ * - Through Vercel's `/api` rewrite, that connecting address is VERCEL's, the
+ *   same for many users. The real client is in `X-Vercel-Forwarded-For`,
+ *   which Vercel overwrites, so it can't be forged through Vercel. But the
+ *   Railway domain is public, and a caller going there directly can send any
+ *   `X-Vercel-Forwarded-For` they like (it passes through untouched).
+ * So the key is the PAIR. Real users through Vercel each get their own
+ * bucket, and nobody can land in someone else's, because a direct caller's
+ * first half is always their own real address. A direct caller can dodge
+ * this limit by rotating the second half; the per-phone and global caps in
+ * `requestOtpCode` still hold for them.
+ *
+ * `trust proxy` stays unset on purpose: nothing here reads `req.ip`, which
+ * would depend on Railway's internal hop count instead of one explicit header.
+ *
+ * Returns null for a loopback request with no `X-Real-IP` (local dev and e2e,
+ * no proxy in front). That can't happen on Railway, which always sets it.
+ */
+export function otpClientKey(req: Request): string | null {
+  const connecting = req.get('x-real-ip');
+  if (!connecting) {
+    const remote = req.socket.remoteAddress ?? '';
+    return isLoopback(remote) ? null : ipPart(remote);
+  }
+  const claimed = req.get('x-vercel-forwarded-for');
+  return claimed ? `${ipPart(connecting)}|${ipPart(claimed)}` : ipPart(connecting);
+}
+
+/**
+ * Per-client cap on the three request-otp routes (one shared instance, so
+ * the count is shared across login/join/signup): 10 per 15 minutes. Mostly
+ * slows enumeration (login answers 404 for a number with no account) and a
+ * single client spraying numbers; the per-phone and global caps stop SMS
+ * pumping. In-memory store, so it resets on deploy (the DB-backed caps don't).
+ */
+export const otpRequestIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => otpClientKey(req) === null,
+  keyGenerator: (req) => otpClientKey(req)!,
+  // We read X-Real-IP / X-Vercel-Forwarded-For ourselves, so express-rate-limit's
+  // "X-Forwarded-For present but trust proxy unset" warning doesn't apply.
+  validate: { xForwardedForHeader: false },
+  handler: sendTooManyRequests,
+});
+
+/** GET /api/join/invite/:token: 60 per 15 minutes per client, keyed and loopback-skipped like `otpRequestIpLimiter`. */
+export const invitePeekLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => otpClientKey(req) === null,
+  keyGenerator: (req) => otpClientKey(req)!,
+  validate: { xForwardedForHeader: false },
+  handler: sendTooManyRequests,
+});
+
+/** Per-client limiter keyed and loopback-skipped like `otpRequestIpLimiter`. */
+function clientKeyedLimiter(windowMs: number, limit: number) {
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => otpClientKey(req) === null,
+    keyGenerator: (req) => otpClientKey(req)!,
+    validate: { xForwardedForHeader: false },
+    handler: sendTooManyRequests,
+  });
+}
+
+/** POST /api/login-links (issue): 10 per hour per session. Mount after `requireSession`. */
+export const loginLinkIssueRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: sessionKey,
+  handler: sendTooManyRequests,
+});
+
+/** POST /api/login-links/redeem: 30 per 10 minutes per client. */
+export const loginLinkRedeemRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 30);
+
+/** POST /api/login-links/peek: its own bucket (60 per 10 minutes) so every sign-in's peek doesn't halve redeem capacity. */
+export const loginLinkPeekRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 60);
+
+/**
+ * Refused kiosk reads (no session; `X-Kiosk-Token` missing, wrong, replaced or
+ * revoked): 20 per 15 minutes per client, keyed and loopback-skipped like
+ * `otpRequestIpLimiter`. middleware/kioskAccess.ts calls it only on a refusal,
+ * so it counts failures alone, and a valid token or a session never reaches it.
+ */
+export const kioskFailureLimiter = clientKeyedLimiter(15 * 60 * 1000, 20);

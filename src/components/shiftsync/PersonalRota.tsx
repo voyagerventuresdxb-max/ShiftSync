@@ -183,7 +183,7 @@ function ShiftCard({
                         <button
                           onClick={() => void sendRequest()}
                           disabled={sending || !online}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                          className="hit-44 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {sending && <span className="spinner" aria-hidden />}
                           {sending ? 'Sending…' : 'Send request'}
@@ -211,7 +211,7 @@ function ShiftCard({
                       <button
                         onClick={() => setRequesting(true)}
                         disabled={!online}
-                        className="inline-flex items-center gap-2 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                        className="hit-44 inline-flex items-center gap-2 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <ArrowLeftRight className="h-3.5 w-3.5" />
                         Request cover

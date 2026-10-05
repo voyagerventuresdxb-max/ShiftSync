@@ -2,16 +2,17 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { createShoutout } from '../lib/actions/communicationActions.js';
+import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
 
 export const shoutoutsRouter = Router();
 
 /**
  * GET /api/shoutouts/:locationId — newest first.
- * Deliberately NOT behind `requireSession` — same kiosk-access-fork decision
- * as `announcements.ts`'s GET (Option 3, 2026-08-31 — see MEMORY.md).
- * Confirmed still correct by the follow-up anonymous-read sweep.
+ * Same gate as `announcements.ts`'s GET: a session of this venue, or a kiosk
+ * screen with the venue's current kiosk token, which gets names but no user
+ * ids. A venue id alone gets 401.
  */
-shoutoutsRouter.get('/:locationId', async (req, res) => {
+shoutoutsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const rows = await prisma.shoutout.findMany({
@@ -22,9 +23,8 @@ shoutoutsRouter.get('/:locationId', async (req, res) => {
     return res.status(200).json({
       shoutouts: rows.map((s) => ({
         id: s.id,
-        employeeId: s.employeeId,
+        ...(req.kioskLocationId ? {} : { employeeId: s.employeeId, authorId: s.authorId }),
         employeeName: s.employee.fullName,
-        authorId: s.authorId,
         authorName: s.author?.fullName ?? null,
         shiftSnapshot: s.shiftSnapshot,
         note: s.note,
@@ -53,7 +53,9 @@ shoutoutsRouter.post('/', requireSession, async (req, res) => {
   try {
     const locationId = req.user!.locationId;
     const employeeId = String(req.body?.employeeId ?? '').trim();
-    const authorId = req.body?.authorId ? String(req.body.authorId).trim() : null;
+    // Author is the signed-in user, never a body-supplied id — see the
+    // matching note on announcements.ts's POST.
+    const authorId = req.user!.id;
     const shiftSnapshot = req.body?.shiftSnapshot ? String(req.body.shiftSnapshot).trim() : null;
     const note = String(req.body?.note ?? '').trim();
 

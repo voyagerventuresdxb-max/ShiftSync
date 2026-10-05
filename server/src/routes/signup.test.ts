@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
-import { createOtpCode, phoneDigits } from '../lib/identity.js';
+import { createOtpCode } from '../lib/identity.js';
+import { toE164 } from '../lib/phone.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
 
 const prisma = new PrismaClient();
@@ -24,7 +25,7 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
 
 /** Unique-enough test phone number per test run, so parallel/rerun tests never collide. */
 function testPhone(): string {
-  return `05${Math.floor(10_000_000 + Math.random() * 89_999_999)}`;
+  return `050${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
 }
 
 test('POST /api/signup/verify-otp: a real new signup creates Organization+Location+User(OWNER) and returns a working session', async () => {
@@ -77,7 +78,7 @@ test('POST /api/signup/verify-otp: a real new signup creates Organization+Locati
     assert.equal(user!.systemRole, 'OWNER');
     assert.equal(user!.locationId, locationId);
     assert.equal(user!.fullName, fullName);
-    assert.equal(user!.phone, phone);
+    assert.equal(user!.phone, toE164(phone), 'stored in E.164, not as typed');
 
     const location = await prisma.location.findUnique({ where: { id: locationId } });
     assert.ok(location, 'a real Location row must exist');
@@ -127,20 +128,18 @@ test('POST /api/signup/verify-otp: a phone that already matches an existing acti
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
 
-  const rawPhone = `+971 50 ${Math.floor(1_000_000 + Math.random() * 8_999_999)}`;
+  const local = testPhone(); // 050xxxxxxx
   const existingUser = await prisma.user.create({
     data: {
       locationId: location!.id,
       fullName: '__task-signup-test__ existing staff',
       systemRole: 'STAFF',
-      phone: rawPhone,
+      phone: toE164(local)!, // stored the way every write now stores it
     },
   });
 
-  // Submit a differently-formatted string that normalizes to the same digits
-  // (same phoneDigits-lossy-normalization semantics as the rest of identity).
-  const digits = phoneDigits(rawPhone);
-  const submittedPhone = `0${digits}`;
+  // Submit the same number written differently: it must still be recognised.
+  const submittedPhone = `+971 ${local.slice(1, 3)} ${local.slice(3)}`;
 
   const { plainCode } = await createOtpCode(submittedPhone, 'SIGNUP');
 
@@ -194,8 +193,6 @@ test('POST /api/signup/verify-otp: missing fullName or venueName gets a 400, not
   const { plainCode: codeA } = await createOtpCode(phoneA, 'SIGNUP');
   const { plainCode: codeB } = await createOtpCode(phoneB, 'SIGNUP');
 
-  const orgCountBefore = await prisma.organization.count();
-
   await withServer(async (baseUrl) => {
     const resNoFullName = await fetch(`${baseUrl}/api/signup/verify-otp`, {
       method: 'POST',
@@ -216,9 +213,13 @@ test('POST /api/signup/verify-otp: missing fullName or venueName gets a 400, not
     assert.match(bodyB.error, /venueName/i);
   });
 
-  assert.equal(await prisma.organization.count(), orgCountBefore, 'no Organization may be created on a 400');
+  // Scoped to this test's own names and phones, never a database-wide count: other test files
+  // create and delete organizations concurrently against the same database (the old global
+  // before/after count was this file's intermittent failure).
+  assert.equal(await prisma.organization.count({ where: { name: '__task-signup-test__ venue A' } }), 0, 'no Organization may be created on a 400');
+  assert.equal(await prisma.location.count({ where: { name: '__task-signup-test__ venue A' } }), 0, 'no Location may be created on a 400');
   const leaked = await prisma.user.findMany({
-    where: { fullName: { in: ['__task-signup-test__ Owner B'] } },
+    where: { OR: [{ fullName: { in: ['__task-signup-test__ Owner B'] } }, { phone: { in: [toE164(phoneA)!, toE164(phoneB)!] } }] },
   });
   assert.equal(leaked.length, 0, 'no User may be created on a 400');
 });
@@ -236,5 +237,5 @@ test('POST /api/signup/request-otp: returns expiresAt for a bare phone (no locat
     assert.ok(body.expiresAt, 'response must carry an expiresAt');
   });
 
-  await prisma.otpCode.deleteMany({ where: { phone: phoneDigits(phone), purpose: 'SIGNUP' } });
+  await prisma.otpCode.deleteMany({ where: { phone: toE164(phone)!, purpose: 'SIGNUP' } });
 });

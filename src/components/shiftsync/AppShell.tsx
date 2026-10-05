@@ -1,14 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { CalendarCheck, WifiOff } from 'lucide-react';
 import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
-import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
+import { PanelSkeleton } from '@/components/shiftsync/PanelSkeleton';
 import { NotificationBell } from '@/components/shiftsync/NotificationBell';
+import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
+import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
+
+// Loaded with the first voice result, then kept mounted (its close animation needs it).
+const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -143,6 +148,8 @@ export function AppShell() {
     executed?: boolean;
   } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
+  const [voiceSheetNeeded, setVoiceSheetNeeded] = useState(false);
+  if (voiceResult && !voiceSheetNeeded) setVoiceSheetNeeded(true);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -193,6 +200,13 @@ export function AppShell() {
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
         const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
+        // Role check BEFORE the confirm sheet: a STAFF session must never be
+        // shown a "Confirm" for a manager action the server would refuse
+        // anyway (the server's 403 on /execute stays the real guard).
+        if (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(session.user.systemRole, intent.intent)) {
+          setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
+          return;
+        }
         setVoiceResult({ transcript, intent, voiceLogId, hasAdditionalRequest });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
@@ -312,14 +326,14 @@ export function AppShell() {
   const onMyShifts = useLocation().pathname === '/my-shifts';
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <header className="sticky top-0 z-20 px-3 pt-3 sm:px-4">
+    <div className="min-h-dvh bg-background pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <header className="sticky top-0 z-20 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-4">
         <div className="glass-bar mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-3 py-2.5 shadow-lux sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
               to="/profile"
               aria-label="Open your profile"
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-sm font-bold text-accent transition-transform duration-200 hover:scale-105 active:scale-95"
+              className="hit-44 grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-sm font-bold text-accent transition-transform duration-200 hover:scale-105 active:scale-95"
             >
               {avatarInitial(venueName ?? 'ShiftSync')}
             </Link>
@@ -336,7 +350,7 @@ export function AppShell() {
               aria-label="Open My Shifts"
               aria-current={onMyShifts ? 'page' : undefined}
               className={cn(
-                'grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
+                'hit-44 grid h-9 w-9 place-items-center rounded-full border transition-all duration-300',
                 onMyShifts
                   ? 'glow-gold border-accent/50 bg-accent/15 text-accent'
                   : 'border-border text-foreground/40 hover:text-foreground/70',
@@ -359,7 +373,10 @@ export function AppShell() {
       )}
 
       <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
-        <Outlet />
+        <SessionGuard />
+        <Suspense fallback={<PanelSkeleton />}>
+          <Outlet />
+        </Suspense>
       </main>
 
       {voiceBanner && (
@@ -373,15 +390,19 @@ export function AppShell() {
         </div>
       )}
 
-      <VoiceCommandSheet
-        intent={voiceResult?.intent ?? null}
-        transcript={voiceResult?.transcript ?? ''}
-        hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
-        executed={voiceResult?.executed ?? false}
-        onConfirm={handleVoiceConfirm}
-        onCancel={handleVoiceCancel}
-        executing={voiceExecuting}
-      />
+      {voiceSheetNeeded && (
+        <Suspense fallback={null}>
+          <VoiceCommandSheet
+            intent={voiceResult?.intent ?? null}
+            transcript={voiceResult?.transcript ?? ''}
+            hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
+            executed={voiceResult?.executed ?? false}
+            onConfirm={handleVoiceConfirm}
+            onCancel={handleVoiceCancel}
+            executing={voiceExecuting}
+          />
+        </Suspense>
+      )}
 
       <RadialDock listening={voiceOn} starting={voiceStarting} processing={voiceProcessing} onToggleListening={handleToggleVoice} />
     </div>

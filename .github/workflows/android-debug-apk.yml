@@ -1,0 +1,100 @@
+name: Android debug APK
+
+# Builds an installable DEBUG APK of the Capacitor shell and attaches it to the
+# run as an artifact. No signing, no store upload, no secrets: the only input
+# is the public API origin baked into the web bundle (VITE_API_URL), taken from
+# a repository *variable* (Settings → Secrets and variables → Actions →
+# Variables), never from a secret. Debug builds are signed with the Android
+# debug keystore Gradle generates on the runner, so the APK installs on a
+# device with "install unknown apps" allowed and is not a release build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: Public API origin to bake into the bundle (overrides the VITE_API_URL repository variable)
+        required: false
+        type: string
+  push:
+    branches: [master]
+    paths:
+      - 'android/**'
+      - 'capacitor.config.ts'
+      - 'src/**'
+      - 'shared/**'
+      - 'public/**'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/android-debug-apk.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-debug-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VITE_API_URL: ${{ inputs.api_url || vars.VITE_API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to build without a public API origin
+        run: |
+          if [ -z "$VITE_API_URL" ]; then
+            echo "::error::Set the VITE_API_URL repository variable (public API origin, e.g. https://api.example.com) or pass api_url to the workflow."
+            exit 1
+          fi
+          case "$VITE_API_URL" in
+            https://*) ;;
+            *) echo "::error::VITE_API_URL must be an https:// origin for a device build (plain http is emulator-only)."; exit 1 ;;
+          esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+      - name: Generate the Prisma client (the web build imports shared types)
+        run: npx prisma generate
+
+      - name: Build the web bundle and sync it into the Android project
+        run: npm run cap:sync
+
+      - name: Assemble the debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Name the artifact after the commit
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk "out/shiftsync-debug-${GITHUB_SHA::7}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shiftsync-debug-apk
+          path: out/*.apk
+          retention-days: 14
+          if-no-files-found: error

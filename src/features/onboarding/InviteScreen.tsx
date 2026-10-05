@@ -3,6 +3,7 @@ import { mintInvite, type MintedInvite } from '../../api/onboarding';
 import { fetchLocation } from '../../api/locations';
 import { fetchStaffDirectory, updateStaffMember, type StaffDirectoryEntry } from '../../api/staffDirectory';
 import { useIdentity } from '../../state/IdentityContext';
+import InviteLinkActions from '../../components/InviteLinkActions';
 import OnboardingScreenShell from './OnboardingScreenShell';
 import { stripUaeCountryCode } from './phoneFormat';
 
@@ -28,6 +29,8 @@ import { stripUaeCountryCode } from './phoneFormat';
  *    exists anywhere in this app) — it opens one `wa.me/<phone>` deep link
  *    per selected person, client-side, the same mechanism the main Share-
  *    to-WhatsApp button already uses for the venue-wide link.
+ *  - The link expires and can be regenerated or revoked here
+ *    (`InviteLinkActions`, shared with People); with none active, Generate.
  *  - A phone typed into the individual list is persisted immediately
  *    (`updateStaffMember`) — real staff-record data, not local-only state.
  *  - "Finish setup"/"Skip" navigate to the real dashboard rather than the
@@ -252,7 +255,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
       }
     >
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -8 }}>
-        <button onClick={() => setDone('skipped')} style={{ padding: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)', background: 'transparent', border: 0 }}>
+        <button className="hit-44" onClick={() => setDone('skipped')} style={{ padding: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)', background: 'transparent', border: 0 }}>
           Skip — invite later
         </button>
       </div>
@@ -273,6 +276,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                 </div>
               </div>
               <button
+                className="hit-44"
                 onClick={() => void handleCopy()}
                 style={{
                   flexShrink: 0,
@@ -320,6 +324,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
               <span style={{ color: 'var(--ob-dim-2)', letterSpacing: '.2em', textTransform: 'uppercase', fontSize: 9, fontWeight: 500 }}>Message preview · </span>
               {messagePreview}
             </div>
+            <InviteLinkActions locationId={locationId} active={invite} onChange={setInvite} look="onboarding" />
           </div>
 
           {/* QR (secondary) */}
@@ -330,7 +335,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="ob-serif" style={{ fontSize: 15, lineHeight: 1.2, color: 'var(--ob-bone)' }}>Or post the QR</div>
               <div style={{ font: "400 11px/1.45 'Manrope'", color: 'var(--ob-bronze)', marginTop: 3 }}>Print it for the pass or the staff room. Same link.</div>
-              <button onClick={handleSaveQr} style={{ marginTop: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--ob-champagne)', background: 'transparent', border: 0 }}>
+              <button className="hit-44" onClick={handleSaveQr} style={{ marginTop: 8, font: "500 10px/1 'Manrope'", letterSpacing: '.2em', textTransform: 'uppercase', color: 'var(--ob-champagne)', background: 'transparent', border: 0 }}>
                 {qrSaved ? 'Saved' : 'Save as image'}
               </button>
             </div>
@@ -465,6 +470,11 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
             )}
           </div>
         </>
+      ) : !error ? (
+        <div style={{ borderRadius: 16, border: '1px solid rgba(201,166,107,.32)', background: 'rgba(201,166,107,.045)', padding: '14px 14px 14px 16px' }}>
+          <div style={{ font: "500 9px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Venue join-link</div>
+          <InviteLinkActions locationId={locationId} active={null} onChange={setInvite} look="onboarding" />
+        </div>
       ) : null}
     </OnboardingScreenShell>
   );

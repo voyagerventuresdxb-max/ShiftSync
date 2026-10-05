@@ -1,18 +1,28 @@
 import { createBrowserRouter, Link, Navigate, useLocation, useSearchParams } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { lazy, type ReactNode } from 'react';
 import { Pencil, Rocket } from 'lucide-react';
 import { AppShell, type RouteHandle } from './components/shiftsync/AppShell';
 import { useIdentity } from './state/IdentityContext';
 import { loadBoundVenue } from './api/venueBinding';
 import HomeContent from './routes/HomeRoute';
 import SchedulingContent from './routes/SchedulingRoute';
-import ScheduleEditorContent from './routes/ScheduleEditorRoute';
-import FloorPlanContent from './routes/FloorPlanRoute';
-import PeopleContent from './routes/PeopleRoute';
 import ProfileContent from './routes/ProfileRoute';
 import JoinContent from './routes/JoinRoute';
+import LoginContent from './routes/LoginRoute';
 import MyShiftsContent from './routes/MyShiftsRoute';
-import OnboardingContent from './routes/OnboardingRoute';
+import WelcomeContent from './routes/WelcomeRoute';
+import LoginLinkContent from './routes/LoginLinkRoute';
+import KioskContent from './routes/KioskRoute';
+import { KIOSK_PATH } from '../shared/kioskLinks';
+import { PrivacyContent, TermsContent } from './routes/LegalRoute';
+
+// Manager-only and heavy screens load on first visit, so the staff screens
+// (Home, My Shifts, Scheduling's personal rota, sign-in) never download them.
+// AppShell wraps the route outlet in the Suspense boundary.
+const ScheduleEditorContent = lazy(() => import('./routes/ScheduleEditorRoute'));
+const FloorPlanContent = lazy(() => import('./routes/FloorPlanRoute'));
+const PeopleContent = lazy(() => import('./routes/PeopleRoute'));
+const OnboardingContent = lazy(() => import('./routes/OnboardingRoute'));
 
 /**
  * Gates the manager-dashboard pages (Scheduling/Approvals, Floor Plan,
@@ -20,17 +30,15 @@ import OnboardingContent from './routes/OnboardingRoute';
  * a real session instead of letting them render and silently show nothing or
  * dead-end on an unactionable error — those pages' own backend routes have
  * required a session since the actor-identity-enforcement phase, so an
- * unauthenticated visit could previously only ever fail. Sends straight to
- * `/join`'s existing login mode rather than its default join/self-
- * registration mode.
+ * unauthenticated visit could previously only ever fail. Sends to `/login`.
  *
  * When redirecting a signed-out visit, the current path (pathname + search)
- * travels along as a `returnTo` query param so `JoinFlow`'s login success
- * path can send the visitor back to where they were headed instead of
- * always landing on `/my-shifts` (see MEMORY.md's open follow-up, now
- * closed). `managerOnly`'s redirect below is unrelated and deliberately
- * left untouched — it sends a real, valid STAFF session away from a page
- * it never had access to, not an unauthenticated visitor.
+ * travels along as a `returnTo` query param so `/login`'s success path can
+ * send the visitor back to where they were headed instead of their role's
+ * default landing (see MEMORY.md's open follow-up, now closed).
+ * `managerOnly`'s redirect below is unrelated and deliberately left
+ * untouched — it sends a real, valid STAFF session away from a page it
+ * never had access to, not an unauthenticated visitor.
  *
  * `/onboarding` was originally left off this list on the reasoning that it
  * "doesn't touch the four hardened routes" — wrong: its venue-setup step
@@ -60,8 +68,7 @@ import OnboardingContent from './routes/OnboardingRoute';
  * `/scheduling`/`/floor-plan`, which genuinely do mix staff-readable/
  * staff-usable content with manager-only sub-actions that fail
  * informatively per-action rather than page-wide. Redirects to
- * `/my-shifts`, the same landing spot `JoinFlow`'s login success path
- * already uses for a STAFF session.
+ * `/my-shifts`, the same landing spot `/login` uses for a STAFF session.
  *
  * **`/schedule` moved from the "mixed" group above into the `managerOnly`
  * one on 2026-09-05 — this comment previously claimed the opposite, and
@@ -95,7 +102,7 @@ function RequireSession({ children, managerOnly }: { children: ReactNode; manage
     // `/floor-plan#table-12`) doesn't silently lose its fragment across a
     // sign-in round trip the day one gets added.
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-    return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
+    return <Navigate to={`/login?returnTo=${returnTo}`} replace />;
   }
   // Positive check (redirect unless confirmed MANAGER/OWNER), not a negative
   // one (redirect only if STAFF) — matching `ShiftEditorLink`'s fix below
@@ -154,13 +161,13 @@ function RootRoute() {
  * commit, and `<Navigate>` fires its actual navigation in an effect, one
  * tick after that first render) — so a negative check would have let a
  * signed-out visitor's very first paint include a manager-only link before
- * the redirect to `/join` took over.
+ * the redirect to `/login` took over.
  */
 function ShiftEditorLink() {
   const { session } = useIdentity();
   if (session?.user.systemRole !== 'MANAGER' && session?.user.systemRole !== 'OWNER') return null;
   return (
-    <Link to="/schedule" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+    <Link to="/schedule" className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
       <Pencil className="h-3.5 w-3.5" />
       <span className="hidden sm:inline">Shift editor</span>
     </Link>
@@ -180,7 +187,7 @@ function OnboardingLink() {
   const { session } = useIdentity();
   if (session?.user.systemRole !== 'MANAGER' && session?.user.systemRole !== 'OWNER') return null;
   return (
-    <Link to="/onboarding" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
+    <Link to="/onboarding" className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground">
       <Rocket className="h-3.5 w-3.5" />
       <span className="hidden sm:inline">Onboarding</span>
     </Link>
@@ -194,9 +201,14 @@ const handles = {
   profile: { title: 'Profile' },
   scheduleEditor: { title: 'Shift Editor' },
   join: { title: 'Join' },
+  login: { title: 'Log in' },
+  privacy: { title: 'Privacy (draft)' },
+  terms: { title: 'Terms (draft)' },
   signup: { title: 'Sign up' },
+  welcome: { title: "You're in" },
   myShifts: { title: 'My Shifts' },
   onboarding: { title: 'Onboarding' },
+  kiosk: { title: 'Rota' },
 } satisfies Record<string, RouteHandle>;
 
 /**
@@ -264,12 +276,24 @@ export const router = createBrowserRouter([
       },
       { path: '/profile', element: <ProfileContent />, handle: handles.profile },
       { path: '/join', element: <JoinContent />, handle: handles.join },
+      { path: '/login', element: <LoginContent />, handle: handles.login },
+      // Public drafts, linked from sign-in and join (never behind RequireSession).
+      { path: '/privacy', element: <PrivacyContent />, handle: handles.privacy },
+      { path: '/terms', element: <TermsContent />, handle: handles.terms },
+      // One-time login links land here (token in the fragment). Never behind
+      // RequireSession — this IS how a session is obtained. See LoginLinkRoute.
+      { path: '/login/link', element: <LoginLinkContent />, handle: handles.login },
       // Account creation moved INTO the onboarding wizard as its first step
       // (2026-09-16, see OnboardingRoute.tsx/AccountScreen.tsx); kept as a
       // redirect so the "Sign up your restaurant" links and any old bookmark
       // still land somewhere real.
       { path: '/signup', element: <Navigate to="/onboarding" replace />, handle: handles.signup },
       { path: '/my-shifts', element: <MyShiftsContent />, handle: handles.myShifts },
+      // The venue's shared screen (kiosk link from People). Never behind
+      // RequireSession: the link's token, not a session, opens it. See KioskRoute.
+      { path: KIOSK_PATH, element: <KioskContent />, handle: handles.kiosk },
+      // One-time "You're in" after a staff member's first sign-in; falls through to My Shifts otherwise.
+      { path: '/welcome', element: <WelcomeContent />, handle: handles.welcome },
       // Deliberately NOT behind RequireSession (2026-09-16): account creation
       // is the wizard's own first step now, so a visitor with no session at
       // all must be able to reach it. OnboardingRoute.tsx applies the same

@@ -1,22 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
-import { periodOf, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
+import { periodOf, pickViewedEmployee, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
 import { shiftHours } from '../engine/time';
 import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
 import { TeamMatrix, type MatrixCell, type MatrixMember } from '../components/shiftsync/TeamMatrix';
 import { HourTracker } from '../components/shiftsync/HourTracker';
-import { RotaBuilder } from '../components/shiftsync/RotaBuilder';
-import ShiftUpload from '../components/ShiftUpload';
+import { PanelSkeleton } from '../components/shiftsync/PanelSkeleton';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
+import { offlineLabel } from '../lib/offlineCache';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
+import { reconcileWeekParam } from '../engine/weekStart';
+
+// Manager-only (their writes are manager-only on the server too) and the
+// heaviest parts of this screen: loaded only for a manager or owner, so staff
+// opening their rota never download them.
+const RotaBuilder = lazy(() => import('../components/shiftsync/RotaBuilder').then((m) => ({ default: m.RotaBuilder })));
+const ShiftUpload = lazy(() => import('../components/ShiftUpload'));
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -31,7 +38,6 @@ function formatDayMonth(iso: string): string {
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-const WEEK_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function SchedulingContent() {
   const { session } = useIdentity();
@@ -43,6 +49,7 @@ export default function SchedulingContent() {
     mergedRoster,
     initialScheduleLoading,
     scheduleLoadFailed,
+    scheduleOfflineSince,
     config,
     venueName,
     currentEmployeeId,
@@ -78,22 +85,32 @@ export default function SchedulingContent() {
   // point `weekStart` and the URL already agree (a no-op) or the effect
   // naturally re-syncs. `replace` so paging through weeks doesn't spam
   // browser history with a back-button entry per week.
+  // The decision lives in engine/weekStart.ts's `reconcileWeekParam`
+  // (unit-tested): `lastSyncedWeek` is the week both sides last agreed on,
+  // which is how a Prev/Next click (state moved) is told apart from a
+  // bookmark or back/forward (URL moved) — without it every Prev/Next click
+  // snapped straight back to the not-yet-updated `?week=`. A non-Monday
+  // `?week=` is adopted as its Monday: every rota week runs Monday to Sunday
+  // and the server refuses to publish anything else.
+  const lastSyncedWeek = useRef<string | null>(null);
   useEffect(() => {
-    const param = searchParams.get('week');
-    if (param && WEEK_PARAM_RE.test(param) && param !== weekStart) {
-      setWeekStart(param);
-      return;
-    }
-    if (param !== weekStart) {
+    const { adopt, write, lastSynced } = reconcileWeekParam(searchParams.get('week'), weekStart, lastSyncedWeek.current);
+    lastSyncedWeek.current = lastSynced;
+    if (adopt) setWeekStart(adopt);
+    if (write) {
       const next = new URLSearchParams(searchParams);
-      next.set('week', weekStart);
+      next.set('week', write);
       setSearchParams(next, { replace: true });
     }
   }, [weekStart, searchParams, setWeekStart, setSearchParams]);
 
   const [mode, setMode] = useState<Mode>('personal');
-  const activeEmployee =
-    mergedRoster.employees.find((e) => e.id === currentEmployeeId) ?? mergedRoster.employees[0];
+  // A STAFF member opening Scheduling must land on THEIR OWN rota — the
+  // "Viewing" dropdown used to default to whoever happened to be first on the
+  // week's roster, so they saw a colleague's shifts (and a Request-cover
+  // button that could only 404 for them). Managers keep the first-entry
+  // default: for them this view is a team review, not a personal one.
+  const activeEmployee = pickViewedEmployee(mergedRoster.employees, currentEmployeeId, session?.user ?? null);
 
   const dates = useMemo(() => weekDates(mergedRoster.weekStart), [mergedRoster.weekStart]);
 
@@ -217,6 +234,7 @@ export default function SchedulingContent() {
   // independent of whatever's selected in "Viewing"; MANAGER/OWNER keeps the
   // existing on-behalf-of capability against the Viewing selection.
   const isStaffSession = session?.user.systemRole === 'STAFF';
+  const isManagerSession = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const clockTargetId = isStaffSession ? session!.user.id : activeEmployee?.id;
   const clockTargetName = isStaffSession ? session!.user.fullName : activeEmployee?.name;
 
@@ -293,7 +311,7 @@ export default function SchedulingContent() {
             key={t.id}
             onClick={() => setMode(t.id)}
             className={cn(
-              'inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-300',
+              'hit-44 inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-300',
               mode === t.id ? 'bg-accent text-accent-foreground shadow-lux' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -320,7 +338,13 @@ export default function SchedulingContent() {
             </div>
           )}
 
-          {!initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />}
+          {scheduleOfflineSince ? (
+            <p role="status" data-testid="offline-label" className="px-4 pb-2 text-[11px] text-warning sm:px-5">
+              {offlineLabel(scheduleOfflineSince)} — the published rota as you last saw it.
+            </p>
+          ) : (
+            !initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />
+          )}
 
           <div key={mode} className="animate-rise">
             {initialScheduleLoading ? (
@@ -361,12 +385,20 @@ export default function SchedulingContent() {
         </aside>
       </div>
 
-      <div className="mt-5">
-        <RotaBuilder />
-      </div>
+      {isManagerSession && (
+        <div className="mt-5">
+          <Suspense fallback={<PanelSkeleton rows={4} />}>
+            <RotaBuilder />
+          </Suspense>
+        </div>
+      )}
 
       <div className="mt-5">
-        <ShiftUpload onCommitted={handleCommitted} />
+        {isManagerSession && (
+          <Suspense fallback={<PanelSkeleton />}>
+            <ShiftUpload onCommitted={handleCommitted} />
+          </Suspense>
+        )}
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>
@@ -383,7 +415,7 @@ export default function SchedulingContent() {
               return (
                 <div className="roster-section" key={section.key}>
                   <button
-                    className={`roster-section-head${section.flagged ? ' roster-section-head-warn' : ''}`}
+                    className={`hit-44 roster-section-head${section.flagged ? ' roster-section-head-warn' : ''}`}
                     onClick={() => setCollapsed((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
                     aria-expanded={!isCollapsed}
                   >
@@ -406,8 +438,10 @@ export default function SchedulingContent() {
                               </span>
                             )}
                           </span>
-                          {DAYS.map((d) => {
-                            const dayShifts = empShifts.filter((s) => weekdayOf(s.date) === d);
+                          {DAYS.map((d, dayIndex) => {
+                            // By DATE, not weekday: a committed upload row from another
+                            // week must not appear in this week's column.
+                            const dayShifts = empShifts.filter((s) => s.date === dates[dayIndex]);
                             return (
                               <span className={`cell shift ${dayShifts[0]?.type ?? ''}`} key={d}>
                                 {dayShifts.length > 1 ? (

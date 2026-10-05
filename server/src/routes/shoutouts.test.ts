@@ -123,6 +123,32 @@ test('shoutouts.ts: a real manager session can still post a shoutout for their o
   }
 });
 
+// MVP readiness review (2026-09-22): same fix as announcements.ts — the
+// author is the session user, never the body's authorId (which the client
+// filled from its "Viewing" employee, i.e. usually someone else).
+test('shoutouts.ts: POST attributes the shoutout to the session user, ignoring any body authorId', async () => {
+  const venue = await createVenue('author');
+  const employee = await prisma.user.create({
+    data: { locationId: venue.location.id, fullName: '__shoutouts-test__ author employee', systemRole: 'STAFF' },
+  });
+  try {
+    await withServer(async (baseUrl) => {
+      const token = await sessionFor(venue.manager.id);
+      const res = await fetch(`${baseUrl}/api/shoutouts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ employeeId: employee.id, authorId: employee.id, note: '__shoutouts-test__ great service' }),
+      });
+      assert.equal(res.status, 201);
+      const { shoutout } = (await res.json()) as { shoutout: { id: string; authorId: string | null; authorName: string | null } };
+      assert.equal(shoutout.authorId, venue.manager.id, 'a body authorId naming someone else must be ignored');
+      assert.equal(shoutout.authorName, venue.manager.fullName);
+    });
+  } finally {
+    await cleanupVenue(venue.location.id);
+  }
+});
+
 // Permission model (2026-09-22, deliberate product decision — see the DELETE
 // route's doc comment): anyone signed in at the venue may POST a shoutout;
 // removing one is manager/owner only, with NO author exception; managers

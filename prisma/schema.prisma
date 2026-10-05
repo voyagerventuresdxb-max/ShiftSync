@@ -44,6 +44,11 @@ model Location {
   // Deterministic-path parsing (Excel/CSV/text-layer PDF) is unaffected —
   // this field is only read/written on the vision-fallback branch.
   lastVisionFallbackUsedAt DateTime? @map("last_vision_fallback_used_at")
+  // Old `/join?location=<id>` links are honoured until this instant (set by the invite-link migration); NULL = never.
+  legacyJoinLinksUntil     DateTime? @map("legacy_join_links_until")
+  // Kiosk link (`/kiosk?venue=<id>#k=<token>`): only the sha256 of its token is stored; NULL = no kiosk link (lib/kioskLinks.ts).
+  kioskTokenHash           String?   @unique @map("kiosk_token_hash")
+  kioskTokenCreatedAt      DateTime? @map("kiosk_token_created_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -60,8 +65,10 @@ model Location {
   rotaPublishes        RotaPublish[]
   eightySixItems       EightySixItem[]
   joinRequests         JoinRequest[]
+  inviteLinks          InviteLink[]
   policyDocuments      PolicyDocument[]
   floorFeedback        FloorFeedback[]
+  aiUsage              AiUsage[]
 
   @@index([organizationId])
   @@map("locations")
@@ -114,6 +121,9 @@ model User {
   // allows unlimited NULLs alongside a unique index, so users with no phone
   // set are unaffected.
   phone             String?    @unique
+  // The phone as stored before the 2026-10 move to E.164 (server/src/lib/phoneBackfill.ts).
+  // Written only by that backfill, never read by the app: it exists so the move can be reverted.
+  phoneBeforeE164   String?    @map("phone_before_e164")
   preferredLanguage String?    @map("preferred_language")
   emiratesIdNumber  String?    @map("emirates_id_number")
   laborCardNumber   String?    @map("labor_card_number")
@@ -122,12 +132,24 @@ model User {
   hiredAt           DateTime?  @map("hired_at")
   terminatedAt      DateTime?  @map("terminated_at")
   isActive          Boolean    @default(true) @map("is_active")
+  // Set when the person deleted their own account (in-app, self-service): personal details are
+  // cleared, sessions ended, and the de-identified row stays so past shifts and attendance keep
+  // their history. A deleted account can't be signed in to or reactivated.
+  deletedAt         DateTime?  @map("deleted_at")
+  // Platform operator (us), not a venue role: may issue login links to any
+  // venue's owners/managers. Deliberately a flag rather than a SystemRole
+  // value so it never collides with the OWNER/MANAGER/STAFF permission
+  // model, and it is granted ONLY by the CLI (server/scripts/
+  // grant-platform-admin.ts) — no API route can set it.
+  isPlatformAdmin   Boolean    @default(false) @map("is_platform_admin")
   createdAt         DateTime   @default(now()) @map("created_at")
   updatedAt         DateTime   @updatedAt @map("updated_at")
 
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
   role     Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
 
+  loginLinks              LoginLink[]                @relation("LoginLinkUser")
+  loginLinksIssued        LoginLink[]                @relation("LoginLinkIssuedBy")
   shifts                  Shift[]                    @relation("ShiftAssignee")
   shiftsCreated           Shift[]                    @relation("ShiftCreatedBy")
   swapRequestsInitiated   ShiftSwapRequest[]         @relation("SwapRequestedBy")
@@ -153,7 +175,8 @@ model User {
   notifications           Notification[]
   joinRequestsReviewed    JoinRequest[]              @relation("JoinRequestReviewedBy")
   joinRequestsCreatedFrom JoinRequest[]              @relation("JoinRequestCreatedUser")
-  availabilityMarks       AvailabilityMark[]
+  inviteLinksCreated      InviteLink[]               @relation("InviteLinkCreatedBy")
+  availabilityMarks      AvailabilityMark[]
   policyDocumentsUploaded PolicyDocument[]           @relation("PolicyDocumentUploadedBy")
   floorFeedbackSubmitted  FloorFeedback[]            @relation("FloorFeedbackSubmitter")
   floorFeedbackReviewed   FloorFeedback[]            @relation("FloorFeedbackReviewedBy")
@@ -300,6 +323,16 @@ enum AuditAction {
   ROTA_TEMPLATE_DELETED
   POLICY_DOCUMENT_UPLOADED
   POLICY_DOCUMENT_DELETED
+  INVITE_LINK_CREATED
+  INVITE_LINK_REVOKED
+  LOGIN_LINK_ISSUED
+  LOGIN_LINK_REDEEMED
+  LOGIN_LINK_REVOKED
+  LOGIN_LINK_REJECTED
+  ROTA_PUBLISHED
+  ANNOUNCEMENT_POSTED
+  SHOUTOUT_POSTED
+  ACCOUNT_DELETED
 }
 
 model AuditLog {
@@ -446,7 +479,12 @@ model FloorSection {
   locationId       String  @map("location_id")
   floorPlanImageId String  @map("floor_plan_image_id")
   label            String
-  polygon          Json // [{x:number,y:number}, ...] fractional coords
+  /// A section is a named pin (2026-09-29): pinX/pinY are fractions (0-1) of the plan's width/height.
+  pinX             Float   @default(0.5) @map("pin_x")
+  pinY             Float   @default(0.5) @map("pin_y")
+  /// DEPRECATED (2026-09-29): polygon boundaries were replaced by pin-only sections. Nothing reads or writes
+  /// it any more; kept (default []) so the change can be reverted. Drop in a later cleanup.
+  polygon          Json    @default("[]")
   paxCapacity      Int     @map("pax_capacity")
   notes            String? // free-text venue note, e.g. "Shade after 17:00"
   sortOrder        Int     @default(0) @map("sort_order")
@@ -686,6 +724,7 @@ model OtpCode {
   createdAt  DateTime   @default(now()) @map("created_at")
 
   @@index([phone, purpose])
+  @@index([createdAt]) // global OTP cap counts the last hour across all phones (requestOtpCode)
   @@map("otp_codes")
 }
 
@@ -704,6 +743,37 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+/**
+ * A one-time login link (server/src/lib/actions/loginLinkActions.ts). Only
+ * the sha256 of the token is stored; the token itself travels in the URL
+ * fragment. Bound to one user, single-use (`consumedAt` is set atomically
+ * on redeem), expires after LOGIN_LINK_TTL_HOURS, revocable (`revokedAt`),
+ * and superseded whenever a newer link is issued for the same user.
+ * `issuedById` is null for links minted by the CLI (a venue's very first
+ * owner link) rather than by a signed-in issuer.
+ */
+model LoginLink {
+  id                String    @id @default(cuid())
+  tokenHash         String    @unique @map("token_hash")
+  userId            String    @map("user_id")
+  issuedById        String?   @map("issued_by_id")
+  // The target's location at issue time — what the audit log is scoped to.
+  locationId        String    @map("location_id")
+  expiresAt         DateTime  @map("expires_at")
+  consumedAt        DateTime? @map("consumed_at")
+  revokedAt         DateTime? @map("revoked_at")
+  redeemedIp        String?   @map("redeemed_ip")
+  redeemedUserAgent String?   @map("redeemed_user_agent")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user     User  @relation("LoginLinkUser", fields: [userId], references: [id], onDelete: Cascade)
+  issuedBy User? @relation("LoginLinkIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, consumedAt])
+  @@index([issuedById])
+  @@map("login_links")
 }
 
 // One Web Push subscription per (browser, device) a user has opted into —
@@ -789,6 +859,27 @@ model JoinRequest {
   @@map("join_requests")
 }
 
+// A venue's shareable join link. Expiry, revoke and maxUses bound how long a
+// leaked link works; the manager's approval of each JoinRequest is the real gate.
+model InviteLink {
+  id          String    @id @default(cuid())
+  locationId  String    @map("location_id")
+  // Plain, not hashed: the manager UI re-displays the active link, and it is a broadcast link (WhatsApp groups) anyway.
+  token       String    @unique
+  createdById String?   @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  maxUses     Int?      @map("max_uses")
+  useCount    Int       @default(0) @map("use_count")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("InviteLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([locationId])
+  @@map("invite_links")
+}
+
 // ---------------------------------------------------------------------------
 // 11. SELF-SERVICE AVAILABILITY — informational only, never a hard block
 // ---------------------------------------------------------------------------
@@ -839,4 +930,45 @@ model PolicyDocument {
 
   @@index([locationId, category])
   @@map("policy_documents")
+}
+
+/// AI spend guard (server/src/lib/aiBudget.ts): the deployment-wide counter the
+/// monthly cap is enforced against, one row per UTC month. Every model call
+/// reserves its worst-case cost here first (a conditional update) and settles
+/// to the real cost after. Amounts only — never content.
+model AiSpendMonth {
+  month       String   @id // YYYY-MM (UTC)
+  spentUsd    Decimal  @default(0) @map("spent_usd") @db.Decimal(12, 6)
+  reservedUsd Decimal  @default(0) @map("reserved_usd") @db.Decimal(12, 6)
+  warned80    Boolean  @default(false) @map("warned_80")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("ai_spend_months")
+}
+
+/// AI spend guard: deployment-wide model calls per UTC day (the daily call limit).
+model AiCallDay {
+  day   String @id // YYYY-MM-DD (UTC)
+  calls Int    @default(0)
+
+  @@map("ai_call_days")
+}
+
+/// AI usage ledger per venue, feature and UTC month: call and token counts and
+/// the estimated cost. Never content, names, phone numbers or audio.
+model AiUsage {
+  id           String   @id @default(cuid())
+  locationId   String   @map("location_id")
+  feature      String
+  month        String // YYYY-MM (UTC)
+  calls        Int      @default(0)
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  estimatedUsd Decimal  @default(0) @map("estimated_usd") @db.Decimal(12, 6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, feature, month])
+  @@map("ai_usage")
 }

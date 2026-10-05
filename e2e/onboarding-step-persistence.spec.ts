@@ -33,6 +33,38 @@ test.describe('onboarding — step position survives a reload', () => {
     expect(new URL(page.url()).pathname).toBe('/onboarding/roster');
   });
 
+  test('Back from Review, and a reload on Roster, both keep the attached file — no re-upload needed', async ({ page }) => {
+    const venueName = testVenueName('step-persist-roster-file');
+    await signupNewVenue(page, venueName);
+    await continueThroughVenue(page);
+    await page.waitForSelector('text=Bring your team with you.');
+    await page.locator('input[type=file][accept*=".xlsx"]').setInputFiles(FIXTURE);
+    await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled({ timeout: 20000 });
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.waitForURL('**/onboarding/review**');
+    await page.waitForSelector("text=Here's what we found.");
+
+    // Back: the zone still shows the file, Continue is still enabled.
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.waitForURL('**/onboarding/roster**');
+    await expect(page.getByText('sample-roster.xlsx')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove file' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled();
+
+    // Reload on Roster: same.
+    await page.reload();
+    await page.waitForSelector('text=Bring your team with you.');
+    await expect(page.getByText('sample-roster.xlsx')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled();
+
+    // Remove really clears it, on this screen AND for Review.
+    await page.getByRole('button', { name: 'Remove file' }).click();
+    await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+    await page.reload();
+    await page.waitForSelector('text=Bring your team with you.');
+    await expect(page.getByRole('button', { name: /Upload your roster/ })).toBeVisible();
+  });
+
   test('reload on Review resumes on Review with the same parsed rows — no re-upload', async ({ page }) => {
     const venueName = testVenueName('step-persist-review');
     await signupNewVenue(page, venueName);

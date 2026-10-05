@@ -1,17 +1,16 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { createOtpCode, verifyOtpCode, issueSession } from '../lib/identity.js';
-import { findPhoneMatches } from './identity.js';
+import { requestOtpCode, OtpRateLimitError, verifyOtpCode, issueSession } from '../lib/identity.js';
+import { otpRequestIpLimiter, sendOtpRateLimited } from '../middleware/rateLimit.js';
+import { requireOtpEnabled } from '../middleware/requireOtpEnabled.js';
+import { findUserByPhone } from './identity.js';
+import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
+import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
+import { sendOtpSms, SMS_SEND_FAILED_ERROR } from '../lib/sms.js';
 
 export const signupRouter = Router();
-
-/**
- * Fail-closed, opt-in dev-OTP echo — see the matching comment in
- * `identity.ts`. Never keyed off `NODE_ENV`, which nothing in this repo sets.
- */
-const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
 
 /**
  * POST /api/signup/request-otp — body: { phone }
@@ -21,22 +20,25 @@ const DEV_OTP_ECHO = process.env.ALLOW_DEV_OTP_ECHO === 'true';
  * `locationId` here because there is no location yet; that's the entire
  * point of this route.
  */
-signupRouter.post('/request-otp', async (req, res) => {
+signupRouter.post('/request-otp', requireOtpEnabled, otpRequestIpLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
-    if (!phone) return res.status(400).json({ error: 'phone is required.' });
+    const rawPhone = String(req.body?.phone ?? '').trim();
+    if (!rawPhone) return res.status(400).json({ error: 'phone is required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
 
-    const { plainCode, expiresAt } = await createOtpCode(phone, 'SIGNUP');
-    // No SMS integration exists; this is a stand-in until one is added.
-    if (DEV_OTP_ECHO) {
-      console.log(`[signup] OTP for ${phone} (SIGNUP): ${plainCode} — dev echo enabled via ALLOW_DEV_OTP_ECHO.`);
-    }
+    const { plainCode, expiresAt } = await requestOtpCode(phone, 'SIGNUP');
+    if ((await sendOtpSms(phone, plainCode, 'signup')) === 'failed') return res.status(503).json({ error: SMS_SEND_FAILED_ERROR });
+    // Dev stand-in for SMS: echoes the code, for allowlisted numbers only.
+    const echo = devOtpEchoFor(phone);
+    if (echo) logDevOtpEcho('signup', phone, 'SIGNUP', plainCode);
 
     return res.status(200).json({
       expiresAt: expiresAt.toISOString(),
-      devCode: DEV_OTP_ECHO ? plainCode : undefined,
+      devCode: echo ? plainCode : undefined,
     });
   } catch (err) {
+    if (err instanceof OtpRateLimitError) return sendOtpRateLimited(res, err.scope, err.retryAfterSeconds);
     console.error('[signup.requestOtp] failed', err);
     return res.status(500).json({ error: 'Unexpected error while requesting a code.' });
   }
@@ -53,29 +55,25 @@ signupRouter.post('/request-otp', async (req, res) => {
  * collects the venue's real emirate/address/venueType right after this, so
  * only the bare minimum is collected here.
  */
-signupRouter.post('/verify-otp', async (req, res) => {
+signupRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   try {
-    const phone = String(req.body?.phone ?? '').trim();
+    const rawPhone = String(req.body?.phone ?? '').trim();
     const code = String(req.body?.code ?? '').trim();
     const fullName = String(req.body?.fullName ?? '').trim();
     const venueName = String(req.body?.venueName ?? '').trim();
-    if (!phone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    if (!rawPhone || !code) return res.status(400).json({ error: 'phone and code are required.' });
+    const phone = toE164(rawPhone);
+    if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
     if (!venueName) return res.status(400).json({ error: 'venueName is required.' });
 
     const result = await verifyOtpCode(phone, 'SIGNUP', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
 
-    // Global check — no location scope exists yet. Reuses identity.ts's own
-    // lookup rather than re-implementing the same lossy phoneDigits filter a
-    // second time — one lookup, one place to fix if normalization ever
-    // changes. Returns ALL matches, not just the first, because two
-    // genuinely different numbers can normalize to the same digits and
-    // User.phone has no unique constraint (yet — a pending migration will
-    // eventually enforce this at the DB level too; this is the
-    // application-layer enforcement in the meantime).
-    const existingMatches = await findPhoneMatches(phone);
-    if (existingMatches.length > 0) {
+    // Global check (no location exists yet), reusing identity.ts's lookup.
+    // `User.phone` is E.164 and unique, deactivated users included, so any
+    // holder of this number would make the create below collide.
+    if (await findUserByPhone(phone)) {
       return res.status(409).json({ error: 'An account already exists for this phone number — log in instead.' });
     }
 

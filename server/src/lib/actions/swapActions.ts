@@ -2,25 +2,35 @@ import { Prisma } from '@prisma/client';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { prisma } from '../prisma.js';
-import { isRequestLocked, nextRequestWindowClose } from '../swapRequestPolicy.js';
+import { isRequestLocked, isRequestWindowOpen, requestWindowCloseForShift, SwapWindowClosedError } from '../swapRequestPolicy.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
+import { formatVenueTime } from '../venueTime.js';
+import { DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
 
 dayjs.extend(utc);
 
 /**
- * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00". Formatted in
- * UTC (same rationale as `parsing/normalize.ts`): the stored wall-clock
- * date/time is what matters, not how the server's local timezone happens to
- * render it. Shared by routes/swapRequests.ts's DTO and the notification
- * copy below, so the request list and its notifications never describe the
- * same shift differently.
+ * Human-readable shift label, e.g. "Mon 25 Aug · 09:00–17:00". `date` is UTC
+ * midnight of the venue-local calendar day, so it is read as UTC; `startTime`
+ * and `endTime` are real instants (built by `combineDateAndTime` in the
+ * venue's timezone), so they are rendered in that same venue timezone, never
+ * in UTC and never in the host's zone. Before this a 09:00 Dubai shift was
+ * labelled "05:00". Shared by routes/swapRequests.ts's DTO and the
+ * notification copy below, so the request list and its notifications never
+ * describe the same shift differently.
  */
-export function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date }): string {
+export function shiftLabelOf(shift: {
+  date: Date;
+  startTime: Date;
+  endTime: Date;
+  location?: { timezone: string | null } | null;
+}): string {
+  const tz = shift.location?.timezone || DEFAULT_VENUE_TIMEZONE;
   const day = dayjs.utc(shift.date).format('ddd D MMM');
-  const start = dayjs.utc(shift.startTime).format('HH:mm');
-  const end = dayjs.utc(shift.endTime).format('HH:mm');
+  const start = formatVenueTime(shift.startTime, tz);
+  const end = formatVenueTime(shift.endTime, tz);
   return `${day} · ${start}–${end}`;
 }
 
@@ -33,7 +43,7 @@ export function shiftLabelOf(shift: { date: Date; startTime: Date; endTime: Date
 export const SWAP_REQUEST_INCLUDE = {
   requestedBy: { select: { fullName: true } },
   targetUser: { select: { fullName: true } },
-  shift: { select: { userId: true, date: true, startTime: true, endTime: true } },
+  shift: { select: { userId: true, date: true, startTime: true, endTime: true, location: { select: { timezone: true } } } },
 } as const;
 
 export type SwapRequestWithRelations = Prisma.ShiftSwapRequestGetPayload<{
@@ -50,11 +60,19 @@ export type SwapRequestWithRelations = Prisma.ShiftSwapRequestGetPayload<{
  */
 export class ShiftAlreadyReassignedError extends Error {}
 
+/** Thrown inside the decide transaction when the request is no longer PENDING (decided concurrently). */
+class SwapAlreadyDecidedError extends Error {}
+
 /**
  * Creates a PENDING cover-swap request. Mirrors the POST /api/swap-requests
  * body shape. Accepts either the top-level `prisma` client or a `tx` — a
  * caller that writes an accompanying audit-log row (routes/swapRequests.ts,
  * routes/voice.ts's REQUEST_SWAP) passes `tx` so both commit atomically.
+ *
+ * Enforces the request window (swapRequestPolicy.ts): once Wednesday 17:00
+ * venue-local of the shift's week has passed, it throws SwapWindowClosedError
+ * and nothing is written. Only filing is limited — decideSwapRequest still
+ * lets a manager act on requests already filed.
  */
 export async function createSwapRequest(
   input: {
@@ -64,7 +82,14 @@ export async function createSwapRequest(
     reason: string | null;
   },
   client: Prisma.TransactionClient | typeof prisma = prisma,
+  now: Date = new Date(),
 ): Promise<SwapRequestWithRelations> {
+  // The window closes Wednesday 17:00 of the shift's week, in the SHIFT's venue timezone.
+  const shift = await client.shift.findUnique({ where: { id: input.shiftId }, select: { date: true, location: { select: { timezone: true } } } });
+  const timezone = shift?.location.timezone || DEFAULT_VENUE_TIMEZONE;
+  if (shift && !isRequestWindowOpen(shift.date, now, timezone)) {
+    throw new SwapWindowClosedError(requestWindowCloseForShift(shift.date, timezone), timezone);
+  }
   return client.shiftSwapRequest.create({
     data: {
       shiftId: input.shiftId,
@@ -73,7 +98,8 @@ export async function createSwapRequest(
       type: 'COVER',
       status: 'PENDING',
       reason: input.reason,
-      expiresAt: nextRequestWindowClose(),
+      // The request's own deadline: when its shift's week stops taking requests.
+      expiresAt: shift ? requestWindowCloseForShift(shift.date, timezone) : now,
     },
     include: SWAP_REQUEST_INCLUDE,
   });
@@ -93,6 +119,7 @@ export async function decideSwapRequest(input: {
   | { result: 'ok'; request: SwapRequestWithRelations }
   | { result: 'not_found' }
   | { result: 'conflict' }
+  | { result: 'already_decided'; status: string }
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
     where: { id: input.id },
@@ -113,6 +140,9 @@ export async function decideSwapRequest(input: {
     },
   });
   if (!existing) return { result: 'not_found' };
+  // A decided request stays decided: re-deciding would reassign (or strand) a
+  // shift after both people were already told the outcome.
+  if (existing.status !== 'PENDING') return { result: 'already_decided', status: existing.status };
 
   if (isRequestLocked({ status: existing.status }, { userId: existing.shift.userId }, existing.requestedById)) {
     return { result: 'conflict' };
@@ -127,6 +157,14 @@ export async function decideSwapRequest(input: {
   const updated = await withAuditedTransaction(
     prisma,
     async (tx) => {
+      // Atomic counterpart of the PENDING check above: two decisions racing on
+      // the same request can both read PENDING, but only one of these matches.
+      const claimed = await tx.shiftSwapRequest.updateMany({
+        where: { id: input.id, status: 'PENDING' },
+        data: { status, reviewedById: input.reviewedById, reviewedAt: new Date(), managerNote },
+      });
+      if (claimed.count === 0) throw new SwapAlreadyDecidedError();
+
       // Atomic guard: only reassign the shift if it is still owned by the
       // same user who requested the swap. This is the real source of truth
       // against the TOCTOU race — two managers approving two different
@@ -148,13 +186,7 @@ export async function decideSwapRequest(input: {
         }
       }
 
-      const updatedRequest = await tx.shiftSwapRequest.update({
-        where: { id: input.id },
-        data: { status, reviewedById: input.reviewedById, reviewedAt: new Date(), managerNote },
-        include: SWAP_REQUEST_INCLUDE,
-      });
-
-      return updatedRequest;
+      return tx.shiftSwapRequest.findUniqueOrThrow({ where: { id: input.id }, include: SWAP_REQUEST_INCLUDE });
     },
     () => ({
       locationId: existing.shift.locationId,
@@ -166,11 +198,16 @@ export async function decideSwapRequest(input: {
       note: managerNote,
     }),
   ).catch((err) => {
-    if (err instanceof ShiftAlreadyReassignedError) return null;
+    if (err instanceof ShiftAlreadyReassignedError) return 'conflict' as const;
+    if (err instanceof SwapAlreadyDecidedError) return 'already_decided' as const;
     throw err;
   });
 
-  if (!updated) return { result: 'conflict' };
+  if (updated === 'conflict') return { result: 'conflict' };
+  if (updated === 'already_decided') {
+    const now = await prisma.shiftSwapRequest.findUnique({ where: { id: input.id }, select: { status: true } });
+    return { result: 'already_decided', status: now?.status ?? 'decided' };
+  }
   return { result: 'ok', request: updated };
 }
 

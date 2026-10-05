@@ -161,6 +161,38 @@ test('announcements.ts: a real owner session can still edit and delete its own v
   }
 });
 
+// MVP readiness review (2026-09-22): the author used to come from the request
+// body — the client sent its "Viewing" employee, or nothing for a fresh venue
+// — so a manager's announcement was attributed to a colleague or to nobody,
+// and an author-less row then rendered under the READER's own name on their
+// My Shifts screen. The author is the session user, whatever the body says.
+test('announcements.ts: POST attributes the announcement to the session user, ignoring any body authorId', async () => {
+  const venue = await createVenue('author');
+  const colleague = await prisma.user.create({
+    data: { locationId: venue.location.id, fullName: '__announcements-test__ author colleague', systemRole: 'STAFF' },
+  });
+  try {
+    await withServer(async (baseUrl) => {
+      const token = await sessionFor(venue.manager.id);
+      for (const authorId of [undefined, null, colleague.id]) {
+        const res = await fetch(`${baseUrl}/api/announcements`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ body: `__announcements-test__ posted with authorId=${String(authorId)}`, authorId }),
+        });
+        assert.equal(res.status, 201);
+        const { announcement } = (await res.json()) as { announcement: { id: string; authorId: string | null; authorName: string | null } };
+        assert.equal(announcement.authorId, venue.manager.id, `authorId=${String(authorId)} in the body must not change the author`);
+        assert.equal(announcement.authorName, venue.manager.fullName);
+        const row = await prisma.announcement.findUnique({ where: { id: announcement.id } });
+        assert.equal(row?.authorId, venue.manager.id);
+      }
+    });
+  } finally {
+    await cleanupVenue(venue.location.id);
+  }
+});
+
 // Permission model (2026-09-22, deliberate product decision — see the PATCH
 // route's doc comment): anyone signed in at the venue may POST, but PATCH and
 // DELETE are manager/owner only, with NO author exception. Tenant isolation

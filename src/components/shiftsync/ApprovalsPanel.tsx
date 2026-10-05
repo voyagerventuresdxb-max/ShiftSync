@@ -140,7 +140,7 @@ export function ApprovalsPanel({
       {open && (
         <>
           <p className="border-b border-border px-4 pb-4 text-xs text-muted-foreground sm:px-5">
-            Requests close Wednesday 17:00 GST. Overlapping requests auto-lock to protect published coverage.
+            Cover requests for a week close Wednesday 17:00 (venue time). Overlapping requests auto-lock to protect published coverage.
           </p>
 
           {!online && requests.length > 0 && <StaleDataNotice />}
@@ -179,14 +179,14 @@ export function ApprovalsPanel({
                           <button
                             onClick={() => void decide(r.id, 'approve')}
                             disabled={!online}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                            className="hit-44 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <Check className="h-3.5 w-3.5" /> Approve
                           </button>
                           <button
                             onClick={() => void decide(r.id, 'deny')}
                             disabled={!online}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
+                            className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border-strong px-3 py-1.5 text-xs font-medium transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <X className="h-3.5 w-3.5" /> Decline
                           </button>

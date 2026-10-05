@@ -1,8 +1,33 @@
 import type { Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Shared Prisma client for e2e fixture teardown — real DB, no mocking.
 export const prisma = new PrismaClient();
+
+/**
+ * Next never-used number from this run's echo pool (playwright.config.ts), the
+ * only numbers the API echoes a code for. The counter lives in a file so a
+ * worker restarted for a retry doesn't hand out a number again (OTP resend caps,
+ * unique User.phone).
+ */
+export function nextEchoPhone(): string {
+  const { E2E_RUN_ID: runId, E2E_ECHO_PHONES: pool } = process.env;
+  if (!runId || !pool) throw new Error('E2E_RUN_ID / E2E_ECHO_PHONES unset — run through playwright.config.ts.');
+  const phones = pool.split(',');
+  const counter = join(tmpdir(), `shiftsync-e2e-echo-phones-${runId}`);
+  const used = existsSync(counter) ? Number(readFileSync(counter, 'utf8')) : 0;
+  if (used >= phones.length) throw new Error(`Echo phone pool exhausted (${phones.length}) — raise ECHO_POOL_SIZE in playwright.config.ts.`);
+  writeFileSync(counter, String(used + 1));
+  return phones[used]!;
+}
+
+/** Ages a phone's OTP codes by 60s so its next code request clears the per-phone 30s resend cap without sleeping. */
+export async function skipOtpResendWait(phone: string): Promise<void> {
+  await prisma.$executeRaw`UPDATE otp_codes SET created_at = created_at - interval '60 seconds' WHERE phone = ${phone}`;
+}
 
 export const TEST_ORG_PREFIX = '__e2e-test__';
 
@@ -21,13 +46,34 @@ export async function cleanupTestOrgs(): Promise<void> {
 }
 
 /**
+ * Waits until the app has released every overlay history entry. Closing a sheet or modal pops
+ * its history sentinel one macrotask later (src/lib/backNavigation.ts, so an overlay opening in
+ * the same tick can adopt it). A real person can't navigate inside that window, but a test can:
+ * a `page.goto` issued right after the close click races the pending `history.back()` and the
+ * navigation is aborted (net::ERR_ABORTED) — the touch-targets flake.
+ */
+export async function settleOverlayHistory(page: Page): Promise<void> {
+  await page
+    .waitForFunction(() => !(history.state as { usr?: { ssOverlayDepth?: number } } | null)?.usr?.ssOverlayDepth, undefined, { timeout: 2_000 })
+    .catch(() => {});
+}
+
+/** `page.goto` that first lets the app finish any pending overlay-history release (see settleOverlayHistory). */
+export async function gotoSettled(page: Page, url: string): Promise<void> {
+  await settleOverlayHistory(page);
+  await page.goto(url);
+}
+
+/**
  * Drives the Welcome intro (hold gesture → settled reveal → 3-card
  * carousel → "Let's set up your venue") the way a real thumb would. Ends
  * with the intro's Continue click, which hands over to the next step
  * (Account for a signed-out visitor, Venue for a signed-in manager).
  */
 export async function passWelcomeIntro(page: Page): Promise<void> {
-  await page.waitForSelector('text=ShiftSync', { timeout: 15000 });
+  // The Welcome screen itself (onboarding is a lazily-loaded route, so the app
+  // header's "ShiftSync" can be on screen before the intro is there to hold).
+  await page.locator('.ob-root').waitFor({ timeout: 30000 });
   const viewport = page.viewportSize()!;
   const cx = viewport.width / 2;
   const cy = viewport.height / 2;
@@ -51,7 +97,8 @@ export async function passWelcomeIntro(page: Page): Promise<void> {
 
 /**
  * Real signup via the dev-OTP echo path (requires the server started with
- * ALLOW_DEV_OTP_ECHO=true, which playwright.config.ts sets automatically).
+ * ALLOW_DEV_OTP_ECHO=true and this run's ECHO_ALLOWED_PHONES, which
+ * playwright.config.ts sets automatically).
  * Drives the actual UI — no API shortcuts — so it also exercises the real
  * phone->OTP->venue-creation path the way a real owner would: the Welcome
  * intro, then the wizard's Account step (2026-09-16: account creation is
@@ -59,7 +106,7 @@ export async function passWelcomeIntro(page: Page): Promise<void> {
  * Lands on /onboarding/venue when done.
  */
 export async function signupNewVenue(page: Page, venueName: string): Promise<{ phone: string }> {
-  const phone = `+97150${Date.now().toString().slice(-7)}`;
+  const phone = nextEchoPhone();
 
   // A cold Vite dev server can auto-reload mid-navigation the very first
   // time it hits a new route (dependency pre-bundling) — Playwright sees

@@ -163,7 +163,7 @@ export default function FloorFeedbackReview() {
                       <button
                         onClick={() => void handleDecide(item.id, 'flagged')}
                         disabled={decidingId === item.id || !online}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-warning/40 px-3 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-warning/40 px-3 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Flag className="h-3.5 w-3.5" /> Flag
                       </button>
@@ -171,7 +171,7 @@ export default function FloorFeedbackReview() {
                     <button
                       onClick={() => void handleDecide(item.id, 'reviewed')}
                       disabled={decidingId === item.id || !online}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
+                      className="hit-44 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" />
                       {decidingId === item.id ? 'Saving…' : 'Mark reviewed'}

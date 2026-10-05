@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
-import { fetchMyShifts, ApiError, type MyShiftEntry } from '../api/myShifts';
+import { ApiError } from '../api/myShifts';
+import { formatShiftDate, useMyShifts } from '../state/useMyShifts';
+import { offlineLabel } from '../lib/offlineCache';
 import { fetchAvailability, setAvailability, removeAvailability, type AvailabilityMarkDto } from '../api/availability';
 import { currentWeekStart } from '../engine/weekStart';
 import { weekDates, weekdayOf } from '../engine/rosterView';
@@ -10,53 +12,16 @@ import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { cn } from '../lib/utils';
 
 export default function MyShiftsContent() {
-  const { session, logout } = useIdentity();
-  const [pendingApproval, setPendingApproval] = useState(false);
-  const [shifts, setShifts] = useState<MyShiftEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!session) {
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    fetchMyShifts(session.token)
-      .then((data) => {
-        if (cancelled) return;
-        setPendingApproval(data.pendingApproval);
-        setShifts(data.shifts);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        // A 401 means the stored token is expired or was revoked. Clearing it
-        // drops us into the not-signed-in state below, which offers a real way
-        // back in — otherwise the user is stuck staring at an error with a
-        // dead session they have no way to discard.
-        if (err instanceof ApiError && err.status === 401) {
-          logout();
-          return;
-        }
-        setError(err instanceof ApiError ? err.message : 'Could not load your shifts.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // `logout` is stable for this provider's lifetime; re-running on it would
-    // re-fetch pointlessly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  const { session } = useIdentity();
+  const { pendingApproval, shifts, loading, error, offlineSince } = useMyShifts();
 
   if (!session) {
     return (
       <div className="status-block space-y-3">
         <p>You're not signed in. Sign in with your phone number to see your shifts.</p>
-        <Link to="/join" className="btn btn-primary inline-flex">
-          Join or log in
+        {/* Bare /join (no ?location=) is the missing-venue dead end; login needs no venue. */}
+        <Link to="/join?mode=login&returnTo=%2Fmy-shifts" className="btn btn-primary inline-flex">
+          Log in
         </Link>
         <p className="text-xs text-muted-foreground">
           Setting up a brand-new venue?{' '}
@@ -86,6 +51,11 @@ export default function MyShiftsContent() {
 
       <section className="panel p-5">
         <h3 className="text-sm font-semibold">Your next shifts</h3>
+        {offlineSince && (
+          <p role="status" data-testid="offline-label" className="mt-1 text-xs text-warning">
+            {offlineLabel(offlineSince)}
+          </p>
+        )}
         {loading ? (
           <p className="hint">Loading…</p>
         ) : shifts.length === 0 ? (
@@ -94,9 +64,8 @@ export default function MyShiftsContent() {
           <ul className="mt-3 space-y-2">
             {shifts.map((s) => (
               <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
-                <span className="font-medium">{s.date}</span> · {s.roleName} ·{' '}
-                {new Date(s.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}–
-                {new Date(s.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <span className="font-medium">{formatShiftDate(s.date)}</span> · {s.roleName} ·{' '}
+                <span data-testid="my-shift-time">{s.startLabel}–{s.endLabel}</span>
               </li>
             ))}
           </ul>
@@ -205,7 +174,7 @@ function AvailabilityWidget({ userId, token }: { userId: string; token: string }
                 disabled={busyDate === date}
                 aria-label={`${weekdayOf(date)} ${date} — ${state === 'UNAVAILABLE' ? 'unavailable' : state === 'PREFERRED_OFF' ? 'preferred off' : 'unmarked'}. Tap to change.`}
                 className={cn(
-                  'flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2 text-[11px] font-medium transition-colors disabled:opacity-50',
+                  'hit-44 flex flex-col items-center gap-1 rounded-lg border px-1.5 py-2 text-[11px] font-medium transition-colors disabled:opacity-50',
                   state === 'UNAVAILABLE' && 'border-destructive/30 bg-destructive/10 text-destructive',
                   state === 'PREFERRED_OFF' && 'border-warning/30 bg-warning/10 text-warning',
                   state === 'UNMARKED' && 'border-border text-muted-foreground hover:border-accent/40 hover:text-foreground',

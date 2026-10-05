@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FALLBACK_SAMPLE_RESPONSE, mapVlmResponseToResult } from './parseVision.js';
+import { mapVlmResponseToResult } from './parseVision.js';
+import { SAMPLE_VLM_RESPONSE } from './__fixtures__/sampleVlmResponse.fixture.js';
 
 test('preserves AM/PM period labels on split shifts', () => {
   const parsed = {
@@ -8,7 +9,7 @@ test('preserves AM/PM period labels on split shifts', () => {
     legend: [],
     employees: [
       {
-        rawName: 'Andrea',
+        rawName: 'Kalim',
         role: 'Floor',
         cells: [
           {
@@ -88,9 +89,9 @@ test('emits a single shift when no AM/PM sub-columns (period null)', () => {
   assert.equal(result.rows[0].managerNotes, null, 'no period label when single column');
 });
 
-test('fallback sample response maps to a valid result (no Gemini call)', () => {
-  const result = mapVlmResponseToResult(FALLBACK_SAMPLE_RESPONSE, '2026-08-17');
-  assert.ok(result.rows.length > 0, 'fallback sample yields shifts');
+test('the fixture VLM response maps to a valid result (no Gemini call)', () => {
+  const result = mapVlmResponseToResult(SAMPLE_VLM_RESPONSE, '2026-08-17');
+  assert.ok(result.rows.length > 0, 'fixture yields shifts');
   assert.ok(result.anomalies.length === 0, 'clean sample has no anomalies');
 
   // No employee has more than 2 shifts on a single day (AM+PM split max).
@@ -105,16 +106,16 @@ test('fallback sample response maps to a valid result (no Gemini call)', () => {
 
   // Management rows are present and carry their management titles.
   const managers = result.rows.filter((r) => r.roleName === 'Manager');
-  assert.ok(managers.length >= 3, 'management staff present in fallback sample');
+  assert.ok(managers.length >= 3, 'management staff present in fixture');
 
   // AM/PM split shifts are preserved with their period labels.
-  const andrea = result.rows.filter((r) => r.employeeName === 'Andrea');
-  assert.equal(andrea.length, 2, 'Andrea has AM+PM split');
-  assert.ok(andrea.some((r) => r.managerNotes?.includes('[AM]')));
-  assert.ok(andrea.some((r) => r.managerNotes?.includes('[PM]')));
+  const kalim = result.rows.filter((r) => r.employeeName === 'Kalim');
+  assert.equal(kalim.length, 2, 'Kalim has AM+PM split');
+  assert.ok(kalim.some((r) => r.managerNotes?.includes('[AM]')));
+  assert.ok(kalim.some((r) => r.managerNotes?.includes('[PM]')));
 
   // Leave records (day off) are captured.
-  assert.ok(result.leaveRecords.some((l) => l.employeeName === 'Tomas' && l.category === 'day_off'));
+  assert.ok(result.leaveRecords.some((l) => l.employeeName === 'Rumur' && l.category === 'day_off'));
 });
 
 // --- Legend-code shift resolution -----------------------------------------

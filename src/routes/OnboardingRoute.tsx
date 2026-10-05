@@ -8,6 +8,7 @@ import ReviewScreen from '../features/onboarding/ReviewScreen';
 import InviteScreen from '../features/onboarding/InviteScreen';
 import { OnboardingStateProvider, stepRequiresSession, useOnboardingState } from '../state/OnboardingStateContext';
 import { useIdentity } from '../state/IdentityContext';
+import { useBackHandler } from '../lib/backNavigation';
 
 /**
  * Onboarding is deliberately NOT behind `RequireSession` in router.tsx any
@@ -35,9 +36,14 @@ export default function OnboardingContent() {
 
 /** All screens (see src/features/onboarding) — Roster's Skip goes straight to Invite (per product spec — nothing to review when nothing was uploaded), bypassing Review entirely. */
 function OnboardingFlow({ locationId }: { locationId: string | null }) {
-  const { step, setStep } = useOnboardingState();
+  const { step, setStep, backStep } = useOnboardingState();
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Priority (ii) of the back mechanism: hardware/app back inside the wizard
+  // goes to the previous step instead of out of the flow. Registered below
+  // any overlay that opens on top (those register later, so they win).
+  useBackHandler(backStep !== null, () => setStep(backStep!));
 
   // Already signed in (a returning manager opening Onboarding from /people,
   // or a reload right after the account step succeeded) — there's no
@@ -68,7 +74,7 @@ function OnboardingFlow({ locationId }: { locationId: string | null }) {
     // it's reachable if/when token expiry or a forced-logout event is
     // added (tracked as a follow-up, see issue #20).
     const returnTo = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-    return <Navigate to={`/join?mode=login&returnTo=${returnTo}`} replace />;
+    return <Navigate to={`/login?returnTo=${returnTo}`} replace />;
   }
 
   if (step === 'welcome') {

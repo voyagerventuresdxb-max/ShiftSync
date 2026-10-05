@@ -16,7 +16,7 @@ import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
  * Phase 1 (admin setup, once per venue): upload the venue's floor plan
  * image (PDF gets rasterized to PNG, reusing the same pypdfium2 step
  * already built for the Ollama vision fallback — no new tool needed) and
- * draw freeform polygon sections over it. Stored server-side (not on the
+ * drop a named pin for each section on it. Stored server-side (not on the
  * uploading device) since multiple staff view the same plan.
  *
  * Phase 2 (daily use): assign staff to sections for a shift date, via
@@ -138,28 +138,39 @@ floorPlanRouter.post('/upload', requireSession, requireManager, upload.single('f
 });
 
 /**
+ * `FloorSection.polygon` is deprecated (2026-09-29, pin-only sections) and
+ * kept in the DB only so the change can be reverted — it is never sent to
+ * clients. Every section a response carries is read with this omit.
+ */
+const OMIT_DEPRECATED = { polygon: true } as const;
+
+/** A pin coordinate: a fraction (0-1) of the plan image's width or height. */
+function isPinCoord(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+}
+
+/**
  * POST /api/floor-plan/sections
- * body: { locationId, floorPlanImageId, label, polygon: {x,y}[], paxCapacity, notes? }
+ * body: { locationId, floorPlanImageId, label, pinX, pinY, paxCapacity, notes? }
  *
- * `polygon` points are fractions (0-1) of the image's width/height.
+ * A section is a named pin (2026-09-29 — drawn polygon boundaries were
+ * removed): `pinX`/`pinY` are fractions (0-1) of the image's width/height.
  */
 floorPlanRouter.post('/sections', requireSession, requireManager, async (req, res) => {
   try {
     const locationId = String(req.body?.locationId ?? '').trim();
     const floorPlanImageId = String(req.body?.floorPlanImageId ?? '').trim();
     const label = String(req.body?.label ?? '').trim();
-    const polygon = req.body?.polygon;
+    const pinX = req.body?.pinX;
+    const pinY = req.body?.pinY;
     const paxCapacity = Number(req.body?.paxCapacity);
     const notes = req.body?.notes ? String(req.body.notes).trim() : null;
 
     if (!locationId) return res.status(400).json({ error: 'locationId is required.' });
     if (!floorPlanImageId) return res.status(400).json({ error: 'floorPlanImageId is required.' });
     if (!label) return res.status(400).json({ error: 'label is required.' });
-    if (!Array.isArray(polygon) || polygon.length < 3) {
-      return res.status(400).json({ error: 'polygon must have at least 3 points.' });
-    }
-    if (!polygon.every((p) => typeof p?.x === 'number' && typeof p?.y === 'number')) {
-      return res.status(400).json({ error: 'polygon points must be {x, y} numbers.' });
+    if (!isPinCoord(pinX) || !isPinCoord(pinY)) {
+      return res.status(400).json({ error: 'pinX and pinY must be numbers between 0 and 1.' });
     }
     if (!Number.isFinite(paxCapacity) || paxCapacity < 0) {
       return res.status(400).json({ error: 'paxCapacity must be a non-negative number.' });
@@ -173,7 +184,8 @@ floorPlanRouter.post('/sections', requireSession, requireManager, async (req, re
 
     const sortOrder = await prisma.floorSection.count({ where: { floorPlanImageId } });
     const section = await prisma.floorSection.create({
-      data: { locationId, floorPlanImageId, label, polygon, paxCapacity: Math.round(paxCapacity), notes, sortOrder },
+      data: { locationId, floorPlanImageId, label, pinX, pinY, paxCapacity: Math.round(paxCapacity), notes, sortOrder },
+      omit: OMIT_DEPRECATED,
     });
     return res.status(201).json({ section });
   } catch (err) {
@@ -182,25 +194,26 @@ floorPlanRouter.post('/sections', requireSession, requireManager, async (req, re
   }
 });
 
-/** PATCH /api/floor-plan/sections/:sectionId — edit label/polygon/paxCapacity/notes. */
+/** PATCH /api/floor-plan/sections/:sectionId — edit label/pin position/paxCapacity/notes. */
 floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, async (req, res) => {
   try {
     const { sectionId } = req.params;
     const existing = await prisma.floorSection.findUnique({ where: { id: sectionId } });
     if (!ownedOrNotFound(req, res, existing, `Section "${sectionId}" not found.`)) return;
 
-    const data: { label?: string; polygon?: { x: number; y: number }[]; paxCapacity?: number; notes?: string | null } = {};
+    const data: { label?: string; pinX?: number; pinY?: number; paxCapacity?: number; notes?: string | null } = {};
     if (req.body?.label !== undefined) {
       const label = String(req.body.label).trim();
       if (!label) return res.status(400).json({ error: 'label cannot be empty.' });
       data.label = label;
     }
-    if (req.body?.polygon !== undefined) {
-      const polygon = req.body.polygon;
-      if (!Array.isArray(polygon) || polygon.length < 3 || !polygon.every((p) => typeof p?.x === 'number' && typeof p?.y === 'number')) {
-        return res.status(400).json({ error: 'polygon must be an array of at least 3 {x, y} points.' });
+    if (req.body?.pinX !== undefined || req.body?.pinY !== undefined) {
+      // Moved together: a pin is one point, never half-updated.
+      if (!isPinCoord(req.body?.pinX) || !isPinCoord(req.body?.pinY)) {
+        return res.status(400).json({ error: 'pinX and pinY must both be numbers between 0 and 1.' });
       }
-      data.polygon = polygon;
+      data.pinX = req.body.pinX;
+      data.pinY = req.body.pinY;
     }
     if (req.body?.paxCapacity !== undefined) {
       const paxCapacity = Number(req.body.paxCapacity);
@@ -217,7 +230,7 @@ floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, as
       return res.status(400).json({ error: 'Nothing to update.' });
     }
 
-    const section = await prisma.floorSection.update({ where: { id: sectionId }, data });
+    const section = await prisma.floorSection.update({ where: { id: sectionId }, data, omit: OMIT_DEPRECATED });
     return res.status(200).json({ section });
   } catch (err) {
     console.error('[floorPlan.sections.update] failed', err);
@@ -258,6 +271,7 @@ floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
     const sections = await prisma.floorSection.findMany({
       where: { floorPlanImageId: image.id },
       orderBy: { sortOrder: 'asc' },
+      omit: OMIT_DEPRECATED,
     });
     return res.status(200).json({ image, sections });
   } catch (err) {
@@ -307,7 +321,8 @@ floorPlanRouter.get('/:locationId/assignments', requireSession, async (req, res)
     const shaped = sections.map((s) => ({
       id: s.id,
       label: s.label,
-      polygon: s.polygon,
+      pinX: s.pinX,
+      pinY: s.pinY,
       paxCapacity: s.paxCapacity,
       notes: s.notes,
       assignments: s.assignments.map((a) => ({

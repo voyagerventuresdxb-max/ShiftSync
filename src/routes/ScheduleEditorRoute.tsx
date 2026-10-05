@@ -4,6 +4,7 @@ import { cn } from '../lib/utils';
 import { weekDates, weekdayOf } from '../engine/rosterView';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
+import { useCloseOnBack } from '../lib/backNavigation';
 import { ApiError } from '../api/schedules';
 import { fetchRoles } from '../api/roles';
 
@@ -30,6 +31,13 @@ export default function ScheduleEditorContent() {
   const [draft, setDraft] = useState<{ id?: string; userId: string | null; roleId: string; start: string; end: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The shift draft dialog is a modal: back dismisses it like its Cancel button
+  // (not mid-write, where Cancel is disabled too).
+  useCloseOnBack(draft !== null, () => {
+    if (busy) return;
+    setDraft(null);
+    setError(null);
+  });
 
   // Every mutation here goes through the same wrapper: a failed write leaves
   // the sheet open with the server's own message showing, instead of the
@@ -145,7 +153,7 @@ export default function ScheduleEditorContent() {
       </button>
 
       {draft && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 backdrop-blur-sm sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 pb-[env(safe-area-inset-bottom)] backdrop-blur-sm sm:items-center sm:pb-0">
           <div className="panel w-full max-w-md p-4">
             <div className="grid grid-cols-2 gap-3">
               <input type="time" value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} className="rounded-lg border border-border bg-background/60 px-3 py-2 text-sm" />

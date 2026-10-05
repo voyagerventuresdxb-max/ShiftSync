@@ -27,7 +27,7 @@ function formatStamp(iso: string): string {
 }
 
 export function Announcements() {
-  const { locationId, currentEmployeeId, mergedRoster } = useAppState();
+  const { locationId, readHeaders } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [items, setItems] = useState<AnnouncementDto[]>([]);
@@ -49,7 +49,7 @@ export function Announcements() {
       return;
     }
     let cancelled = false;
-    fetchAnnouncements(locationId)
+    fetchAnnouncements(locationId, readHeaders)
       .then((list) => {
         if (cancelled) return;
         setItems(list);
@@ -73,7 +73,7 @@ export function Announcements() {
     return () => {
       cancelled = true;
     };
-  }, [locationId]);
+  }, [locationId, readHeaders]);
 
   async function save() {
     if (!draft || !draft.body.trim()) return;
@@ -95,7 +95,7 @@ export function Announcements() {
         const updated = await updateAnnouncement(session.token, draft.id, draft.body.trim());
         setItems((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
       } else {
-        const created = await postAnnouncement(session.token, locationId!, draft.body.trim(), currentEmployeeId);
+        const created = await postAnnouncement(session.token, locationId!, draft.body.trim());
         setItems((prev) => [created, ...prev]);
       }
       setDraft(null);
@@ -121,8 +121,11 @@ export function Announcements() {
     }
   }
 
-  const authorName = (a: AnnouncementDto) =>
-    a.authorName ?? mergedRoster.employees.find((e) => e.id === currentEmployeeId)?.name ?? 'Management';
+  // Never the viewer's own "Viewing" employee as a stand-in: on My Shifts
+  // that showed a manager's announcement as posted by the staff member
+  // reading it. The server attributes every post to its session user now, so
+  // this fallback only covers rows written before that.
+  const authorName = (a: AnnouncementDto) => a.authorName ?? 'Management';
 
   // Anyone signed in may post; editing/deleting is manager/owner only, with
   // no author exception (server-enforced in announcements.ts — this only
@@ -139,7 +142,7 @@ export function Announcements() {
         </div>
         <button
           onClick={() => setDraft({ id: null, body: '' })}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
+          className="hit-44 inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground"
         >
           <Plus className="h-3.5 w-3.5" /> Post
         </button>
@@ -160,14 +163,14 @@ export function Announcements() {
           <div className="mt-2 flex justify-end gap-2">
             <button
               onClick={() => setDraft(null)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" /> Cancel
             </button>
             <button
               onClick={() => void save()}
               disabled={!draft.body.trim() || saving}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              className="hit-44 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
               {saving ? 'Saving…' : draft.id ? 'Save edit' : 'Broadcast'}
             </button>

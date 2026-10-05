@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { StaffDirectoryEntry } from '../../api/staffDirectory';
 import { initials } from './staffFormat';
+import { useCloseOnBack } from '../../lib/backNavigation';
 
 interface Props {
   sectionLabel: string;
@@ -13,6 +14,7 @@ interface Props {
 export default function SectionPicker({ sectionLabel, staff, onPick, onClose }: Props) {
   const [query, setQuery] = useState('');
   const [dutyLabel, setDutyLabel] = useState('');
+  useCloseOnBack(true, onClose);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return staff;
