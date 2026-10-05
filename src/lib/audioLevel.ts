@@ -19,8 +19,15 @@ export function isSilent(peakRms: number): boolean {
 }
 
 /**
- * Samples the stream's level every 100 ms. `stop()` returns the loudest moment's RMS, or null
- * when the browser can't measure (then nothing is blocked).
+ * How often the level is read, and how many samples each read covers. Each read must reach back
+ * past the previous one, so a short word between reads is never missed.
+ */
+export const METER_INTERVAL_MS = 40;
+export const METER_WINDOW_SAMPLES = 4096;
+
+/**
+ * Samples the stream's level every `METER_INTERVAL_MS`. `stop()` returns the loudest moment's
+ * RMS, or null when the browser can't measure (then nothing is blocked).
  */
 export function startLevelMeter(stream: MediaStream): { stop: () => number | null } {
   try {
@@ -28,7 +35,7 @@ export function startLevelMeter(stream: MediaStream): { stop: () => number | nul
     if (!Ctx) return { stop: () => null };
     const ctx = new Ctx();
     const analyser = ctx.createAnalyser();
-    analyser.fftSize = 2048;
+    analyser.fftSize = METER_WINDOW_SAMPLES;
     ctx.createMediaStreamSource(stream).connect(analyser);
     const buf = new Float32Array(analyser.fftSize);
     let peak = 0;
@@ -37,7 +44,7 @@ export function startLevelMeter(stream: MediaStream): { stop: () => number | nul
       analyser.getFloatTimeDomainData(buf);
       peak = Math.max(peak, rms(buf));
       measured = true;
-    }, 100);
+    }, METER_INTERVAL_MS);
     return {
       stop: () => {
         clearInterval(timer);
