@@ -25,6 +25,9 @@
     "phones:backfill": "node scripts/with-branch-schema.mjs \"tsx server/scripts/backfill-phone-e164.ts\"",
     "db:seed": "node scripts/with-branch-schema.mjs \"tsx server/scripts/seed-test-data.ts\"",
     "db:seed:demo": "node scripts/with-branch-schema.mjs \"tsx server/scripts/seed-demo-venue.ts\"",
+    "load:smoke": "node scripts/with-branch-schema.mjs \"node scripts/load-smoke.mjs\"",
+    "db:reset:demo": "node scripts/with-branch-schema.mjs \"tsx server/scripts/reset-demo-venue.ts\"",
+    "demo:record": "node scripts/with-branch-schema.mjs \"playwright test -c playwright.demo.config.ts\"",
     "admin:grant": "node scripts/with-branch-schema.mjs \"tsx server/scripts/grant-platform-admin.ts\"",
     "org:create": "node scripts/with-branch-schema.mjs \"tsx server/scripts/create-org-shell.ts\"",
     "cleanup:test-venues": "node scripts/with-branch-schema.mjs \"tsx server/scripts/cleanup-test-venues.ts\"",
@@ -39,7 +42,8 @@
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "vlm:check": "tsx server/scripts/vlm-check.ts",
     "eval:roster": "tsx server/eval/roster/run.ts",
-    "eval:roster:generate": "tsx server/eval/roster/generate.ts"
+    "eval:roster:generate": "tsx server/eval/roster/generate.ts",
+    "fixtures:restore-private": "node scripts/restore-private-fixtures.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

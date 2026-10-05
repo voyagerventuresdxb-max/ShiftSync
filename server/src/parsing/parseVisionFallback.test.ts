@@ -4,6 +4,11 @@ import { ApiError, type GoogleGenAI } from '@google/genai';
 import * as parseVision from './parseVision.js';
 import { parseRosterImage, VisionIngestionError, __setGeminiClientForTests } from './parseVision.js';
 
+// These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
+// (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
+process.env.AI_MONTHLY_BUDGET_USD = '1000000';
+process.env.AI_DAILY_CALL_LIMIT = '1000000';
+
 /**
  * Proves the canned sample roster is gone from every production path: when
  * Gemini says 429 on every retry, the manager gets a clear error — never a
@@ -11,7 +16,7 @@ import { parseRosterImage, VisionIngestionError, __setGeminiClientForTests } fro
  * (a real 429 cannot be produced on demand, and every real call is paid);
  * everything from the retry loop down is the real code.
  */
-const SAMPLE_NAMES = ['Andrea', 'Roberto', 'Alessandro', 'Tomas', 'Sintia', 'Pratik', 'Rojina', 'Hefny', 'Bashkar', 'Gattopardo'];
+const SAMPLE_NAMES = ['Kalim', 'Nemur', 'Karen', 'Rumur', 'Ruren', 'Mibru', 'Nezon', 'Lodak', 'Kadak', 'Gattopardo'];
 
 function fakeClientThatAlwaysReturns(status: number): GoogleGenAI {
   return {
@@ -107,5 +112,26 @@ test('no Gemini credentials at all: an image rejects with vision_unconfigured in
     assert.match(err.message, /Excel\/CSV/);
   } finally {
     process.env.GEMINI_API_KEY = key;
+  }
+});
+
+test('the AI spend cap reached: an image rejects with vision_paused and Gemini is never called', async () => {
+  const saved = process.env.AI_MONTHLY_BUDGET_USD;
+  process.env.AI_MONTHLY_BUDGET_USD = '0';
+  let calls = 0;
+  __setGeminiClientForTests({
+    models: {
+      generateContent: async () => {
+        calls++;
+        return { text: '{"employees":[]}' };
+      },
+    },
+  } as unknown as GoogleGenAI);
+  try {
+    const err = await expectVisionError(parseRosterImage(Buffer.from('png'), 'image/png', 'roster.png', '2026-08-17'), 'vision_paused');
+    assert.equal(err.message, 'AI reading is paused for this month; upload Excel/CSV or add staff manually.');
+    assert.equal(calls, 0, 'no provider call is made once the cap is reached');
+  } finally {
+    process.env.AI_MONTHLY_BUDGET_USD = saved;
   }
 });

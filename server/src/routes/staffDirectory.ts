@@ -6,7 +6,7 @@ import { withAuditedTransaction } from '../lib/auditLog.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { findUserByPhone } from './identity.js';
 import { revokeUserAccess } from '../lib/identity.js';
-import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError } from '../lib/actions/employmentStatusActions.js';
+import { assertNotLastActiveOwner, employmentStatusRefusal, LastOwnerError, phoneChangeRefusal } from '../lib/actions/employmentStatusActions.js';
 
 /**
  * Staff Directory — a venue-configured mapping of each staff member to
@@ -262,6 +262,13 @@ staffDirectoryRouter.patch('/:userId', requireSession, requireManager, async (re
     // to move both — otherwise terminatedAt stays permanently null and the two
     // fields disagree about the same fact. Only a real transition writes it, so
     // re-sending isActive:false doesn't overwrite the original termination date.
+    // The phone is the sign-in credential: only a real change is checked, so
+    // re-sending the current number stays a no-op for everyone.
+    if (data.phone !== undefined && data.phone !== existing.phone) {
+      const refusal = phoneChangeRefusal(req.user!, existing);
+      if (refusal) return res.status(403).json({ error: refusal });
+    }
+
     const statusChanges = data.isActive !== undefined && data.isActive !== existing.isActive;
     if (statusChanges) {
       // Who may change whose status (see employmentStatusActions.ts). Checked

@@ -2,6 +2,7 @@ import { gridToTsvText } from './parseWorkbook.js';
 import { PDFParse } from 'pdf-parse';
 import { isOvernight, parseDateCell, parseTimeCell, resolveDayMonthDate } from './normalize.js';
 import { getVisionProvider, VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
+import { AI_PAUSED_MESSAGE } from '../lib/aiBudget.js';
 import { enforceNoDoubleShifts } from './shiftConstraints.js';
 import { parseRotaFile, processRowsIntoRoster } from './deterministicParser.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
@@ -29,8 +30,9 @@ function clampConfidence(value: number): number {
  *  - vision_model_unavailable every configured model answered 404 (retired, misspelled or not
  *                             offered in the configured region) — an operator fix, not a retry.
  *  - vision_failed            any other failure (auth, bad response, unmappable output).
+ *  - vision_paused            the in-app AI spend cap (lib/aiBudget.ts) is reached; nothing was sent.
  */
-export type VisionErrorCode = 'vision_busy' | 'vision_unconfigured' | 'vision_model_unavailable' | 'vision_failed';
+export type VisionErrorCode = 'vision_busy' | 'vision_unconfigured' | 'vision_model_unavailable' | 'vision_failed' | 'vision_paused';
 
 /**
  * Manager-facing copy. Every message names the way out (Excel/CSV, retry) —
@@ -43,6 +45,7 @@ export const VISION_ERROR_MESSAGES: Record<VisionErrorCode, string> = {
   vision_model_unavailable:
     'AI roster reading is unavailable on this server until its AI model setting is updated. Upload an Excel/CSV export instead, or add staff by hand.',
   vision_failed: "AI roster reading couldn't read this file. Try again in a few minutes, or upload an Excel/CSV export instead.",
+  vision_paused: AI_PAUSED_MESSAGE,
 };
 
 export class VisionIngestionError extends Error {
@@ -171,6 +174,8 @@ export const AI_TEMPLATE_LABEL = 'Direct Vision Ingestion';
 export interface VisionCallOptions {
   /** Default true (per VLM_FALLBACK_MODE). false: on any AI failure throw the coded VisionIngestionError. */
   localFallback?: boolean;
+  /** The venue the read is for — recorded in the AI usage ledger. */
+  locationId?: string | null;
 }
 
 /** Test seam kept for existing tests: swaps the Gemini SDK client inside the real provider. */
@@ -180,6 +185,7 @@ const PROVIDER_ERROR_CODE: Record<VisionProviderError['kind'], VisionErrorCode> 
   busy: 'vision_busy',
   model_unavailable: 'vision_model_unavailable',
   failed: 'vision_failed',
+  paused: 'vision_paused',
 };
 
 /**
@@ -260,7 +266,7 @@ export async function parseRosterGrid(
     return { ...result, templateLabel: 'Deterministic local parser (AI roster reading not configured)' };
   }
 
-  const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart });
+  const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart, locationId: options.locationId ?? null });
   if ('code' in read) {
     if (mode === 'off') throw new VisionIngestionError(VISION_ERROR_MESSAGES[read.code], read.cause, read.code);
     console.warn(`[parseVision] Falling back to the deterministic local parser for a grid roster (${read.code}).`);
@@ -291,7 +297,7 @@ export async function parseRosterImage(
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision_unconfigured', undefined);
   }
 
-  const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart });
+  const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart, locationId: options.locationId ?? null });
   if ('code' in read) {
     if (mode === 'off') throw new VisionIngestionError(VISION_ERROR_MESSAGES[read.code], read.cause, read.code);
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, read.code, read.cause);

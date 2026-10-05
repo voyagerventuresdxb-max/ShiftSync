@@ -1,4 +1,4 @@
-import { GoogleGenAI, ApiError } from '@google/genai';
+import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { intentSchemaFor, type ParsedIntent } from './intentSchema.js';
@@ -7,12 +7,16 @@ import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
 import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
 import { bestMatch } from '../lib/textSimilarity.js';
+import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, textInputEstimate, withAiBudget } from '../lib/aiBudget.js';
+import { billedOutputTokens } from '../parsing/visionProvider.js';
 
 export class VoiceIntentError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
   cause?: unknown;
   /** True when Gemini answered 404 for the configured model (retired/misspelled): an operator fix, not a retry. */
   modelUnavailable: boolean;
+  /** True when the in-app AI spend cap refused the call (nothing was sent). */
+  paused = false;
 
   constructor(message: string, cause?: unknown, modelUnavailable = false) {
     super(message);
@@ -163,15 +167,24 @@ export async function parseVoiceIntent(
   const schema = intentSchemaFor(user.systemRole);
 
   try {
-    const response = await client.models.generateContent({
-      model: voiceModel(),
-      contents: [{ role: 'user', parts: [{ text: transcript }] }],
-      config: {
-        systemInstruction: systemPrompt,
-        responseMimeType: 'application/json',
-        responseSchema: schema,
+    const genai = client;
+    const response = await withAiBudget(
+      { locationId: user.locationId, feature: 'voice_intent', inputTokensEstimate: textInputEstimate(systemPrompt, transcript, JSON.stringify(schema)) },
+      async () => {
+        const r = await genai.models.generateContent({
+          model: voiceModel(),
+          contents: [{ role: 'user', parts: [{ text: transcript }] }],
+          config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: 'application/json',
+            responseSchema: schema,
+            maxOutputTokens: MAX_OUTPUT_TOKENS.voice_intent,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          },
+        });
+        return { value: r, usage: { inputTokens: r.usageMetadata?.promptTokenCount ?? null, outputTokens: billedOutputTokens(r.usageMetadata) } };
       },
-    });
+    );
     const raw = JSON.parse(response.text ?? '{}');
     const attempted = normalizeParsedIntent(raw);
     // Computed independently of confidence/the gate below — this line must
@@ -199,6 +212,11 @@ export async function parseVoiceIntent(
 
     return { response: clientResponse, attempted, hasAdditionalRequest };
   } catch (err) {
+    if (err instanceof AiBudgetExceededError) {
+      const paused = new VoiceIntentError(`AI spend cap reached (${err.limit}); no call made.`, err);
+      paused.paused = true;
+      throw paused;
+    }
     if (err instanceof ApiError) {
       const modelUnavailable = reportIfModelUnavailable('parse-intent', err);
       throw new VoiceIntentError(`Intent parsing failed (${err.status ?? 'unknown'}): ${err.message}`, err, modelUnavailable);

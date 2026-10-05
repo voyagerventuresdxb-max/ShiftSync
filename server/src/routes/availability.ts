@@ -74,14 +74,17 @@ availabilityRouter.post('/', requireSession, async (req, res) => {
   }
 });
 
-/** DELETE /api/availability/:id — session-gated, and only the mark's own owner may remove it. */
+/**
+ * DELETE /api/availability/:id — session-gated, and only the mark's own owner
+ * may remove it. Someone else's mark answers exactly like a missing one (404),
+ * so the route can't be used to learn which ids exist.
+ */
 availabilityRouter.delete('/:id', requireSession, async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await prisma.availabilityMark.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ error: `Availability mark "${id}" not found.` });
-    if (existing.userId !== req.user!.id) {
-      return res.status(403).json({ error: 'You can only remove your own availability marks.' });
+    if (!existing || existing.userId !== req.user!.id) {
+      return res.status(404).json({ error: 'That availability mark could not be found.' });
     }
     await prisma.availabilityMark.delete({ where: { id } });
     return res.status(204).send();
