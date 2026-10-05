@@ -270,6 +270,9 @@ interface Case extends Call {
 const CASES: Case[] = [
   // AI spend cap (owner only)
   { name: 'GET /api/ai/usage', method: 'GET', path: (f) => `/api/ai/usage?locationId=${f.locA}`, refuse: ['anon', 'deactivatedA', 'staffA', 'managerA', 'staffB', 'managerB', 'ownerB'] },
+  // Owner-only, about the server's own AI setup (no venue data): any other role is refused.
+  // No positive control here: it would make real model calls; aiSelfTest.test.ts covers the owner path with a fake client.
+  { name: 'POST /api/ai/self-test', method: 'POST', path: () => '/api/ai/self-test', refuse: ['anon', 'deactivatedA', 'staffA', 'managerA', 'staffB', 'managerB'] },
   // announcements
   { name: 'GET /api/announcements/:locationId', method: 'GET', path: (f) => `/api/announcements/${f.locA}`, refuse: OUTSIDERS },
   { name: 'POST /api/announcements', method: 'POST', path: () => '/api/announcements', body: () => ({ body: `${TAG} new` }), refuse: ['anon', 'deactivatedA'] },

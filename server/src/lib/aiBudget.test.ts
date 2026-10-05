@@ -4,7 +4,14 @@ import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from './identity.js';
-import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, aiBudgetConfig, costUsd, withAiBudget, aiUsageSummary, type AiCallUsage } from './aiBudget.js';
+import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, aiBudgetConfig, costUsd, withAiBudget, aiUsageSummary, visionWeeklyLimit, type AiCallUsage } from './aiBudget.js';
+
+test('AI_VISION_WEEKLY_LIMIT: default 1 (the old once-a-week), whole numbers from 0 up, anything else the default', () => {
+  assert.equal(visionWeeklyLimit({}), 1);
+  assert.equal(visionWeeklyLimit({ AI_VISION_WEEKLY_LIMIT: '5' }), 5);
+  assert.equal(visionWeeklyLimit({ AI_VISION_WEEKLY_LIMIT: ' 0 ' }), 0);
+  for (const bad of ['', '-1', '2.5', 'five']) assert.equal(visionWeeklyLimit({ AI_VISION_WEEKLY_LIMIT: bad }), 1, bad);
+});
 
 /**
  * The spend cap's counters are deployment-wide per UTC month/day, so every test here runs on

@@ -106,6 +106,9 @@ export const transcribeRateLimiter = makeAiRouteLimiter(20, true);
  */
 export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
 
+/** POST /api/ai/self-test: two tiny real model calls per request, so a handful per 5 minutes. Every request counts. */
+export const aiSelfTestRateLimiter = makeAiRouteLimiter(3, false);
+
 /**
  * POST /api/schedules/upload (roster file upload — schedules.ts routes an
  * uploaded file across several parsing paths depending on shape: a

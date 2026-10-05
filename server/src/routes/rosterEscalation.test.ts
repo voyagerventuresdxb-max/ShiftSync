@@ -54,7 +54,8 @@ beforeEach(async () => {
   __setVisionProviderForTests(null);
   __setGridParserForTests(null);
   delete process.env.ROSTER_ESCALATE_EMPTY_ROLE_SHARE;
-  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: null } });
+  delete process.env.AI_VISION_WEEKLY_LIMIT;
+  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: null, visionFallbackUses: [] } });
 });
 
 after(async () => {
@@ -133,8 +134,8 @@ const image = { data: PNG, name: 'roster.png', type: 'image/png' };
 const sheet = (data: Buffer) => ({ data, name: 'roster.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
 async function allowanceUsed(): Promise<boolean> {
-  const loc = await prisma.location.findUnique({ where: { id: locationId }, select: { lastVisionFallbackUsedAt: true } });
-  return loc?.lastVisionFallbackUsedAt != null;
+  const loc = await prisma.location.findUnique({ where: { id: locationId }, select: { lastVisionFallbackUsedAt: true, visionFallbackUses: true } });
+  return loc?.lastVisionFallbackUsedAt != null && loc.visionFallbackUses.length > 0;
 }
 
 test('a STAFF session cannot upload a roster (an AI read costs the venue): 403', async () => {
@@ -168,11 +169,38 @@ test('image with consent: read by the provider, preview returned, weekly allowan
 test('image with consent but the weekly allowance already used: 422 with the manual path, nothing sent', async () => {
   const mock = new MockVisionProvider(AI_RESPONSE);
   __setVisionProviderForTests(mock);
-  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: new Date() } });
+  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: new Date(), visionFallbackUses: [new Date()] } });
   const { status, body } = await upload(image, { aiConsent: true });
   assert.equal(status, 422);
   assert.equal(body.errorCode, 'vision_fallback_blocked');
+  assert.match(body.error, /limited to once per venue per week/);
   assert.match(body.error, /People → Add staff member/);
+  assert.equal(mock.calls.length, 0);
+});
+
+test('AI_VISION_WEEKLY_LIMIT=2: a second read this week goes through, a third is refused; reads older than 7 days do not count', async () => {
+  process.env.AI_VISION_WEEKLY_LIMIT = '2';
+  const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  await prisma.location.update({ where: { id: locationId }, data: { visionFallbackUses: [eightDaysAgo, new Date()] } });
+  const mock = new MockVisionProvider(AI_RESPONSE);
+  __setVisionProviderForTests(mock);
+  assert.equal((await upload(image, { aiConsent: true })).status, 200);
+  assert.equal(mock.calls.length, 1);
+  const loc = await prisma.location.findUniqueOrThrow({ where: { id: locationId }, select: { visionFallbackUses: true } });
+  assert.equal(loc.visionFallbackUses.length, 2, 'the expired read was dropped, the new one recorded');
+  const third = await upload(image, { aiConsent: true });
+  assert.equal(third.status, 422);
+  assert.match(third.body.error, /limited to 2 times per venue per week/);
+  assert.equal(mock.calls.length, 1);
+});
+
+test('AI_VISION_WEEKLY_LIMIT=0: AI roster reading is off, nothing sent', async () => {
+  process.env.AI_VISION_WEEKLY_LIMIT = '0';
+  const mock = new MockVisionProvider(AI_RESPONSE);
+  __setVisionProviderForTests(mock);
+  const { status, body } = await upload(image, { aiConsent: true });
+  assert.equal(status, 422);
+  assert.match(body.error, /switched off on this server/);
   assert.equal(mock.calls.length, 0);
 });
 
