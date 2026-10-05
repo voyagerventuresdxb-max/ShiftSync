@@ -235,3 +235,11 @@ export const loginLinkRedeemRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 30)
 
 /** POST /api/login-links/peek: its own bucket (60 per 10 minutes) so every sign-in's peek doesn't halve redeem capacity. */
 export const loginLinkPeekRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 60);
+
+/**
+ * Refused kiosk reads (no session; `X-Kiosk-Token` missing, wrong, replaced or
+ * revoked): 20 per 15 minutes per client, keyed and loopback-skipped like
+ * `otpRequestIpLimiter`. middleware/kioskAccess.ts calls it only on a refusal,
+ * so it counts failures alone, and a valid token or a session never reaches it.
+ */
+export const kioskFailureLimiter = clientKeyedLimiter(15 * 60 * 1000, 20);

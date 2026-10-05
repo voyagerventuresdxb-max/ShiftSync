@@ -145,6 +145,32 @@ tsx server/scripts/grant-platform-admin.ts +971501234567
 
 Locally: `npm run org:create -- …` and `npm run admin:grant -- …` (against the branch schema).
 
+## Kiosk links
+
+A venue's shared screen (a tablet at the host stand, a back-of-house TV) opens
+`<FRONTEND_ORIGIN>/kiosk?venue=<locationId>#k=<token>` to show this week's **published** rota,
+announcements and shoutouts with no personal sign-in. Owners and managers make the link on
+People → **Kiosk link**: it is shown once, when created; Regenerate replaces it (the old link
+stops working at once) and Revoke leaves the venue with none. Its origin follows the invite-link
+rule (the caller's origin if it is in `FRONTEND_ORIGIN`, else the first entry).
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /api/kiosk/:locationId` | owner/manager of that venue | `{ active: { createdAt } \| null }` — never the link |
+| `POST /api/kiosk/:locationId/regenerate` | owner/manager of that venue | `201 { active, url }`; the only time the link is returned |
+| `POST /api/kiosk/:locationId/revoke` | owner/manager of that venue | `{ active: null }` |
+| `GET /api/shifts/:locationId?weekStart=`, `GET /api/shifts/:locationId/publish-status?weekStart=`, `GET /api/announcements/:locationId`, `GET /api/shoutouts/:locationId` | a session of that venue, **or** the venue's current token in `X-Kiosk-Token` | another venue's session: 403. No session and no current token (venue id alone, an old, revoked or made-up token): the same `401 kiosk_link_required` |
+
+- With the token, the shift read returns published shifts only, each as id, date, start, end,
+  staff name and role name; announcements and shoutouts come without user ids. No other route
+  accepts the token.
+- Only the token's sha256 is stored (`locations.kiosk_token_hash`, migration
+  `20261004140000_kiosk_token`). The token travels in the URL fragment; the page stores it on
+  the device (localStorage) and removes it from the address bar.
+- Refused kiosk reads are limited to 20 per 15 minutes per client (keyed like the OTP limiter);
+  a valid token or a session is never limited.
+- Regenerate and revoke are not in the audit log (no audit action covers kiosk links yet).
+
 ## Rollback
 
 - API: Railway → Deployments → *Redeploy* a previous green deployment.

@@ -46,6 +46,9 @@ model Location {
   lastVisionFallbackUsedAt DateTime? @map("last_vision_fallback_used_at")
   // Old `/join?location=<id>` links are honoured until this instant (set by the invite-link migration); NULL = never.
   legacyJoinLinksUntil     DateTime? @map("legacy_join_links_until")
+  // Kiosk link (`/kiosk?venue=<id>#k=<token>`): only the sha256 of its token is stored; NULL = no kiosk link (lib/kioskLinks.ts).
+  kioskTokenHash           String?   @unique @map("kiosk_token_hash")
+  kioskTokenCreatedAt      DateTime? @map("kiosk_token_created_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
