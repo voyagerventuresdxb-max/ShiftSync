@@ -65,20 +65,22 @@ async function teardown(orgId: string) {
   await prisma.organization.delete({ where: { id: orgId } }).catch(() => {});
 }
 
-test('GET /api/shifts/:locationId — drafts only for a manager of that venue; staff, anonymous and other-venue managers get PUBLISHED only', async () => {
+test('GET /api/shifts/:locationId — drafts only for a manager of that venue; staff get PUBLISHED only; anonymous and other-venue callers are refused', async () => {
   const f = await fixture();
   try {
     const [mgrToken, staffToken, otherMgrToken] = await Promise.all([sessionFor(f.manager.id), sessionFor(f.staff.id), sessionFor(f.otherManager.id)]);
     await withServer(async (baseUrl) => {
-      const ids = async (token?: string) => {
-        const res = await fetch(`${baseUrl}/api/shifts/${f.location.id}?weekStart=${WEEK}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const read = (token?: string) => fetch(`${baseUrl}/api/shifts/${f.location.id}?weekStart=${WEEK}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const ids = async (token: string) => {
+        const res = await read(token);
         assert.equal(res.status, 200);
         return ((await res.json()) as { shifts: { id: string }[] }).shifts.map((s) => s.id).sort();
       };
-      assert.deepEqual(await ids(), [f.published.id], 'anonymous kiosk read must not see drafts');
+      // A kiosk screen reads with its own token (PUBLISHED only — kiosk.test.ts); a venue id alone is refused.
+      assert.equal((await read()).status, 401, 'anonymous read is refused');
+      assert.equal((await read('not-a-real-token')).status, 401, 'an invalid token is refused');
+      assert.equal((await read(otherMgrToken)).status, 403, "another venue's manager is refused");
       assert.deepEqual(await ids(staffToken), [f.published.id], 'staff must not see drafts');
-      assert.deepEqual(await ids(otherMgrToken), [f.published.id], "another venue's manager must not see this venue's drafts");
-      assert.deepEqual(await ids('not-a-real-token'), [f.published.id], 'an invalid token is treated as anonymous');
       assert.deepEqual(await ids(mgrToken), [f.draft.id, f.published.id].sort(), 'a manager of the venue sees drafts');
     });
   } finally {

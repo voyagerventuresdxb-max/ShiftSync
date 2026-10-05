@@ -138,44 +138,11 @@ floorPlanRouter.post('/upload', requireSession, requireManager, upload.single('f
 });
 
 /**
- * COMPAT — one release only (2026-09-30). Remove once the pin-only frontend
- * is live in production (tracked in the follow-up issue; grep "COMPAT").
- *
- * The frontend (Vercel) and this API (Railway) deploy separately, and the API
- * ships first. Until the new frontend is live, the OLD frontend is talking to
- * this API: it positions each section from `polygon` and creates sections by
- * POSTing a polygon. So for one release this API still:
- *  - sends a `polygon` with every section — the stored one, or for a
- *    pin-only section (stored `[]`) a small square centred on the pin, so
- *    the old board still draws its pin in the right place;
- *  - accepts a POST with only a polygon, deriving the pin from its vertex
- *    average (the same rule the backfill migration used).
- * The new frontend ignores `polygon` entirely.
+ * `FloorSection.polygon` is deprecated (2026-09-29, pin-only sections) and
+ * kept in the DB only so the change can be reverted — it is never sent to
+ * clients. Every section a response carries is read with this omit.
  */
-const COMPAT_SQUARE_HALF = 0.02;
-
-type Pt = { x: number; y: number };
-function storedPolygon(polygon: unknown): Pt[] | null {
-  return Array.isArray(polygon) && polygon.length >= 3 && polygon.every((p) => typeof p?.x === 'number' && typeof p?.y === 'number')
-    ? (polygon as Pt[])
-    : null;
-}
-function compatPolygon(section: { polygon: unknown; pinX: number; pinY: number }): Pt[] {
-  const stored = storedPolygon(section.polygon);
-  if (stored) return stored;
-  const c = (v: number) => Math.min(1, Math.max(0, v));
-  const { pinX: x, pinY: y } = section;
-  const h = COMPAT_SQUARE_HALF;
-  return [
-    { x: c(x - h), y: c(y - h) },
-    { x: c(x + h), y: c(y - h) },
-    { x: c(x + h), y: c(y + h) },
-    { x: c(x - h), y: c(y + h) },
-  ];
-}
-function withCompatPolygon<T extends { polygon: unknown; pinX: number; pinY: number }>(section: T): T & { polygon: Pt[] } {
-  return { ...section, polygon: compatPolygon(section) };
-}
+const OMIT_DEPRECATED = { polygon: true } as const;
 
 /** A pin coordinate: a fraction (0-1) of the plan image's width or height. */
 function isPinCoord(v: unknown): v is number {
@@ -194,14 +161,8 @@ floorPlanRouter.post('/sections', requireSession, requireManager, async (req, re
     const locationId = String(req.body?.locationId ?? '').trim();
     const floorPlanImageId = String(req.body?.floorPlanImageId ?? '').trim();
     const label = String(req.body?.label ?? '').trim();
-    let pinX = req.body?.pinX;
-    let pinY = req.body?.pinY;
-    // COMPAT (one release): the old frontend POSTs only a polygon.
-    const legacyPolygon = pinX === undefined && pinY === undefined ? storedPolygon(req.body?.polygon) : null;
-    if (legacyPolygon) {
-      pinX = legacyPolygon.reduce((n, p) => n + p.x, 0) / legacyPolygon.length;
-      pinY = legacyPolygon.reduce((n, p) => n + p.y, 0) / legacyPolygon.length;
-    }
+    const pinX = req.body?.pinX;
+    const pinY = req.body?.pinY;
     const paxCapacity = Number(req.body?.paxCapacity);
     const notes = req.body?.notes ? String(req.body.notes).trim() : null;
 
@@ -223,9 +184,10 @@ floorPlanRouter.post('/sections', requireSession, requireManager, async (req, re
 
     const sortOrder = await prisma.floorSection.count({ where: { floorPlanImageId } });
     const section = await prisma.floorSection.create({
-      data: { locationId, floorPlanImageId, label, pinX, pinY, polygon: legacyPolygon ?? [], paxCapacity: Math.round(paxCapacity), notes, sortOrder },
+      data: { locationId, floorPlanImageId, label, pinX, pinY, paxCapacity: Math.round(paxCapacity), notes, sortOrder },
+      omit: OMIT_DEPRECATED,
     });
-    return res.status(201).json({ section: withCompatPolygon(section) });
+    return res.status(201).json({ section });
   } catch (err) {
     console.error('[floorPlan.sections.create] failed', err);
     return res.status(500).json({ error: 'Unexpected error while saving the section.' });
@@ -268,8 +230,8 @@ floorPlanRouter.patch('/sections/:sectionId', requireSession, requireManager, as
       return res.status(400).json({ error: 'Nothing to update.' });
     }
 
-    const section = await prisma.floorSection.update({ where: { id: sectionId }, data });
-    return res.status(200).json({ section: withCompatPolygon(section) });
+    const section = await prisma.floorSection.update({ where: { id: sectionId }, data, omit: OMIT_DEPRECATED });
+    return res.status(200).json({ section });
   } catch (err) {
     console.error('[floorPlan.sections.update] failed', err);
     return res.status(500).json({ error: 'Unexpected error while updating the section.' });
@@ -309,8 +271,9 @@ floorPlanRouter.get('/:locationId', requireSession, async (req, res) => {
     const sections = await prisma.floorSection.findMany({
       where: { floorPlanImageId: image.id },
       orderBy: { sortOrder: 'asc' },
+      omit: OMIT_DEPRECATED,
     });
-    return res.status(200).json({ image, sections: sections.map(withCompatPolygon) });
+    return res.status(200).json({ image, sections });
   } catch (err) {
     console.error('[floorPlan.get] failed', err);
     return res.status(500).json({ error: 'Unexpected error while loading the floor plan.' });
@@ -360,7 +323,6 @@ floorPlanRouter.get('/:locationId/assignments', requireSession, async (req, res)
       label: s.label,
       pinX: s.pinX,
       pinY: s.pinY,
-      polygon: compatPolygon(s), // COMPAT (one release)
       paxCapacity: s.paxCapacity,
       notes: s.notes,
       assignments: s.assignments.map((a) => ({
