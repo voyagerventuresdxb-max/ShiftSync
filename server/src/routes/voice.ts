@@ -54,6 +54,8 @@ const TIME_RE = /^\d{2}:\d{2}$/;
 const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
 /** A retired/misspelled model is not fixed by retrying, so say so (and point at the buttons). */
 const VOICE_MODEL_UNAVAILABLE = "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile.";
+/** The in-app AI spend cap (lib/aiBudget.ts) refused the call before anything was sent. */
+const VOICE_PAUSED = "Voice commands are paused (AI spending limit reached). Use the app's buttons meanwhile.";
 
 /**
  * Per-intent-type shape guard for the CLIENT-SUPPLIED intent body — mirrors
@@ -189,7 +191,7 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
       vocabulary = undefined;
     }
 
-    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary);
+    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary, req.user!.locationId);
     return res.status(200).json({ transcript });
   } catch (err) {
     if (err instanceof VoiceTranscriptionError && err.kind === 'format_rejected') {
@@ -201,6 +203,9 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
         error: `Your phone's recording format (${req.file?.mimetype ?? 'unknown'}) wasn't accepted by the transcription service. This is a bug on our side rather than an outage — please tell us your phone model.`,
         errorCode: 'voice_format_rejected',
       });
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'paused') {
+      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
     }
     if (err instanceof VoiceTranscriptionError && err.kind === 'model_unavailable') {
       return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
@@ -246,6 +251,9 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
       hasAdditionalRequest: shouldPromptForAdditionalRequest(resolution),
     });
   } catch (err) {
+    if (err instanceof VoiceIntentError && err.paused) {
+      return res.status(503).json({ error: VOICE_PAUSED, errorCode: 'ai_paused' });
+    }
     if (err instanceof VoiceIntentError && err.modelUnavailable) {
       return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
     }
@@ -416,6 +424,11 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // whose shift a DIFFERENT approved request already reassigned.
         if (result.result === 'conflict') {
           const msg = 'That shift was already reassigned by another swap request.';
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
+        // Decided by someone else between the PENDING check above and this call.
+        if (result.result === 'already_decided') {
+          const msg = `That swap request was already ${result.status.toLowerCase()}.`;
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
         // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/

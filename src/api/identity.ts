@@ -6,6 +6,7 @@
 import { apiFetch, retryAfterSeconds } from './http';
 import { ApiError } from './schedules';
 import { apiUrl } from '../lib/apiUrl';
+import { clearOfflineCache } from '../lib/offlineCache';
 export { ApiError };
 
 export interface SessionUser {
@@ -114,6 +115,8 @@ export interface StoredSession {
 }
 
 export function saveSession(session: StoredSession): void {
+  // A fresh sign-in never inherits anyone's offline schedule copy (shared devices).
+  clearOfflineCache();
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
@@ -143,6 +146,8 @@ export function loadSession(): StoredSession | null {
 }
 
 export function clearSession(): void {
+  // Sign-out, a dead session (any 401, incl. deactivation) and an expired one all land here.
+  clearOfflineCache();
   localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 

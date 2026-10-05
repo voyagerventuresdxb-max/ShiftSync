@@ -13,6 +13,7 @@ import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
+import { offlineLabel } from '../lib/offlineCache';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
@@ -48,6 +49,7 @@ export default function SchedulingContent() {
     mergedRoster,
     initialScheduleLoading,
     scheduleLoadFailed,
+    scheduleOfflineSince,
     config,
     venueName,
     currentEmployeeId,
@@ -336,7 +338,13 @@ export default function SchedulingContent() {
             </div>
           )}
 
-          {!initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />}
+          {scheduleOfflineSince ? (
+            <p role="status" data-testid="offline-label" className="px-4 pb-2 text-[11px] text-warning sm:px-5">
+              {offlineLabel(scheduleOfflineSince)} — the published rota as you last saw it.
+            </p>
+          ) : (
+            !initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />
+          )}
 
           <div key={mode} className="animate-rise">
             {initialScheduleLoading ? (

@@ -5,6 +5,7 @@ import { Announcements } from '../components/shiftsync/Announcements';
 import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { ApprovalsPanel, type ApprovalRequestView } from '../components/shiftsync/ApprovalsPanel';
 import { SafetyValve } from '../components/shiftsync/SafetyValve';
+import { NextShiftCard } from '../components/shiftsync/NextShiftCard';
 import { weekdayOf } from '../engine/rosterView';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
@@ -61,6 +62,7 @@ export default function HomeContent() {
 
   return (
     <div className="space-y-5">
+      {session?.user.systemRole === 'STAFF' && <NextShiftCard />}
       <PredictiveBanner />
       <Announcements />
       <Shoutouts />

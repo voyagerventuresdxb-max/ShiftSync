@@ -258,7 +258,7 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       const gate = await gateWithoutLocalResult('image_or_scan');
       if (gate) return res.status(422).json(gate);
       try {
-        adopt(await readWithAi(() => parseRosterImage(file.buffer, file.mimetype, file.originalname, weekStart)));
+        adopt(await readWithAi(() => parseRosterImage(file.buffer, file.mimetype, file.originalname, weekStart, { locationId: req.user!.locationId })));
       } catch (err) {
         return visionError(err);
       }
@@ -268,7 +268,7 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       // reconstruction can recover data that was never encoded as text.
       const hasTextLayer = await hasPdfTextLayer(file.buffer);
       const readPdfWithAi = (localFallback = true) => () =>
-        parseRosterImage(file.buffer, 'application/pdf', file.originalname, weekStart, { localFallback });
+        parseRosterImage(file.buffer, 'application/pdf', file.originalname, weekStart, { localFallback, locationId: req.user!.locationId });
 
       if (hasTextLayer) {
         // PRIMARY path for a text-layer PDF: reconstruct the grid from real
@@ -362,7 +362,7 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
             : null;
         const withSheetsNote = (result: ParsedVisionResult): ParsedVisionResult =>
           ignoredSheetsAnomaly ? { ...result, anomalies: [ignoredSheetsAnomaly, ...result.anomalies] } : result;
-        const readGridWithAi = (localFallback = true) => () => parseRosterGrid(grid, file.originalname, weekStart, { localFallback });
+        const readGridWithAi = (localFallback = true) => () => parseRosterGrid(grid, file.originalname, weekStart, { localFallback, locationId: req.user!.locationId });
 
         let deterministicResult: ParsedVisionResult | null = null;
         try {

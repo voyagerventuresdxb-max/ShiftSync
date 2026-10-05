@@ -24,7 +24,7 @@ import { parseExcelGrid } from './deterministicGridParser.js';
  *
  * Known transcription caveats (be aware these are judgment calls, not
  * verified against the source data itself):
- *  - Waiter 1 (Putri Rohmawati)'s Saturday cell renders as a solid black
+ *  - Waiter 1 (Neren Netel)'s Saturday cell renders as a solid black
  *    box in the source with no legible text at all — transcribed as blank
  *    here; the real value is unknown.
  *  - The hyphen-chained cells ("10:30-4:00-8:00-12") are read as literal
@@ -46,27 +46,27 @@ const BAR_DES_PRES_GRID: unknown[][] = [
   ['DAY OF THE WEEK', '', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
   ['Events', '', '', '', '', '', '', '', 'SUNDAY LUNCH'],
   ['', '', '', '', '', '', '', '', ''],
-  ['RM', 'Robert Orgovan', 'OFF', '12CL', '10IN', 'OFF', 'IN', '4CL', 'UL'],
-  ['AM', 'Shovit Shrestha', '2CL', 'OFF', 'OFF', '4CL', '4CL', 'UL', '4CL'],
-  ['JAM', 'Leandro De Souza', 'OFF', 'UL', '4CL', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12'],
-  ['Supervisor', 'Eugeniu Mihalas', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12', 'UL', 'OFF', 'OFF', 'AL', 'AL'],
+  ['RM', 'Nedak Mizon', 'OFF', '12CL', '10IN', 'OFF', 'IN', '4CL', 'UL'],
+  ['AM', 'Negal Nebru', '2CL', 'OFF', 'OFF', '4CL', '4CL', 'UL', '4CL'],
+  ['JAM', 'Tavo Kelrin', 'OFF', 'UL', '4CL', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12'],
+  ['Supervisor', 'Kagal Miren', '10:30-4:00-8:00-12', '10:30-4:00-8:00-12', 'UL', 'OFF', 'OFF', 'AL', 'AL'],
   ['', '', '', '', '', '', '', '', ''],
-  ['Head waiter 1', 'Robert Torrecampo', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '4pm to 2am', 'OFF', 'OFF', 'UL', '4pm to 2am'],
-  ['Head waiter 2', 'Nitin Bansal', 'OFF', 'OFF', 'UL', '1pm to 11pm', '4pm to 2am', '4pm to 2am', '1pm to 11pm'],
-  ['Head waiter 4', 'Aya Boutaieb', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL'],
-  ['Head waiter 5', 'Ishita Ghosh', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL'],
+  ['Head waiter 1', 'Nedak Ruzon', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '4pm to 2am', 'OFF', 'OFF', 'UL', '4pm to 2am'],
+  ['Head waiter 2', 'Midak Kavos', 'OFF', 'OFF', 'UL', '1pm to 11pm', '4pm to 2am', '4pm to 2am', '1pm to 11pm'],
+  ['Head waiter 4', 'Mira Dunvale', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL'],
+  ['Head waiter 5', 'Lotel Lovos', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL'],
   ['WAITER', '', '', '', '', '', '', '', ''],
-  ['Waiter 1', 'Putri Rohmawati', '4pm to 2am', 'OFF', '1pm to 11pm', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '', 'OFF'], // Saturday cell unreadable (solid black) in source, see caveats above
-  ['Waiter 2', 'Tony', 'UL', 'UL', 'UL', 'UL', 'UL', 'OFF', 'OFF'],
-  ['Waiter 3', 'Francis Chan', 'OFF', '1pm to 11pm', '10am/3pm-7pm/12am', '4pm to 2am', '1pm to 11pm', 'UL', 'OFF'],
-  ['Waiter 4', 'Benedict Nykuna', '1pm to 11pm', '4pm to 2am', 'OFF', 'OFF', 'OFF', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am'],
+  ['Waiter 1', 'Neren Netel', '4pm to 2am', 'OFF', '1pm to 11pm', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '', 'OFF'], // Saturday cell unreadable (solid black) in source, see caveats above
+  ['Waiter 2', 'Rutel', 'UL', 'UL', 'UL', 'UL', 'UL', 'OFF', 'OFF'],
+  ['Waiter 3', 'Loren Kazon', 'OFF', '1pm to 11pm', '10am/3pm-7pm/12am', '4pm to 2am', '1pm to 11pm', 'UL', 'OFF'],
+  ['Waiter 4', 'Kamur Mitel', '1pm to 11pm', '4pm to 2am', 'OFF', 'OFF', 'OFF', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am'],
   ['RUNNER', '', '', '', '', '', '', '', ''],
-  ['Chef de pass', 'George Karanja', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL'],
-  ['Runner 1', 'Oak Soe Khant', 'UL', 'OFF', 'OFF', 'UL', '4pm to 2am', '1pm to 11pm', 'UL'],
-  ['Runner 2', 'Tsepo Nkomo', '4pm to 2am', '4pm to 2am', '4pm to 2am', '4pm to 2am', 'OFF', 'OFF', 'UL'],
-  ['Runner 3', 'Mike', '1pm to 11pm', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', 'OFF', 'AL', 'AL'],
-  ['Runner 4', 'Leo', 'OFF', 'OFF', 'UL', '10am/3pm-7pm/12am', '1pm to 11pm', '4pm to 2am', '1pm to 11pm'],
-  ['Runner 5', 'Fernanda Paiva', 'UL', 'UL', 'UL', 'UL', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '4pm to 2am'],
+  ['Chef de pass', 'Lolim Lopix', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL', 'UL'],
+  ['Runner 1', 'Oren Saltis', 'UL', 'OFF', 'OFF', 'UL', '4pm to 2am', '1pm to 11pm', 'UL'],
+  ['Runner 2', 'Rupix Mimur', '4pm to 2am', '4pm to 2am', '4pm to 2am', '4pm to 2am', 'OFF', 'OFF', 'UL'],
+  ['Runner 3', 'Milim', '1pm to 11pm', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', 'OFF', 'AL', 'AL'],
+  ['Runner 4', 'Pell Varrow', 'OFF', 'OFF', 'UL', '10am/3pm-7pm/12am', '1pm to 11pm', '4pm to 2am', '1pm to 11pm'],
+  ['Runner 5', 'Kabru Migal', 'UL', 'UL', 'UL', 'UL', '10am/3pm-7pm/12am', '10am/3pm-7pm/12am', '4pm to 2am'],
 ];
 
 test('Bar des Pres reference: header detection finds the stacked date+weekday rows and locates all 20 staff', () => {
@@ -79,10 +79,10 @@ test('Bar des Pres reference: header detection finds the stacked date+weekday ro
   for (const r of result.anomalies) if (r.employeeName) staffSeen.add(r.employeeName);
 
   const expectedStaff = [
-    'Robert Orgovan', 'Shovit Shrestha', 'Leandro De Souza', 'Eugeniu Mihalas',
-    'Robert Torrecampo', 'Nitin Bansal', 'Aya Boutaieb', 'Ishita Ghosh',
-    'Putri Rohmawati', 'Tony', 'Francis Chan', 'Benedict Nykuna',
-    'George Karanja', 'Oak Soe Khant', 'Tsepo Nkomo', 'Mike', 'Leo', 'Fernanda Paiva',
+    'Nedak Mizon', 'Negal Nebru', 'Tavo Kelrin', 'Kagal Miren',
+    'Nedak Ruzon', 'Midak Kavos', 'Mira Dunvale', 'Lotel Lovos',
+    'Neren Netel', 'Rutel', 'Loren Kazon', 'Kamur Mitel',
+    'Lolim Lopix', 'Oren Saltis', 'Rupix Mimur', 'Milim', 'Pell Varrow', 'Kabru Migal',
   ];
   for (const name of expectedStaff) {
     assert.ok(staffSeen.has(name), `expected ${name} to appear somewhere in the parsed output`);
@@ -97,7 +97,7 @@ test('Bar des Pres reference: per-row titles resolve correctly, including the se
     return [...roles];
   };
 
-  // NOTE: Robert Orgovan (RM), Shovit Shrestha (AM), and George Karanja
+  // NOTE: Nedak Mizon (RM), Negal Nebru (AM), and Lolim Lopix
   // (Chef de pass) are deliberately not checked here — each has a
   // transcribed week made entirely of leave codes ("OFF"/"UL") and/or
   // flagged shorthand ("12CL"/"10IN"/"IN"/"4CL"), so none of them have any
@@ -105,26 +105,26 @@ test('Bar des Pres reference: per-row titles resolve correctly, including the se
   // finding: AnomalyRecord and LeaveRecord both carry no role field, so an
   // employee whose whole week is leave/flagged has their role recorded
   // NOWHERE in the output, not even implicitly — see the coverage report.
-  assert.deepEqual(roleOf('Leandro De Souza'), ['JAM']);
-  assert.deepEqual(roleOf('Eugeniu Mihalas'), ['Supervisor']);
-  assert.deepEqual(roleOf('Robert Torrecampo'), ['Head waiter 1']);
-  assert.deepEqual(roleOf('Putri Rohmawati'), ['Waiter 1']);
-  assert.deepEqual(roleOf('Fernanda Paiva'), ['Runner 5']);
+  assert.deepEqual(roleOf('Tavo Kelrin'), ['JAM']);
+  assert.deepEqual(roleOf('Kagal Miren'), ['Supervisor']);
+  assert.deepEqual(roleOf('Nedak Ruzon'), ['Head waiter 1']);
+  assert.deepEqual(roleOf('Neren Netel'), ['Waiter 1']);
+  assert.deepEqual(roleOf('Kabru Migal'), ['Runner 5']);
 });
 
-test('Bar des Pres reference: "UL" leave code recognized throughout, including all-UL weeks (Aya, Ishita, George)', () => {
+test('Bar des Pres reference: "UL" leave code recognized throughout, including all-UL weeks (Aya, Lotel, Lolim)', () => {
   const result = parseExcelGrid(BAR_DES_PRES_GRID, WEEK_START);
   const ulCount = result.leaveRecords.filter((r) => r.leaveCode === 'UL').length;
   assert.ok(ulCount > 20, `expected many UL leave records across the week, got ${ulCount}`);
-  assert.equal(result.leaveRecords.filter((r) => r.employeeName === 'Aya Boutaieb').length, 7);
-  assert.equal(result.leaveRecords.filter((r) => r.employeeName === 'Ishita Ghosh').length, 7);
-  assert.equal(result.leaveRecords.filter((r) => r.employeeName === 'George Karanja').length, 7);
+  assert.equal(result.leaveRecords.filter((r) => r.employeeName === 'Mira Dunvale').length, 7);
+  assert.equal(result.leaveRecords.filter((r) => r.employeeName === 'Lotel Lovos').length, 7);
+  assert.equal(result.leaveRecords.filter((r) => r.employeeName === 'Lolim Lopix').length, 7);
 });
 
 test('Bar des Pres reference: shorthand codes (IN/CL) are flagged with a clear reason, never a guessed time', () => {
   const result = parseExcelGrid(BAR_DES_PRES_GRID, WEEK_START);
-  const robertAnomalies = result.anomalies.filter((a) => a.employeeName === 'Robert Orgovan');
-  // Robert's week: OFF, 12CL, 10IN, OFF, IN, 4CL, UL -> 4 shorthand cells (12CL, 10IN, IN, 4CL).
+  const robertAnomalies = result.anomalies.filter((a) => a.employeeName === 'Nedak Mizon');
+  // Nedak's week: OFF, 12CL, 10IN, OFF, IN, 4CL, UL -> 4 shorthand cells (12CL, 10IN, IN, 4CL).
   assert.equal(robertAnomalies.length, 4);
   assert.ok(robertAnomalies.some((a) => /open-ended/i.test(a.reason) && /10:00/.test(a.reason))); // 10IN
   assert.ok(robertAnomalies.some((a) => /closing/i.test(a.reason) && /12:00/.test(a.reason))); // 12CL
@@ -134,6 +134,6 @@ test('Bar des Pres reference: shorthand codes (IN/CL) are flagged with a clear r
 
 test('Bar des Pres reference: hyphen-chained split shifts (JAM, Supervisor) produce two shifts per day, not an anomaly', () => {
   const result = parseExcelGrid(BAR_DES_PRES_GRID, WEEK_START);
-  const leandroThursday = result.rows.filter((r) => r.employeeName === 'Leandro De Souza' && r.date === '2026-04-16');
+  const leandroThursday = result.rows.filter((r) => r.employeeName === 'Tavo Kelrin' && r.date === '2026-04-16');
   assert.equal(leandroThursday.length, 2, 'the hyphen-chained cell should split into 2 shifts');
 });
