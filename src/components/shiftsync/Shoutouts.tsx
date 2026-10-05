@@ -20,7 +20,7 @@ function timeAgo(iso: string): string {
 }
 
 export function Shoutouts() {
-  const { locationId, mergedRoster } = useAppState();
+  const { locationId, mergedRoster, readHeaders } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [items, setItems] = useState<ShoutoutDto[]>([]);
@@ -45,7 +45,7 @@ export function Shoutouts() {
       return;
     }
     let cancelled = false;
-    fetchShoutouts(locationId)
+    fetchShoutouts(locationId, readHeaders)
       .then((list) => {
         if (cancelled) return;
         setItems(list);
@@ -69,7 +69,7 @@ export function Shoutouts() {
     return () => {
       cancelled = true;
     };
-  }, [locationId]);
+  }, [locationId, readHeaders]);
 
   const shiftsForEmployee = useMemo(
     () => mergedRoster.shifts.filter((s) => s.employeeId === employeeId).sort((a, b) => b.date.localeCompare(a.date)),

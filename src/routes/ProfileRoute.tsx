@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { ACCOUNT_DELETED_REASON, deleteAccount } from '../api/identity';
+
+// Owner-only, so staff never download it.
+const AiConnectionPanel = lazy(() => import('../components/AiConnectionPanel'));
 
 export default function ProfileContent() {
   const { session, logout } = useIdentity();
@@ -38,6 +41,12 @@ export default function ProfileContent() {
           Sign out
         </button>
       </section>
+
+      {session.user.systemRole === 'OWNER' && (
+        <Suspense fallback={null}>
+          <AiConnectionPanel token={session.token} />
+        </Suspense>
+      )}
 
       <section className="panel p-5" data-testid="delete-account">
         <p className="eyebrow">Delete account</p>

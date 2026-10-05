@@ -27,7 +27,7 @@ dedicated demo database (never production). Two phones: **M** (you, the manager/
 | # | Where | Do | Expect |
 |---|---|---|---|
 | 1 | M `/login` | Enter the owner number → Send code → enter the shown code | Lands on Home: announcement, shoutout, "Conflict-Free Approvals" |
-| 2 | M Scheduling | Open the Weekly rota builder | This week, Monday to Sunday, labelled with month and year; 7 people, split and overnight shifts visible |
+| 2 | M Scheduling | Open the Weekly rota builder | This week, Monday to Sunday, labelled with month and year; 7 people, overnight shifts visible (split shifts arrive with the rota stack, #69 → #78) |
 | 3 | M Scheduling | Tap "Add shift on <tomorrow>", pick a role and times, save | Chip appears on the right day; status says "Unpublished changes" |
 | 4 | M Scheduling | Publish | "Published"; the staff phone gets the notification (if push is on) |
 | 5 | S `/login?as=staff` | Enter the staff number → code | "Staff sign in" wording, no venue-setup links; lands on My Shifts with venue times |
@@ -36,7 +36,7 @@ dedicated demo database (never production). Two phones: **M** (you, the manager/
 | 8 | S (or a third phone) `/join?invite=…` | Paste the venue's invite link from People → Invite | "Join <venue> as staff", a phone field, short welcome; no manager wording |
 | 9 | Applicant `/login?as=staff` | First sign-in after approval | "You're in" screen, then My Shifts |
 | 10 | M People → Staff Directory | Toggle a staffer Inactive, then Active | The staffer's phone is signed out on its next action and lands on `/login` with "You've been signed out." (#80); the owner's own chip refuses |
-| 11 | M Home | Tap the microphone, say "Publish this week's rota" | Confirm sheet with the venue week; Confirm executes. On S, say "Approve Omar's request" → "That command needs a manager or owner account." |
+| 11 | M Home | Tap the microphone (the first tap shows "Before you use voice" → **Use voice**), say "Publish this week's rota" | Confirm sheet with the venue week; Confirm executes. On S, say "Approve Omar's request" → "That command needs a manager or owner account." |
 | 12 | M Scheduling → Upload | Upload an Excel/CSV roster export | Preview with venue times; dates read correctly whatever the laptop's timezone (#82) |
 | 13 | Either phone | Turn Wi-Fi off, tap Send code / Publish | A message, a disabled button, no endless spinner; works again when Wi-Fi returns |
 | 14 | M `/people` → Notification preferences | On an iPhone in Safari | "Add to Home Screen" hint; after installing, the push toggle appears |
@@ -45,7 +45,7 @@ dedicated demo database (never production). Two phones: **M** (you, the manager/
 
 - Share → Add to Home Screen; the installed app opens full screen with the dark status bar.
 - Tap a text field: the page must not zoom (16px controls). The keyboard must not hide the field.
-- Voice: the first tap asks for the microphone; a recording goes through (iPhone records `audio/mp4`).
+- Voice: the first tap shows ShiftSync's notice, then asks for the microphone; a recording goes through (iPhone records `audio/mp4`).
 - Push works only from the installed Home-Screen app, and only once VAPID is live (`docs/push-go-live.md`).
 
 ## Android specifics
@@ -60,6 +60,7 @@ dedicated demo database (never production). Two phones: **M** (you, the manager/
   reaches (check `/api/health` from the phone's browser).
 - "You've been signed out" unexpectedly: the session row was removed (deactivation, sign-out
   elsewhere) — sign in again.
-- A 409 on save: the person already works at that time (split-shift rule). Pick another slot.
+- Voice says it isn't set up, or has reached today's limit: see the messages table in
+  [`voice-test-script.md`](voice-test-script.md).
 - Re-seed between demos: `npm run db:seed:demo -- --phones=…` resets this week's demo shifts and the
   pending request; it never touches other venues.

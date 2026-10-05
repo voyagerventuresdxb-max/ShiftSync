@@ -121,6 +121,9 @@ test.describe('bad network — offline and slow links', () => {
     const toggle = page.getByRole('button', { name: /Weekly rota builder/ });
     if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
     await expect(page.getByRole('button', { name: /Publish & notify|Publish changes/ })).toBeEnabled({ timeout: 15_000 });
+    // The rota must actually be on screen before the network drops: the publish button is enabled
+    // before the week's shifts arrive, and a first load that fails offline has nothing to keep.
+    await expect(page.getByText('1 shifts this week')).toBeVisible({ timeout: 15_000 });
 
     await context.setOffline(true);
     // The connectivity probe notices within its own interval; the stale notice and the disabled publish follow.

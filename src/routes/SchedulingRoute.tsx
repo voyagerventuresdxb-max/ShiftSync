@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, LayoutGrid } from 'lucide-react';
 import { periodOf, pickViewedEmployee, shiftsFor, weekDates, weekdayOf } from '../engine/rosterView';
@@ -8,17 +8,23 @@ import { nameKey } from '../engine/roleGrouping';
 import { PersonalRota, type CoverCandidate, type RotaCard } from '../components/shiftsync/PersonalRota';
 import { TeamMatrix, type MatrixCell, type MatrixMember } from '../components/shiftsync/TeamMatrix';
 import { HourTracker } from '../components/shiftsync/HourTracker';
-import { RotaBuilder } from '../components/shiftsync/RotaBuilder';
-import ShiftUpload from '../components/ShiftUpload';
+import { PanelSkeleton } from '../components/shiftsync/PanelSkeleton';
 import { cn } from '../lib/utils';
 import { useAppState } from '../state/AppStateContext';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice } from '../components/shiftsync/OfflineNotice';
+import { offlineLabel } from '../lib/offlineCache';
 import { clockIn, clockOut, fetchWeeklyHours } from '../api/attendance';
 import { fetchMyAssignments, type MyAssignmentDto } from '../api/floorPlan';
 import { ApiError } from '../api/schedules';
 import { LEAVE_LABELS } from '../../shared/leaveTypes';
+
+// Manager-only (their writes are manager-only on the server too) and the
+// heaviest parts of this screen: loaded only for a manager or owner, so staff
+// opening their rota never download them.
+const RotaBuilder = lazy(() => import('../components/shiftsync/RotaBuilder').then((m) => ({ default: m.RotaBuilder })));
+const ShiftUpload = lazy(() => import('../components/ShiftUpload'));
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
@@ -44,6 +50,7 @@ export default function SchedulingContent() {
     mergedRoster,
     initialScheduleLoading,
     scheduleLoadFailed,
+    scheduleOfflineSince,
     config,
     venueName,
     currentEmployeeId,
@@ -243,6 +250,7 @@ export default function SchedulingContent() {
   // independent of whatever's selected in "Viewing"; MANAGER/OWNER keeps the
   // existing on-behalf-of capability against the Viewing selection.
   const isStaffSession = session?.user.systemRole === 'STAFF';
+  const isManagerSession = session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER';
   const clockTargetId = isStaffSession ? session!.user.id : activeEmployee?.id;
   const clockTargetName = isStaffSession ? session!.user.fullName : activeEmployee?.name;
 
@@ -346,7 +354,13 @@ export default function SchedulingContent() {
             </div>
           )}
 
-          {!initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />}
+          {scheduleOfflineSince ? (
+            <p role="status" data-testid="offline-label" className="px-4 pb-2 text-[11px] text-warning sm:px-5">
+              {offlineLabel(scheduleOfflineSince)} — the published rota as you last saw it.
+            </p>
+          ) : (
+            !initialScheduleLoading && mergedRoster.employees.length > 0 && !online && <StaleDataNotice />
+          )}
 
           <div key={mode} className="animate-rise">
             {initialScheduleLoading ? (
@@ -387,14 +401,20 @@ export default function SchedulingContent() {
         </aside>
       </div>
 
-      {isManager && (
+      {isManagerSession && (
         <div className="mt-5">
-          <RotaBuilder />
+          <Suspense fallback={<PanelSkeleton rows={4} />}>
+            <RotaBuilder />
+          </Suspense>
         </div>
       )}
 
       <div className="mt-5">
-        {isManager && <ShiftUpload onCommitted={handleCommitted} />}
+        {isManagerSession && (
+          <Suspense fallback={<PanelSkeleton />}>
+            <ShiftUpload onCommitted={handleCommitted} />
+          </Suspense>
+        )}
 
         <section className="roster">
           <h2 className="section-title">Roster</h2>

@@ -27,7 +27,7 @@ function formatStamp(iso: string): string {
 }
 
 export function Announcements() {
-  const { locationId } = useAppState();
+  const { locationId, readHeaders } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [items, setItems] = useState<AnnouncementDto[]>([]);
@@ -49,7 +49,7 @@ export function Announcements() {
       return;
     }
     let cancelled = false;
-    fetchAnnouncements(locationId)
+    fetchAnnouncements(locationId, readHeaders)
       .then((list) => {
         if (cancelled) return;
         setItems(list);
@@ -73,7 +73,7 @@ export function Announcements() {
     return () => {
       cancelled = true;
     };
-  }, [locationId]);
+  }, [locationId, readHeaders]);
 
   async function save() {
     if (!draft || !draft.body.trim()) return;

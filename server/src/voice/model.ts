@@ -1,5 +1,5 @@
-import { ApiError } from '@google/genai';
-import { voiceConfig } from '../lib/aiConfig.js';
+import { ApiError, type GoogleGenAIOptions } from '@google/genai';
+import { developerApiKey, vertexCredentials, voiceConfig } from '../lib/aiConfig.js';
 
 /**
  * Which Gemini model both halves of the voice pipeline (transcribe.ts and
@@ -27,15 +27,29 @@ export function reportIfModelUnavailable(stage: 'transcribe' | 'parse-intent', e
 
 /**
  * Options for both voice Gemini clients, or null when voice isn't configured.
- * GEMINI_BASE_URL (dev/e2e only — productionGuards.ts refuses to boot with it
- * in production) points them at a local fake Gemini, which needs no real key.
- * Roster vision parsing (parseVision.ts) deliberately doesn't read it.
+ * Same backend, credentials, region and timeout as roster vision
+ * (lib/aiConfig.ts): Vertex AI when GEMINI_VERTEX_PROJECT is set, otherwise the
+ * Developer API key. GEMINI_BASE_URL (dev/e2e only — productionGuards.ts
+ * refuses to boot with it in production) points them at a local fake Gemini,
+ * which needs no real key. Roster vision parsing doesn't read it.
+ * Throws VertexCredentialsError for an unreadable service-account variable.
+ * Never log the return value.
  */
-export function voiceClientOptions(
-  env: NodeJS.ProcessEnv = process.env,
-): { apiKey: string; httpOptions?: { baseUrl: string } } | null {
+export function voiceClientOptions(env: NodeJS.ProcessEnv = process.env): GoogleGenAIOptions | null {
   const baseUrl = env.GEMINI_BASE_URL?.trim();
-  const apiKey = env.GEMINI_API_KEY || (baseUrl ? 'local-fake-gemini' : '');
-  if (!apiKey) return null;
-  return baseUrl ? { apiKey, httpOptions: { baseUrl } } : { apiKey };
+  if (baseUrl) return { apiKey: env.GEMINI_API_KEY || 'local-fake-gemini', httpOptions: { baseUrl } };
+  const config = voiceConfig(env);
+  const httpOptions = { timeout: config.timeoutMs };
+  if (config.backend === 'vertex') {
+    const credentials = vertexCredentials(env);
+    return {
+      vertexai: true,
+      project: config.project!,
+      location: config.location!,
+      httpOptions,
+      ...(credentials ? { googleAuthOptions: { credentials } } : {}),
+    };
+  }
+  if (config.backend === 'developer-api') return { apiKey: developerApiKey(env)!, httpOptions };
+  return null;
 }
