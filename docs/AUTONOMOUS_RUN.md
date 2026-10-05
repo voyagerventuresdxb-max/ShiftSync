@@ -854,7 +854,7 @@ GitHub access with push rights; the run 9 log matched git history and production
 | 3 — voice | #125: 179-case corpus and offline test; live text (73 cases) and audio (23 synthetic clips) evaluation; propose-time checks, prompt, silence and weekday fixes; `docs/voice-eval-report.md`; re-test phrases in `voice-test-script.md`. Something changed without a Confirm: 0. Live spend USD 1.46, stopped by the harness ceiling. |
 | 4 — security | #126 route coverage from the live router + low-risk API headers; #127 per-person and per-venue daily AI quotas and a safe overall default; #128 kiosk link audit entries + turn voice off in Profile; #129 rendering and redirect regression tests. History scan, dependency audit and the read-only production check: reported to the owner. The local database host check was blocked (environment files are unreadable by design). Dependency audit: no fix available inside the allowed range without adding packages; nothing changed. |
 | 5 — rota stack | #69, #78, #84 and #108–#111 refreshed on master `94cd7c9` with merge commits (nothing force-pushed) and pushed; not merged. #69 carried the real conflicts (shift week read: master's session-or-kiosk rule plus #69's draft visibility; session-only publisher kept; app state; My Shifts; access matrix; layout); #108–#111 conflicted only in `MEMORY.md`. One spec fix: the rota golden path accepts master's first-use voice notice. Each PR has a comment with its resolutions and gate. `rota-review-guide.md` refreshed; screenshots in the run artifacts folder (not committed). |
-| 6 — wait and report | Observer summary below (added when the observer stops at 03:00 Dubai). |
+| 6 — wait and report | Report written at 00:55 Dubai at the owner's request, with a **partial** observer summary (below); the full summary is appended after the observer stops at 03:00 Dubai. |
 
 Every gate: typecheck, lint 0 errors (18 existing warnings), unit, build (staff bundle within
 budget), server suite, full e2e (`CI=1 --retries=0`), secrets scan clean. #125: a re-run found
@@ -873,4 +873,11 @@ for about a second before tapping stop: #125 doesn't send a recording that staye
 test browser's fake microphone only beeps now and then.
 
 ## Production after the run
-Unchanged by this run: API `5fd67c0c` on `ee65d9d`. Observer summary to follow at 03:00 Dubai.
+Unchanged by this run: API `5fd67c0c` on `ee65d9d`; no deploy, rollback or variable change.
+
+**Observer (PARTIAL: 2026-10-05 16:34 → 2026-10-06 00:51 Dubai; it runs until 03:00).** 98
+checks each of health, readiness and the web root: all 200. Latency p50 / p95 / max: health
+668 / 924 / 1919 ms, readiness 725 / 901 / 2041 ms, web root 312 / 523 / 837 ms. API logs (33
+fifteen-minute windows): 211 requests, 202 2xx and 9 4xx, no 5xx; every 4xx came from this run's
+own read-only check. Per-window p95 at most 113 ms. No deploy-log lines (no deploys). The full
+summary is appended after 03:00.
