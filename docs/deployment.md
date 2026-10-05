@@ -59,7 +59,7 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | `ALLOW_DEV_OTP_ECHO` | **`true` for the MBRIF demo only** — there is no SMS integration, so this is the only way a code can be entered on the live site. It shows the real one-time code on screen to whoever requested it. Remove it right after the demo. |
    | `PORT` | injected by Railway; the server reads it |
 
-4. Add a **Volume** mounted at `/app/server/uploads` (not done for the MBRIF demo) so floor-plan images and policy
+4. Add a **Volume** mounted at `/app/server/uploads` so floor-plan images and policy
    documents survive redeploys. (Without it they are lost on every deploy — acceptable for
    a demo, not for real use.)
 5. Deploy. `railway.json` runs `npm install && prisma generate` to build and
@@ -86,19 +86,7 @@ Vercel dashboard → the `shift-sync` project → Settings → Git → **Product
 deployment. Deliberately last, so the first thing that goes live is the working
 combination, not a frontend whose `/api` calls 404.
 
-Two things learned doing this for real on 2026-09-22:
-
-- Changing the Production Branch does **not** build anything by itself. Either push to
-  `master` afterwards, or promote the latest master build:
-  `npx vercel@latest promote https://<latest-master-deployment>.vercel.app --yes`
-  (creates a new Production deployment from that Git build; `npx vercel ls --prod` shows it).
-- If the production domain answers `302` to `vercel.com/sso-api`, Deployment Protection is
-  covering production: Settings → Deployment Protection → Vercel Authentication →
-  **Standard Protection** (previews stay protected, production is public). Dashboard-only.
-- The project's production domain is `shift-sync-two-ashy.vercel.app`; the older
-  `shift-sync-shift-sync1.vercel.app` alias is stale and stays SSO-gated — ignore it.
-
-Two things learned doing this for real on 2026-09-22:
+Three things learned doing this for real on 2026-09-22:
 
 - Changing the Production Branch does **not** build anything by itself. Either push to
   `master` afterwards, or promote the latest master build:
