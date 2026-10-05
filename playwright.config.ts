@@ -62,7 +62,7 @@ export default defineConfig({
       // (no key, no quota); roster vision parsing never reads it.
       // Empty VAPID_* keep push off whatever the local .env holds (push-unavailable.spec.ts relies on it).
       // PUSH_TRANSPORT=record: push sends land in /api/dev/push-outbox instead of a push service, so no spec needs VAPID keys or a push sink.
-      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: FAKE_GEMINI_URL, VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '', PUSH_TRANSPORT: 'record', AI_MONTHLY_BUDGET_USD: '1000000', AI_DAILY_CALL_LIMIT: '1000000' },
+      env: { ALLOW_DEV_OTP_ECHO: 'true', ECHO_ALLOWED_PHONES: echoPhones, ALLOW_DEV_ERROR_INJECTION: 'true', GEMINI_BASE_URL: FAKE_GEMINI_URL, VAPID_PUBLIC_KEY: '', VAPID_PRIVATE_KEY: '', PUSH_TRANSPORT: 'record', AI_MONTHLY_BUDGET_USD: '1000000', AI_DAILY_CALL_LIMIT: '1000000', AI_VISION_DAILY_CALL_LIMIT: '1000000', AI_VOICE_DAILY_CALL_LIMIT: '1000000' },
       timeout: 60_000,
     },
     {

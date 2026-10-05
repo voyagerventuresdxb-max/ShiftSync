@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { CalendarCheck, WifiOff } from 'lucide-react';
 import { Link, Outlet, useMatches, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { RadialDock } from '@/components/shiftsync/RadialDock';
-import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
+import { PanelSkeleton } from '@/components/shiftsync/PanelSkeleton';
 import { NotificationBell } from '@/components/shiftsync/NotificationBell';
 import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
@@ -11,6 +11,29 @@ import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
 import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
+
+// Loaded with the first voice result, then kept mounted (its close animation needs it).
+const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
+const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
+
+const voiceConsentKey = (userId: string) => `shiftsync.voiceConsent.${userId}`;
+
+/** Unreadable storage (private mode, blocked site data) means the notice is shown again — never skipped. */
+function hasVoiceConsent(userId: string): boolean {
+  try {
+    return localStorage.getItem(voiceConsentKey(userId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveVoiceConsent(userId: string): void {
+  try {
+    localStorage.setItem(voiceConsentKey(userId), '1');
+  } catch {
+    // Not remembered: the notice is shown again next time.
+  }
+}
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -145,6 +168,11 @@ export function AppShell() {
     executed?: boolean;
   } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
+  const [voiceSheetNeeded, setVoiceSheetNeeded] = useState(false);
+  const [voiceConsentOpen, setVoiceConsentOpen] = useState(false);
+  const [voiceConsentNeeded, setVoiceConsentNeeded] = useState(false);
+  if (voiceConsentOpen && !voiceConsentNeeded) setVoiceConsentNeeded(true);
+  if (voiceResult && !voiceSheetNeeded) setVoiceSheetNeeded(true);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -278,10 +306,20 @@ export function AppShell() {
     if (voiceProcessing || voiceStarting) return;
     if (voiceOn) {
       stopVoiceRecording();
+    } else if (session && !hasVoiceConsent(session.user.id)) {
+      setVoiceConsentOpen(true);
     } else {
       void startVoiceRecording();
     }
-  }, [voiceOn, voiceProcessing, voiceStarting, startVoiceRecording, stopVoiceRecording]);
+  }, [voiceOn, voiceProcessing, voiceStarting, session, startVoiceRecording, stopVoiceRecording]);
+
+  const handleVoiceConsentAccept = useCallback(() => {
+    setVoiceConsentOpen(false);
+    if (session) saveVoiceConsent(session.user.id);
+    void startVoiceRecording();
+  }, [session, startVoiceRecording]);
+
+  const handleVoiceConsentCancel = useCallback(() => setVoiceConsentOpen(false), []);
 
   const handleVoiceCancel = useCallback(() => {
     setVoiceResult(null);
@@ -369,7 +407,9 @@ export function AppShell() {
 
       <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
         <SessionGuard />
-        <Outlet />
+        <Suspense fallback={<PanelSkeleton />}>
+          <Outlet />
+        </Suspense>
       </main>
 
       {voiceBanner && (
@@ -383,15 +423,25 @@ export function AppShell() {
         </div>
       )}
 
-      <VoiceCommandSheet
-        intent={voiceResult?.intent ?? null}
-        transcript={voiceResult?.transcript ?? ''}
-        hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
-        executed={voiceResult?.executed ?? false}
-        onConfirm={handleVoiceConfirm}
-        onCancel={handleVoiceCancel}
-        executing={voiceExecuting}
-      />
+      {voiceSheetNeeded && (
+        <Suspense fallback={null}>
+          <VoiceCommandSheet
+            intent={voiceResult?.intent ?? null}
+            transcript={voiceResult?.transcript ?? ''}
+            hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
+            executed={voiceResult?.executed ?? false}
+            onConfirm={handleVoiceConfirm}
+            onCancel={handleVoiceCancel}
+            executing={voiceExecuting}
+          />
+        </Suspense>
+      )}
+
+      {voiceConsentNeeded && (
+        <Suspense fallback={null}>
+          <VoiceConsentSheet open={voiceConsentOpen} onAccept={handleVoiceConsentAccept} onCancel={handleVoiceConsentCancel} />
+        </Suspense>
+      )}
 
       <RadialDock listening={voiceOn} starting={voiceStarting} processing={voiceProcessing} onToggleListening={handleToggleVoice} />
     </div>

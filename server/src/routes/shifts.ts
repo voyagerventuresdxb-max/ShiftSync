@@ -4,13 +4,14 @@ import { prisma } from '../lib/prisma.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
 import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
-import { requireSession, requireManager, optionalSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { visibleShiftFilter } from '../lib/shiftVisibility.js';
 import { findBlockingLeave, blockedByLeaveMessage } from '../lib/actions/leaveActions.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { createShift, editShift, removeShift, SHIFT_INCLUDE, ShiftOverlapError, findBatchOverlap } from '../lib/actions/shiftActions.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
+import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
 
 export const shiftsRouter = Router();
 
@@ -49,6 +50,22 @@ function shiftToDto(
   };
 }
 
+/** A kiosk screen's view of a published shift: who, which role, when — no user ids, notes or anything else. */
+function shiftToKioskDto(
+  s: { id: string; date: Date; startTime: Date; endTime: Date; assignee: { fullName: string } | null; role: { name: string } },
+  timezone: string,
+) {
+  return {
+    id: s.id,
+    employeeName: s.assignee?.fullName ?? null,
+    roleName: s.role.name,
+    date: s.date.toISOString().slice(0, 10),
+    start: formatVenueTime(s.startTime, timezone),
+    end: formatVenueTime(s.endTime, timezone),
+    status: 'published' as const,
+  };
+}
+
 async function venueTimezone(locationId: string): Promise<string> {
   const location = await prisma.location.findUnique({ where: { id: locationId }, select: { timezone: true } });
   return location?.timezone || DEFAULT_VENUE_TIMEZONE;
@@ -56,19 +73,13 @@ async function venueTimezone(locationId: string): Promise<string> {
 
 /**
  * GET /api/shifts/:locationId?weekStart=YYYY-MM-DD — the 7 days starting weekStart.
- * Deliberately NOT behind `requireSession` — the kiosk-access-fork decision
- * (Option 3, 2026-08-31 — see MEMORY.md): Home's anonymous glance board
- * needs this (via `AppStateContext.tsx`'s shared `refetchWeekShifts`, which
- * every consumer — signed-in or not — reads from). `/schedule` (the write
- * surface) requires a session; this read does not. Confirmed still correct
- * by the follow-up anonymous-read sweep.
- *
- * Drafts (2026-09-25, golden-path v0): PUBLISHED shifts only, unless the
- * caller is a manager of THIS venue (`optionalSession` + `visibleShiftFilter`)
- * — the builder needs its own drafts; staff and the anonymous kiosk never
- * see a shift before it's published.
+ * A manager of this venue gets every shift, drafts included (the builder needs
+ * its own drafts); staff get PUBLISHED shifts only (`visibleShiftFilter`). A
+ * kiosk screen (the venue's current `X-Kiosk-Token`, see
+ * middleware/kioskAccess.ts) gets only PUBLISHED shifts, as `shiftToKioskDto`.
+ * A venue id alone gets 401.
  */
-shiftsRouter.get('/:locationId', optionalSession, async (req, res) => {
+shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();
@@ -79,13 +90,14 @@ shiftsRouter.get('/:locationId', optionalSession, async (req, res) => {
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 7);
 
+    const kiosk = req.kioskLocationId !== undefined;
     const timezone = await venueTimezone(locationId);
     const shifts = await prisma.shift.findMany({
-      where: { locationId, date: { gte: start, lt: end }, ...visibleShiftFilter(req.user, locationId) },
+      where: { locationId, date: { gte: start, lt: end }, ...(kiosk ? { status: 'PUBLISHED' as const } : visibleShiftFilter(req.user, locationId)) },
       include: SHIFT_INCLUDE,
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
     });
-    return res.status(200).json({ shifts: shifts.map((s) => shiftToDto(s, timezone)) });
+    return res.status(200).json({ shifts: shifts.map((s) => (kiosk ? shiftToKioskDto(s, timezone) : shiftToDto(s, timezone))) });
   } catch (err) {
     console.error('[shifts.list] failed', err);
     return res.status(500).json({ error: 'Unexpected error while loading shifts.' });
@@ -367,13 +379,10 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
 
 /**
  * GET /api/shifts/:locationId/publish-status?weekStart=YYYY-MM-DD
- * Deliberately NOT behind `requireSession` — same kiosk-access-fork
- * reasoning as the GET above (`AppStateContext.tsx`'s `refreshPublishInfo`
- * also runs for every consumer regardless of session). No sensitive content
- * either way: just a publish timestamp and a count. Confirmed still correct
- * by the follow-up anonymous-read sweep.
+ * A session of this venue, or a kiosk screen with the venue's current kiosk
+ * token (same gate as the GET above): a publish timestamp and a count.
  */
-shiftsRouter.get('/:locationId/publish-status', async (req, res) => {
+shiftsRouter.get('/:locationId/publish-status', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();
