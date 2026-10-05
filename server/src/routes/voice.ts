@@ -60,10 +60,14 @@ export const VOICE_NOT_CONFIGURED = "Voice commands aren't set up on this server
 /** The in-app AI spend cap (lib/aiBudget.ts) refused the call before anything was sent. */
 export const VOICE_PAUSED_MONTH = "Voice commands are paused for the rest of this month (AI spending limit reached). Use the app's buttons meanwhile.";
 export const VOICE_PAUSED_TODAY = "Voice commands have reached today's limit and are back tomorrow. Use the app's buttons meanwhile.";
+export const VOICE_PAUSED_USER = "You've used today's voice commands; they're back tomorrow. Use the app's buttons meanwhile.";
+export const VOICE_PAUSED_VENUE = "Your venue has used today's voice commands; they're back tomorrow. Use the app's buttons meanwhile.";
 
 /** 503 body for a refusal by the spend cap; an unreachable ledger is an outage, not a limit. */
 function pausedBody(limit: AiBudgetExceededError['limit'] | undefined): { error: string; errorCode: string } {
   if (limit === 'daily_calls') return { error: VOICE_PAUSED_TODAY, errorCode: 'ai_paused' };
+  if (limit === 'user_daily') return { error: VOICE_PAUSED_USER, errorCode: 'ai_paused' };
+  if (limit === 'venue_daily') return { error: VOICE_PAUSED_VENUE, errorCode: 'ai_paused' };
   if (limit === 'monthly_budget') return { error: VOICE_PAUSED_MONTH, errorCode: 'ai_paused' };
   return { error: VOICE_UNAVAILABLE, errorCode: 'voice_unavailable' };
 }
@@ -202,7 +206,7 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
       vocabulary = undefined;
     }
 
-    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary, req.user!.locationId);
+    const transcript = await transcribeAudio(req.file.buffer, req.file.mimetype, vocabulary, req.user!.locationId, req.user!.id);
     return res.status(200).json({ transcript });
   } catch (err) {
     if (err instanceof VoiceTranscriptionError && err.kind === 'format_rejected') {

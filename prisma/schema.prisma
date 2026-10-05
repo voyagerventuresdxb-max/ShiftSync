@@ -960,6 +960,19 @@ model AiCallDay {
   @@map("ai_call_days")
 }
 
+/// AI spend guard: model calls per UTC day for one venue or one person, by
+/// feature group ('vision' | 'voice'), beneath the deployment-wide limits.
+model AiCallQuota {
+  day          String // YYYY-MM-DD (UTC)
+  scope        String // 'venue' | 'user'
+  scopeId      String @map("scope_id")
+  featureGroup String @map("feature_group")
+  calls        Int    @default(0)
+
+  @@id([day, scope, scopeId, featureGroup])
+  @@map("ai_call_quotas")
+}
+
 /// AI usage ledger per venue, feature and UTC month: call and token counts and
 /// the estimated cost. Never content, names, phone numbers or audio.
 model AiUsage {

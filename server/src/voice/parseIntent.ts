@@ -181,7 +181,7 @@ export async function parseVoiceIntent(
   try {
     const genai = client;
     const response = await withAiBudget(
-      { locationId: user.locationId, feature: 'voice_intent', inputTokensEstimate: textInputEstimate(systemPrompt, transcript, JSON.stringify(schema)) },
+      { locationId: user.locationId, userId: user.id, feature: 'voice_intent', inputTokensEstimate: textInputEstimate(systemPrompt, transcript, JSON.stringify(schema)) },
       async () => {
         const r = await genai.models.generateContent({
           model: voiceModel(),
