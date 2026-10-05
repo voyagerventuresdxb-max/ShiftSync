@@ -4,7 +4,14 @@ import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from './identity.js';
-import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, aiBudgetConfig, costUsd, withAiBudget, aiUsageSummary, type AiCallUsage } from './aiBudget.js';
+import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, aiBudgetConfig, costUsd, withAiBudget, aiUsageSummary, visionWeeklyLimit, type AiCallUsage } from './aiBudget.js';
+
+test('AI_VISION_WEEKLY_LIMIT: default 1 (the old once-a-week), whole numbers from 0 up, anything else the default', () => {
+  assert.equal(visionWeeklyLimit({}), 1);
+  assert.equal(visionWeeklyLimit({ AI_VISION_WEEKLY_LIMIT: '5' }), 5);
+  assert.equal(visionWeeklyLimit({ AI_VISION_WEEKLY_LIMIT: ' 0 ' }), 0);
+  for (const bad of ['', '-1', '2.5', 'five']) assert.equal(visionWeeklyLimit({ AI_VISION_WEEKLY_LIMIT: bad }), 1, bad);
+});
 
 /**
  * The spend cap's counters are deployment-wide per UTC month/day, so every test here runs on
@@ -77,6 +84,46 @@ test('the daily call limit refuses further calls without calling the provider', 
   await once();
   await assert.rejects(once(), (err: unknown) => err instanceof AiBudgetExceededError && err.limit === 'daily_calls');
   assert.equal(providerCalls, 2);
+});
+
+test('defaults: vision 60 and voice 200 calls a day, and no overall ceiling unless AI_DAILY_CALL_LIMIT is set', () => {
+  const c = aiBudgetConfig({});
+  assert.deepEqual([c.visionDailyCallLimit, c.voiceDailyCallLimit, c.dailyCallLimit], [60, 200, null]);
+  assert.equal(aiBudgetConfig({ AI_DAILY_CALL_LIMIT: '0' }).dailyCallLimit, 0);
+  assert.equal(aiBudgetConfig({ AI_VOICE_DAILY_CALL_LIMIT: 'lots' }).voiceDailyCallLimit, 200, 'a non-number keeps the default');
+});
+
+test('vision and voice have separate daily limits: a spent voice allowance never blocks roster reading', async () => {
+  const now = clock('2099-09-10T10:00:00.000Z');
+  const e = { AI_MONTHLY_BUDGET_USD: '1000', AI_VOICE_DAILY_CALL_LIMIT: '2', AI_VISION_DAILY_CALL_LIMIT: '1', AI_PRICE_IN_PER_M: '3', AI_PRICE_OUT_PER_M: '15' };
+  let providerCalls = 0;
+  const call = (feature: 'voice_transcribe' | 'voice_intent' | 'roster_vision') =>
+    withAiBudget({ locationId: null, feature, inputTokensEstimate: 100 }, async () => {
+      providerCalls++;
+      return { value: 'x', usage: { inputTokens: 10, outputTokens: 10 } };
+    }, { now, env: e });
+  await call('voice_transcribe');
+  await call('voice_intent');
+  await assert.rejects(call('voice_transcribe'), (err: unknown) => err instanceof AiBudgetExceededError && err.limit === 'daily_calls');
+  await call('roster_vision');
+  await assert.rejects(call('roster_vision'), (err: unknown) => err instanceof AiBudgetExceededError && err.limit === 'daily_calls');
+  assert.equal(providerCalls, 3);
+  const day = await prisma.aiCallDay.findUniqueOrThrow({ where: { day: '2099-09-10' } });
+  assert.deepEqual([day.calls, day.voiceCalls, day.visionCalls], [3, 2, 1]);
+  const summary = await aiUsageSummary((await venue('per-feature')).id, { now, env: e });
+  assert.deepEqual(summary.voice, { callsToday: 2, callLimit: 2, paused: true });
+  assert.deepEqual(summary.vision, { callsToday: 1, callLimit: 1, paused: true });
+  assert.equal(summary.paused, false, 'the monthly budget is not reached');
+});
+
+test('AI_DAILY_CALL_LIMIT=0 still stops every feature (the runbook switch)', async () => {
+  const now = clock('2099-10-10T10:00:00.000Z');
+  for (const feature of ['roster_vision', 'voice_transcribe'] as const) {
+    await assert.rejects(
+      withAiBudget({ locationId: null, feature, inputTokensEstimate: 100 }, async () => ({ value: 'x', usage: { inputTokens: 1, outputTokens: 1 } }), { now, env: env(1000, 0) }),
+      (err: unknown) => err instanceof AiBudgetExceededError && err.limit === 'daily_calls',
+    );
+  }
 });
 
 test('parallel calls can never reserve past the budget', async () => {
@@ -201,7 +248,7 @@ test('GET /api/ai/usage: the owner sees the cap; staff, managers, other venues a
     const ok = await get(owner.id, `?locationId=${location.id}`);
     assert.equal(ok.status, 200);
     const body = (await ok.json()) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(body).sort(), ['callLimit', 'callsToday', 'limitUsd', 'month', 'monthToDateUsd', 'paused', 'venue']);
+    assert.deepEqual(Object.keys(body).sort(), ['callLimit', 'callsToday', 'limitUsd', 'month', 'monthToDateUsd', 'paused', 'venue', 'vision', 'voice']);
     assert.equal((await get(null)).status, 401);
     assert.equal((await get(staff.id)).status, 403);
     assert.equal((await get(manager.id)).status, 403);

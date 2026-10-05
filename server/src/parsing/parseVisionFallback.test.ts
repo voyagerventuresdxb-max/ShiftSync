@@ -8,6 +8,8 @@ import { parseRosterImage, VisionIngestionError, __setGeminiClientForTests } fro
 // (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
 process.env.AI_MONTHLY_BUDGET_USD = '1000000';
 process.env.AI_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VISION_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VOICE_DAILY_CALL_LIMIT = '1000000';
 
 /**
  * Proves the canned sample roster is gone from every production path: when

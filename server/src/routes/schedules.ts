@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
+import { visionWeeklyLimit } from '../lib/aiBudget.js';
 import { parseWorkbookBuffer, buildMergeExpandedGrid, listOtherSheetNames, TemplateDetectionError } from '../parsing/parseWorkbook.js';
 import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
 import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from '../parsing/pdfTableExtractor.js';
@@ -27,33 +28,45 @@ const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 // call for image/scanned-PDF uploads) — the deterministic Excel/CSV/
 // text-layer-PDF path is unaffected by either limit.
 const VISION_FALLBACK_MAX_BYTES = 5 * 1024 * 1024;
-const VISION_FALLBACK_RATE_LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
+const VISION_FALLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** This venue's AI reads within the rolling 7-day window, oldest first. */
+function recentVisionUses(uses: Date[], now = Date.now()): Date[] {
+  return uses.filter((d) => now - d.getTime() < VISION_FALLBACK_WINDOW_MS).sort((a, b) => a.getTime() - b.getTime());
+}
 
 /**
  * Returns a user-facing rejection message when the vision-fallback path
- * shouldn't run for this upload (file too large, or this venue already
- * used its one-per-week allowance) — null when it's allowed to proceed.
+ * shouldn't run for this upload (file too large, or this venue already used
+ * its `AI_VISION_WEEKLY_LIMIT` reads in the last 7 days) — null when it's
+ * allowed to proceed.
  */
 async function checkVisionFallbackAllowed(fileSize: number, locationId: string): Promise<string | null> {
   if (fileSize > VISION_FALLBACK_MAX_BYTES) {
     return `This file is ${(fileSize / (1024 * 1024)).toFixed(1)}MB, over the ${VISION_FALLBACK_MAX_BYTES / (1024 * 1024)}MB limit for AI-assisted roster reading. Please upload a smaller image/PDF, or use an Excel/CSV export instead.`;
   }
-  const location = await prisma.location.findUnique({ where: { id: locationId }, select: { lastVisionFallbackUsedAt: true } });
-  const lastUsed = location?.lastVisionFallbackUsedAt;
-  if (lastUsed && Date.now() - lastUsed.getTime() < VISION_FALLBACK_RATE_LIMIT_MS) {
-    const nextAvailable = new Date(lastUsed.getTime() + VISION_FALLBACK_RATE_LIMIT_MS);
+  const limit = visionWeeklyLimit();
+  if (limit === 0) return 'AI-assisted roster reading is switched off on this server. Try an Excel/CSV export instead.';
+  const location = await prisma.location.findUnique({ where: { id: locationId }, select: { visionFallbackUses: true } });
+  const recent = recentVisionUses(location?.visionFallbackUses ?? []);
+  if (recent.length >= limit) {
+    const lastUsed = recent[recent.length - 1]!;
+    const nextAvailable = new Date(recent[recent.length - limit]!.getTime() + VISION_FALLBACK_WINDOW_MS);
     return (
       `AI-assisted roster reading for this venue was already used this week ` +
-      `(last used ${lastUsed.toISOString().slice(0, 10)}) — it's limited to once per venue per week. ` +
+      `(last used ${lastUsed.toISOString().slice(0, 10)}) — it's limited to ${limit === 1 ? 'once' : `${limit} times`} per venue per week. ` +
       `It'll be available again on ${nextAvailable.toISOString().slice(0, 10)}. Try an Excel/CSV export in the meantime.`
     );
   }
   return null;
 }
 
-/** Records that this venue's one-per-week vision-fallback allowance was just used. Call only after a successful parse. */
+/** Records one use of this venue's weekly vision-fallback allowance. Call only after a successful parse. */
 async function markVisionFallbackUsed(locationId: string): Promise<void> {
-  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: new Date() } });
+  const now = new Date();
+  const location = await prisma.location.findUnique({ where: { id: locationId }, select: { visionFallbackUses: true } });
+  const kept = recentVisionUses(location?.visionFallbackUses ?? [], now.getTime());
+  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: now, visionFallbackUses: [...kept, now] } });
 }
 
 const upload = multer({

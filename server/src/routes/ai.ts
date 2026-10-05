@@ -1,6 +1,8 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { requireSession } from '../middleware/requireSession.js';
+import { aiSelfTestRateLimiter } from '../middleware/rateLimit.js';
 import { aiUsageSummary } from '../lib/aiBudget.js';
+import { runAiSelfTest } from '../lib/aiSelfTest.js';
 
 export const aiRouter = Router();
 
@@ -22,3 +24,24 @@ aiRouter.get('/usage', requireSession, async (req, res) => {
     return res.status(500).json({ error: 'Unexpected error while loading AI usage.' });
   }
 });
+
+/**
+ * POST /api/ai/self-test — the owner's "Test AI connection": one tiny roster-
+ * vision call and one tiny voice call on the configured backend, through the
+ * spend cap (lib/aiSelfTest.ts). Answers backend, model, region, latency and
+ * pass/fail with a reason code per feature; nothing else. Owners only;
+ * 3 per 5 minutes per session.
+ */
+aiRouter.post('/self-test', requireSession, requireOwner, aiSelfTestRateLimiter, async (req, res) => {
+  try {
+    return res.status(200).json(await runAiSelfTest(req.user!.locationId));
+  } catch (err) {
+    console.error('[ai.self-test] failed', err instanceof Error ? err.message : err);
+    return res.status(500).json({ error: 'Unexpected error while testing the AI connection.' });
+  }
+});
+
+function requireOwner(req: Request, res: Response, next: NextFunction) {
+  if (req.user!.systemRole !== 'OWNER') return res.status(403).json({ error: 'Only the venue owner can test the AI connection.' });
+  next();
+}
