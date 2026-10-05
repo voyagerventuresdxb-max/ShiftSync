@@ -9,9 +9,11 @@ import { fetchSwapRequests, createSwapRequest, decideSwapRequest } from '../api/
 import { fetchWeekShifts, createShift, updateShift, deleteShift, bulkCreateShifts, publishWeek, fetchPublishStatus } from '../api/shifts';
 import { fetchWeekLeaves, setLeave, deleteLeave, type LeaveDto } from '../api/rotaLeaves';
 import { useRefetchOnReturn } from '../lib/scheduleRefresh';
-import { loadBoundVenue, saveBoundVenue } from '../api/venueBinding';
+import { loadBoundVenue, loadKioskToken, saveVenueBinding, venueReadHeaders } from '../api/venueBinding';
+import { withAuth } from '../api/identity';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
+import { isNetworkFailure, loadOffline, saveOffline } from '../lib/offlineCache';
 
 /**
  * Shared UI vocabulary (role/shift-type labels) plus a compliance ruleset —
@@ -63,9 +65,16 @@ interface AppStateValue {
    * "shared kiosk device" case. Persisted to localStorage so the binding
    * survives future visits with no `?venue=` param present. No-ops while a
    * real session exists, so a bookmarked kiosk link can never override a
-   * signed-in user's own venue.
+   * signed-in user's own venue. A kiosk link's token replaces the stored
+   * one; binding another venue without a token drops the old venue's token.
    */
-  bindAnonymousVenue: (locationId: string) => void;
+  bindAnonymousVenue: (locationId: string, kioskToken?: string | null) => void;
+  /**
+   * Headers for the four venue reads (rota, publish status, announcements,
+   * shoutouts): the session when signed in, else this device's kiosk token —
+   * see `venueReadHeaders` in api/venueBinding.ts.
+   */
+  readHeaders: Record<string, string>;
   mergedRoster: Roster;
   /**
    * True until the FIRST `weekShifts` fetch (success or failure) settles,
@@ -77,6 +86,8 @@ interface AppStateValue {
   initialScheduleLoading: boolean;
   /** True when the most recent weekShifts fetch failed — distinct from `initialScheduleLoading`, which only covers the first load. Lets SchedulingRoute tell "offline, nothing cached for this week" apart from a genuine "no staff parsed yet" empty state. */
   scheduleLoadFailed: boolean;
+  /** Set when the shown week is a staff member's saved offline copy (the live fetch failed for lack of network): when it was saved. Null while the week is live. */
+  scheduleOfflineSince: string | null;
   swapRequests: SwapRequest[];
   /** True until the first swap-requests fetch (success or failure) settles — same "initial load only" shape as `initialScheduleLoading`, for ApprovalsPanel. */
   swapRequestsLoading: boolean;
@@ -122,12 +133,18 @@ const AppStateCtx = createContext<AppStateValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const { session } = useIdentity();
-  const [anonymousVenueId, setAnonymousVenueId] = useState<string | null>(() => loadBoundVenue());
-  const locationId = session?.user.locationId ?? anonymousVenueId;
-  const bindAnonymousVenue = useCallback((id: string) => {
-    saveBoundVenue(id);
-    setAnonymousVenueId(id);
+  const [binding, setBinding] = useState(() => ({ venueId: loadBoundVenue(), kioskToken: loadKioskToken() }));
+  useEffect(() => saveVenueBinding(binding.venueId, binding.kioskToken), [binding]);
+  const locationId = session?.user.locationId ?? binding.venueId;
+  // A staff member's published weeks are kept as their offline copy (lib/offlineCache.ts).
+  const offlineUserId = session?.user.systemRole === 'STAFF' ? session.user.id : null;
+  const bindAnonymousVenue = useCallback((id: string, kioskToken: string | null = null) => {
+    setBinding((prev) => {
+      const token = kioskToken ?? (prev.venueId === id ? prev.kioskToken : null);
+      return prev.venueId === id && prev.kioskToken === token ? prev : { venueId: id, kioskToken: token };
+    });
   }, []);
+  const readHeaders = useMemo(() => venueReadHeaders(session?.token ?? null, binding.kioskToken), [session, binding.kioskToken]);
 
   // The real venue's display name — never `config.name` (see the comment on
   // `config`, above). `GET /api/locations/:id` requires a session, so an
@@ -201,6 +218,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [swapRequestsLoading, setSwapRequestsLoading] = useState(true);
   const [swapRequestsLoadFailed, setSwapRequestsLoadFailed] = useState(false);
   const [scheduleLoadFailed, setScheduleLoadFailed] = useState(false);
+  const [scheduleOfflineSince, setScheduleOfflineSince] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [staffDirectory, setStaffDirectory] = useState<StaffDirectoryEntry[]>([]);
   const [currentEmployeeId, setCurrentEmployeeId] = useState<string | undefined>(undefined);
@@ -225,10 +243,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const loadedWeekShiftsWeekRef = useRef<string | null>(null);
 
   const refetchWeekShifts = useCallback(async () => {
-    // No session, no real venue to scope this fetch to — clear rather than
-    // fetch against a hardcoded/wrong location. Same shared-device reasoning
-    // as the staff-directory/swap-requests effects below.
-    if (!locationId) {
+    // Session only: with none, clear rather than fetch (same shared-device
+    // reasoning as the staff-directory/swap-requests effects below). A kiosk
+    // screen reads its published rota itself (KioskRoute), in the reduced
+    // shape its token gets, which is not a full roster.
+    if (!session) {
       setWeekShifts([]);
       loadedWeekShiftsWeekRef.current = null;
       setInitialScheduleLoading(false);
@@ -237,10 +256,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     const seq = ++reqSeqRef.current;
     const targetWeek = weekStart;
     try {
-      const dtos = await fetchWeekShifts(locationId, weekStart, session?.token);
+      const dtos = await fetchWeekShifts(session.user.locationId, weekStart, withAuth(session.token));
       if (seq !== reqSeqRef.current) return;
-      setWeekShifts(
-        dtos.map((s) => ({
+      const shifts: Shift[] = dtos.map((s) => ({
           id: s.id,
           employeeId: s.employeeId ?? `open-${s.id}`,
           date: s.date,
@@ -252,11 +270,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           status: s.status,
           briefingNote: s.briefingNote ?? undefined,
           sidework: s.sidework,
-        })),
-      );
+        }));
+      setWeekShifts(shifts);
       loadedWeekShiftsWeekRef.current = targetWeek;
       setScheduleLoadFailed(false);
-    } catch {
+      setScheduleOfflineSince(null);
+      if (offlineUserId) {
+        saveOffline(offlineUserId, `rotaWeek.${targetWeek}`, { locationId, shifts: shifts.filter((s) => s.status === 'published') });
+      }
+    } catch (err) {
       // A stale failure is discarded for the same reason a stale success is:
       // it must not clear a newer week's freshly-loaded shifts.
       if (seq !== reqSeqRef.current) return;
@@ -265,8 +287,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // We hold no valid cached data for THIS week at all (first load of
         // it, or whatever's in `weekShifts` is leftover from a different
         // week) — leaving it in place would show the wrong week's shifts
-        // under this week's header, so clearing is the only safe option.
-        setWeekShifts([]);
+        // under this week's header, so clearing is the only safe option —
+        // unless this staff member has a saved copy of this very week and the
+        // network is the reason: then that copy is shown, flagged as offline.
+        const cached = offlineUserId && isNetworkFailure(err) ? loadOffline<{ locationId: string; shifts: Shift[] }>(offlineUserId, `rotaWeek.${targetWeek}`) : null;
+        if (cached && cached.data.locationId === locationId) {
+          setWeekShifts(cached.data.shifts);
+          loadedWeekShiftsWeekRef.current = targetWeek;
+          setScheduleOfflineSince(cached.savedAt);
+        } else {
+          setWeekShifts([]);
+          setScheduleOfflineSince(null);
+        }
       }
       // Else: the failure is for the SAME week already on screen (e.g. a
       // transient offline blip) — the currently-displayed data is still
@@ -278,7 +310,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // `setState(false)` when already `false` is a no-op re-render.
       if (seq === reqSeqRef.current) setInitialScheduleLoading(false);
     }
-  }, [weekStart, locationId, session?.token]);
+  }, [weekStart, session, locationId, offlineUserId]);
 
   useEffect(() => {
     void refetchWeekShifts();
@@ -306,6 +338,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refetchWeekLeaves();
   }, [refetchWeekLeaves]);
+  // A saved offline copy is on screen: fetch the live week as soon as the device is back online.
+  useEffect(() => {
+    if (!scheduleOfflineSince) return;
+    const onOnline = () => void refetchWeekShifts();
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [scheduleOfflineSince, refetchWeekShifts]);
 
   const mergedRoster: Roster = useMemo(() => {
     const withCommitted = mergeCommitted(roster, committed);
@@ -595,14 +634,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // pattern as `refetchWeekShifts` above, and re-fetched by every editor
   // after a mutation (a create/update/delete flips `hasUnpublishedChanges`).
   const refreshPublishInfo = useCallback(() => {
-    if (!locationId) {
+    // Session only, like `refetchWeekShifts` above: only the editors read this.
+    if (!session) {
       setPublishInfo(null);
       return;
     }
-    fetchPublishStatus(locationId, weekStart)
+    fetchPublishStatus(session.user.locationId, weekStart, withAuth(session.token))
       .then(setPublishInfo)
       .catch(() => setPublishInfo(null));
-  }, [weekStart, locationId]);
+  }, [weekStart, session]);
 
   useEffect(() => {
     refreshPublishInfo();
@@ -628,9 +668,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       locationId,
       venueName,
       bindAnonymousVenue,
+      readHeaders,
       mergedRoster,
       initialScheduleLoading,
       scheduleLoadFailed,
+      scheduleOfflineSince,
       swapRequests,
       swapRequestsLoading,
       swapRequestsLoadFailed,
@@ -665,9 +707,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       locationId,
       venueName,
       bindAnonymousVenue,
+      readHeaders,
       mergedRoster,
       initialScheduleLoading,
       scheduleLoadFailed,
+      scheduleOfflineSince,
       swapRequests,
       swapRequestsLoading,
       swapRequestsLoadFailed,

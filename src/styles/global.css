@@ -54,27 +54,6 @@ body,
   min-height: 100dvh;
 }
 
-/*
- * Phones: every text control at least 16px. Below that, iOS Safari zooms
- * the whole page in when the field is focused and never zooms back out.
- * One rule instead of a fix per file: this beats every Tailwind size
- * utility (those live in @layer utilities; this sheet is unlayered) and
- * the named classes below are the unlayered ones in this file that set a
- * smaller size explicitly. Inline styles (the onboarding wizard's 20px
- * serif fields) are already above the floor and are untouched.
- */
-@media (max-width: 640px) {
-  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
-  select,
-  textarea,
-  .staff-directory-input,
-  .staff-directory-input-inline,
-  .fp-pax-input,
-  .fp-notes-input {
-    font-size: 1rem;
-  }
-}
-
 body {
   background: var(--bg);
   color: var(--text);
@@ -132,7 +111,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* Nine columns can't fit a phone: scroll the table, never the page. */
+  /* Nine columns don't fit a phone: scroll sideways rather than cut Sun and Hours off. */
   overflow-x: auto;
 }
 
@@ -1018,4 +997,27 @@ body {
 .staff-directory-role-row .staff-directory-input-inline {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/*
+ * Phones: every text control at least 16px. Below that, iOS Safari zooms
+ * the whole page in when the field is focused and never zooms back out.
+ * Kept at the END of this sheet: an equal-specificity rule after it (e.g.
+ * `.staff-directory-input`'s 0.85rem) would otherwise win.
+ * One rule instead of a fix per file: this beats every Tailwind size
+ * utility (those live in @layer utilities; this sheet is unlayered) and
+ * the named classes in it are the unlayered ones in this file that set a
+ * smaller size explicitly. Inline styles (the onboarding wizard's 20px
+ * serif fields) are already above the floor and are untouched.
+ */
+@media (max-width: 640px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+  select,
+  textarea,
+  .staff-directory-input,
+  .staff-directory-input-inline,
+  .fp-pax-input,
+  .fp-notes-input {
+    font-size: 1rem;
+  }
 }

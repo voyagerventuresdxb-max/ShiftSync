@@ -13,6 +13,8 @@ import {
 // (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
 process.env.AI_MONTHLY_BUDGET_USD = '1000000';
 process.env.AI_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VISION_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VOICE_DAILY_CALL_LIMIT = '1000000';
 
 /**
  * The only mock is the Gemini client (a real 400/429 cannot be produced on
@@ -110,4 +112,34 @@ test('a Gemini 404 (retired or misspelled VOICE_MODEL) becomes model_unavailable
   assert.ok(line, 'a loud MODEL NOT AVAILABLE line is logged');
   assert.match(line!, /"gemini-retired-example"/);
   assert.ok(!line!.includes('test-key-never-used'), 'never logs the key');
+});
+
+test('with no Vertex project, no key and no fake base URL, transcription fails as not_configured', async () => {
+  const saved = { key: process.env.GEMINI_API_KEY, project: process.env.GEMINI_VERTEX_PROJECT, base: process.env.GEMINI_BASE_URL };
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_VERTEX_PROJECT;
+  delete process.env.GEMINI_BASE_URL;
+  __setVoiceClientForTests(null);
+  try {
+    await expectFailure('not_configured');
+  } finally {
+    process.env.GEMINI_API_KEY = saved.key ?? 'test-key-never-used';
+    if (saved.project !== undefined) process.env.GEMINI_VERTEX_PROJECT = saved.project;
+    if (saved.base !== undefined) process.env.GEMINI_BASE_URL = saved.base;
+  }
+});
+
+test('a refusal by the daily voice limit is "paused" and names the limit; the provider is never called', async () => {
+  const savedLimit = process.env.AI_VOICE_DAILY_CALL_LIMIT;
+  process.env.AI_VOICE_DAILY_CALL_LIMIT = '0';
+  let called = false;
+  __setVoiceClientForTests({ models: { generateContent: async () => { called = true; return { text: 'x' }; } } } as unknown as GoogleGenAI);
+  try {
+    const err = await expectFailure('paused');
+    assert.equal(err.limit, 'daily_calls');
+    assert.equal(called, false);
+  } finally {
+    if (savedLimit === undefined) delete process.env.AI_VOICE_DAILY_CALL_LIMIT;
+    else process.env.AI_VOICE_DAILY_CALL_LIMIT = savedLimit;
+  }
 });

@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import StaffDirectory from '../components/StaffDirectory';
 import PendingApprovals from '../components/PendingApprovals';
 import InviteLinkPanel from '../components/InviteLinkPanel';
+import KioskLinkPanel from '../components/KioskLinkPanel';
 import PolicyDocuments from '../components/PolicyDocuments';
 import FloorFeedbackReview from '../components/shiftsync/FloorFeedbackReview';
 import { NotificationSettings } from '../components/shiftsync/NotificationSettings';
@@ -36,6 +37,7 @@ export default function PeopleContent() {
         <>
           <PendingApprovals locationId={locationId} refreshKey={refreshKey} onDecided={refresh} />
           <InviteLinkPanel locationId={locationId} refreshKey={refreshKey} />
+          <KioskLinkPanel locationId={locationId} />
           <FloorFeedbackReview />
         </>
       )}

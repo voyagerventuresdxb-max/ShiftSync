@@ -1,66 +1,19 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
-import { fetchMyShifts, ApiError, type MyShiftEntry } from '../api/myShifts';
+import { ApiError } from '../api/myShifts';
+import { formatShiftDate, useMyShifts } from '../state/useMyShifts';
+import { offlineLabel } from '../lib/offlineCache';
 import { fetchAvailability, setAvailability, removeAvailability, type AvailabilityMarkDto } from '../api/availability';
 import { currentWeekStart } from '../engine/weekStart';
 import { weekDates, weekdayOf } from '../engine/rosterView';
 import { Announcements } from '../components/shiftsync/Announcements';
 import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { cn } from '../lib/utils';
-import { useRefetchOnReturn } from '../lib/scheduleRefresh';
-
-/** "Mon 5 Oct" from a YYYY-MM-DD venue calendar day — pure calendar math, no timezone conversion. */
-function formatShiftDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y!, m! - 1, d!).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-}
 
 export default function MyShiftsContent() {
-  const { session, logout } = useIdentity();
-  const [pendingApproval, setPendingApproval] = useState(false);
-  const [shifts, setShifts] = useState<MyShiftEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  // Bumped when the person returns to the app or opens a notification, so a
-  // manager's edit shows up without a reload (lib/scheduleRefresh.ts).
-  const [refreshKey, setRefreshKey] = useState(0);
-  useRefetchOnReturn(useCallback(() => setRefreshKey((k) => k + 1), []));
-
-  useEffect(() => {
-    if (!session) {
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    fetchMyShifts(session.token)
-      .then((data) => {
-        if (cancelled) return;
-        setPendingApproval(data.pendingApproval);
-        setShifts(data.shifts);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        // A 401 means the stored token is expired or was revoked. Clearing it
-        // drops us into the not-signed-in state below, which offers a real way
-        // back in — otherwise the user is stuck staring at an error with a
-        // dead session they have no way to discard.
-        if (err instanceof ApiError && err.status === 401) {
-          logout();
-          return;
-        }
-        setError(err instanceof ApiError ? err.message : 'Could not load your shifts.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // `logout` is stable for this provider's lifetime; re-running on it would
-    // re-fetch pointlessly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, refreshKey]);
+  const { session } = useIdentity();
+  const { pendingApproval, shifts, loading, error, offlineSince } = useMyShifts();
 
   if (!session) {
     return (
@@ -98,6 +51,11 @@ export default function MyShiftsContent() {
 
       <section className="panel p-5">
         <h3 className="text-sm font-semibold">Your next shifts</h3>
+        {offlineSince && (
+          <p role="status" data-testid="offline-label" className="mt-1 text-xs text-warning">
+            {offlineLabel(offlineSince)}
+          </p>
+        )}
         {loading ? (
           <p className="hint">Loading…</p>
         ) : shifts.length === 0 ? (

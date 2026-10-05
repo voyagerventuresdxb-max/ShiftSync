@@ -1,6 +1,42 @@
 import type { ParsedIntent } from '@/api/voice';
 import { useCloseOnBack } from '@/lib/backNavigation';
 
+/** Shown once per person on this device, before their first recording: what leaves the phone and what is kept. */
+export function VoiceConsentSheet({ open, onAccept, onCancel }: { open: boolean; onAccept: () => void; onCancel: () => void }) {
+  useCloseOnBack(open, onCancel);
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:items-center sm:p-6"
+      onClick={onCancel}
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby="voice-consent-title" className="panel w-full max-w-sm shadow-lux" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5">
+          <p id="voice-consent-title" className="eyebrow">
+            Before you use voice
+          </p>
+          <p className="mt-2 text-sm">
+            Your command is recorded on this device (up to 10 seconds) and sent to Google's Gemini AI service, outside the UAE, to turn it into
+            text and work out what you asked for.
+          </p>
+          <p className="mt-2 text-sm text-foreground/60">
+            ShiftSync doesn't keep the recording. The text of each command is kept in your venue's voice log, which managers can see, and nothing
+            changes until you confirm it.
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <button className="btn btn-ghost" onClick={onCancel}>
+              Not now
+            </button>
+            <button className="btn btn-primary" onClick={onAccept}>
+              Use voice
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Confirm-before-execute sheet for the voice command pipeline. Mirrors the
  * overlay conventions already used by RotaBuilder.tsx's `SheetShell` and

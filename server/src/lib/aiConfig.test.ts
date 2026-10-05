@@ -8,6 +8,7 @@ import {
   DEFAULT_VISION_MODEL,
   DEFAULT_VOICE_MODEL,
   describeVisionConfig,
+  describeVoiceConfig,
   vertexCredentials,
   VertexCredentialsError,
   visionConfig,
@@ -54,6 +55,20 @@ test('overrides are read from the environment, trimmed, and blank values fall ba
   assert.deepEqual([v.project, v.location, v.model, v.fallbackModel, v.timeoutMs], ['proj-2', 'global', 'model-a', DEFAULT_VISION_FALLBACK_MODEL, 45000]);
   assert.equal(visionConfig({ GEMINI_HTTP_TIMEOUT_MS: 'nope' }).timeoutMs, 30_000);
   assert.equal(voiceConfig({ VOICE_MODEL: 'model-v' }).model, 'model-v');
+});
+
+test('voice uses the same backend, project, region and timeout as vision; only the model is its own', () => {
+  const env = { GEMINI_VERTEX_PROJECT: 'proj-3', GEMINI_VERTEX_LOCATION: 'us', GEMINI_HTTP_TIMEOUT_MS: '20000', VOICE_MODEL: 'model-v', VLM_MODEL: 'model-a' };
+  const v = voiceConfig(env);
+  assert.deepEqual([v.backend, v.project, v.location, v.timeoutMs, v.model], ['vertex', 'proj-3', 'us', 20000, 'model-v']);
+  assert.equal(voiceConfig({ GEMINI_API_KEY: 'k' }).backend, 'developer-api');
+  assert.equal(voiceConfig({}).backend, null);
+});
+
+test('describeVoiceConfig names backend, model and region but never the project id or any key', () => {
+  const line = describeVoiceConfig(voiceConfig({ GEMINI_VERTEX_PROJECT: 'secret-project-id', GEMINI_API_KEY: 'key-value-xyz' }));
+  assert.equal(line, 'voice: vertex location=eu model=gemini-3.6-flash');
+  assert.match(describeVoiceConfig(voiceConfig({})), /not configured/);
 });
 
 test('describeVisionConfig names backend, model and region but never the project id or any key', () => {

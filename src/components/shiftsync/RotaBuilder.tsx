@@ -107,6 +107,7 @@ export function RotaBuilder() {
     weekLeaves,
     setRotaLeave,
     removeRotaLeave,
+    readHeaders,
   } = useAppState();
   const { session } = useIdentity();
   const { online } = useConnectivity();
@@ -174,7 +175,7 @@ export function RotaBuilder() {
     // page with no locationId has nothing else to render anyway.
     if (!locationId) return;
     let cancelled = false;
-    fetchWeekShifts(locationId, weekStart, session?.token)
+    fetchWeekShifts(locationId, weekStart, readHeaders)
       .then((dtos) => {
         if (cancelled) return;
         setRoleIdByShiftId(Object.fromEntries(dtos.map((d) => [d.id, d.roleId])));
@@ -193,7 +194,7 @@ export function RotaBuilder() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, dataVersion, locationId, session?.token]);
+  }, [weekStart, dataVersion, locationId, readHeaders]);
 
   useEffect(() => {
     const userIds = assignedUserIdsKey ? assignedUserIdsKey.split(',') : [];
@@ -454,8 +455,8 @@ export function RotaBuilder() {
     setCopying(true);
     try {
       const [previous, current] = await Promise.all([
-        fetchWeekShifts(locationId, shiftWeek(weekStart, -1), session.token),
-        fetchWeekShifts(locationId, weekStart, session.token),
+        fetchWeekShifts(locationId, shiftWeek(weekStart, -1), readHeaders),
+        fetchWeekShifts(locationId, weekStart, readHeaders),
       ]);
       if (previous.length === 0) {
         say('Last week has no shifts to copy.');
