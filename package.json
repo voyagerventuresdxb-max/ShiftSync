@@ -26,6 +26,8 @@
     "db:seed": "node scripts/with-branch-schema.mjs \"tsx server/scripts/seed-test-data.ts\"",
     "db:seed:demo": "node scripts/with-branch-schema.mjs \"tsx server/scripts/seed-demo-venue.ts\"",
     "load:smoke": "node scripts/with-branch-schema.mjs \"node scripts/load-smoke.mjs\"",
+    "db:reset:demo": "node scripts/with-branch-schema.mjs \"tsx server/scripts/reset-demo-venue.ts\"",
+    "demo:record": "node scripts/with-branch-schema.mjs \"playwright test -c playwright.demo.config.ts\"",
     "admin:grant": "node scripts/with-branch-schema.mjs \"tsx server/scripts/grant-platform-admin.ts\"",
     "org:create": "node scripts/with-branch-schema.mjs \"tsx server/scripts/create-org-shell.ts\"",
     "cleanup:test-venues": "node scripts/with-branch-schema.mjs \"tsx server/scripts/cleanup-test-venues.ts\"",
