@@ -13,8 +13,12 @@ import { billedOutputTokens } from '../parsing/visionProvider.js';
  *                       an empty answer — retry later.
  *  - not_configured     no AI backend is set on this server (no Vertex project, no key).
  *  - paused             the in-app spend cap refused the call (see `limit`); nothing was sent.
+ *  - no_speech          the clip had no clear speech (silence, noise); nothing to act on.
  */
-export type VoiceFailureKind = 'format_rejected' | 'model_unavailable' | 'unavailable' | 'paused' | 'not_configured';
+export type VoiceFailureKind = 'format_rejected' | 'model_unavailable' | 'unavailable' | 'paused' | 'not_configured' | 'no_speech';
+
+/** What the transcriber answers for a clip with no clear speech. */
+export const NO_SPEECH = 'NO_SPEECH';
 
 export class VoiceTranscriptionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -105,9 +109,12 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabula
   // evidence of what that phone actually recorded.
   console.log(`[voice.transcribe] mime=${mimeType} sent-as=${sentAs} bytes=${buffer.length}`);
 
+  // Seen in evaluation: with a vocabulary list, silence and pure noise came back as invented
+  // commands built from the list's names. Hence the NO_SPEECH answer and the "only if spoken" rule.
+  const base = `Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it. If the audio has no clear human speech (silence, background noise, music), return exactly ${NO_SPEECH}.`;
   const instruction = vocabularyHint
-    ? `Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it. This is a hospitality-venue staff-scheduling command; it may reference these names/terms — bias your transcription toward them when the audio is ambiguous: ${vocabularyHint}`
-    : 'Transcribe this voice command to plain text. Return ONLY the transcribed words, nothing else — no punctuation commentary, no quotes around it.';
+    ? `${base} This is a hospitality-venue staff-scheduling command; it may reference these names/terms — use them only to spell words that were actually spoken, never add a name or term that wasn't said: ${vocabularyHint}`
+    : base;
 
   try {
     const response = await withAiBudget(
@@ -132,6 +139,9 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabula
     const text = response.text?.trim();
     if (!text) {
       throw new VoiceTranscriptionError('Gemini returned an empty transcription.');
+    }
+    if (text.replace(/[^A-Za-z_]/g, '').toUpperCase() === NO_SPEECH) {
+      throw new VoiceTranscriptionError('No speech in the clip.', undefined, 'no_speech');
     }
     return text;
   } catch (err) {

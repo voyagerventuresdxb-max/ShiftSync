@@ -24,6 +24,14 @@ test('outcomeAtParseTime: a genuine above-threshold QUERY_MY_SCHEDULE logs ANSWE
   assert.equal(outcomeAtParseTime(resolution(intent, intent)), 'ANSWERED');
 });
 
+test('outcomeAtParseTime: a confident answer refused for the caller’s role logs REJECTED_PERMISSION; refused by a check, REJECTED_VALIDATION', () => {
+  const attempted: ParsedIntent = { intent: 'APPROVE_JOIN', joinRequestId: 'j1', confidence: 0.95, summary: 'Approve.' };
+  const role: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'That command needs a manager or owner account.', summary: 'x' };
+  assert.equal(outcomeAtParseTime(resolution(attempted, role)), 'REJECTED_PERMISSION');
+  const check: ParsedIntent = { intent: 'UNRECOGNIZED', reason: "The pending join request wasn't one this venue has.", summary: 'x' };
+  assert.equal(outcomeAtParseTime(resolution(attempted, check)), 'REJECTED_VALIDATION');
+});
+
 test('outcomeAtParseTime: any other genuine intent logs PENDING_CONFIRMATION', () => {
   const intent: ParsedIntent = { intent: 'MARK_AVAILABILITY', date: '2026-09-25', type: 'UNAVAILABLE', confidence: 0.9, summary: 'Mark you unavailable.' };
   assert.equal(outcomeAtParseTime(resolution(intent, intent)), 'PENDING_CONFIRMATION');
