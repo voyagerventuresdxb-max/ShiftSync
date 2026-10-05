@@ -9,6 +9,8 @@ import { issueSession } from '../lib/identity.js';
 // (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
 process.env.AI_MONTHLY_BUDGET_USD = '1000000';
 process.env.AI_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VISION_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VOICE_DAILY_CALL_LIMIT = '1000000';
 
 const prisma = new PrismaClient();
 

@@ -16,7 +16,7 @@ never had a live production deployment and deployed the frontend only
 ## Shape
 
 ```
-browser ── https://shift-sync-shift-sync1.vercel.app ── Vercel (static Vite build)
+browser ── https://shift-sync-two-ashy.vercel.app ── Vercel (static Vite build)
                 │
                 │  vercel.json rewrites  /api/*  and  /uploads/*
                 ▼
@@ -63,9 +63,9 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | Variable | Value / note |
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL |
-   | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
+   | `FRONTEND_ORIGIN` | `https://shift-sync-two-ashy.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
    | `CORS_ORIGINS` | optional. Unset = any origin (the web app is same-origin through the rewrite, so it never needs listing). Set to `https://localhost,capacitor://localhost` to allow only the Capacitor app shells — see `docs/android.md` |
-   | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
+   | `GEMINI_VERTEX_PROJECT` + `GOOGLE_SERVICE_ACCOUNT_JSON` | turn on voice and image/scanned-PDF roster ingestion through Vertex AI ([`vlm-go-live.md`](vlm-go-live.md)); Excel/CSV/text-PDF parsing works without them. `GEMINI_API_KEY` does the same without Vertex (local dev). |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice). To switch push on, follow [`push-go-live.md`](push-go-live.md). |
    | `NODE_ENV` | `production`. Turns on the boot-time safety checks below. (Railway's own `RAILWAY_ENVIRONMENT_NAME=production` turns them on too, but don't rely on that alone.) It also makes the build's `npm install` skip devDependencies, which is fine: everything the server runs is in `dependencies`. |
    | `ALLOW_DEV_OTP_ECHO` | `true` only while there is no SMS integration (#51) — it is the only way a code can be entered on the live site. It shows the real one-time code on screen (and in the server log), **but only for the numbers in `ECHO_ALLOWED_PHONES`**; every other number gets a code it can never see. |
@@ -112,7 +112,7 @@ the client can be older than `prisma/schema.prisma`. That broke the #49 preview 
 `FloorSection.pinX` "does not exist"). `prisma generate` needs no database connection.
 Railway already generates in its own build command.
 
-### 3. Vercel Production Branch — last
+### 3. Vercel Production Branch — last (done 2026-09-22)
 
 Vercel dashboard → the `shift-sync` project → Settings → Git → **Production Branch =
 `master`**. This is a dashboard-only setting; the CLI cannot change it. The next push to
@@ -120,13 +120,25 @@ Vercel dashboard → the `shift-sync` project → Settings → Git → **Product
 deployment. Deliberately last, so the first thing that goes live is the working
 combination, not a frontend whose `/api` calls 404.
 
+Three things learned doing this for real on 2026-09-22:
+
+- Changing the Production Branch does **not** build anything by itself. Either push to
+  `master` afterwards, or promote the latest master build:
+  `npx vercel@latest promote https://<latest-master-deployment>.vercel.app --yes`
+  (creates a new Production deployment from that Git build; `npx vercel ls --prod` shows it).
+- If the production domain answers `302` to `vercel.com/sso-api`, Deployment Protection is
+  covering production: Settings → Deployment Protection → Vercel Authentication →
+  **Standard Protection** (previews stay protected, production is public). Dashboard-only.
+- The project's production domain is `shift-sync-two-ashy.vercel.app`; the older
+  `shift-sync-shift-sync1.vercel.app` alias is stale and stays SSO-gated — ignore it.
+
 Then verify on the production URL, not a preview (previews sit behind Vercel SSO):
 
 ```
-curl https://shift-sync-shift-sync1.vercel.app/api/health        → {"ok":true}
-open  https://shift-sync-shift-sync1.vercel.app/onboarding       → Welcome intro renders
+curl https://shift-sync-two-ashy.vercel.app/api/health        → {"ok":true}
+open  https://shift-sync-two-ashy.vercel.app/onboarding       → Welcome intro renders
 sign up a throwaway venue end to end (Account → Venue → Roster upload → Review → Invite)
-open  https://shift-sync-shift-sync1.vercel.app/onboarding/venue → reload survives (SPA fallback)
+open  https://shift-sync-two-ashy.vercel.app/onboarding/venue → reload survives (SPA fallback)
 ```
 
 ## Login links (operator scripts)
@@ -144,6 +156,32 @@ tsx server/scripts/grant-platform-admin.ts +971501234567
 ```
 
 Locally: `npm run org:create -- …` and `npm run admin:grant -- …` (against the branch schema).
+
+## Kiosk links
+
+A venue's shared screen (a tablet at the host stand, a back-of-house TV) opens
+`<FRONTEND_ORIGIN>/kiosk?venue=<locationId>#k=<token>` to show this week's **published** rota,
+announcements and shoutouts with no personal sign-in. Owners and managers make the link on
+People → **Kiosk link**: it is shown once, when created; Regenerate replaces it (the old link
+stops working at once) and Revoke leaves the venue with none. Its origin follows the invite-link
+rule (the caller's origin if it is in `FRONTEND_ORIGIN`, else the first entry).
+
+| Route | Who | Notes |
+|---|---|---|
+| `GET /api/kiosk/:locationId` | owner/manager of that venue | `{ active: { createdAt } \| null }` — never the link |
+| `POST /api/kiosk/:locationId/regenerate` | owner/manager of that venue | `201 { active, url }`; the only time the link is returned |
+| `POST /api/kiosk/:locationId/revoke` | owner/manager of that venue | `{ active: null }` |
+| `GET /api/shifts/:locationId?weekStart=`, `GET /api/shifts/:locationId/publish-status?weekStart=`, `GET /api/announcements/:locationId`, `GET /api/shoutouts/:locationId` | a session of that venue, **or** the venue's current token in `X-Kiosk-Token` | another venue's session: 403. No session and no current token (venue id alone, an old, revoked or made-up token): the same `401 kiosk_link_required` |
+
+- With the token, the shift read returns published shifts only, each as id, date, start, end,
+  staff name and role name; announcements and shoutouts come without user ids. No other route
+  accepts the token.
+- Only the token's sha256 is stored (`locations.kiosk_token_hash`, migration
+  `20261004140000_kiosk_token`). The token travels in the URL fragment; the page stores it on
+  the device (localStorage) and removes it from the address bar.
+- Refused kiosk reads are limited to 20 per 15 minutes per client (keyed like the OTP limiter);
+  a valid token or a session is never limited.
+- Regenerate and revoke are not in the audit log (no audit action covers kiosk links yet).
 
 ## Rollback
 

@@ -2,19 +2,17 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { createAnnouncement } from '../lib/actions/communicationActions.js';
+import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
 
 export const announcementsRouter = Router();
 
 /**
  * GET /api/announcements/:locationId — newest first.
- * Deliberately NOT behind `requireSession` — this is the kiosk-access-fork
- * decision (Option 3, 2026-08-31 — see MEMORY.md): `/` (Home) stays
- * anonymous-friendly for the "walk up to the shared venue device" use case,
- * and Announcements is one of the two read surfaces (with Shoutouts) that
- * decision explicitly restores anonymous access to. Confirmed still correct
- * by the follow-up anonymous-read sweep, not newly decided here.
+ * A session of this venue, or a kiosk screen with the venue's current kiosk
+ * token (middleware/kioskAccess.ts), which gets names but no user ids. A
+ * venue id alone gets 401.
  */
-announcementsRouter.get('/:locationId', async (req, res) => {
+announcementsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const rows = await prisma.announcement.findMany({
@@ -26,7 +24,7 @@ announcementsRouter.get('/:locationId', async (req, res) => {
       announcements: rows.map((a) => ({
         id: a.id,
         body: a.body,
-        authorId: a.authorId,
+        ...(req.kioskLocationId ? {} : { authorId: a.authorId }),
         authorName: a.author?.fullName ?? null,
         createdAt: a.createdAt.toISOString(),
         editedAt: a.editedAt?.toISOString() ?? null,

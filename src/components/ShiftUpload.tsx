@@ -198,7 +198,7 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
           <p className="dropzone-sub">.xlsx · .xls · .csv · .pdf · .png · .jpg · .webp — up to 10MB</p>
           <p className="dropzone-sub">
             Spreadsheets and text PDFs are read on ShiftSync's own server. Photos, scans and layouts it can't read can go to a
-            third-party AI reader outside the UAE — only after you agree, each time (max 5MB, once per venue per week).
+            third-party AI reader outside the UAE — only after you agree, each time (max 5MB, a few times per venue per week).
           </p>
         </div>
       ) : null}

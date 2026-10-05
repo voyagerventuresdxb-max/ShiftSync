@@ -106,6 +106,9 @@ export const transcribeRateLimiter = makeAiRouteLimiter(20, true);
  */
 export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
 
+/** POST /api/ai/self-test: two tiny real model calls per request, so a handful per 5 minutes. Every request counts. */
+export const aiSelfTestRateLimiter = makeAiRouteLimiter(3, false);
+
 /**
  * POST /api/schedules/upload (roster file upload — schedules.ts routes an
  * uploaded file across several parsing paths depending on shape: a
@@ -235,3 +238,11 @@ export const loginLinkRedeemRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 30)
 
 /** POST /api/login-links/peek: its own bucket (60 per 10 minutes) so every sign-in's peek doesn't halve redeem capacity. */
 export const loginLinkPeekRateLimiter = clientKeyedLimiter(10 * 60 * 1000, 60);
+
+/**
+ * Refused kiosk reads (no session; `X-Kiosk-Token` missing, wrong, replaced or
+ * revoked): 20 per 15 minutes per client, keyed and loopback-skipped like
+ * `otpRequestIpLimiter`. middleware/kioskAccess.ts calls it only on a refusal,
+ * so it counts failures alone, and a valid token or a session never reaches it.
+ */
+export const kioskFailureLimiter = clientKeyedLimiter(15 * 60 * 1000, 20);

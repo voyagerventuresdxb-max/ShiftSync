@@ -83,6 +83,10 @@ async function speak(page: Page, transcript: string, intent: Record<string, unkn
   await scriptUtterance(transcript, intent);
   await page.getByRole('button', { name: 'Start recording a voice command' }).click();
   const stop = page.getByRole('button', { name: 'Stop recording voice command' });
+  // The first recording per person on a device asks first (VoiceConsentSheet).
+  const useVoice = page.getByRole('button', { name: 'Use voice' });
+  await expect(stop.or(useVoice)).toBeVisible();
+  if (await useVoice.isVisible()) await useVoice.click();
   await expect(stop).toBeVisible();
   await page.waitForTimeout(700);
   // While listening the button "breathes" (an endless scale animation), so it never passes Playwright's stability check.
@@ -238,6 +242,35 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     ]);
     const calls = await expectPipeline([said, asked]);
     expect(intentEnum(calls[1]!)).toEqual(['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE', 'UNRECOGNIZED']);
+  });
+
+  test('consent: the first tap explains where the audio goes; "Not now" records and sends nothing; it is asked once', async ({ page }) => {
+    const { locationId } = await createVenue('consent');
+    const staffPhone = freshPhone();
+    await createUser(locationId, 'STAFF', 'E2E Voice Consent', staffPhone);
+    await logIn(page, staffPhone, '/my-shifts');
+
+    const mic = page.getByRole('button', { name: 'Start recording a voice command' });
+    await mic.click();
+    const notice = page.getByRole('dialog', { name: 'Before you use voice' });
+    await expect(notice).toContainText("Google's Gemini AI service");
+    await expect(notice).toContainText("ShiftSync doesn't keep the recording");
+    await notice.getByRole('button', { name: 'Not now' }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Stop recording voice command' })).toHaveCount(0);
+    expect(await geminiCalls()).toEqual([]);
+
+    const asked = "What's my schedule this week?";
+    await speak(page, asked, { intent: 'QUERY_MY_SCHEDULE', confidence: 0.9, summary: 'You have no shifts scheduled this week.' });
+    await sheetFor(page, asked).getByRole('button', { name: 'Got it' }).click();
+
+    await scriptUtterance(asked, { intent: 'QUERY_MY_SCHEDULE', confidence: 0.9, summary: 'You have no shifts scheduled this week.' });
+    await mic.click();
+    await expect(page.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+    await expect(notice).toHaveCount(0);
+    await page.waitForTimeout(700);
+    await page.getByRole('button', { name: 'Stop recording voice command' }).click({ force: true });
+    await expect(sheetFor(page, asked)).toBeVisible();
   });
 
   test('manager approvals: APPROVE_JOIN turns a pending join request into a real staff member', async ({ page }) => {

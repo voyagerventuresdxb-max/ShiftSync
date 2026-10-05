@@ -11,13 +11,17 @@ import { billedOutputTokens } from '../parsing/visionProvider.js';
  *                       misspelled) — an operator fix, not a retry.
  *  - unavailable        quota (429), overload (5xx), auth/config, network, or
  *                       an empty answer — retry later.
+ *  - not_configured     no AI backend is set on this server (no Vertex project, no key).
+ *  - paused             the in-app spend cap refused the call (see `limit`); nothing was sent.
  */
-export type VoiceFailureKind = 'format_rejected' | 'model_unavailable' | 'unavailable' | 'paused';
+export type VoiceFailureKind = 'format_rejected' | 'model_unavailable' | 'unavailable' | 'paused' | 'not_configured';
 
 export class VoiceTranscriptionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
   cause?: unknown;
   kind: VoiceFailureKind;
+  /** For kind 'paused': which limit refused the call. */
+  limit?: AiBudgetExceededError['limit'];
 
   constructor(message: string, cause?: unknown, kind: VoiceFailureKind = 'unavailable') {
     super(message);
@@ -34,11 +38,21 @@ export class VoiceTranscriptionError extends Error {
 
 let client: GoogleGenAI | null = null;
 function getClient(): GoogleGenAI {
-  const options = voiceClientOptions();
-  if (!options) {
-    throw new VoiceTranscriptionError('GEMINI_API_KEY is not configured on the server — voice transcription is unavailable.');
+  if (client) return client;
+  let options: ReturnType<typeof voiceClientOptions>;
+  try {
+    options = voiceClientOptions();
+  } catch (err) {
+    throw new VoiceTranscriptionError(err instanceof Error ? err.message : 'Voice AI credentials could not be read.', err);
   }
-  if (!client) client = new GoogleGenAI(options);
+  if (!options) {
+    throw new VoiceTranscriptionError(
+      'No AI backend is configured (GEMINI_VERTEX_PROJECT or GEMINI_API_KEY) — voice transcription is unavailable.',
+      undefined,
+      'not_configured',
+    );
+  }
+  client = new GoogleGenAI(options);
   return client;
 }
 
@@ -122,7 +136,9 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabula
     return text;
   } catch (err) {
     if (err instanceof AiBudgetExceededError) {
-      throw new VoiceTranscriptionError(`AI spend cap reached (${err.limit}); no call made.`, err, 'paused');
+      const paused = new VoiceTranscriptionError(`AI spend cap reached (${err.limit}); no call made.`, err, 'paused');
+      paused.limit = err.limit;
+      throw paused;
     }
     if (err instanceof ApiError) {
       reportIfModelUnavailable('transcribe', err);
