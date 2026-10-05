@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { buildKioskUrl, regenerateKioskToken, revokeKioskToken } from '../lib/kioskLinks.js';
 import { requireSession, requireManager, assertOwnsLocation } from '../middleware/requireSession.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 /**
  * Manager-only: view, regenerate and revoke the caller's own venue's kiosk
@@ -29,7 +30,19 @@ kioskRouter.post('/:locationId/regenerate', requireSession, requireManager, asyn
   try {
     const { locationId } = req.params;
     if (!assertOwnsLocation(req, res, locationId)) return;
-    const { token, createdAt } = await regenerateKioskToken(locationId);
+    // The change and its audit row commit together. The token itself is never logged.
+    const { token, createdAt } = await prisma.$transaction(async (tx) => {
+      const before = await tx.location.findUnique({ where: { id: locationId }, select: { kioskTokenCreatedAt: true } });
+      const minted = await regenerateKioskToken(locationId, tx);
+      await writeAuditLog(tx, {
+        locationId,
+        actorId: req.user!.id,
+        action: before?.kioskTokenCreatedAt ? 'KIOSK_LINK_REGENERATED' : 'KIOSK_LINK_CREATED',
+        entityType: 'Location',
+        entityId: locationId,
+      });
+      return minted;
+    });
     return res.status(201).json({ active: { createdAt: createdAt.toISOString() }, url: buildKioskUrl(locationId, token, req.query.baseUrl) });
   } catch (err) {
     console.error('[kiosk.regenerate] failed', err);
@@ -42,7 +55,10 @@ kioskRouter.post('/:locationId/revoke', requireSession, requireManager, async (r
   try {
     const { locationId } = req.params;
     if (!assertOwnsLocation(req, res, locationId)) return;
-    await revokeKioskToken(locationId);
+    await prisma.$transaction(async (tx) => {
+      await revokeKioskToken(locationId, tx);
+      await writeAuditLog(tx, { locationId, actorId: req.user!.id, action: 'KIOSK_LINK_REVOKED', entityType: 'Location', entityId: locationId });
+    });
     return res.status(200).json({ active: null });
   } catch (err) {
     console.error('[kiosk.revoke] failed', err);
