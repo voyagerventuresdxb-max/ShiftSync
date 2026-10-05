@@ -7,7 +7,8 @@ import { apiUrl } from '../lib/apiUrl';
 export interface AnnouncementDto {
   id: string;
   body: string;
-  authorId: string | null;
+  /** Absent on a kiosk read (no session): names only. */
+  authorId?: string | null;
   authorName: string | null;
   createdAt: string;
   editedAt: string | null;
@@ -29,9 +30,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** GET /api/announcements/:locationId */
-export async function fetchAnnouncements(locationId: string): Promise<AnnouncementDto[]> {
-  const data = await request<{ announcements: AnnouncementDto[] }>(`/api/announcements/${locationId}`);
+/** GET /api/announcements/:locationId — `headers` from `venueReadHeaders` (api/venueBinding.ts). */
+export async function fetchAnnouncements(locationId: string, headers: Record<string, string>): Promise<AnnouncementDto[]> {
+  const data = await request<{ announcements: AnnouncementDto[] }>(`/api/announcements/${locationId}`, { headers });
   return data.announcements;
 }
 

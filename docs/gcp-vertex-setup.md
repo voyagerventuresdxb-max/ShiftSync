@@ -83,6 +83,6 @@ Do this once, in the Google Cloud Console (or `gcloud` CLI, noted per step):
 
 Vertex AI Gemini calls are billed per request/token, separate from Google
 Workspace/other GCP spend already on this project (if any). The app's own
-`server/src/routes/schedules.ts` already rate-limits this path to one
+`server/src/routes/schedules.ts` already rate-limits this path to `AI_VISION_WEEKLY_LIMIT` (default one)
 vision-fallback parse per venue per week and caps uploads at 5MB, which
 bounds worst-case spend — this doc doesn't change that.

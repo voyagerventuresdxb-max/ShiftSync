@@ -40,12 +40,18 @@ model Location {
   createdAt                DateTime  @default(now()) @map("created_at")
   updatedAt                DateTime  @updatedAt @map("updated_at")
   // Rate-limits the paid vision-fallback roster parse (hosted Gemini/Vertex
-  // AI call, image/scanned-PDF uploads only) to once per location per week.
-  // Deterministic-path parsing (Excel/CSV/text-layer PDF) is unaffected —
-  // this field is only read/written on the vision-fallback branch.
+  // AI call, image/scanned-PDF uploads only) to AI_VISION_WEEKLY_LIMIT per
+  // location per rolling 7 days: `visionFallbackUses` holds the recent reads,
+  // `lastVisionFallbackUsedAt` the latest one. Deterministic-path parsing
+  // (Excel/CSV/text-layer PDF) is unaffected — these are only read/written on
+  // the vision-fallback branch.
   lastVisionFallbackUsedAt DateTime? @map("last_vision_fallback_used_at")
+  visionFallbackUses       DateTime[] @default([]) @map("vision_fallback_uses")
   // Old `/join?location=<id>` links are honoured until this instant (set by the invite-link migration); NULL = never.
   legacyJoinLinksUntil     DateTime? @map("legacy_join_links_until")
+  // Kiosk link (`/kiosk?venue=<id>#k=<token>`): only the sha256 of its token is stored; NULL = no kiosk link (lib/kioskLinks.ts).
+  kioskTokenHash           String?   @unique @map("kiosk_token_hash")
+  kioskTokenCreatedAt      DateTime? @map("kiosk_token_created_at")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -992,10 +998,13 @@ model AiSpendMonth {
   @@map("ai_spend_months")
 }
 
-/// AI spend guard: deployment-wide model calls per UTC day (the daily call limit).
+/// AI spend guard: deployment-wide model calls per UTC day — all features, and
+/// vision / voice separately (each has its own daily limit).
 model AiCallDay {
-  day   String @id // YYYY-MM-DD (UTC)
-  calls Int    @default(0)
+  day         String @id // YYYY-MM-DD (UTC)
+  calls       Int    @default(0)
+  visionCalls Int    @default(0) @map("vision_calls")
+  voiceCalls  Int    @default(0) @map("voice_calls")
 
   @@map("ai_call_days")
 }

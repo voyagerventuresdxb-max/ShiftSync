@@ -2,7 +2,7 @@ import { gridToTsvText } from './parseWorkbook.js';
 import { PDFParse } from 'pdf-parse';
 import { isOvernight, parseDateCell, parseTimeCell, resolveDayMonthDate } from './normalize.js';
 import { getVisionProvider, VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
-import { AI_PAUSED_MESSAGE } from '../lib/aiBudget.js';
+import { AI_PAUSED_MESSAGE, AI_PAUSED_TODAY_MESSAGE, AiBudgetExceededError } from '../lib/aiBudget.js';
 import { enforceNoDoubleShifts } from './shiftConstraints.js';
 import { parseRotaFile, processRowsIntoRoster } from './deterministicParser.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
@@ -47,6 +47,12 @@ export const VISION_ERROR_MESSAGES: Record<VisionErrorCode, string> = {
   vision_failed: "AI roster reading couldn't read this file. Try again in a few minutes, or upload an Excel/CSV export instead.",
   vision_paused: AI_PAUSED_MESSAGE,
 };
+
+/** VISION_ERROR_MESSAGES, except a refusal by the daily call limit says it is back tomorrow. */
+function visionErrorMessage(code: VisionErrorCode, cause: unknown): string {
+  if (code === 'vision_paused' && cause instanceof AiBudgetExceededError && cause.limit === 'daily_calls') return AI_PAUSED_TODAY_MESSAGE;
+  return VISION_ERROR_MESSAGES[code];
+}
 
 export class VisionIngestionError extends Error {
   /** The underlying error (e.g. a Gemini ApiError) that caused this, if any. */
@@ -268,7 +274,7 @@ export async function parseRosterGrid(
 
   const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart, locationId: options.locationId ?? null });
   if ('code' in read) {
-    if (mode === 'off') throw new VisionIngestionError(VISION_ERROR_MESSAGES[read.code], read.cause, read.code);
+    if (mode === 'off') throw new VisionIngestionError(visionErrorMessage(read.code, read.cause), read.cause, read.code);
     console.warn(`[parseVision] Falling back to the deterministic local parser for a grid roster (${read.code}).`);
     const result = processRowsIntoRoster(grid, weekStart);
     return { ...result, templateLabel: `Deterministic local parser (${read.code})` };
@@ -299,7 +305,7 @@ export async function parseRosterImage(
 
   const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart, locationId: options.locationId ?? null });
   if ('code' in read) {
-    if (mode === 'off') throw new VisionIngestionError(VISION_ERROR_MESSAGES[read.code], read.cause, read.code);
+    if (mode === 'off') throw new VisionIngestionError(visionErrorMessage(read.code, read.cause), read.cause, read.code);
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, read.code, read.cause);
   }
   return mapProviderOutput(read.output, provider, weekStart, startTime, 'image/PDF');
@@ -350,7 +356,7 @@ async function buildLocalFallback(
   }
   // Images (or PDFs with no text layer) — nothing to parse locally. Fail
   // clearly rather than show anything that didn't come from this file.
-  throw new VisionIngestionError(VISION_ERROR_MESSAGES[code], cause, code);
+  throw new VisionIngestionError(visionErrorMessage(code, cause), cause, code);
 }
 
 /** Pure mapping function (no network calls) — kept separate so it's unit-testable against fixture JSON. */

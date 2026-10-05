@@ -49,7 +49,7 @@ runs migrations. It still has **no healthcheck** until §3 is done.
    | `DATABASE_URL` | yes | `server:start` runs `prisma migrate deploy` and the phone backfill against it on every boot |
    | `NODE_ENV` | yes, `production` | `server/src/lib/prisma.ts` only uses `DATABASE_URL` unchanged when `NODE_ENV=production`. Otherwise it runs `git rev-parse` and can add a `dev_<branch>` schema. Railpack sets it in the image (its plan shows `NODE_ENV=production`). Set it on the service anyway so it doesn't depend on the builder. |
    | `FRONTEND_ORIGIN` | yes | invite links are minted only for this origin |
-   | `GEMINI_API_KEY` | for voice / image roster parsing | one key per environment. The free tier is 20 requests/day per key. |
+   | `GEMINI_VERTEX_PROJECT`, `GOOGLE_SERVICE_ACCOUNT_JSON` | for voice / image roster parsing | Vertex AI, both features ([`vlm-go-live.md`](vlm-go-live.md)). `GEMINI_API_KEY` only without Vertex: one key per environment, the free tier is 20 requests/day per key. |
    | `ALLOW_DEV_OTP_ECHO` | demo only | shows real one-time codes on screen. Remove it after the demo. |
    | `ECHO_ALLOWED_PHONES` | whenever `ALLOW_DEV_OTP_ECHO=true` | from the parallel echo-allowlist change. Once that change is deployed, a production API with echo on and no allowlist **refuses to boot**, and the deploy fails its healthcheck. |
    | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | optional | push is off without them. Generate them with `npm run vapid:generate`, which prints to your terminal only. `VAPID_SUBJECT` must start with `mailto:` or `https:`. A bad value now turns push off (`[push] VAPID config rejected …` in the log) instead of crashing the API. |
