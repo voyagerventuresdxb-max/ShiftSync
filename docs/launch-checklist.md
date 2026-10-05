@@ -18,7 +18,8 @@ stores).
   [`ENV_VARS.md`](ENV_VARS.md) §2.
 - [ ] **Production variables match the checklist**, both "must be set" and "must be absent".
   Follow: [`ENV_VARS.md`](ENV_VARS.md) §6.
-- [ ] **Health after the last deploy:** `/api/health` and `/api/health/ready` both answer `200`.
+- [x] **Health after the last deploy:** `/api/health` and `/api/health/ready` both answer `200`
+  (checked 2026-10-05 after deploy `5fd67c0c`, master `ee65d9d`). Re-check after every deploy.
   Follow: [`runbook-incidents.md`](runbook-incidents.md) §0.
 - [ ] **Test venues removed from production** (#53). Follow:
   [`test-venue-cleanup.md`](test-venue-cleanup.md).
@@ -35,18 +36,21 @@ stores).
 
 - [ ] **Google Cloud billing** linked, Vertex AI API on, budget alert set. Follow:
   [`vlm-go-live.md`](vlm-go-live.md) §1–2.
-- [ ] **Vision credentials** (service account, `GEMINI_VERTEX_PROJECT`,
-  `GOOGLE_SERVICE_ACCOUNT_JSON`) set on Railway, and `vlm:check` passes inside the service.
-  Follow: [`vlm-go-live.md`](vlm-go-live.md) §3–6.
-- [ ] **Spend cap decided:** keep or change `AI_MONTHLY_BUDGET_USD` (default 5) and
-  `AI_DAILY_CALL_LIMIT` (default 60). Follow: [`vlm-go-live.md`](vlm-go-live.md) §2.
-- [ ] **Rotate the Gemini key** used for voice (`GEMINI_API_KEY`). Production gets its own key,
-  shared with no other environment or worktree. Create the new key, replace the Railway value,
-  deploy, test one voice command, then delete the old key. The repo has no step-by-step page for
-  this key; [`vlm-go-live.md`](vlm-go-live.md) §7 covers the Vertex key, and
-  [`ENV_VARS.md`](ENV_VARS.md) §1 the one-key-per-environment rule.
-- [ ] **Explicit opt-in before the first voice command**, with a way to withdraw it. Not built
-  yet. Follow: [`store-readiness.md`](store-readiness.md) §3.
+- [ ] **Vertex credentials** (service account, `GEMINI_VERTEX_PROJECT`,
+  `GOOGLE_SERVICE_ACCOUNT_JSON`) are set on Railway (2026-10-04) and now serve both roster reading
+  and voice (2026-10-05). Tick when the owner's **Test AI connection** (Profile) shows both
+  *Working*. Follow: [`vlm-go-live.md`](vlm-go-live.md) §3–6, [`owner-todo.md`](owner-todo.md).
+- [ ] **Spend cap decided:** keep or change `AI_MONTHLY_BUDGET_USD` (default 5),
+  `AI_VISION_DAILY_CALL_LIMIT` (default 60), `AI_VOICE_DAILY_CALL_LIMIT` (default 200) and
+  `AI_VISION_WEEKLY_LIMIT` (production: 5 per venue in any 7 days). Follow:
+  [`vlm-go-live.md`](vlm-go-live.md) §2, [`ENV_VARS.md`](ENV_VARS.md).
+- [ ] **Delete the old Gemini Developer API key.** Production no longer uses one (voice moved to
+  Vertex on 2026-10-05). Each local worktree keeps its own key ([`ENV_VARS.md`](ENV_VARS.md) §1).
+- [ ] **Opt-in before the first voice command, with a way to withdraw it.** The notice before the
+  first recording is built (2026-10-05); a setting to withdraw it is not. Follow:
+  [`store-readiness.md`](store-readiness.md) §3.
+- [ ] **Voice tested on real phones** (iPhone and Android, accents, floor noise). Follow:
+  [`voice-test-script.md`](voice-test-script.md).
 - [ ] Everyone on call knows how to switch AI off. Follow:
   [`runbook-incidents.md`](runbook-incidents.md) §5.
 
@@ -86,7 +90,8 @@ stores).
 - [ ] **Rota stack** reviewed and merged in order: #69 → #78 → #84 → #108–#111. Before #84's
   migration, run its read-only overlap check against production. Follow:
   [`rota-review-guide.md`](rota-review-guide.md) (covers #69, #78, #84).
-- [ ] **Kiosk links** (#115) reviewed. Once merged, add its revoke steps to
-  [`runbook-incidents.md`](runbook-incidents.md) §6.3.
+- [x] **Kiosk links** (#115) merged and deployed 2026-10-05; revoke steps are in
+  [`runbook-incidents.md`](runbook-incidents.md) §6.3. Shared screens opened with an old
+  `/?venue=` link need a new kiosk link from People.
 - [ ] After the rota stack merges, update the quick-starts and
   [`mvp-status.md`](mvp-status.md).

@@ -794,3 +794,39 @@ All gates also: typecheck ×2 ✔, lint 0 errors (18 pre-existing warnings), bui
 - Closed as superseded (replacements verified merged): #72 → #80, #76 → #85, #43 → #86. #42 left open.
 - Docs: #70 merged after this entry (reread: outcome-only). **#75 skipped**: it names which upload path consumes the library with the open advisories; Stage 2's PR replaces it.
 - Not merged (as instructed): #69, #78, #84 (rota stack). No PR body in #80–#88 contained security specifics.
+
+---
+
+# Autonomous run 9 — 2026-10-04/05
+
+Rules as run 4: merge commits only, `origin/master` merged into each branch first, full gate per PR,
+`npm run scan:secrets` before every push and merge, at most two API deploys
+(`railway redeploy --from-source`, pinned CLI), additive migrations only, fresh worktrees removed
+after use. Switch `ROTA_STACK_APPROVED = NO`. Security wording outcome-only.
+
+## Preconditions: passed
+Required production variables present, `NODE_ENV=production`, dev-bypass / error-injection /
+base-URL-override variables absent; `/api/health` and `/api/health/ready` 200. Rollback targets:
+`67546a87` (before Stage B), `a8e3ec53` (before Stage E).
+
+## Stages
+
+| Stage | Result |
+|---|---|
+| A — open PRs | 11 merged: #116 `34ca1d6`, #120 `de9b86f`, #79 `530c8b4`, #55 `6ea0234`, #117 `376ce0b`, #118 `41fa0a6`, #119 `a502d6b`, #106 `91888d9`, #107 `674f3fa`, #115 `4768693` (kiosk carve-out met: full e2e 88/88, create/regenerate/revoke screen on People), #41 `d65264d` (plus a fix commit: a duplicated paragraph and a stale volume note removed). Conflicts were `MEMORY.md` (both sides kept), `package.json` scripts (both kept), `AppStateContext.tsx` (#106 offline copy + #115 kiosk binding, both kept), `docs/deployment.md` (real domain + master's new rows). Left open: #36, #30, #91, #42, rota stack. A merge-permission pause on #117 was cleared by the owner. |
+| B — API deploy | `a8e3ec53` (`d65264d`): SUCCESS, kiosk migration applied, start `npm run server:start`, health/ready 200 ×2, smoke checks as expected. No rollback. |
+| C — voice on Vertex | #121 `2ab9c50`: voice on the roster-vision Vertex setup; separate vision (60) / voice (200) daily limits inside the monthly cap; clear not-set-up / today / month messages; notice before the first recording; `docs/voice-test-script.md`. Gate: unit 104, server 641 / 3 skip, full e2e 89/89. |
+| D — self-test + weekly limit | #122 `ee65d9d`: owner-only Test AI connection (Profile); `AI_VISION_WEEKLY_LIMIT` (default 1). Gate: unit 104, server 652 / 3 skip, full e2e 90/90. |
+| E — deploy | `AI_VISION_WEEKLY_LIMIT=5` staged; `5fd67c0c` (`ee65d9d`): SUCCESS, two additive migrations applied, health/ready 200 ×2, self-test refuses anonymous callers (401 direct and via the web URL). No rollback. |
+| F — docs | `mvp-status.md`, `launch-checklist.md`, `pilot-checklist.md`, `runbook-incidents.md` §6.3, new `owner-todo.md`. |
+| G — cleanup | Run worktrees removed. Older worktrees left for the owner (see the final report). |
+
+Every gate: typecheck, lint 0 errors (18 existing warnings), unit, build (staff bundle within
+budget once #107 landed), server suite, relevant or full e2e (`CI=1 --retries=0`), secrets scan
+clean. A few e2e runs logged Prisma errors from tests' venue cleanup racing an in-flight request;
+every test passed.
+
+## Production after the run
+API `5fd67c0c` on `ee65d9d`, health and readiness 200. Roster photo reading and voice are both on
+Vertex AI behind the spend cap, neither yet tested on a real phone. Push is off (no VAPID). The
+owner's next steps are in [`owner-todo.md`](owner-todo.md).
