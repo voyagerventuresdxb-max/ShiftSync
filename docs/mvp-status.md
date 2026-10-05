@@ -1,4 +1,4 @@
-# MVP status (master, 2026-10-04)
+# MVP status (master, 2026-10-05)
 
 An honest snapshot: what works end to end on `master` and which test proves it, what is mocked or not configured in production, and the known limits. Update it when any of these change.
 
@@ -16,7 +16,9 @@ Every line has an end-to-end Playwright spec in `e2e/` that drives the real app,
 | Time zones | Week, "today" and shift times are the venue's (tested from Dubai and Los Angeles viewers, month and year ends) | `calendar-liveness` |
 | Floor plan | Section pins (place, drag, rename, delete), pinch zoom, daily assignment by drag | `floor-plan-pins`, `floor-plan-section-editor`, `floor-plan-zoom` |
 | Documents | Policy documents upload, view, delete | `policy-documents` |
-| Voice commands | Transcript → intent → confirm sheet → change, for staff and manager intents (the AI is faked at the network boundary in tests) | `voice` |
+| Voice commands | A notice before the first recording; transcript → intent → confirm sheet → change, for staff and manager intents (the AI is faked at the network boundary in tests) | `voice` |
+| AI connection test | Owner → Profile → Test AI connection: one tiny roster-reading and one tiny voice call, a line per feature; staff never see it | `ai-self-test` |
+| Offline staff schedule | My Shifts and Home's next shift show the person's saved copy, labelled, when the network drops; wiped on sign-out | `offline-schedule` |
 | Notifications | In-app bell; push delivery path up to the send (recorded in tests) | `push-outbox`, `push-unavailable` |
 | AI roster consent | Nothing goes to the AI reader without the manager's per-file consent | `roster-ai-consent` |
 | Account deletion | Self-service deletion from Profile; the last owner is refused; draft privacy/terms pages linked | `account-deletion` |
@@ -27,17 +29,19 @@ Server-side rules with their own suites (no e2e): the Wednesday 17:00 cover-requ
 ## Mocked or not configured in production
 | Feature | State in production | What turns it on |
 |---|---|---|
-| AI roster reading (photos, scans) | Code ready; **no Vertex credentials**, so image uploads get a clear "not configured" message with the manual path | `docs/vlm-go-live.md` |
-| Voice commands | **No Gemini key**: voice is off | a key set by hand on Railway |
+| AI roster reading (photos, scans) | **On**: Vertex AI (`eu`), behind the in-app spend cap (USD 5 a month); up to 5 AI reads per venue in any 7 days (`AI_VISION_WEEKLY_LIMIT=5`). First real-phone test pending | `docs/vlm-go-live.md` (owner: `docs/owner-todo.md` items 3–4) |
+| Voice commands | **On** since 2026-10-05: the same Vertex AI setup as roster reading, same spend cap, 200 calls a day. First real-phone test pending | `docs/voice-test-script.md` |
 | SMS sign-in codes | Flag off, no provider. Codes reach only numbers on the demo allowlist; everyone else signs in with a manager's login link | `docs/otp-delivery-uae.md` (sender-ID registration first) |
 | Push notifications | **No VAPID keys**: in-app bell only | `docs/push-go-live.md` |
 | Android app | Shell builds locally; nothing uploaded to Play | `docs/store-readiness.md` |
 | iPhone | PWA (Add to Home Screen); no native app | — |
-| Web front end | Production URL behind Vercel deployment protection | owner's Vercel settings |
+| Web front end | Production URL answered without a Vercel login on 2026-10-05; confirm on a phone | owner's Vercel settings (`docs/owner-todo.md` item 1) |
 
 ## Known limits
 - **Rota builder v0 is not on master yet.** Leave on the grid, copy last week, split shifts, the overlap guard and manager-only drafts are in #69 → #78 → #84, awaiting review (`docs/rota-review-guide.md`).
-- **Parser:** day headers written like `Mon 17/08` aren't recognised (the eval harness reports it); image rosters need the AI reader.
+- **Parser:** image rosters need the AI reader (day headers with a weekday, like `Mon 17/08`, are read since 2026-10-04).
+- **Voice consent** is a notice shown once per person per device; there is no setting to withdraw it yet.
+- **Offline copy** covers a staff member's own published weeks only, and only weeks already opened online on that device.
 - **Live updates** are refetch-on-focus/visibility/notification, not websockets. A kiosk screen left open picks up new announcements or rota edits only when reloaded (it does move to the new week on Monday).
 - **Legal pages** are drafts, marked as such, pending legal review.
 - **Railway config-as-code** (`railway.json`) stops working on 2026-12-01 (#52 follow-ups).

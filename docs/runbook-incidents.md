@@ -189,8 +189,15 @@ A manager or venue owner, for their own venue: People → **Join link**.
 
 ### 6.3 Kiosk links
 
-Pending: kiosk links with their own tokens arrive with PR #115 (not merged). Once merged, they
-are regenerated or revoked from People. Update this section when #115 lands.
+A venue's shared screen opens a kiosk link (`/kiosk?venue=…#k=…`). Owners and managers of that
+venue manage it on People → **Kiosk link** ([`deployment.md`](deployment.md) → Kiosk links):
+
+- **Revoke**: no kiosk link works for the venue; open shared screens show "Kiosk link needed".
+- **Regenerate**: the old link stops working at once; the new one is shown once, to copy to the
+  screen.
+- A leaked kiosk link shows only the published rota (names, roles, times), announcements and
+  shoutouts. It can't change anything or open any other page.
+- Kiosk regenerate and revoke are not in the audit log yet.
 
 ### 6.4 Sessions
 
