@@ -40,10 +40,13 @@ model Location {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
   // Rate-limits the paid vision-fallback roster parse (hosted Gemini/Vertex
-  // AI call, image/scanned-PDF uploads only) to once per location per week.
-  // Deterministic-path parsing (Excel/CSV/text-layer PDF) is unaffected —
-  // this field is only read/written on the vision-fallback branch.
+  // AI call, image/scanned-PDF uploads only) to AI_VISION_WEEKLY_LIMIT per
+  // location per rolling 7 days: `visionFallbackUses` holds the recent reads,
+  // `lastVisionFallbackUsedAt` the latest one. Deterministic-path parsing
+  // (Excel/CSV/text-layer PDF) is unaffected — these are only read/written on
+  // the vision-fallback branch.
   lastVisionFallbackUsedAt DateTime? @map("last_vision_fallback_used_at")
+  visionFallbackUses       DateTime[] @default([]) @map("vision_fallback_uses")
   // Old `/join?location=<id>` links are honoured until this instant (set by the invite-link migration); NULL = never.
   legacyJoinLinksUntil     DateTime? @map("legacy_join_links_until")
   // Kiosk link (`/kiosk?venue=<id>#k=<token>`): only the sha256 of its token is stored; NULL = no kiosk link (lib/kioskLinks.ts).

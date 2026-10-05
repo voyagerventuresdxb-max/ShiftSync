@@ -67,8 +67,9 @@ The steps below are a second line, in Google Cloud:
    per-minute generate-content quota for each model in `eu`. A quota limits the **rate**, not the
    monthly total.
 3. The app's other limits still apply (`server/src/routes/schedules.ts`): AI reading takes files up
-   to 5 MB and runs at most **once per venue per week** (a successful read starts the week), plus the
-   general roster-upload rate limiter.
+   to 5 MB and runs at most **`AI_VISION_WEEKLY_LIMIT` times per venue in any 7 days** (default 1;
+   each successful read counts for 7 days; `0` switches AI roster reading off), plus the general
+   roster-upload rate limiter.
 
 ## 3. Service account with Vertex AI User only
 
@@ -127,9 +128,16 @@ failing closed, not a credentials problem. Run it inside the service instead:
    - Do **not** run it through `node scripts/with-branch-schema.mjs` against production: that
      wrapper is for dev worktrees and would point production's connection at a dev schema.
 
+**In the app instead (no laptop):** sign in as the venue **owner** → **Profile** → **AI connection** →
+**Test AI connection**. It sends one tiny image call (roster reading) and one tiny audio call
+(voice) on the production setup, through the spend cap, and shows per feature: *Working — model
+(Vertex AI, region), N ms*, or *Not working —* a plain reason (not set up, credentials unreadable,
+access refused, model unavailable, today's / this month's limit reached, Google not answering).
+It never shows a key, project id or provider message. Owners only; 3 runs per 5 minutes.
+
 ## 6. Photo-roster test on a phone
 
-1. On a phone, sign in as a manager of a **test venue** (AI reading is limited to once per venue per week, so don't spend a real venue's allowance). Open **Scheduling** → the roster upload panel. It states that image and scanned-PDF rosters are read by a third-party AI service outside the UAE.
+1. On a phone, sign in as a manager of a **test venue** (AI reading is limited to `AI_VISION_WEEKLY_LIMIT` reads per venue in any 7 days, so don't spend a real venue's allowance). Open **Scheduling** → the roster upload panel. It states that image and scanned-PDF rosters are read by a third-party AI service outside the UAE.
 2. Take a photo of a printed roster with **made-up names** (or the sample image from `server/scripts/fixtures/vlm-check-roster.png` shown on another screen).
 3. The **review screen** must show the shifts read from the photo; nothing is saved until you confirm.
 4. Railway logs for that request: `[parseVision] image/PDF read by vertex-gemini model=… — … chars, tokens in/out=…/…, N shifts`. The log carries counts only, never the names.

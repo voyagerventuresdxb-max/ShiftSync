@@ -21,19 +21,31 @@ import { prisma } from './prisma.js';
  * only — no content, names, phone numbers or audio is ever recorded.
  */
 
-export type AiFeature = 'roster_vision' | 'voice_transcribe' | 'voice_intent';
+export type AiFeature = 'roster_vision' | 'voice_transcribe' | 'voice_intent' | 'self_test_vision' | 'self_test_voice';
 
 /** Output ceiling per call, thinking included (Gemini counts thought tokens against maxOutputTokens). */
 export const MAX_OUTPUT_TOKENS: Record<AiFeature, number> = {
   roster_vision: 16_384,
   voice_transcribe: 1_024,
   voice_intent: 2_048,
+  self_test_vision: 256,
+  self_test_voice: 256,
 };
 
 export type AiFeatureGroup = 'vision' | 'voice';
 
 export function featureGroup(feature: AiFeature): AiFeatureGroup {
-  return feature === 'roster_vision' ? 'vision' : 'voice';
+  return feature === 'roster_vision' || feature === 'self_test_vision' ? 'vision' : 'voice';
+}
+
+/** AI roster reads (photo/scan uploads) per venue per rolling 7 days. */
+export const DEFAULT_VISION_WEEKLY_LIMIT = 1;
+
+/** `AI_VISION_WEEKLY_LIMIT`: a whole number ≥ 0 (0 switches AI roster reading off); anything else uses the default. */
+export function visionWeeklyLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.AI_VISION_WEEKLY_LIMIT ?? '').trim();
+  const n = Number(raw);
+  return raw !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_VISION_WEEKLY_LIMIT;
 }
 
 export const DEFAULT_MONTHLY_BUDGET_USD = 5;
