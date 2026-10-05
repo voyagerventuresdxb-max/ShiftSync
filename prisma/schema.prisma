@@ -946,10 +946,13 @@ model AiSpendMonth {
   @@map("ai_spend_months")
 }
 
-/// AI spend guard: deployment-wide model calls per UTC day (the daily call limit).
+/// AI spend guard: deployment-wide model calls per UTC day — all features, and
+/// vision / voice separately (each has its own daily limit).
 model AiCallDay {
-  day   String @id // YYYY-MM-DD (UTC)
-  calls Int    @default(0)
+  day         String @id // YYYY-MM-DD (UTC)
+  calls       Int    @default(0)
+  visionCalls Int    @default(0) @map("vision_calls")
+  voiceCalls  Int    @default(0) @map("voice_calls")
 
   @@map("ai_call_days")
 }

@@ -17,6 +17,8 @@ import {
 // (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
 process.env.AI_MONTHLY_BUDGET_USD = '1000000';
 process.env.AI_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VISION_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VOICE_DAILY_CALL_LIMIT = '1000000';
 
 /** A fake SDK client: answers each call from `script` in order (a status number throws an ApiError). */
 function fakeClient(script: (number | { text: string; usage?: { promptTokenCount: number; candidatesTokenCount: number } })[]) {

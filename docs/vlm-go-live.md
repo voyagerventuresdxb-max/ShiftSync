@@ -32,21 +32,27 @@ Never paste a key, key file or any part of one into chat, a PR, an issue, a comm
 
 **The hard stop is inside the app, not in Google Cloud.** Every Gemini / Vertex call the API makes
 (roster vision, voice transcription, voice intent, and `vlm:check`) first reserves its worst-case
-cost against a monthly budget and a daily call count kept in the database
-(`server/src/lib/aiBudget.ts`). If the call could cross either limit, nothing is sent to Google and
+cost against a monthly budget and a daily call count for its feature kept in the database
+(`server/src/lib/aiBudget.ts`). If the call could cross a limit, nothing is sent to Google and
 the manager sees "AI reading is paused for this month; upload Excel/CSV or add staff manually."
+(or "…has reached today's limit and is back tomorrow…" for the daily count).
 Spreadsheets, text PDFs and manual entry keep working. If the counters can't be reached, AI calls
 are refused too (fail closed).
 
+Voice uses the same Vertex project, region and credentials as vision (only `VOICE_MODEL` is its own),
+so the steps below turn on both.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `AI_MONTHLY_BUDGET_USD` | `5` | Estimated spend per UTC calendar month, all venues together. |
-| `AI_DAILY_CALL_LIMIT` | `60` | Model calls per UTC day, all venues together. |
+| `AI_MONTHLY_BUDGET_USD` | `5` | Estimated spend per UTC calendar month, all venues and features together. |
+| `AI_VISION_DAILY_CALL_LIMIT` | `60` | Roster-vision model calls per UTC day, all venues together. |
+| `AI_VOICE_DAILY_CALL_LIMIT` | `200` | Voice model calls per UTC day, all venues together (two per command). |
+| `AI_DAILY_CALL_LIMIT` | unset | Optional ceiling on all AI calls per UTC day; `0` switches AI off. |
 | `AI_PRICE_IN_PER_M` / `AI_PRICE_OUT_PER_M` | `3` / `15` | USD per 1M input / output tokens used for the estimate. At or above the highest price Google lists for these models (checked 2026-10-04), so the estimate runs high, never low. |
 
 The API logs `[ai-budget] WARNING: estimated AI spend for <month> has reached 80% …` once a month
 when the estimate passes 80 %. The owner can see the cap's state at `GET /api/ai/usage`
-(month-to-date estimate, limit, calls today, call limit).
+(month-to-date estimate, limit, calls today in total and for vision and voice, and their limits).
 
 The steps below are a second line, in Google Cloud:
 
