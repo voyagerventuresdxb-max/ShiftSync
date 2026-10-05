@@ -224,8 +224,13 @@ test('golden path: build → publish → staff sees + push → voice edit → st
       }),
     );
     await m.getByRole('button', { name: 'Start recording a voice command' }).click();
+    // The first recording per person on a device asks first (VoiceConsentSheet).
+    const stop = m.getByRole('button', { name: 'Stop recording voice command' });
+    const useVoice = m.getByRole('button', { name: 'Use voice' });
+    await expect(stop.or(useVoice)).toBeVisible();
+    if (await useVoice.isVisible()) await useVoice.click();
     // The recording button pulses (CSS animation), so Playwright never sees it "stable" — dispatch the tap.
-    await m.getByRole('button', { name: 'Stop recording voice command' }).dispatchEvent('click');
+    await stop.dispatchEvent('click');
     const confirm = m.getByRole('button', { name: 'Confirm', exact: true });
     await expect(confirm).toBeVisible();
     await expect(m.getByText(`Move Sara Staff's ${tue} shift to 18:00–23:30`)).toBeVisible();
