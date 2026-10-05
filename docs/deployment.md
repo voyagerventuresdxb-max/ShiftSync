@@ -16,7 +16,7 @@ never had a live production deployment and deployed the frontend only
 ## Shape
 
 ```
-browser ── https://shift-sync-shift-sync1.vercel.app ── Vercel (static Vite build)
+browser ── https://shift-sync-two-ashy.vercel.app ── Vercel (static Vite build)
                 │
                 │  vercel.json rewrites  /api/*  and  /uploads/*
                 ▼
@@ -63,7 +63,7 @@ history from scratch, which is exactly what `server:start` does on every boot.
    | Variable | Value / note |
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL |
-   | `FRONTEND_ORIGIN` | `https://shift-sync-shift-sync1.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
+   | `FRONTEND_ORIGIN` | `https://shift-sync-two-ashy.vercel.app` — the only origin invite links are minted for (`server/src/routes/onboarding.ts`); comma-separate to add a custom domain later |
    | `CORS_ORIGINS` | optional. Unset = any origin (the web app is same-origin through the rewrite, so it never needs listing). Set to `https://localhost,capacitor://localhost` to allow only the Capacitor app shells — see `docs/android.md` |
    | `GEMINI_API_KEY` | needed for voice and for image/scanned-PDF roster ingestion; Excel/CSV/text-PDF parsing works without it |
    | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | optional — push notifications are disabled without them (the server logs a one-line notice). To switch push on, follow [`push-go-live.md`](push-go-live.md). |
@@ -112,7 +112,7 @@ the client can be older than `prisma/schema.prisma`. That broke the #49 preview 
 `FloorSection.pinX` "does not exist"). `prisma generate` needs no database connection.
 Railway already generates in its own build command.
 
-### 3. Vercel Production Branch — last
+### 3. Vercel Production Branch — last (done 2026-09-22)
 
 Vercel dashboard → the `shift-sync` project → Settings → Git → **Production Branch =
 `master`**. This is a dashboard-only setting; the CLI cannot change it. The next push to
@@ -120,13 +120,25 @@ Vercel dashboard → the `shift-sync` project → Settings → Git → **Product
 deployment. Deliberately last, so the first thing that goes live is the working
 combination, not a frontend whose `/api` calls 404.
 
+Three things learned doing this for real on 2026-09-22:
+
+- Changing the Production Branch does **not** build anything by itself. Either push to
+  `master` afterwards, or promote the latest master build:
+  `npx vercel@latest promote https://<latest-master-deployment>.vercel.app --yes`
+  (creates a new Production deployment from that Git build; `npx vercel ls --prod` shows it).
+- If the production domain answers `302` to `vercel.com/sso-api`, Deployment Protection is
+  covering production: Settings → Deployment Protection → Vercel Authentication →
+  **Standard Protection** (previews stay protected, production is public). Dashboard-only.
+- The project's production domain is `shift-sync-two-ashy.vercel.app`; the older
+  `shift-sync-shift-sync1.vercel.app` alias is stale and stays SSO-gated — ignore it.
+
 Then verify on the production URL, not a preview (previews sit behind Vercel SSO):
 
 ```
-curl https://shift-sync-shift-sync1.vercel.app/api/health        → {"ok":true}
-open  https://shift-sync-shift-sync1.vercel.app/onboarding       → Welcome intro renders
+curl https://shift-sync-two-ashy.vercel.app/api/health        → {"ok":true}
+open  https://shift-sync-two-ashy.vercel.app/onboarding       → Welcome intro renders
 sign up a throwaway venue end to end (Account → Venue → Roster upload → Review → Invite)
-open  https://shift-sync-shift-sync1.vercel.app/onboarding/venue → reload survives (SPA fallback)
+open  https://shift-sync-two-ashy.vercel.app/onboarding/venue → reload survives (SPA fallback)
 ```
 
 ## Login links (operator scripts)
