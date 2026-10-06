@@ -46,8 +46,8 @@ stores).
   [`vlm-go-live.md`](vlm-go-live.md) §2, [`ENV_VARS.md`](ENV_VARS.md).
 - [ ] **Delete the old Gemini Developer API key.** Production no longer uses one (voice moved to
   Vertex on 2026-10-05). Each local worktree keeps its own key ([`ENV_VARS.md`](ENV_VARS.md) §1).
-- [ ] **Opt-in before the first voice command, with a way to withdraw it.** The notice before the
-  first recording is built (2026-10-05); a setting to withdraw it is not. Follow:
+- [x] **Opt-in before the first voice command, with a way to withdraw it.** The notice before the
+  first recording, and Profile → Voice commands → Turn off voice on this device (2026-10-05). Follow:
   [`store-readiness.md`](store-readiness.md) §3.
 - [ ] **Voice tested on real phones** (iPhone and Android, accents, floor noise). Follow:
   [`voice-test-script.md`](voice-test-script.md).

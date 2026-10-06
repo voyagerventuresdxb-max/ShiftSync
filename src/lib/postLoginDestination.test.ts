@@ -95,6 +95,15 @@ test('isSafeReturnTo: rejects the embedded tab/CR/LF bypass (the one a blocklist
   assert.equal(isSafeReturnTo('/\r\n/evil.example'), false);
 });
 
+test('isSafeReturnTo: an accepted value always resolves to this origin, encoded slashes and dot segments included', () => {
+  // Accepted values are only ever used for client-side navigation (router `navigate`/`<Navigate>`),
+  // never `window.location`; this pins that whatever passes also resolves to the same origin.
+  const base = 'https://app.invalid';
+  for (const candidate of ['/%2F%2Fevil.example', '/%5Cevil.example', '/./evil.example', '/scheduling/../people', '/a/%2e%2e/%2e%2e//evil.example']) {
+    if (isSafeReturnTo(candidate)) assert.equal(new URL(candidate, base).origin, base, candidate);
+  }
+});
+
 test('postLoginDestination: with no returnTo, OWNER and MANAGER land on / and STAFF on /my-shifts', () => {
   assert.equal(postLoginDestination('OWNER'), '/');
   assert.equal(postLoginDestination('MANAGER'), '/');
