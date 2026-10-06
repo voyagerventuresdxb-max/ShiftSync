@@ -53,6 +53,8 @@ const TIME_RE = /^\d{2}:\d{2}$/;
  * only this generic line crosses the wire.
  */
 const VOICE_UNAVAILABLE = "Voice commands aren't available right now — try again later.";
+/** The clip had no clear speech; nothing was sent on to be understood. */
+export const VOICE_NO_SPEECH = "I didn't hear a command. Hold the phone a little closer and try again.";
 /** A retired/misspelled model is not fixed by retrying, so say so (and point at the buttons). */
 const VOICE_MODEL_UNAVAILABLE = "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile.";
 /** No AI backend on this server at all (no Vertex project, no key). */
@@ -224,6 +226,9 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
     }
     if (err instanceof VoiceTranscriptionError && err.kind === 'not_configured') {
       return res.status(503).json({ error: VOICE_NOT_CONFIGURED, errorCode: 'voice_not_configured' });
+    }
+    if (err instanceof VoiceTranscriptionError && err.kind === 'no_speech') {
+      return res.status(422).json({ error: VOICE_NO_SPEECH, errorCode: 'voice_no_speech' });
     }
     if (err instanceof VoiceTranscriptionError && err.kind === 'model_unavailable') {
       return res.status(503).json({ error: VOICE_MODEL_UNAVAILABLE, errorCode: 'voice_model_unavailable' });
