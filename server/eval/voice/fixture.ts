@@ -73,7 +73,7 @@ export function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-async function shift(db: PrismaClient, locationId: string, roleId: string, userId: string, date: string, start: string, end: string) {
+async function shift(db: PrismaClient, locationId: string, roleId: string, userId: string, date: string, start: string, end: string, published = false) {
   return db.shift.create({
     data: {
       locationId,
@@ -82,6 +82,7 @@ async function shift(db: PrismaClient, locationId: string, roleId: string, userI
       date: new Date(`${date}T00:00:00.000Z`),
       startTime: combineDateAndTime(date, start, TZ),
       endTime: combineDateAndTime(date, end, TZ, end <= start),
+      ...(published ? { status: 'PUBLISHED' as const } : {}),
     },
   });
 }
@@ -111,7 +112,8 @@ export async function seedFixture(db: PrismaClient): Promise<Fixture> {
   }
   const shifts = {} as Record<ShiftKey, string>;
   for (const [key, s] of Object.entries(SHIFTS) as [ShiftKey, (typeof SHIFTS)[ShiftKey]][]) {
-    shifts[key] = (await shift(db, locA.id, roles[s.role], users[s.who], addDays(today, s.day), s.start, s.end)).id;
+    // Sam is the staff caller (score.ts CALLER), and a staff member only ever sees published shifts.
+    shifts[key] = (await shift(db, locA.id, roles[s.role], users[s.who], addDays(today, s.day), s.start, s.end, s.who === 'sam')).id;
   }
   const swap = await db.shiftSwapRequest.create({
     data: { shiftId: shifts['alex+1'], requestedById: users.alex, targetUserId: users.omar, status: 'PENDING', expiresAt: new Date(`${addDays(today, 14)}T00:00:00.000Z`) },
