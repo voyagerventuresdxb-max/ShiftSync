@@ -14,7 +14,10 @@
  *  - an identical shift (person, day, role, start, end) already exists in
  *    the target week — so pressing the button twice doesn't double the rota.
  *    Matched by COUNT, not presence: two identical open Bartender slots last
- *    week become two this week (minus any identical ones already there).
+ *    week become two this week (minus any identical ones already there);
+ *  - the person already has a different shift overlapping those times in the
+ *    target week (the server refuses the whole batch for one such row). Both
+ *    segments of a split shift copy, since they don't overlap each other.
  */
 export interface CopySourceShift {
   employeeId: string | null;
@@ -39,6 +42,7 @@ export interface CopyPlan {
   skippedLeave: number;
   skippedInactive: number;
   skippedDuplicate: number;
+  skippedOverlap: number;
 }
 
 function addDays(iso: string, days: number): string {
@@ -49,6 +53,19 @@ function addDays(iso: string, days: number): string {
 
 const keyOf = (r: { userId: string | null; date: string; roleId: string; start: string; end: string }) =>
   `${r.userId ?? 'open'}|${r.date}|${r.roleId}|${r.start}|${r.end}`;
+
+/** [start, end) in wall-clock minutes since the epoch; an end at or before the start is the next day, as the server stores it. */
+function spanOf(r: { date: string; start: string; end: string }): [number, number] {
+  const minutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+  const day = Date.parse(`${r.date}T00:00:00.000Z`) / 60_000;
+  return [day + minutes(r.start), day + minutes(r.end) + (r.end <= r.start ? 1440 : 0)];
+}
+
+const overlaps = (a: { date: string; start: string; end: string }, b: { date: string; start: string; end: string }) => {
+  const [as, ae] = spanOf(a);
+  const [bs, be] = spanOf(b);
+  return as < be && bs < ae;
+};
 
 export function planCopyWeek(input: {
   previousWeekShifts: CopySourceShift[];
@@ -62,7 +79,7 @@ export function planCopyWeek(input: {
   // absorbs one matching source row.
   const alreadyThere = new Map<string, number>();
   for (const t of input.targetWeekShifts) alreadyThere.set(keyOf(t), (alreadyThere.get(keyOf(t)) ?? 0) + 1);
-  const plan: CopyPlan = { rows: [], skippedLeave: 0, skippedInactive: 0, skippedDuplicate: 0 };
+  const plan: CopyPlan = { rows: [], skippedLeave: 0, skippedInactive: 0, skippedDuplicate: 0, skippedOverlap: 0 };
   for (const s of input.previousWeekShifts) {
     const row: CopyRow = {
       roleId: s.roleId,
@@ -85,6 +102,10 @@ export function planCopyWeek(input: {
     if (remaining > 0) {
       alreadyThere.set(key, remaining - 1);
       plan.skippedDuplicate += 1;
+      continue;
+    }
+    if (row.userId && [...input.targetWeekShifts, ...plan.rows].some((t) => t.userId === row.userId && overlaps(t, row))) {
+      plan.skippedOverlap += 1;
       continue;
     }
     plan.rows.push(row);

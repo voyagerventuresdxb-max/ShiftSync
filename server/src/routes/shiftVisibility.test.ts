@@ -139,7 +139,8 @@ test('actor ids come from the session: body createdById/publishedById naming a S
       const created = await fetch(`${baseUrl}/api/shifts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ roleId: f.role.id, userId: f.staff.id, date: DAY, start: '18:00', end: '23:00', createdById: f.staff.id }),
+        // 21:00, not 18:00: the fixture's PUBLISHED shift runs to 20:00 and overlapping shifts are refused (split shifts).
+        body: JSON.stringify({ roleId: f.role.id, userId: f.staff.id, date: DAY, start: '21:00', end: '23:00', createdById: f.staff.id }),
       });
       assert.equal(created.status, 201);
       const { shift } = (await created.json()) as { shift: { id: string } };

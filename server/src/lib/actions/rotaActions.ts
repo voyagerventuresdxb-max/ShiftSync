@@ -3,6 +3,8 @@ import { prisma } from '../prisma.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
 import { findBlockingLeave, blockedByLeaveMessage } from './leaveActions.js';
+import { findBatchOverlap } from './shiftActions.js';
+import { weekScheduleSummary } from '../scheduleNotifications.js';
 
 interface TemplateEntry {
   dayOffset: number;
@@ -47,7 +49,7 @@ export async function getRotaPublishPreview(
 }
 
 export type PublishRotaResult =
-  | { result: 'ok'; publishedAt: Date; notifiedCount: number; affectedUserIds: string[] }
+  | { result: 'ok'; publishedAt: Date; notifiedCount: number; affectedUserIds: string[]; summaries: Map<string, string> }
   | { result: 'not_found'; message: string }
   | { result: 'empty'; message: string };
 
@@ -127,7 +129,21 @@ export async function publishRota(input: {
     return row;
   });
 
-  return { result: 'ok', publishedAt: publish.publishedAt, notifiedCount: publish.notifiedCount, affectedUserIds };
+  // Each person's digest lists their week, so a split shift reads as both
+  // segments in one notification rather than one notification per segment.
+  const published = await prisma.shift.findMany({
+    where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd }, userId: { not: null } },
+    select: { userId: true, date: true, startTime: true, endTime: true },
+  });
+  const timezone = location.timezone || DEFAULT_VENUE_TIMEZONE;
+  const summaries = new Map(
+    affectedUserIds.flatMap((userId) => {
+      const mine = published.filter((s) => s.userId === userId);
+      return mine.length > 0 ? [[userId, weekScheduleSummary(mine, timezone)] as const] : [];
+    }),
+  );
+
+  return { result: 'ok', publishedAt: publish.publishedAt, notifiedCount: publish.notifiedCount, affectedUserIds, summaries };
 }
 
 export type ApplyRotaTemplateResult =
@@ -135,7 +151,8 @@ export type ApplyRotaTemplateResult =
   | { result: 'template_not_found'; message: string }
   | { result: 'invalid_role'; roleId: string; message: string }
   | { result: 'invalid_user'; userId: string; message: string }
-  | { result: 'blocked_by_leave'; message: string };
+  | { result: 'blocked_by_leave'; message: string }
+  | { result: 'overlap'; message: string };
 
 /**
  * Raw apply — exactly the `withAuditedTransaction(...)` call
@@ -191,28 +208,41 @@ export async function applyRotaTemplate(input: {
   const location = await prisma.location.findUnique({ where: { id: template.locationId }, select: { timezone: true } });
   const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
 
+  const planned = entries.map((e) => {
+    const date = new Date(input.weekStart);
+    date.setUTCDate(date.getUTCDate() + e.dayOffset);
+    const dateStr = date.toISOString().slice(0, 10);
+    return {
+      entry: e,
+      userId: e.userId,
+      date: dateStr,
+      startTime: combineDateAndTime(dateStr, e.start, timezone),
+      endTime: combineDateAndTime(dateStr, e.end, timezone, e.end <= e.start),
+    };
+  });
+  // Split-shift segments (2026-10-02): an entry overlapping a shift already in
+  // the week, or another entry, refuses the whole apply — same as leave.
+  const overlap = await findBatchOverlap(template.locationId, planned);
+  if (overlap) return { result: 'overlap', message: overlap };
+
   const created = await withAuditedTransaction(
     prisma,
     async (tx) => {
       // Sequential, not Promise.all: `tx` is bound to a single reserved DB
       // connection (see routes/rotaTemplates.ts's original comment).
       const rows: { id: string }[] = [];
-      for (const e of entries) {
-        const date = new Date(input.weekStart);
-        date.setUTCDate(date.getUTCDate() + e.dayOffset);
-        const dateStr = date.toISOString().slice(0, 10);
-        const overnight = e.end <= e.start;
+      for (const p of planned) {
         rows.push(
           await tx.shift.create({
             data: {
               locationId: template.locationId,
-              roleId: e.roleId,
-              userId: e.userId,
+              roleId: p.entry.roleId,
+              userId: p.entry.userId,
               createdById: input.createdById,
-              date,
-              startTime: combineDateAndTime(dateStr, e.start, timezone),
-              endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
-              managerNotes: e.note ?? null,
+              date: new Date(`${p.date}T00:00:00.000Z`),
+              startTime: p.startTime,
+              endTime: p.endTime,
+              managerNotes: p.entry.note ?? null,
               status: 'DRAFT',
             },
           }),

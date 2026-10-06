@@ -14,7 +14,7 @@ import { SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { decideJoinRequest, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
-import { createShift, editShift } from '../lib/actions/shiftActions.js';
+import { createShift, editShift, ShiftOverlapError } from '../lib/actions/shiftActions.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
 import { createAnnouncement, createShoutout } from '../lib/actions/communicationActions.js';
@@ -452,7 +452,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         // 'conflict' is NOT "already decided" (the PENDING guard above covers
         // that) — isRequestLocked() only ever fires on a still-PENDING request
         // whose shift a DIFFERENT approved request already reassigned.
-        if (result.result === 'target_on_leave') {
+        if (result.result === 'target_on_leave' || result.result === 'target_overlap') {
           return respond(409, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }
         if (result.result === 'conflict') {
@@ -669,7 +669,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         }
         // Same notification path as the REST route (routes/shifts.ts's
         // publish endpoint) — never inside publishRota's own transaction.
-        void notifySchedulePublished(result.affectedUserIds, intent.weekStart);
+        void notifySchedulePublished(result.affectedUserIds, intent.weekStart, result.summaries);
         return respond(
           200,
           { executed: true, result: { publishedAt: result.publishedAt.toISOString(), notifiedCount: result.notifiedCount } },
@@ -700,7 +700,7 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
         const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
         if (result.result !== 'ok') {
-          return respond(result.result === 'blocked_by_leave' ? 409 : 404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+          return respond(result.result === 'blocked_by_leave' || result.result === 'overlap' ? 409 : 404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }
         return respond(201, { executed: true, result: { createdCount: result.createdCount, templateName: result.templateName } }, 'EXECUTED');
       }
@@ -748,6 +748,8 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
       }
     }
   } catch (err) {
+    // CREATE_SHIFT / EDIT_SHIFT: the shared shift mutators refuse overlap with the same 409 REST gives.
+    if (err instanceof ShiftOverlapError) return respond(409, { error: err.message }, 'REJECTED_VALIDATION', err.message);
     console.error('[voice.execute] failed', err);
     return respond(500, { error: 'Unexpected error while executing the voice command.' }, 'ERROR');
   }

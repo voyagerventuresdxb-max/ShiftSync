@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCloseOnBack } from '@/lib/backNavigation';
-import { weekDates, weekdayOf } from '@/engine/rosterView';
+import { totalHours, weekDates, weekdayOf } from '@/engine/rosterView';
 import { weekRangeLabel } from '@/engine/weekMath';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
@@ -113,6 +113,8 @@ export function RotaBuilder() {
   const [cardOpen, setCardOpen] = useState(true);
   const [templates, setTemplates] = useState<RotaTemplateDto[]>([]);
   const [sheet, setSheet] = useState<Sheet>(null);
+  // A refused save (overlap, leave) shown inside the sheet that caused it — the flash sits behind the sheet's overlay.
+  const [sheetError, setSheetError] = useState<{ sheet: Sheet; message: string } | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [suppressClick, setSuppressClick] = useState(false);
   // Department (role-group) sections the manager has folded away, keyed by section key.
@@ -371,7 +373,7 @@ export function RotaBuilder() {
       refreshPublishInfo();
       setSheet(null);
     } catch (err) {
-      fail(err, 'Could not save that shift.');
+      setSheetError({ sheet, message: err instanceof ApiError ? err.message : 'Could not save that shift.' });
     }
   };
 
@@ -464,6 +466,7 @@ export function RotaBuilder() {
         plan.skippedDuplicate && `${plan.skippedDuplicate} already here`,
         plan.skippedLeave && `${plan.skippedLeave} on leave`,
         plan.skippedInactive && `${plan.skippedInactive} no longer on staff`,
+        plan.skippedOverlap && `${plan.skippedOverlap} overlapping a shift already here`,
       ].filter(Boolean);
       if (plan.rows.length === 0) {
         say(`Nothing to copy — ${skipped.join(', ')}.`);
@@ -651,6 +654,7 @@ export function RotaBuilder() {
                         <div className="sticky left-0 z-[2] flex min-w-0 items-center gap-2 bg-surface p-2 text-xs font-medium sm:p-3 sm:text-sm">
                           {person.userId === null && <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                           <span className="truncate">{person.name}</span>
+                          {person.userId !== null && <WeekHours hours={totalHours(weekShifts.filter((s) => s.employeeId === person.userId))} />}
                         </div>
                         {days.map((d) => (
                           <Cell
@@ -701,6 +705,7 @@ export function RotaBuilder() {
               : roleOptions.filter((r) => venueRoles.some((v) => v.id === r.id))
           }
           online={online}
+          error={sheetError?.sheet === sheet ? sheetError.message : null}
           onClose={() => setSheet(null)}
           onSave={(d) => void saveDraft(d)}
           onSaveLeave={(type) => sheet.draft.userId && void saveLeave(sheet.draft.userId, sheet.draft.date, type)}
@@ -862,6 +867,10 @@ function Cell({
       {shifts.map((s) => (
         <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
       ))}
+      {/* A split shift (two segments, one person, one day) shows the day's summed hours. */}
+      {userId !== null && shifts.length > 1 && (
+        <p title="Hours this day" className="px-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">{totalHours(shifts).toFixed(1)}h total</p>
+      )}
       {/* hit-44 only on an empty cell: with a chip 4px above, the expanded
           area would overlap that chip (touch-target audit category b). */}
       {/* A blocking leave replaces the "+": the chip itself explains why (tap it). */}
@@ -872,6 +881,16 @@ function Cell({
         </button>
       )}
     </div>
+  );
+}
+
+/** A person's scheduled hours for the visible week, every split-shift segment included. Hidden while they have none. */
+function WeekHours({ hours }: { hours: number }) {
+  if (hours <= 0) return null;
+  return (
+    <span title="Hours this week" className="ml-auto shrink-0 text-[10px] font-normal tabular-nums text-muted-foreground">
+      {hours.toFixed(1)}h
+    </span>
   );
 }
 
@@ -1013,6 +1032,7 @@ function ShiftSheet({
   draft,
   roleOptions,
   online,
+  error,
   onClose,
   onSave,
   onSaveLeave,
@@ -1021,6 +1041,7 @@ function ShiftSheet({
   draft: DraftShift;
   roleOptions: RoleOption[];
   online: boolean;
+  error: string | null;
   onClose: () => void;
   onSave: (d: DraftShift) => void;
   onSaveLeave: (type: LeaveTypeKey) => void;
@@ -1102,6 +1123,11 @@ function ShiftSheet({
             className={field}
           />
         </div>
+        {error && (
+          <div className="error-block" role="alert">
+            <p>{error}</p>
+          </div>
+        )}
         <div className="flex gap-2 pt-1">
           <button onClick={() => onSave(local)} disabled={!online} className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-60">
             <Check className="mr-1.5 inline h-4 w-4" /> {draft.id ? 'Save shift' : 'Add shift'}
