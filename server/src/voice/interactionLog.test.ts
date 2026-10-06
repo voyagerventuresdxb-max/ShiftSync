@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { outcomeAtParseTime, shouldPromptForAdditionalRequest } from './interactionLog.js';
+import { outcomeAtParseTime, personNoteAtParseTime, shouldPromptForAdditionalRequest } from './interactionLog.js';
 import type { VoiceIntentResolution } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
 
@@ -61,4 +61,17 @@ test('shouldPromptForAdditionalRequest: true + a real intent coerced to UNRECOGN
 test('shouldPromptForAdditionalRequest: false -> false regardless of intent', () => {
   const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
   assert.equal(shouldPromptForAdditionalRequest(resolution(intent, intent, false)), false);
+});
+
+test('personNoteAtParseTime: a question about a person is noted by kind and count only; anything else is not', () => {
+  const attempted: ParsedIntent = { intent: 'POST_SHOUTOUT', targetUserId: '', targetUserName: 'Karim', content: 'Great job', confidence: 0.9, summary: 'x' };
+  const option: ParsedIntent = { intent: 'POST_SHOUTOUT', targetUserId: 'u1', targetUserName: 'Karim Saleh', content: 'Great job', confidence: 0.9, summary: 'Give Karim Saleh a shout-out.' };
+  const asked: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'Pick one.', summary: 'Which Karim did you mean?', person: { heard: 'Karim', status: 'ambiguous' }, options: [option, { ...option, targetUserId: 'u2' }] };
+  const note = personNoteAtParseTime(resolution(attempted, asked));
+  assert.equal(note, 'person_ambiguous:2');
+  assert.ok(!/karim|great|u1/i.test(note!));
+  const missing: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'x', summary: "I couldn't find Rana on your team.", person: { heard: 'Rana', status: 'missing' } };
+  assert.equal(personNoteAtParseTime(resolution(attempted, missing)), 'person_missing:0');
+  assert.equal(personNoteAtParseTime(resolution(attempted, attempted)), null);
+  assert.equal(personNoteAtParseTime(resolution(attempted, { intent: 'UNRECOGNIZED', reason: 'x', summary: 'y' })), null);
 });

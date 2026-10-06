@@ -38,6 +38,17 @@ export function shouldPromptForAdditionalRequest(resolution: VoiceIntentResoluti
 }
 
 /**
+ * Why a parse ended in a question about a person, for the log: the kind and how many people were
+ * offered ("person_missing:0", "person_ambiguous:2"). Counts and kinds only — never a name, a
+ * note's text or an id. Null for every other outcome.
+ */
+export function personNoteAtParseTime(resolution: VoiceIntentResolution): string | null {
+  const { response } = resolution;
+  if (response.intent !== 'UNRECOGNIZED' || !response.person) return null;
+  return `person_${response.person.status}:${response.options?.length ?? 0}`;
+}
+
+/**
  * Writes one row per /parse-intent call — every real attempt, regardless
  * of outcome. Called AFTER parseVoiceIntent resolves successfully (a
  * VoiceIntentError from the Gemini call itself is never logged here — see
@@ -61,6 +72,9 @@ export async function logParsedInteraction(
       confidence,
       hasAdditionalRequest: resolution.hasAdditionalRequest,
       outcome: outcomeAtParseTime(resolution),
+      // Why nothing was offered outright, when the person named couldn't be pinned down. If the
+      // caller then picks someone and confirms, /execute records the outcome as usual.
+      declineReason: personNoteAtParseTime(resolution),
     },
     select: { id: true },
   });
@@ -90,6 +104,12 @@ export async function updateInteractionOutcome(
 ): Promise<void> {
   await prisma.voiceInteractionLog.updateMany({
     where: { id: logId, actorId },
-    data: { outcome, declineReason: declineReason ?? null, ...(confirmedIntent ? { resolvedIntent: confirmedIntent } : {}) },
+    data: {
+      outcome,
+      // An executed command keeps its parse-time note (a "which Omar?" question it answered);
+      // a refusal records why it was refused.
+      ...(outcome === 'EXECUTED' && !declineReason ? {} : { declineReason: declineReason ?? null }),
+      ...(confirmedIntent ? { resolvedIntent: confirmedIntent } : {}),
+    },
   });
 }

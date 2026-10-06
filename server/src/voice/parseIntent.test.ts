@@ -441,3 +441,31 @@ test('normalizeParsedIntent: POST_SHOUTOUT with a missing targetUserName default
     assert.equal(result.targetUserName, '');
   }
 });
+
+test('normalizeParsedIntent: a person-naming answer with the name but no id is kept for the server to look up, never executable as is', () => {
+  const shout = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Rana', content: 'Great job', confidence: 0.9, summary: 'x' });
+  assert.deepEqual(shout.intent === 'POST_SHOUTOUT' && [shout.targetUserId, shout.targetUserName, shout.content], ['', 'Rana', 'Great job']);
+  const section = normalizeParsedIntent({ intent: 'ASSIGN_SECTION', sectionId: 's1', staffId: null, targetUserName: 'Karim', shiftDate: '2031-03-04', period: 'PM', confidence: 0.9, summary: 'x' });
+  assert.deepEqual(section.intent === 'ASSIGN_SECTION' && [section.staffId, section.targetUserName], ['', 'Karim']);
+  const shift = normalizeParsedIntent({ intent: 'CREATE_SHIFT', roleId: 'r1', date: '2031-03-04', start: '12:00', end: '20:00', userId: null, targetUserName: 'Rana', confidence: 0.9, summary: 'x' });
+  assert.deepEqual(shift.intent === 'CREATE_SHIFT' && [shift.userId, shift.targetUserName], [null, 'Rana']);
+  // An open shift names nobody.
+  const open = normalizeParsedIntent({ intent: 'CREATE_SHIFT', roleId: 'r1', date: '2031-03-04', start: '12:00', end: '20:00', userId: null, confidence: 0.9, summary: 'x' });
+  assert.equal(open.intent === 'CREATE_SHIFT' && 'targetUserName' in open, false);
+  // Neither a name nor an id: nothing to work with.
+  assert.equal(normalizeParsedIntent({ intent: 'REQUEST_SWAP', shiftId: 'x', targetUserName: '  ', confidence: 0.9, summary: 'x' }).intent, 'UNRECOGNIZED');
+});
+
+test('normalizeParsedIntent: "not understood" is worded for the caller; model text written like a log line is replaced', () => {
+  const none = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: 'Could not determine what to do.' });
+  assert.ok(none.intent === 'UNRECOGNIZED');
+  assert.equal(none.summary, "I didn't catch what you'd like to do.");
+  assert.match(none.reason, /^Try again with who, what and when/);
+  const jargon = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: 'x', unrecognizedReason: 'Could not confidently match this to a supported command.' });
+  assert.ok(jargon.intent === 'UNRECOGNIZED' && !/supported command/.test(jargon.reason));
+  const kept = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: "I didn't catch which day you meant.", unrecognizedReason: 'Say the day, for example "next Friday".' });
+  assert.deepEqual(kept.intent === 'UNRECOGNIZED' && [kept.summary, kept.reason], ["I didn't catch which day you meant.", 'Say the day, for example "next Friday".']);
+  // A known intent missing what it needs: never its own summary on a "not understood" sheet.
+  const broken = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', confidence: 0.9, summary: 'Give Omar a shoutout.' });
+  assert.ok(broken.intent === 'UNRECOGNIZED' && broken.summary === "I didn't catch what you'd like to do.");
+});

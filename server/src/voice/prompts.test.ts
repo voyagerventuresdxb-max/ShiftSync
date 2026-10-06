@@ -42,3 +42,19 @@ test('a staff caller gets none of the manager-only lists or rules', () => {
   assert.ok(!staffPrompt.includes('Pending'));
   assert.ok(!staffPrompt.includes('ASSIGN_SECTION, "period"'));
 });
+
+test('people: the name as said is always kept, an id only for exactly one match, and a missing or shared name is not a reason to give up', () => {
+  const prompt = buildSystemPrompt('MANAGER', ctx);
+  assert.match(prompt, /put the name exactly as you heard it in "targetUserName"/);
+  assert.match(prompt, /Fill in that person's id only when exactly one person in the staff list above has that name/);
+  assert.match(prompt, /Never choose between people who share a name, and never answer UNRECOGNIZED only because of a person's name/);
+  assert.match(prompt, /"me" or "myself" means the caller, Test Manager/);
+  assert.match(prompt, /For POST_SHOUTOUT: the recipient is the person being thanked or praised/);
+  assert.match(prompt, /always say why in unrecognizedReason, as one short, friendly sentence to the caller/);
+});
+
+test('a staff caller gets the people rule (for swaps) but not the shout-out one', () => {
+  const staffPrompt = buildSystemPrompt('STAFF', { today: ctx.today, callerName: 'Test Staff', callerShifts: [], staffDirectory: ctx.staffDirectory });
+  assert.match(staffPrompt, /put the name exactly as you heard it/);
+  assert.ok(!staffPrompt.includes('For POST_SHOUTOUT'));
+});

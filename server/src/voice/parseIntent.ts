@@ -1,7 +1,8 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent } from './intentSchema.js';
+import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type ReadingDetails } from './intentSchema.js';
+import { MAX_PEOPLE_CHOICES, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
@@ -100,12 +101,16 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
       include: { requestedBy: { select: { fullName: true } }, targetUser: { select: { fullName: true } }, shift: { select: { date: true, startTime: true, endTime: true } } },
       take: 20,
     });
-    ctx.pendingSwapRequests = pendingSwaps.map((r) => ({
-      id: r.id,
-      requesterName: r.requestedBy.fullName,
-      coverName: r.targetUser?.fullName ?? null,
-      shiftLabel: `${r.shift.date.toISOString().slice(0, 10)} ${formatVenueTime(r.shift.startTime, timezone)}-${formatVenueTime(r.shift.endTime, timezone)}`,
-    }));
+    ctx.pendingSwapRequests = pendingSwaps.map((r) => {
+      const shift = { date: r.shift.date.toISOString().slice(0, 10), start: formatVenueTime(r.shift.startTime, timezone), end: formatVenueTime(r.shift.endTime, timezone) };
+      return {
+        id: r.id,
+        requesterName: r.requestedBy.fullName,
+        coverName: r.targetUser?.fullName ?? null,
+        shiftLabel: `${shift.date} ${shift.start}-${shift.end}`,
+        shift,
+      };
+    });
 
     const pendingJoins = await prisma.joinRequest.findMany({
       where: { locationId: user.locationId, status: 'PENDING' },
@@ -210,14 +215,8 @@ export async function parseVoiceIntent(
     // Computed independently of confidence/the gate below — this line must
     // never move inside either branch of that gate.
     const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
-    let clientResponse: ParsedIntent =
-      attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD
-        ? attempted
-        : {
-            intent: 'UNRECOGNIZED',
-            reason: `I understood this as "${attempted.summary}" but wasn't confident enough to act on it without you rephrasing.`,
-            summary: 'Could not confidently resolve this command.',
-          };
+    const lowConfidence = attempted.intent !== 'UNRECOGNIZED' && attempted.confidence < CONFIDENCE_THRESHOLD;
+    let clientResponse: ParsedIntent = lowConfidence ? lowConfidenceResponse(attempted.summary) : attempted;
 
     // PUBLISH_ROTA/APPLY_ROTA_TEMPLATE get a further, deterministic
     // refinement pass on top of the confidence gate above — see spec
@@ -231,12 +230,20 @@ export async function parseVoiceIntent(
     }
     const timezone = await venueTimezoneFor(user.locationId);
     clientResponse = await checkAgainstContext(clientResponse, context, user, timezone, transcript);
-    // Below the confidence gate, but the model named two or three concrete readings (approve or
-    // decline?): offer the ones that pass every check a confident answer must pass as choices,
-    // instead of asking to rephrase. Picking one only opens the normal confirm sheet.
-    if (clientResponse.intent === 'UNRECOGNIZED' && attempted.intent !== 'UNRECOGNIZED' && attempted.confidence < CONFIDENCE_THRESHOLD) {
-      const options = await offerableReadings([attempted, ...normalizeAlternatives(raw)], context, user, timezone, transcript);
-      if (options.length >= 2) clientResponse = { ...clientResponse, summary: WHICH_DID_YOU_MEAN, options };
+    if (lowConfidence) {
+      // A person the server couldn't pin down (nobody by that name, or more than one) is asked
+      // about directly, whatever the model's confidence: often that is exactly why it was unsure.
+      // Every choice is still a complete, checked reading that runs only after its own Confirm.
+      const own = await checkAgainstContext(attempted, context, user, timezone, transcript);
+      if (own.intent === 'UNRECOGNIZED' && own.person) {
+        clientResponse = own;
+      } else {
+        // The model named two or three concrete readings (approve or decline?): offer the ones that
+        // pass every check a confident answer must pass as choices, instead of asking to rephrase.
+        // Picking one only opens the normal confirm sheet.
+        const options = await offerableReadings([attempted, ...normalizeAlternatives(raw)], context, user, timezone, transcript);
+        if (options.length >= 2) clientResponse = { intent: 'UNRECOGNIZED', summary: WHICH_DID_YOU_MEAN, reason: PICK_ONE, options };
+      }
     }
 
     return { response: clientResponse, attempted, hasAdditionalRequest };
@@ -279,7 +286,7 @@ export async function refinePublishRotaResponse(
 ): Promise<ParsedIntent> {
   const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
   if (Number.isNaN(weekStart.getTime())) {
-    return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to publish.' };
+    return { intent: 'UNRECOGNIZED', reason: WHICH_WEEK_HINT, summary: 'Which week should I publish?' };
   }
   const { shiftCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
   if (shiftCount === 0) {
@@ -312,7 +319,7 @@ export async function refineApplyRotaTemplateResponse(
 ): Promise<ParsedIntent> {
   const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
   if (Number.isNaN(weekStart.getTime())) {
-    return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to apply the template to.' };
+    return { intent: 'UNRECOGNIZED', reason: WHICH_WEEK_HINT, summary: 'Which week should I use the template for?' };
   }
   const { best, runnerUp } = bestMatch(response.templateName, templates);
   const confidentMatch =
@@ -325,8 +332,8 @@ export async function refineApplyRotaTemplateResponse(
     const candidates = [best, runnerUp].filter((c): c is NonNullable<typeof c> => c !== null).map((c) => `"${c.name}"`);
     const reason =
       candidates.length > 0
-        ? `Not confident which saved template "${response.templateName}" refers to — closest matches: ${candidates.join(', ')}.`
-        : `No saved template resembling "${response.templateName}" was found.`;
+        ? `I'm not sure which saved template "${response.templateName}" is — closest matches: ${candidates.join(', ')}.`
+        : `There's no saved template like "${response.templateName}" at your venue.`;
     return {
       intent: 'UNRECOGNIZED',
       reason,
@@ -344,6 +351,36 @@ export async function refineApplyRotaTemplateResponse(
 /** At most this many choices on a "which did you mean?" sheet. */
 export const MAX_VOICE_OPTIONS = 3;
 export const WHICH_DID_YOU_MEAN = 'Which did you mean?';
+const PICK_ONE = 'Pick one to see exactly what will happen. Nothing changes until you confirm.';
+
+/**
+ * Everything the caller reads on a "not understood" sheet is written for them, never for us:
+ * no "intent", "supported command" or other internals (the old fallback, "Could not confidently
+ * match this to a supported command.", was what a phone showed for a shout-out to someone the
+ * venue didn't have).
+ */
+export const VOICE_DIDNT_CATCH = "I didn't catch what you'd like to do.";
+export const VOICE_TRY_AGAIN = 'Try again with who, what and when — for example "Mark me unavailable on Friday".';
+const WHICH_WEEK_HINT = 'Say the week, for example "this week" or "next week".';
+/** Model text that reads like a log line, not a sentence for the caller. */
+const JARGON = /\bintents?\b|supported command|\bschema\b|\bjson\b|\bunrecognized\b|\bids?\b|could not (confidently )?(match|resolve|determine)/i;
+
+/** The model's own sentence for the caller, if it wrote one that reads like one. */
+function forCaller(text: unknown): string | null {
+  return typeof text === 'string' && text.trim() && !JARGON.test(text) ? text.trim() : null;
+}
+
+/** Below the confidence gate: say what it sounded like, and how to fix it. */
+function lowConfidenceResponse(summary: string): ParsedIntent {
+  const heard = summary.trim().replace(/[.!?]+$/, '');
+  return {
+    intent: 'UNRECOGNIZED',
+    reason: heard
+      ? `It sounded like "${heard}", but I'd rather check than guess. Say it again, or fix what I heard and try again.`
+      : 'Say it again, or fix what I heard and try again.',
+    summary: "I'm not sure I got that right.",
+  };
+}
 
 /** The model's other readings (`alternatives`), normalized like the main answer. */
 function normalizeAlternatives(raw: Record<string, unknown>): ParsedIntent[] {
@@ -408,13 +445,13 @@ export function weekdayMismatch(transcript: string, response: ParsedIntent): Par
   const actual = new Date(`${date}T00:00:00.000Z`).getUTCDay();
   if (Number.isNaN(actual) || actual === said[0]) return null;
   return clarify(
-    `The caller said ${WEEKDAY_NAMES[said[0]!]}, but ${date} is a ${WEEKDAY_NAMES[actual]}.`,
+    `Say the day again, or fix what I heard and try again.`,
     `You said ${WEEKDAY_NAMES[said[0]!]}, but that date is a ${WEEKDAY_NAMES[actual]}. Which day did you mean?`,
   );
 }
 
-const NOT_FOUND = (what: string) => clarify(`The ${what} wasn't one this venue has.`, `I couldn't find that ${what} at your venue. Please say it again.`);
-const PAST_DATE = clarify('The date resolved to a day that has already passed.', 'That day has already passed. Which day did you mean?');
+const NOT_FOUND = (what: string) => clarify('Say it again, or fix what I heard and try again.', `I couldn't find that ${what} at your venue.`);
+const PAST_DATE = clarify('Pick a day from today onwards.', 'That day has already passed. Which day did you mean?');
 
 /**
  * Propose-time backstop, after the model and the refinements above: the
@@ -442,6 +479,26 @@ export async function checkAgainstContext(
   }
   const mismatch = weekdayMismatch(transcript, response);
   if (mismatch) return mismatch;
+  // The person a command names is looked up in the caller's own venue, never taken on the model's
+  // word: nobody by that name, or more than one, is put to the caller as a question.
+  const slot = personSlot(response);
+  if (slot) {
+    const found = resolvePerson(slot.heard, slot.id, ctx.staffDirectory, transcript, caller.id);
+    if (found.kind === 'one') response = withPerson(response, found.person);
+    else if (found.kind !== 'unknown') return askWhichPerson(response, found, ctx, caller, timezone, transcript);
+    // 'unknown' (no name, and an id from nowhere) is refused by the checks below.
+  }
+  const checked = await checkIds(response, ctx, caller, timezone);
+  return checked.intent === 'UNRECOGNIZED' ? checked : withDetails(checked, ctx);
+}
+
+/** The id, date and overlap checks behind `checkAgainstContext`, for a reading whose person is settled. */
+async function checkIds(
+  response: Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' }>,
+  ctx: PromptContext,
+  caller: { id: string; locationId: string },
+  timezone: string,
+): Promise<ParsedIntent> {
   const staff = new Set(ctx.staffDirectory.map((s) => s.id));
   const isPast = (date: string | undefined) => date !== undefined && date < ctx.today;
   switch (response.intent) {
@@ -492,6 +549,167 @@ export async function checkAgainstContext(
   }
 }
 
+type Reading = Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' }>;
+
+/**
+ * The person a reading names, if it names one: the name as said and the id the model picked.
+ * CREATE_SHIFT/EDIT_SHIFT with no one named are an open shift, or (EDIT_SHIFT) a shift whose
+ * person stays the same or is taken off; there is nobody to look up.
+ */
+function personSlot(r: Reading): { heard: string; id: string | null } | null {
+  switch (r.intent) {
+    case 'REQUEST_SWAP':
+    case 'POST_SHOUTOUT':
+      return { heard: r.targetUserName, id: r.targetUserId || null };
+    case 'ASSIGN_SECTION':
+      return { heard: r.targetUserName ?? '', id: r.staffId || null };
+    case 'CREATE_SHIFT':
+    case 'EDIT_SHIFT':
+      if (r.userId === undefined || (r.userId === null && !r.targetUserName?.trim())) return null;
+      return { heard: r.targetUserName ?? '', id: r.userId };
+    default:
+      return null;
+  }
+}
+
+/** The reading with this person in it, named as the venue's staff list names them. */
+function withPerson(r: Reading, p: StaffEntry): Reading {
+  switch (r.intent) {
+    case 'REQUEST_SWAP':
+    case 'POST_SHOUTOUT':
+      return { ...r, targetUserId: p.id, targetUserName: p.fullName };
+    case 'ASSIGN_SECTION':
+      return { ...r, staffId: p.id, targetUserName: p.fullName };
+    case 'CREATE_SHIFT':
+    case 'EDIT_SHIFT':
+      return { ...r, userId: p.id, targetUserName: p.fullName };
+    default:
+      return r;
+  }
+}
+
+/** "Sat 10 Oct" for a YYYY-MM-DD venue day. */
+export function dayLabel(iso: string): string {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+/** Names for the confirm sheet's preview, from the caller's own venue lists only (never a phone number). */
+function describeReading(r: Reading, ctx: PromptContext): ReadingDetails | undefined {
+  const nameOf = (id: string) => ctx.staffDirectory.find((s) => s.id === id)?.fullName ?? null;
+  const roleOf = (id: string) => (ctx.roles ?? []).find((x) => x.id === id)?.name;
+  switch (r.intent) {
+    case 'POST_SHOUTOUT':
+      return { person: nameOf(r.targetUserId) };
+    case 'REQUEST_SWAP': {
+      const s = ctx.callerShifts.find((x) => x.id === r.shiftId);
+      return { person: nameOf(r.targetUserId), ...(s ? { shift: { date: s.date, start: s.startTime, end: s.endTime } } : {}) };
+    }
+    case 'APPROVE_SWAP':
+    case 'DECLINE_SWAP': {
+      const q = (ctx.pendingSwapRequests ?? []).find((x) => x.id === r.swapRequestId);
+      return q ? { person: q.requesterName, cover: q.coverName ?? null, ...(q.shift ? { shift: q.shift } : {}) } : undefined;
+    }
+    case 'APPROVE_JOIN':
+    case 'DECLINE_JOIN': {
+      const j = (ctx.pendingJoinRequests ?? []).find((x) => x.id === r.joinRequestId);
+      return j ? { person: j.fullName } : undefined;
+    }
+    case 'CREATE_SHIFT':
+      return { person: r.userId ? nameOf(r.userId) : null, role: roleOf(r.roleId) };
+    case 'EDIT_SHIFT': {
+      const s = (ctx.weekShifts ?? []).find((x) => x.id === r.shiftId);
+      return {
+        ...(r.userId !== undefined ? { person: r.userId ? nameOf(r.userId) : null } : {}),
+        ...(r.roleId ? { role: roleOf(r.roleId) } : {}),
+        ...(s ? { shift: { date: s.date, start: s.start, end: s.end, role: s.roleName, person: s.assigneeName } } : {}),
+      };
+    }
+    case 'ASSIGN_SECTION':
+      return { person: nameOf(r.staffId), section: (ctx.floorSections ?? []).find((x) => x.id === r.sectionId)?.label };
+    default:
+      return undefined;
+  }
+}
+
+function withDetails(r: Reading, ctx: PromptContext): Reading {
+  const details = describeReading(r, ctx);
+  return details ? { ...r, details } : r;
+}
+
+/** A person choice's own sentence: the model's summary named whoever it picked, not this person. */
+function personSummary(r: Reading): string {
+  const d = r.details ?? {};
+  const name = d.person ?? 'them';
+  switch (r.intent) {
+    case 'POST_SHOUTOUT':
+      return `Give ${name} a shout-out.`;
+    case 'REQUEST_SWAP':
+      return d.shift ? `Ask ${name} to cover your ${dayLabel(d.shift.date)} shift.` : `Ask ${name} to cover your shift.`;
+    case 'CREATE_SHIFT':
+      return `Create a ${d.role ? `${d.role} ` : ''}shift for ${name}, ${dayLabel(r.date)} ${r.start}–${r.end}.`;
+    case 'EDIT_SHIFT':
+      return d.shift ? `Give the ${dayLabel(d.shift.date)} ${d.shift.start}–${d.shift.end} shift to ${name}.` : `Give that shift to ${name}.`;
+    case 'ASSIGN_SECTION':
+      return `Put ${name} on ${d.section ?? 'that section'}, ${dayLabel(r.shiftDate)} ${r.period}.`;
+    default:
+      return r.summary;
+  }
+}
+
+/** "Rana" appears in what the caller said (word for word, ignoring case and punctuation). */
+function saidAloud(name: string, transcript: string): boolean {
+  const n = normalizeName(name);
+  return n.length > 0 && ` ${normalizeName(transcript)} `.includes(` ${n} `);
+}
+
+/**
+ * Nobody, or more than one person, at the caller's venue fits the name: a question for the
+ * caller, with one complete reading per candidate (each checked like any other answer) to pick
+ * from. Only the caller's own words are echoed back — never a name they didn't say, and never
+ * anyone outside their venue (the candidates come from its staff list alone).
+ */
+async function askWhichPerson(
+  reading: Reading,
+  found: Extract<PersonResolution, { kind: 'ambiguous' | 'missing' }>,
+  ctx: PromptContext,
+  caller: { id: string; systemRole: SystemRole; locationId: string },
+  timezone: string,
+  transcript: string,
+): Promise<ParsedIntent> {
+  const candidates = found.kind === 'ambiguous' ? found.people : found.near;
+  const options: ChoosableIntent[] = [];
+  if (candidates.length <= MAX_PEOPLE_CHOICES) {
+    for (const person of candidates) {
+      const checked = await checkIds(withPerson(reading, person), ctx, caller, timezone);
+      if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+      const described = withDetails(checked, ctx);
+      options.push({ ...described, summary: personSummary(described) } as ChoosableIntent);
+    }
+  }
+  const choices = options.length ? { options } : {};
+
+  if (found.kind === 'ambiguous') {
+    const heard = found.heard;
+    const sameName = candidates.every((p) => normalizeName(heard).split(' ').every((w) => normalizeName(p.fullName).split(' ').includes(w)));
+    const summary = sameName ? `Which ${heard} did you mean?` : 'Who did you mean?';
+    const reason =
+      candidates.length > MAX_PEOPLE_CHOICES
+        ? `${candidates.length} people on your team are called ${heard}. Say their full name and try again.`
+        : options.length
+          ? PICK_ONE
+          : 'Say their full name and try again.';
+    return { intent: 'UNRECOGNIZED', summary, reason, person: { heard, status: 'ambiguous' }, ...choices };
+  }
+
+  const heard = saidAloud(found.heard, transcript) ? found.heard : '';
+  const who = heard || 'that person';
+  const canAddStaff = caller.systemRole !== 'STAFF';
+  const addHint = canAddStaff ? `If ${heard || 'they'} ${heard ? 'is' : 'are'} new, add them in People first, then try again.` : 'Check the name and try again.';
+  const reason = options.length ? `Did you mean ${options.length === 1 ? 'this person' : 'one of these'}? ${addHint}` : addHint;
+  return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...choices };
+}
+
 /**
  * Narrows Gemini's loosely-typed JSON object into the real ParsedIntent
  * union, defaulting to UNRECOGNIZED on any shape mismatch rather than
@@ -501,7 +719,12 @@ export async function checkAgainstContext(
  */
 export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
   const intent = typeof raw.intent === 'string' ? raw.intent : 'UNRECOGNIZED';
-  const summary = typeof raw.summary === 'string' ? raw.summary : 'Could not determine what to do.';
+  const summary = typeof raw.summary === 'string' ? raw.summary : '';
+  // The name as said. A reading that names someone the model couldn't (or shouldn't) pick an id
+  // for is kept, with an empty id, so checkAgainstContext can look the name up and ask the caller;
+  // an empty id is never executable (/execute requires a non-empty one).
+  const heardName = typeof raw.targetUserName === 'string' ? raw.targetUserName : '';
+  const named = heardName.trim() !== '';
   // A missing/non-numeric/out-of-range confidence fails CLOSED to 0 — an
   // absent score must never be treated as "the model was certain."
   const rawConfidence = raw.confidence;
@@ -514,12 +737,12 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
       }
       break;
     case 'REQUEST_SWAP':
-      if (typeof raw.shiftId === 'string' && typeof raw.targetUserId === 'string') {
+      if (typeof raw.shiftId === 'string' && (typeof raw.targetUserId === 'string' || named)) {
         return {
           intent: 'REQUEST_SWAP',
           shiftId: raw.shiftId,
-          targetUserId: raw.targetUserId,
-          targetUserName: typeof raw.targetUserName === 'string' ? raw.targetUserName : '',
+          targetUserId: typeof raw.targetUserId === 'string' ? raw.targetUserId : '',
+          targetUserName: heardName,
           reason: typeof raw.reason === 'string' ? raw.reason : null,
           confidence,
           summary,
@@ -547,6 +770,7 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
           start: raw.start,
           end: raw.end,
           userId: typeof raw.userId === 'string' ? raw.userId : null,
+          ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
@@ -562,6 +786,7 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
           start: typeof raw.start === 'string' ? raw.start : undefined,
           end: typeof raw.end === 'string' ? raw.end : undefined,
           userId: typeof raw.userId === 'string' || raw.userId === null ? raw.userId : undefined,
+          ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
@@ -590,11 +815,11 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
       }
       break;
     case 'POST_SHOUTOUT':
-      if (typeof raw.targetUserId === 'string' && typeof raw.content === 'string') {
+      if ((typeof raw.targetUserId === 'string' || named) && typeof raw.content === 'string') {
         return {
           intent: 'POST_SHOUTOUT',
-          targetUserId: raw.targetUserId,
-          targetUserName: typeof raw.targetUserName === 'string' ? raw.targetUserName : '',
+          targetUserId: typeof raw.targetUserId === 'string' ? raw.targetUserId : '',
+          targetUserName: heardName,
           content: raw.content,
           confidence,
           summary,
@@ -604,23 +829,26 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
     case 'QUERY_MY_SCHEDULE':
       return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
     case 'ASSIGN_SECTION':
-      if (typeof raw.sectionId === 'string' && typeof raw.staffId === 'string' && typeof raw.shiftDate === 'string' && (raw.period === 'AM' || raw.period === 'PM')) {
+      if (typeof raw.sectionId === 'string' && (typeof raw.staffId === 'string' || named) && typeof raw.shiftDate === 'string' && (raw.period === 'AM' || raw.period === 'PM')) {
         return {
           intent: 'ASSIGN_SECTION',
           sectionId: raw.sectionId,
-          staffId: raw.staffId,
+          staffId: typeof raw.staffId === 'string' ? raw.staffId : '',
           shiftDate: raw.shiftDate,
           period: raw.period,
           dutyLabel: typeof raw.dutyLabel === 'string' ? raw.dutyLabel : null,
+          ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
       }
       break;
   }
+  // Not understood, or an answer missing what it needs: the caller is told so in plain words.
+  // The model's own sentences are kept only when they read like one (see forCaller).
   return {
     intent: 'UNRECOGNIZED',
-    reason: typeof raw.unrecognizedReason === 'string' ? raw.unrecognizedReason : 'Could not confidently match this to a supported command.',
-    summary,
+    reason: forCaller(raw.unrecognizedReason) ?? VOICE_TRY_AGAIN,
+    summary: (intent === 'UNRECOGNIZED' ? forCaller(raw.summary) : null) ?? VOICE_DIDNT_CATCH,
   };
 }
