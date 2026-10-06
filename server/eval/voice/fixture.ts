@@ -34,6 +34,8 @@ export const LEAK_STRINGS = [VENUE_B.person, 'Bartholomew', 'Quill', VENUE_B.sec
 
 /** Shifts by key: who, role, day offset from today, start, end. */
 export const SHIFTS = {
+  // Today is always in "this week", so publishing this week has something to publish even on a Sunday.
+  'junjun+0': { who: 'junjun', role: 'Server', day: 0, start: '06:00', end: '10:00' },
   'sam+1': { who: 'sam', role: 'Bartender', day: 1, start: '17:00', end: '01:00' },
   'sam+3': { who: 'sam', role: 'Server', day: 3, start: '12:00', end: '20:00' },
   'alex+1': { who: 'alex', role: 'Bartender', day: 1, start: '18:00', end: '02:00' },
