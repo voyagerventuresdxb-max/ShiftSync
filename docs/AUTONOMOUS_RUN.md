@@ -881,3 +881,17 @@ checks each of health, readiness and the web root: all 200. Latency p50 / p95 / 
 fifteen-minute windows): 211 requests, 202 2xx and 9 4xx, no 5xx; every 4xx came from this run's
 own read-only check. Per-window p95 at most 113 ms. No deploy-log lines (no deploys). The full
 summary is appended after 03:00.
+
+**Observer — full summary (appended 2026-10-06 by run 12).** Polls ran from 2026-10-05 16:34 to
+2026-10-06 01:22 Dubai: 104 checks each of health, readiness and the web root, all 200. Latency
+p50 / p95 / max: health 668 / 904 / 1919 ms, readiness 725 / 899 / 2041 ms, web root
+307 / 523 / 837 ms. API logs (35 fifteen-minute windows, none unavailable): 223 requests, 214 2xx
+and 9 4xx, no 5xx; every 4xx came from this run's own read-only check (one window, 17:51).
+Per-window p95 at most 113 ms. No deploy-log lines (no deploys).
+
+- Gaps between consecutive polls: none over 10 minutes (largest 6.3 minutes).
+- End time: **not reached.** The last poll was 01:22:47 and the log has no exit line; the
+  computer went to sleep at 01:25 (system event log) and woke at 16:54, and the observer process
+  was no longer running afterwards. 01:22 → 03:00 (97 minutes) has no observations: laptop asleep
+  or script paused, not an outage. The poll before it was healthy, and the next check (run 12
+  preconditions, 2026-10-06 17:20 Dubai) found health and readiness 200 on the same deployment.
