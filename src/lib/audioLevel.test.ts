@@ -1,6 +1,41 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { isSilent, METER_INTERVAL_MS, METER_WINDOW_SAMPLES, rms, SILENCE_RMS } from './audioLevel';
+import { isSilent, METER_INTERVAL_MS, METER_WINDOW_SAMPLES, rms, SILENCE_RMS, startLevelMeter } from './audioLevel';
+
+/** Runs `startLevelMeter` against a fake AudioContext in `state` whose analyser reads `level`. */
+function meterPeak(state: 'running' | 'suspended', level: number): number | null {
+  class FakeContext {
+    state = state;
+    createAnalyser() {
+      return { fftSize: 0, getFloatTimeDomainData: (buf: Float32Array) => buf.fill(level) };
+    }
+    createMediaStreamSource() {
+      return { connect() {} };
+    }
+    close() {
+      return Promise.resolve();
+    }
+  }
+  const g = globalThis as { window?: unknown };
+  const saved = g.window;
+  g.window = { AudioContext: FakeContext };
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const meter = startLevelMeter({} as MediaStream);
+    mock.timers.tick(METER_INTERVAL_MS * 5);
+    return meter.stop();
+  } finally {
+    mock.timers.reset();
+    g.window = saved;
+  }
+}
+
+test('a suspended audio context measures nothing, so the clip is never blocked as silent', () => {
+  // Some browsers start an AudioContext suspended until a user gesture; its analyser reads only zeros.
+  assert.equal(meterPeak('suspended', 0), null);
+  assert.equal(meterPeak('running', 0), 0);
+  assert.ok(!isSilent(meterPeak('running', 0.2)!));
+});
 
 test('the level meter reads overlapping windows, so a short word between reads is never missed', () => {
   // Phone microphones run at 44.1 or 48 kHz: each read covers at least two intervals (room for timer jitter).

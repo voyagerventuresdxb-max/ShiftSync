@@ -41,6 +41,8 @@ export function startLevelMeter(stream: MediaStream): { stop: () => number | nul
     let peak = 0;
     let measured = false;
     const timer = setInterval(() => {
+      // A suspended context (some browsers wait for a user gesture) reads only zeros: not silence.
+      if (ctx.state !== 'running') return;
       analyser.getFloatTimeDomainData(buf);
       peak = Math.max(peak, rms(buf));
       measured = true;
