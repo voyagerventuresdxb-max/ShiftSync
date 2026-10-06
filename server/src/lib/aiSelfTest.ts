@@ -70,7 +70,8 @@ export function __setSelfTestClientForTests(fake: GoogleGenAI | null): void {
 
 function reasonFor(err: unknown): AiSelfTestReason {
   if (err instanceof AiBudgetExceededError) {
-    return err.limit === 'daily_calls' ? 'paused_today' : err.limit === 'monthly_budget' ? 'paused_month' : 'unavailable';
+    if (err.limit === 'daily_calls' || err.limit === 'user_daily' || err.limit === 'venue_daily') return 'paused_today';
+    return err.limit === 'monthly_budget' ? 'paused_month' : 'unavailable';
   }
   if (err instanceof VertexCredentialsError) return 'credentials';
   if (err instanceof ApiError) {
@@ -88,6 +89,7 @@ async function runCheck(
   feature: AiFeature,
   media: { mimeType: string; data: string },
   locationId: string,
+  userId: string | null,
 ): Promise<AiSelfTestCheck> {
   let genai: GoogleGenAI;
   try {
@@ -100,7 +102,7 @@ async function runCheck(
   }
   let latencyMs: number | null = null;
   try {
-    await withAiBudget({ locationId, feature, inputTokensEstimate: 2_000 }, async () => {
+    await withAiBudget({ locationId, userId, feature, inputTokensEstimate: 2_000 }, async () => {
       const started = Date.now();
       const r = await genai.models.generateContent({
         model: base.model,
@@ -118,7 +120,7 @@ async function runCheck(
   }
 }
 
-export async function runAiSelfTest(locationId: string): Promise<AiSelfTestResult> {
+export async function runAiSelfTest(locationId: string, userId: string | null = null): Promise<AiSelfTestResult> {
   const vision = visionConfig();
   const voice = voiceConfig();
   // Sequential: two calls at once would only make the latencies harder to read.
@@ -128,6 +130,7 @@ export async function runAiSelfTest(locationId: string): Promise<AiSelfTestResul
     'self_test_vision',
     { mimeType: 'image/png', data: TINY_PNG_BASE64 },
     locationId,
+    userId,
   );
   const voiceCheck = await runCheck(
     'voice',
@@ -135,6 +138,7 @@ export async function runAiSelfTest(locationId: string): Promise<AiSelfTestResul
     'self_test_voice',
     { mimeType: 'audio/wav', data: silentWav().toString('base64') },
     locationId,
+    userId,
   );
   return { vision: visionCheck, voice: voiceCheck };
 }

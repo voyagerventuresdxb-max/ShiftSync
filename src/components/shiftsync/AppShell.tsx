@@ -11,31 +11,13 @@ import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
 import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
+import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 import { choosableFor } from '@/lib/voiceChoices';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
 const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
-
-const voiceConsentKey = (userId: string) => `shiftsync.voiceConsent.${userId}`;
-
-/** Unreadable storage (private mode, blocked site data) means the notice is shown again — never skipped. */
-function hasVoiceConsent(userId: string): boolean {
-  try {
-    return localStorage.getItem(voiceConsentKey(userId)) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function saveVoiceConsent(userId: string): void {
-  try {
-    localStorage.setItem(voiceConsentKey(userId), '1');
-  } catch {
-    // Not remembered: the notice is shown again next time.
-  }
-}
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.

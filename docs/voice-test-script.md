@@ -88,6 +88,8 @@ These come from the server, word for word (`server/src/routes/voice.ts`), shown 
 |---|---|
 | No AI set up on the server | "Voice commands aren't set up on this server yet. Use the app's buttons meanwhile." |
 | Today's voice limit reached (`AI_VOICE_DAILY_CALL_LIMIT`, default 200 calls ≈ 100 commands; resets at 00:00 UTC = 04:00 Dubai) | "Voice commands have reached today's limit and are back tomorrow. Use the app's buttons meanwhile." |
+| This person's daily voice quota used (`AI_VOICE_USER_DAILY_LIMIT`, default 40 calls ≈ 20 commands) | "You've used today's voice commands; they're back tomorrow. Use the app's buttons meanwhile." |
+| This venue's daily voice quota used (`AI_VOICE_VENUE_DAILY_LIMIT`, default 100 calls ≈ 50 commands) | "Your venue has used today's voice commands; they're back tomorrow. Use the app's buttons meanwhile." |
 | Monthly AI budget reached (`AI_MONTHLY_BUDGET_USD`) | "Voice commands are paused for the rest of this month (AI spending limit reached). Use the app's buttons meanwhile." |
 | AI model setting out of date | "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile." |
 | Google busy or unreachable | "Voice commands aren't available right now — try again later." |

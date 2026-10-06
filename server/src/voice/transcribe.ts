@@ -102,7 +102,7 @@ export function classifyGeminiFailure(err: ApiError): VoiceFailureKind {
  *   before calling this function, or verify behavior empirically, since an
  *   unsupported mimetype will surface as a Gemini ApiError below.
  */
-export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabularyHint?: string, locationId: string | null = null): Promise<string> {
+export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabularyHint?: string, locationId: string | null = null, userId: string | null = null): Promise<string> {
   const genai = getClient();
   const sentAs = geminiMimeTypeFor(mimeType);
   // Always logged: when a phone's format is rejected this line is the
@@ -118,7 +118,7 @@ export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabula
 
   try {
     const response = await withAiBudget(
-      { locationId, feature: 'voice_transcribe', inputTokensEstimate: audioInputEstimate(buffer.length) + Math.ceil(instruction.length / 3) },
+      { locationId, userId, feature: 'voice_transcribe', inputTokensEstimate: audioInputEstimate(buffer.length) + Math.ceil(instruction.length / 3) },
       async () => {
         const r = await genai.models.generateContent({
           model: voiceModel(),
