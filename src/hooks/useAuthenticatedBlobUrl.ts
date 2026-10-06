@@ -24,7 +24,12 @@ export function useAuthenticatedBlobUrl(fileUrl: string | undefined, token: stri
     let objectUrl: string | undefined;
     apiFetch(apiUrl(fileUrl), { headers: withAuth(token) })
       .then((res) => {
-        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        if (!res.ok) {
+          // Release the unread error body: the API marks session responses no-store, so nothing
+          // else drains it, and an open response holds one of the browser's few connections.
+          void res.body?.cancel().catch(() => {});
+          throw new Error(`Request failed (${res.status})`);
+        }
         return res.blob();
       })
       .then((blob) => {

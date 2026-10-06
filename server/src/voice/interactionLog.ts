@@ -1,7 +1,8 @@
 import type { VoiceInteractionOutcome } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import type { ParsedIntent } from './intentSchema.js';
-import type { VoiceIntentResolution } from './parseIntent.js';
+import { CONFIDENCE_THRESHOLD, type VoiceIntentResolution } from './parseIntent.js';
+import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 
 /**
  * Classifies a fresh parse result into its at-parse-time outcome —
@@ -9,8 +10,14 @@ import type { VoiceIntentResolution } from './parseIntent.js';
  * updateInteractionOutcome below).
  */
 export function outcomeAtParseTime(resolution: VoiceIntentResolution): VoiceInteractionOutcome {
-  if (resolution.attempted.intent === 'UNRECOGNIZED') return 'UNRECOGNIZED';
-  if (resolution.response.intent === 'UNRECOGNIZED') return 'LOW_CONFIDENCE';
+  const { attempted, response } = resolution;
+  if (attempted.intent === 'UNRECOGNIZED') return 'UNRECOGNIZED';
+  if (response.intent === 'UNRECOGNIZED') {
+    // Why nothing was offered: the caller's role, the confidence gate, or a propose-time check
+    // (an id not at the venue, a past date, an overlap, an empty week, an ambiguous template).
+    if (response.reason === VOICE_ROLE_REFUSAL) return 'REJECTED_PERMISSION';
+    return attempted.confidence < CONFIDENCE_THRESHOLD ? 'LOW_CONFIDENCE' : 'REJECTED_VALIDATION';
+  }
   if (resolution.response.intent === 'QUERY_MY_SCHEDULE') return 'ANSWERED';
   return 'PENDING_CONFIRMATION';
 }

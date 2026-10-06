@@ -830,3 +830,68 @@ every test passed.
 API `5fd67c0c` on `ee65d9d`, health and readiness 200. Roster photo reading and voice are both on
 Vertex AI behind the spend cap, neither yet tested on a real phone. Push is off (no VAPID). The
 owner's next steps are in [`owner-todo.md`](owner-todo.md).
+
+---
+
+# Autonomous run 10 — 2026-10-05 (test-night prep)
+
+Production freeze for the owner's test night: no merges, deploys, rollbacks, variable changes or
+production writes; the only production traffic was health polling, read-only logs and a small
+read-only check (under 30 unauthenticated requests). All work ends as open PRs, built in fresh
+worktrees against a local database. Live AI spend ceiling USD 1.50. Security wording outcome-only;
+specifics went to the owner in the chat report.
+
+## Preconditions: passed
+GitHub access with push rights; the run 9 log matched git history and production (API healthy,
+35/35 migrations applied).
+
+## Stages
+
+| Stage | Result |
+|---|---|
+| 1 — observer | Health, readiness and web root every 5 minutes, log summaries every 15, until 03:00 Dubai. Summary below. |
+| 2 — tonight kit | #124: `docs/tonight-test-plan.md` (blocks, steps, findings log, decision tree); deploy-log wording fix in the deploy procedure and incident runbook. |
+| 3 — voice | #125: 179-case corpus and offline test; live text (73 cases) and audio (23 synthetic clips) evaluation; propose-time checks, prompt, silence and weekday fixes; `docs/voice-eval-report.md`; re-test phrases in `voice-test-script.md`. Something changed without a Confirm: 0. Live spend USD 1.46, stopped by the harness ceiling. |
+| 4 — security | #126 route coverage from the live router + low-risk API headers; #127 per-person and per-venue daily AI quotas and a safe overall default; #128 kiosk link audit entries + turn voice off in Profile; #129 rendering and redirect regression tests. History scan, dependency audit and the read-only production check: reported to the owner. The local database host check was blocked (environment files are unreadable by design). Dependency audit: no fix available inside the allowed range without adding packages; nothing changed. |
+| 5 — rota stack | #69, #78, #84 and #108–#111 refreshed on master `94cd7c9` with merge commits (nothing force-pushed) and pushed; not merged. #69 carried the real conflicts (shift week read: master's session-or-kiosk rule plus #69's draft visibility; session-only publisher kept; app state; My Shifts; access matrix; layout); #108–#111 conflicted only in `MEMORY.md`. One spec fix: the rota golden path accepts master's first-use voice notice. Each PR has a comment with its resolutions and gate. `rota-review-guide.md` refreshed; screenshots in the run artifacts folder (not committed). |
+| 6 — wait and report | Report written at 00:55 Dubai at the owner's request, with a **partial** observer summary (below); the full summary is appended after the observer stops at 03:00 Dubai. |
+
+Every gate: typecheck, lint 0 errors (18 existing warnings), unit, build (staff bundle within
+budget), server suite, full e2e (`CI=1 --retries=0`), secrets scan clean. #125: a re-run found
+an intermittent miss in the new on-device silence check; fixed in a follow-up commit (overlapping
+level reads, with a unit test), then full e2e 90/90. #108: one onboarding e2e missed a 5-second
+wait while other test suites ran on the same machine, and passed 2/2 alone. #69–#84: the rota
+golden-path spec needed the first-use voice notice step (above), then 1/1 on each.
+
+## Merge order for the owner
+#124, #125, #127, #126, #128, #129, then this log. Expected conflicts: `MEMORY.md` (keep both
+entries) and, for #128 after #125, two import lines in `AppShell.tsx` (keep both). #127 changes
+the default overall AI limit to 150 calls per day when `AI_DAILY_CALL_LIMIT` is unset, and adds
+per-person and per-venue limits (`docs/ENV_VARS.md`). Rota stack: only with
+`ROTA_STACK_APPROVED = YES`. If the stack merges after #125, the rota golden-path spec must record
+for about a second before tapping stop: #125 doesn't send a recording that stayed silent, and the
+test browser's fake microphone only beeps now and then.
+
+## Production after the run
+Unchanged by this run: API `5fd67c0c` on `ee65d9d`; no deploy, rollback or variable change.
+
+**Observer (PARTIAL: 2026-10-05 16:34 → 2026-10-06 00:51 Dubai; it runs until 03:00).** 98
+checks each of health, readiness and the web root: all 200. Latency p50 / p95 / max: health
+668 / 924 / 1919 ms, readiness 725 / 901 / 2041 ms, web root 312 / 523 / 837 ms. API logs (33
+fifteen-minute windows): 211 requests, 202 2xx and 9 4xx, no 5xx; every 4xx came from this run's
+own read-only check. Per-window p95 at most 113 ms. No deploy-log lines (no deploys). The full
+summary is appended after 03:00.
+
+**Observer — full summary (appended 2026-10-06 by run 12).** Polls ran from 2026-10-05 16:34 to
+2026-10-06 01:22 Dubai: 104 checks each of health, readiness and the web root, all 200. Latency
+p50 / p95 / max: health 668 / 904 / 1919 ms, readiness 725 / 899 / 2041 ms, web root
+307 / 523 / 837 ms. API logs (35 fifteen-minute windows, none unavailable): 223 requests, 214 2xx
+and 9 4xx, no 5xx; every 4xx came from this run's own read-only check (one window, 17:51).
+Per-window p95 at most 113 ms. No deploy-log lines (no deploys).
+
+- Gaps between consecutive polls: none over 10 minutes (largest 6.3 minutes).
+- End time: **not reached.** The last poll was 01:22:47 and the log has no exit line; the
+  computer went to sleep at 01:25 (system event log) and woke at 16:54, and the observer process
+  was no longer running afterwards. 01:22 → 03:00 (97 minutes) has no observations: laptop asleep
+  or script paused, not an outage. The poll before it was healthy, and the next check (run 12
+  preconditions, 2026-10-06 17:20 Dubai) found health and readiness 200 on the same deployment.
