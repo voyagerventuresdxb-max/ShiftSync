@@ -150,8 +150,11 @@ export function AppShell() {
     hasAdditionalRequest: boolean;
     /** True once the primary MUTATING intent has actually executed — the sheet stays open in its follow-up state instead of closing. Irrelevant for QUERY_MY_SCHEDULE, which has no execute step. */
     executed?: boolean;
+    /** The choices a picked reading came from, so the sheet can go back to them. */
+    asked?: ParsedIntent;
   } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
+  const [voiceReparsing, setVoiceReparsing] = useState(false);
   const [voiceSheetNeeded, setVoiceSheetNeeded] = useState(false);
   const [voiceConsentOpen, setVoiceConsentOpen] = useState(false);
   const [voiceConsentNeeded, setVoiceConsentNeeded] = useState(false);
@@ -191,6 +194,26 @@ export function AppShell() {
     };
   }, []);
 
+  /**
+   * Shows a parse result: the role check BEFORE the confirm sheet (a STAFF session must never be
+   * shown a "Confirm" for a manager action the server would refuse anyway — the server's 403 on
+   * /execute stays the real guard; the parse step refuses it too, with this same shared reason),
+   * then only the choices this role may confirm.
+   */
+  const showParsed = useCallback(
+    (systemRole: string, transcript: string, parsed: { intent: ParsedIntent; voiceLogId: string | null; hasAdditionalRequest: boolean }) => {
+      const { intent, voiceLogId, hasAdditionalRequest } = parsed;
+      const refusedForRole = intent.intent === 'UNRECOGNIZED' && intent.reason === VOICE_ROLE_REFUSAL;
+      if (refusedForRole || (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(systemRole, intent.intent))) {
+        setVoiceResult(null);
+        setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
+        return;
+      }
+      setVoiceResult({ transcript, intent: choosableFor(systemRole, intent), voiceLogId, hasAdditionalRequest });
+    },
+    [],
+  );
+
   const handleRecordingComplete = useCallback(
     async (blob: Blob) => {
       if (blob.size === 0) {
@@ -206,24 +229,36 @@ export function AppShell() {
       setVoiceProcessing(true);
       try {
         const { transcript } = await transcribeAudio(session.token, blob);
-        const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
-        // Role check BEFORE the confirm sheet: a STAFF session must never be
-        // shown a "Confirm" for a manager action the server would refuse
-        // anyway (the server's 403 on /execute stays the real guard). The
-        // parse step refuses it too, with this same shared reason.
-        const refusedForRole = intent.intent === 'UNRECOGNIZED' && intent.reason === VOICE_ROLE_REFUSAL;
-        if (refusedForRole || (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(session.user.systemRole, intent.intent))) {
-          setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
-          return;
-        }
-        setVoiceResult({ transcript, intent: choosableFor(session.user.systemRole, intent), voiceLogId, hasAdditionalRequest });
+        showParsed(session.user.systemRole, transcript, await parseVoiceIntent(session.token, transcript));
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
       } finally {
         setVoiceProcessing(false);
       }
     },
-    [session],
+    [session, showParsed],
+  );
+
+  // "Try again" on the sheet with the words as edited: the same parse step as a recording, from
+  // the text alone (nothing is recorded or transcribed). Nothing runs until its own Confirm.
+  const handleVoiceReparse = useCallback(
+    async (text: string) => {
+      if (!session) {
+        setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
+        setVoiceResult(null);
+        return;
+      }
+      setVoiceReparsing(true);
+      try {
+        showParsed(session.user.systemRole, text, await parseVoiceIntent(session.token, text));
+      } catch (err) {
+        setVoiceResult(null);
+        setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
+      } finally {
+        setVoiceReparsing(false);
+      }
+    },
+    [session, showParsed],
   );
 
   /** The single stop-and-process path — a manual second tap and the max-duration timer both land here. */
@@ -320,7 +355,11 @@ export function AppShell() {
 
   // A "which did you mean?" choice only swaps in that reading; its own Confirm still executes it.
   const handleVoiceChoose = useCallback((option: ParsedIntent) => {
-    setVoiceResult((prev) => (prev ? { ...prev, intent: option } : prev));
+    setVoiceResult((prev) => (prev ? { ...prev, intent: option, asked: prev.asked ?? prev.intent } : prev));
+  }, []);
+
+  const handleVoiceBackToChoices = useCallback(() => {
+    setVoiceResult((prev) => (prev?.asked ? { ...prev, intent: prev.asked, asked: undefined } : prev));
   }, []);
 
   const handleVoiceConfirm = useCallback(async () => {
@@ -430,8 +469,13 @@ export function AppShell() {
             executed={voiceResult?.executed ?? false}
             onConfirm={handleVoiceConfirm}
             onChoose={handleVoiceChoose}
+            onBackToChoices={voiceResult?.asked ? handleVoiceBackToChoices : undefined}
+            onReparse={handleVoiceReparse}
             onCancel={handleVoiceCancel}
             executing={voiceExecuting}
+            reparsing={voiceReparsing}
+            viewerName={session?.user.fullName ?? 'You'}
+            canManageStaff={session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER'}
           />
         </Suspense>
       )}

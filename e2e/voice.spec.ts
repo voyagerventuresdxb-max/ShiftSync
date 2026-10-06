@@ -1,7 +1,8 @@
-import { test, expect, type Page } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { SystemRole } from '@prisma/client';
 import { cleanupTestOrgs, nextEchoPhone, prisma, testVenueName } from './helpers';
-import { geminiCalls, resetFakeGemini, scriptUtterance, type GeminiCall } from './fakeGemini';
+import { geminiCalls, resetFakeGemini, scriptIntent, scriptUtterance, type GeminiCall } from './fakeGemini';
 
 /**
  * Voice commands end to end: mic → /transcribe → /parse-intent → confirm
@@ -93,9 +94,43 @@ async function speak(page: Page, transcript: string, intent: Record<string, unkn
   await stop.click({ force: true });
 }
 
-/** The confirm sheet — the one panel that echoes the transcript back. */
+/** The voice sheet: the one dialog that shows what was heard. */
+function voiceSheet(page: Page) {
+  return page.getByRole('dialog').filter({ hasText: 'I heard' });
+}
+
+/** The sheet for this transcript, while it shows what was heard as text (not in the edit box). */
 function sheetFor(page: Page, transcript: string) {
-  return page.locator('.panel').filter({ hasText: `You said: “${transcript}”` });
+  return voiceSheet(page).filter({ hasText: `“${transcript}”` });
+}
+
+/** Phone-sized screenshots of the sheet, made-up data only (run 13 review). */
+const SCREENS = 'C:/dev/_autonomous-run-artifacts/run13-screens/voice';
+
+async function phone(page: Page): Promise<void> {
+  await page.setViewportSize({ width: 390, height: 844 });
+  // Reduced motion: the sheet must not animate at all (and screenshots are then stable).
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+}
+
+async function screenshot(page: Page, name: string): Promise<void> {
+  if (process.platform !== 'win32') return;
+  mkdirSync(SCREENS, { recursive: true });
+  await page.screenshot({ path: `${SCREENS}/${name}.png` });
+}
+
+/** Every control in the sheet is at least 44x44 CSS px on its own (no reliance on a hit-area expansion), and nothing in it animates under reduced motion. */
+async function expectPhoneFriendly(sheet: Locator): Promise<void> {
+  const boxes = await sheet.locator('button, a[href], textarea').evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { label: (el.getAttribute('aria-label') || (el as HTMLElement).innerText || el.tagName).trim().slice(0, 40), w: Math.round(r.width), h: Math.round(r.height) };
+    }),
+  );
+  expect(boxes.length).toBeGreaterThan(0);
+  expect(boxes.filter((b) => b.w < 44 || b.h < 44)).toEqual([]);
+  // CSS animations only (the sheet's rise): a hover's colour transition is not motion.
+  expect(await sheet.evaluate((el) => el.getAnimations({ subtree: true }).filter((a) => 'animationName' in a).length)).toBe(0);
 }
 
 async function voiceLogs(actorId: string) {
@@ -133,6 +168,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
   });
 
   test('compound request: confirms only the primary intent, then asks for the rest, which runs as its own command', async ({ page }) => {
+    await phone(page);
     const { locationId, roleId } = await createVenue('compound');
     const managerPhone = freshPhone();
     const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
@@ -150,9 +186,14 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     // Before executing: the plain confirm view for the primary intent, no follow-up copy yet.
     const sheet = sheetFor(page, first);
-    await expect(sheet.locator('.eyebrow')).toHaveText('Confirm voice command');
+    await expect(sheet.locator('.eyebrow')).toHaveText('New shift');
     await expect(sheet.getByText(createSummary, { exact: true })).toBeVisible();
     await expect(sheet.getByText(FOLLOW_UP)).toHaveCount(0);
+    // The rota line: person, role, day and time, as a draft.
+    await expect(sheet.getByText('Layla Haddad', { exact: true })).toBeVisible();
+    await expect(sheet.getByText(/^Bartender · \w{3} \d{1,2} \w{3} · 18:00–02:00$/)).toBeVisible();
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '06-new-shift-preview');
     expect(await prisma.shift.count({ where: { locationId } })).toBe(0);
 
     // Confirm → the same sheet turns into the follow-up state; no success banner.
@@ -185,8 +226,8 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
       confidence: 0.9, hasAdditionalRequest: false, summary: 'Post a shoutout for Layla Haddad.',
     });
     const sheet2 = sheetFor(page, second);
-    await expect(sheet2.locator('.eyebrow')).toHaveText('Confirm voice command');
-    await expect(sheet2.getByText(`“${note}”`, { exact: true })).toBeVisible();
+    await expect(sheet2.locator('.eyebrow')).toHaveText('Shout-out');
+    await expect(sheet2.getByText(note, { exact: true })).toBeVisible();
     await expect(sheet2.getByText(FOLLOW_UP)).toHaveCount(0);
     await sheet2.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.locator('.success-block')).toContainText('Post a shoutout for Layla Haddad.');
@@ -379,6 +420,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
   });
 
   test('announcements: POST_ANNOUNCEMENT previews the text verbatim and posts exactly that text', async ({ page }) => {
+    await phone(page);
     const { locationId } = await createVenue('announce');
     const managerPhone = freshPhone();
     const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
@@ -388,7 +430,11 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const content = 'The staff meeting moved to 4pm on Thursday — please be on time.';
     await speak(page, said, { intent: 'POST_ANNOUNCEMENT', content, confidence: 0.91, summary: 'Post an announcement to all staff.' });
     const sheet = sheetFor(page, said);
-    await expect(sheet.getByText(`“${content}”`, { exact: true })).toBeVisible();
+    // The preview is the board's own announcement card: the text verbatim, under the poster's name.
+    await expect(sheet.getByText('How it will look')).toBeVisible();
+    await expect(sheet.getByText(content, { exact: true })).toBeVisible();
+    await expect(sheet.getByText(/^E2E Voice Manager · /)).toBeVisible();
+    await screenshot(page, '07-announcement-preview');
     expect(await prisma.announcement.count({ where: { locationId } })).toBe(0);
     await sheet.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.locator('.success-block')).toContainText('Post an announcement to all staff.');
@@ -410,12 +456,15 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
       intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.42, hasAdditionalRequest: true,
       summary: "Approve Omar Farouk's request to join.",
     });
-    const sheet = sheetFor(page, said);
+    const sheet = voiceSheet(page);
     await expect(sheet.locator('.eyebrow')).toHaveText("Didn't catch that");
+    await expect(sheet.getByRole('heading', { name: "I'm not sure I got that right." })).toBeVisible();
     await expect(
-      sheet.getByText(`I understood this as "Approve Omar Farouk's request to join." but wasn't confident enough to act on it without you rephrasing.`),
+      sheet.getByText(`It sounded like "Approve Omar Farouk's request to join", but I'd rather check than guess. Say it again, or fix what I heard and try again.`),
     ).toBeVisible();
-    await expect(sheet.getByRole('button')).toHaveText(['Cancel']);
+    // What was heard is open for editing; there is nothing to confirm.
+    await expect(sheet.getByLabel(/I heard/)).toHaveValue(said);
+    await expect(sheet.getByRole('button')).toHaveText(['Try again', 'Cancel']);
     await expect(sheet.getByText(FOLLOW_UP)).toHaveCount(0);
     await sheet.getByRole('button', { name: 'Cancel' }).click();
     await expect(sheet).toHaveCount(0);
@@ -428,6 +477,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
   });
 
   test('which did you mean: approve or decline are offered as choices; a choice opens its own Confirm, and only that runs', async ({ page }) => {
+    await phone(page);
     const { locationId } = await createVenue('choices');
     const managerPhone = freshPhone();
     const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
@@ -442,13 +492,17 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
       alternatives: [{ intent: 'DECLINE_JOIN', joinRequestId: request.id, confidence: 0.4, summary: decline }],
     });
     const sheet = sheetFor(page, said);
-    await expect(sheet.locator('.eyebrow')).toHaveText('Which did you mean?');
-    await expect(sheet.getByRole('button')).toHaveText([approve, decline, 'Cancel']);
+    await expect(sheet.locator('.eyebrow')).toHaveText('Choose one');
+    await expect(sheet.getByRole('heading', { name: 'Which did you mean?' })).toBeVisible();
+    await expect(sheet.getByRole('button')).toHaveText([approve, decline, 'Edit', 'Cancel']);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '08-which-did-you-mean');
 
     // Choosing only shows that reading for its own Confirm: nothing has changed yet.
     await sheet.getByRole('button', { name: decline }).click();
-    await expect(sheet.locator('.eyebrow')).toHaveText('Confirm voice command');
-    await expect(sheet.getByText(decline, { exact: true })).toBeVisible();
+    await expect(sheet.locator('.eyebrow')).toHaveText('Join request');
+    await expect(sheet.getByRole('heading', { name: decline })).toBeVisible();
+    await expect(sheet.getByText('Omar Farouk', { exact: true })).toBeVisible();
     expect((await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).status).toBe('PENDING');
 
     await sheet.getByRole('button', { name: 'Confirm' }).click();
@@ -495,5 +549,163 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     });
     expect(direct.status()).toBe(403);
     expect(await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).toMatchObject({ status: 'PENDING', reviewedById: null });
+  });
+
+  test('shout-out: the name said is looked up, the preview is the board card, and Confirm posts exactly one', async ({ page }) => {
+    await phone(page);
+    const { locationId } = await createVenue('shoutout');
+    const managerPhone = freshPhone();
+    const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    const layla = await createUser(locationId, 'STAFF', 'Layla Nasser');
+    await createUser(locationId, 'STAFF', 'Omar Haddad');
+
+    await logIn(page, managerPhone, '/');
+    const said = 'Give Layla a shout-out saying great job';
+    // The model gives the name as said and no id: the server finds her in this venue.
+    await speak(page, said, {
+      intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Layla', content: 'Great job',
+      confidence: 0.95, summary: 'Give Layla a shout-out with this note.',
+    });
+    const sheet = sheetFor(page, said);
+    await expect(sheet.locator('.eyebrow')).toHaveText('Shout-out');
+    await expect(sheet.getByText('How it will look')).toBeVisible();
+    // The board's own shout-out card: full name, the note, who and when.
+    await expect(sheet.getByText('Layla Nasser', { exact: true })).toBeVisible();
+    await expect(sheet.getByText('Great job', { exact: true })).toBeVisible();
+    await expect(sheet.getByText('E2E Voice Manager · just now', { exact: true })).toBeVisible();
+    await expect(sheet.getByRole('button')).toHaveText(['Confirm', 'Edit', 'Cancel']);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '01-shoutout-preview');
+    expect(await prisma.shoutout.count({ where: { locationId } })).toBe(0);
+
+    await sheet.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.locator('.success-block')).toContainText('Give Layla a shout-out with this note.');
+    const posted = await prisma.shoutout.findMany({ where: { locationId } });
+    expect(posted.map((s) => [s.employeeId, s.authorId, s.note])).toEqual([[layla.id, manager.id, 'Great job']]);
+  });
+
+  test("shout-out to someone who isn't on the team: a plain message naming them, a way to People, and nothing changes", async ({ page }) => {
+    await phone(page);
+    const { locationId } = await createVenue('missing');
+    const managerPhone = freshPhone();
+    const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    await createUser(locationId, 'STAFF', 'Layla Nasser');
+
+    await logIn(page, managerPhone, '/');
+    const said = 'Give Rana a shout-out saying great job';
+    await speak(page, said, {
+      intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Rana', content: 'Great job', confidence: 0.9, summary: 'Give Rana a shout-out.',
+    });
+    const sheet = voiceSheet(page);
+    await expect(sheet.locator('.eyebrow')).toHaveText('Not on your team');
+    await expect(sheet.getByRole('heading', { name: "I couldn't find Rana on your team." })).toBeVisible();
+    await expect(sheet.getByText('If Rana is new, add them in People first, then try again.')).toBeVisible();
+    await expect(sheet.getByRole('link', { name: 'Open People' })).toBeVisible();
+    await expect(sheet.getByLabel(/I heard/)).toHaveValue(said);
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await expect(sheet).not.toContainText(/supported command|intent/i);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '02-shoutout-missing-person');
+
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+    await expect(sheet).toHaveCount(0);
+    expect(await prisma.shoutout.count({ where: { locationId } })).toBe(0);
+    // Logged by kind and count only.
+    const logs = await voiceLogs(manager.id);
+    expect(logs.map((l) => [l.resolvedIntent, l.outcome, l.declineReason])).toEqual([['POST_SHOUTOUT', 'REJECTED_VALIDATION', 'person_missing:0']]);
+  });
+
+  test('a first name two people share: "Which Karim?", choosing one previews it, Cancel changes nothing', async ({ page }) => {
+    await phone(page);
+    const { locationId } = await createVenue('which');
+    const managerPhone = freshPhone();
+    const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    const saleh = await createUser(locationId, 'STAFF', 'Karim Saleh');
+    await createUser(locationId, 'STAFF', 'Karim Aziz');
+
+    await logIn(page, managerPhone, '/');
+    const said = 'Give Karim a shout-out saying great job';
+    // Seen live: the model picks one of them at high confidence. The app must still ask.
+    await speak(page, said, {
+      intent: 'POST_SHOUTOUT', targetUserId: saleh.id, targetUserName: 'Karim', content: 'Great job', confidence: 0.9, summary: 'Give Karim a shout-out.',
+    });
+    const sheet = sheetFor(page, said);
+    await expect(sheet.locator('.eyebrow')).toHaveText('Which person?');
+    await expect(sheet.getByRole('heading', { name: 'Which Karim did you mean?' })).toBeVisible();
+    const choices = sheet.getByRole('group', { name: 'People to choose from' }).getByRole('button');
+    await expect(choices).toHaveText([/Karim Aziz/, /Karim Saleh/]);
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '03-which-karim');
+
+    // A choice only previews that reading; nothing has changed.
+    await sheet.getByRole('button', { name: /Karim Aziz/ }).click();
+    await expect(sheet.locator('.eyebrow')).toHaveText('Shout-out');
+    await expect(sheet.getByRole('heading', { name: 'Give Karim Aziz a shout-out.' })).toBeVisible();
+    await expect(sheet.getByText('Karim Aziz', { exact: true })).toBeVisible();
+    await expect(sheet.getByText('Great job', { exact: true })).toBeVisible();
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '04-which-karim-chosen');
+    expect(await prisma.shoutout.count({ where: { locationId } })).toBe(0);
+
+    // Back to the list, pick again, then Cancel: still nothing.
+    await sheet.getByRole('button', { name: 'Other choices' }).click();
+    await expect(choices).toHaveCount(2);
+    await sheet.getByRole('button', { name: /Karim Aziz/ }).click();
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+    await expect(voiceSheet(page)).toHaveCount(0);
+    expect(await prisma.shoutout.count({ where: { locationId } })).toBe(0);
+    const logs = await voiceLogs(manager.id);
+    expect(logs.map((l) => [l.resolvedIntent, l.outcome, l.declineReason])).toEqual([['POST_SHOUTOUT', 'REJECTED_VALIDATION', 'person_ambiguous:2']]);
+  });
+
+  test('edit what was heard: "Try again" re-reads the edited words (no new recording), and only the new reading is confirmed', async ({ page }) => {
+    await phone(page);
+    const { locationId } = await createVenue('edit');
+    const managerPhone = freshPhone();
+    const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    const layla = await createUser(locationId, 'STAFF', 'Layla Nasser');
+
+    await logIn(page, managerPhone, '/');
+    const misheard = 'Give later a shout out saying great job';
+    await speak(page, misheard, {
+      intent: 'UNRECOGNIZED', summary: "I didn't catch who the shout-out is for.", unrecognizedReason: 'Say their name, for example "Give Sam a shout-out".',
+    });
+    const sheet = voiceSheet(page);
+    await expect(sheet.locator('.eyebrow')).toHaveText("Didn't catch that");
+    await expect(sheet.getByRole('heading', { name: "I didn't catch who the shout-out is for." })).toBeVisible();
+    const heard = sheet.getByLabel(/I heard/);
+    await expect(heard).toHaveValue(misheard);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '05-not-understood-edit');
+
+    const fixed = 'Give Layla a shout-out saying great job';
+    await heard.fill(fixed);
+    await scriptIntent({
+      intent: 'POST_SHOUTOUT', targetUserId: layla.id, targetUserName: 'Layla', content: 'Great job', confidence: 0.95, summary: 'Give Layla Nasser a shout-out with this note.',
+    });
+    await sheet.getByRole('button', { name: 'Try again' }).click();
+    const again = sheetFor(page, fixed);
+    await expect(again.locator('.eyebrow')).toHaveText('Shout-out');
+    await expect(again.getByText('Layla Nasser', { exact: true })).toBeVisible();
+    // One recording, two reads: the second read was the edited text, and nothing was transcribed again.
+    const calls = await geminiCalls();
+    expect(calls.map((c) => c.kind)).toEqual(['transcribe', 'parse', 'parse']);
+    expect(calls[2]!.body.contents?.[0]?.parts?.[0]?.text).toBe(fixed);
+
+    // Edit from the preview opens the box again; Back returns to the same preview.
+    await again.getByRole('button', { name: 'Edit' }).click();
+    await expect(voiceSheet(page).getByLabel(/I heard/)).toHaveValue(fixed);
+    await expect(voiceSheet(page).getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await voiceSheet(page).getByRole('button', { name: 'Back' }).click();
+    await again.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.locator('.success-block')).toContainText('Give Layla Nasser a shout-out with this note.');
+    const posted = await prisma.shoutout.findMany({ where: { locationId } });
+    expect(posted.map((s) => [s.employeeId, s.note])).toEqual([[layla.id, 'Great job']]);
+    const logs = await voiceLogs(manager.id);
+    expect(logs.map((l) => [l.transcript, l.outcome])).toEqual([
+      [misheard, 'UNRECOGNIZED'],
+      [fixed, 'EXECUTED'],
+    ]);
   });
 });

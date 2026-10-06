@@ -41,6 +41,8 @@ function isNonEmptyString(v: unknown): v is string {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Longest command /parse-intent reads; the sheet's edit box allows 300 characters. */
+const MAX_TRANSCRIPT_CHARS = 500;
 const TIME_RE = /^\d{2}:\d{2}$/;
 
 /**
@@ -247,6 +249,9 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
   try {
     const transcript = String(req.body?.transcript ?? '').trim();
     if (!transcript) return res.status(400).json({ error: 'transcript is required.' });
+    // A recording is at most 10 seconds, but the confirm sheet also lets people type a correction
+    // ("Try again"): keep that to a spoken-command length before anything is sent to the model.
+    if (transcript.length > MAX_TRANSCRIPT_CHARS) return res.status(400).json({ error: 'That command is too long. Keep it to a sentence or two.' });
 
     const resolution = await parseVoiceIntent(transcript, {
       id: req.user!.id,

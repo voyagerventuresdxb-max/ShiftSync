@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Megaphone, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import {
   fetchAnnouncements,
   postAnnouncement,
@@ -12,6 +12,8 @@ import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { StaleDataNotice, OfflineEmptyState } from '@/components/shiftsync/OfflineNotice';
+import { AnnouncementCard } from '@/components/shiftsync/FeedCards';
+import { formatStamp } from '@/lib/feedFormat';
 
 /** "3h ago" / "2d ago" — coarse, matches the reference design's tone. */
 function timeAgo(iso: string): string {
@@ -20,10 +22,6 @@ function timeAgo(iso: string): string {
   if (hours < 1) return 'just now';
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-function formatStamp(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 export function Announcements() {
@@ -191,17 +189,12 @@ export function Announcements() {
       ) : (
         <ul className="mt-4 space-y-3">
           {items.map((a) => (
-            <li key={a.id} className="rounded-xl border border-border bg-background/40 p-3">
-              <div className="flex min-w-0 items-start gap-3">
-                <Megaphone className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm leading-relaxed">{a.body}</p>
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">
-                    {authorName(a)} · {formatStamp(a.createdAt)} · {timeAgo(a.createdAt)}
-                    {a.editedAt ? ` · edited ${timeAgo(a.editedAt)}` : ''}
-                  </p>
-                </div>
-                {canModerate && (
+            <AnnouncementCard
+              key={a.id}
+              body={a.body}
+              meta={`${authorName(a)} · ${formatStamp(a.createdAt)} · ${timeAgo(a.createdAt)}${a.editedAt ? ` · edited ${timeAgo(a.editedAt)}` : ''}`}
+              action={
+                canModerate && (
                 <div className="flex shrink-0 gap-1.5">
                   <button
                     onClick={() => setDraft({ id: a.id, body: a.body })}
@@ -218,9 +211,9 @@ export function Announcements() {
                     <Trash2 className="h-3 w-3" />
                   </button>
                 </div>
-                )}
-              </div>
-            </li>
+                )
+              }
+            />
           ))}
         </ul>
       )}

@@ -4,14 +4,21 @@ import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
 /**
  * A "which did you mean?" answer as this person may see it: only choices their role can confirm
  * (the server already filters them; this is the same second check the app makes for a single
- * answer) and only actions. Fewer than two left is not a choice: the list is dropped and the
- * sheet asks to rephrase, as for any low-confidence answer.
+ * answer) and only actions. For a choice between readings, fewer than two left is not a choice:
+ * the list is dropped and the sheet asks to rephrase, as for any low-confidence answer. A question
+ * about a person ("Which Karim?", "I couldn't find Rana — did you mean Rania?") keeps even a single
+ * suggestion, since the question itself stands without it.
  */
 export function choosableFor(systemRole: string, intent: ParsedIntent): ParsedIntent {
   if (intent.intent !== 'UNRECOGNIZED' || !intent.options) return intent;
   const options = intent.options.filter(
     (o) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'QUERY_MY_SCHEDULE' && canConfirmVoiceIntent(systemRole, o.intent),
   );
-  if (options.length >= 2) return { ...intent, options };
-  return { intent: 'UNRECOGNIZED', reason: intent.reason, summary: 'Could not confidently resolve this command.' };
+  if (options.length >= (intent.person ? 1 : 2)) return { ...intent, options };
+  if (intent.person) {
+    // Its reason pointed at choices that are gone now.
+    const reason = intent.person.status === 'missing' ? 'Check the name and try again.' : 'Say their full name and try again.';
+    return { intent: 'UNRECOGNIZED', reason, summary: intent.summary, person: intent.person };
+  }
+  return { intent: 'UNRECOGNIZED', reason: 'Say it again, or fix what I heard and try again.', summary: "I'm not sure I got that right." };
 }
