@@ -101,7 +101,9 @@ test.describe('onboarding — full real gate', () => {
     await expect(page.getByRole('main').getByText(venueName, { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Rename' }).click();
     await expect(page.getByPlaceholder('e.g. Sefarina, DIFC')).toHaveValue(venueName);
-    await page.getByPlaceholder('e.g. Sefarina, DIFC').fill('E2E Test Restaurant');
+    // Keeps the test prefix: a rename carries over to the organization's name,
+    // which is what cleanupTestOrgs matches on.
+    await page.getByPlaceholder('e.g. Sefarina, DIFC').fill(testVenueName('onboarding-full-renamed'));
     await continueThroughVenue(page);
     await uploadRoster(page);
     await resolveReviewRows(page);

@@ -13,6 +13,8 @@ Open ShiftSync. After the Welcome screen there are five steps: **Account → Ven
 4. **Review:** check every flagged row. **Confirm & Continue** works when nothing is flagged. Nothing is live until you confirm.
 5. **Invite:** share the venue join link on WhatsApp, or save the QR code. **Finish setup**.
 
+Rename the venue any time: tap the round badge at the top left (Profile) → **Venue** → **Rename venue** → **Save**. Your header changes at once; your team sees the new name the next time they open or switch back to ShiftSync.
+
 No code arrived? Ask ShiftSync to set up the venue for you. You get a one-time login link that opens setup at the Venue screen.
 
 ## 2. Share the join link

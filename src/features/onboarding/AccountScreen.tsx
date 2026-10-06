@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, requestSignupOtp, verifySignupOtp } from '../../api/signup';
 import { getLoginConfig, type LoginMethods } from '../../api/loginLinks';
 import { extractLoginLinkToken, LOGIN_LINK_PATH } from '../../../shared/loginLinks';
+import { VENUE_NAME_MAX_LENGTH } from '../../../shared/venueName';
 import { useIdentity } from '../../state/IdentityContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
 
@@ -353,6 +354,7 @@ function OtpAccountScreen({ onBack, onContinue }: { onBack: () => void; onContin
             <input
               autoComplete="organization"
               value={venueName}
+              maxLength={VENUE_NAME_MAX_LENGTH}
               onChange={(e) => setVenueName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void handleVerify();
