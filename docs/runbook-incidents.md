@@ -198,7 +198,7 @@ venue manage it on People â†’ **Kiosk link** ([`deployment.md`](deployment.md) â
   screen.
 - A leaked kiosk link shows only the published rota (names, roles, times), announcements and
   shoutouts. It can't change anything or open any other page.
-- Kiosk regenerate and revoke are not in the audit log yet.
+- Each create, regenerate and revoke is in the audit log with who did it (never the link itself).
 
 ### 6.4 Sessions
 
