@@ -222,6 +222,10 @@ test('golden path: build → publish → staff sees + push → voice edit → st
     const useVoice = m.getByRole('button', { name: 'Use voice' });
     await expect(stop.or(useVoice)).toBeVisible();
     if (await useVoice.isVisible()) await useVoice.click();
+    await expect(stop).toBeVisible();
+    // A recording that stayed silent is never sent, and the test browser's fake microphone only
+    // beeps now and then: record for a moment first, as e2e/voice.spec.ts's speak() does.
+    await m.waitForTimeout(700);
     // The recording button pulses (CSS animation), so Playwright never sees it "stable" — dispatch the tap.
     await stop.dispatchEvent('click');
     const confirm = m.getByRole('button', { name: 'Confirm', exact: true });

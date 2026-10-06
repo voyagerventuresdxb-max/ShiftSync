@@ -47,7 +47,9 @@ so the steps below turn on both.
 | `AI_MONTHLY_BUDGET_USD` | `5` | Estimated spend per UTC calendar month, all venues and features together. |
 | `AI_VISION_DAILY_CALL_LIMIT` | `60` | Roster-vision model calls per UTC day, all venues together. |
 | `AI_VOICE_DAILY_CALL_LIMIT` | `200` | Voice model calls per UTC day, all venues together (two per command). |
-| `AI_DAILY_CALL_LIMIT` | unset | Optional ceiling on all AI calls per UTC day; `0` switches AI off. |
+| `AI_DAILY_CALL_LIMIT` | `150` | Ceiling on all AI calls per UTC day; `0` switches AI off. |
+| `AI_VOICE_USER_DAILY_LIMIT` / `AI_VOICE_VENUE_DAILY_LIMIT` | `40` / `100` | Voice calls per UTC day for one person / one venue. |
+| `AI_VISION_USER_DAILY_LIMIT` / `AI_VISION_VENUE_DAILY_LIMIT` | `10` / `20` | Roster-reading calls per UTC day for one person / one venue. |
 | `AI_PRICE_IN_PER_M` / `AI_PRICE_OUT_PER_M` | `3` / `15` | USD per 1M input / output tokens used for the estimate. At or above the highest price Google lists for these models (checked 2026-10-04), so the estimate runs high, never low. |
 
 The API logs `[ai-budget] WARNING: estimated AI spend for <month> has reached 80% …` once a month

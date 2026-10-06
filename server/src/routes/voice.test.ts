@@ -11,6 +11,10 @@ process.env.AI_MONTHLY_BUDGET_USD = '1000000';
 process.env.AI_DAILY_CALL_LIMIT = '1000000';
 process.env.AI_VISION_DAILY_CALL_LIMIT = '1000000';
 process.env.AI_VOICE_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VOICE_USER_DAILY_LIMIT = '1000000';
+process.env.AI_VOICE_VENUE_DAILY_LIMIT = '1000000';
+process.env.AI_VISION_USER_DAILY_LIMIT = '1000000';
+process.env.AI_VISION_VENUE_DAILY_LIMIT = '1000000';
 
 const prisma = new PrismaClient();
 

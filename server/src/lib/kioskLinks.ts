@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { hashOtp } from './identity.js';
 import { resolveInviteBaseUrl } from './inviteLinks.js';
@@ -22,16 +23,16 @@ export function buildKioskUrl(locationId: string, token: string, requestedBaseUr
 }
 
 /** Replaces the venue's kiosk token in one write, so the previous one stops working with it. Returns the new token. */
-export async function regenerateKioskToken(locationId: string): Promise<{ token: string; createdAt: Date }> {
+export async function regenerateKioskToken(locationId: string, client: Prisma.TransactionClient | typeof prisma = prisma): Promise<{ token: string; createdAt: Date }> {
   const token = randomBytes(32).toString('base64url');
   const createdAt = new Date();
-  await prisma.location.update({ where: { id: locationId }, data: { kioskTokenHash: hashOtp(token), kioskTokenCreatedAt: createdAt } });
+  await client.location.update({ where: { id: locationId }, data: { kioskTokenHash: hashOtp(token), kioskTokenCreatedAt: createdAt } });
   return { token, createdAt };
 }
 
 /** After this, no kiosk token works for the venue. */
-export async function revokeKioskToken(locationId: string): Promise<void> {
-  await prisma.location.update({ where: { id: locationId }, data: { kioskTokenHash: null, kioskTokenCreatedAt: null } });
+export async function revokeKioskToken(locationId: string, client: Prisma.TransactionClient | typeof prisma = prisma): Promise<void> {
+  await client.location.update({ where: { id: locationId }, data: { kioskTokenHash: null, kioskTokenCreatedAt: null } });
 }
 
 /** True only for the venue's current kiosk token. */
