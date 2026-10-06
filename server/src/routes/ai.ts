@@ -34,7 +34,7 @@ aiRouter.get('/usage', requireSession, async (req, res) => {
  */
 aiRouter.post('/self-test', requireSession, requireOwner, aiSelfTestRateLimiter, async (req, res) => {
   try {
-    return res.status(200).json(await runAiSelfTest(req.user!.locationId));
+    return res.status(200).json(await runAiSelfTest(req.user!.locationId, req.user!.id));
   } catch (err) {
     console.error('[ai.self-test] failed', err instanceof Error ? err.message : err);
     return res.status(500).json({ error: 'Unexpected error while testing the AI connection.' });
