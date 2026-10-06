@@ -321,13 +321,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [weekLeaves, setWeekLeaves] = useState<LeaveDto[]>([]);
   const leaveSeqRef = useRef(0);
   const refetchWeekLeaves = useCallback(async () => {
-    if (!locationId) {
+    // Session only, like the week's shifts: a kiosk screen never sees leave.
+    if (!locationId || !session?.token) {
       setWeekLeaves([]);
       return;
     }
     const seq = ++leaveSeqRef.current;
     try {
-      const leaves = await fetchWeekLeaves(locationId, weekStart, session?.token);
+      const leaves = await fetchWeekLeaves(locationId, weekStart, session.token);
       if (seq === leaveSeqRef.current) setWeekLeaves(leaves);
     } catch {
       // Keep what's on screen on a connectivity blip (same rule as shifts);

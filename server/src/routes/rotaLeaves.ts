@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import type { LeaveType, RotaLeave } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { requireSession, requireManager, optionalSession, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
+import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
 import { canSeeDraftShifts } from '../lib/shiftVisibility.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { LEAVE_LABELS, LEAVE_TYPES, deleteLeave, notifyPublishedLeaveChange, setLeave } from '../lib/actions/leaveActions.js';
@@ -34,20 +35,21 @@ function isIsoDate(s: string): boolean {
 
 /**
  * GET /api/rota-leaves/:locationId?weekStart=YYYY-MM-DD — the 7 days from
- * weekStart. Leave type can be health data (Sick Leave), so this is stricter
+ * weekStart. Gated like the other rota reads (`requireSessionOrKioskToken`):
+ * a session of this venue, or the venue's current kiosk link; anyone else is
+ * refused. Leave type can be health data (Sick Leave), so this is stricter
  * than the shift read:
  *  - a manager of this venue sees everyone's leave, drafts included;
  *  - a staff member of this venue sees only their OWN leave, published only;
- *  - anyone else (anonymous kiosk, another venue) gets an empty list.
+ *  - the kiosk screen sees none.
  */
-rotaLeavesRouter.get('/:locationId', optionalSession, async (req, res) => {
+rotaLeavesRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
     const { locationId } = req.params;
     const weekStart = String(req.query.weekStart ?? '').trim();
     if (!isIsoDate(weekStart)) return res.status(400).json({ error: 'weekStart query param is required, as YYYY-MM-DD.' });
+    if (req.kioskLocationId) return res.status(200).json({ leaves: [] });
     const isVenueManager = canSeeDraftShifts(req.user, locationId);
-    const isVenueStaff = Boolean(req.user) && req.user!.locationId === locationId;
-    if (!isVenueManager && !isVenueStaff) return res.status(200).json({ leaves: [] });
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 7);
