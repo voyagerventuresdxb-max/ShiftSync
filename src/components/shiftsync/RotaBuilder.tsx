@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Copy,
   Layers,
+  ListChecks,
   Lock,
   Moon,
   PencilLine,
@@ -24,6 +25,7 @@ import { cn } from '@/lib/utils';
 import { useCloseOnBack } from '@/lib/backNavigation';
 import { totalHours, weekDates, weekdayOf } from '@/engine/rosterView';
 import { weekRangeLabel } from '@/engine/weekMath';
+import { bulkSummary } from '@/engine/bulkSummary';
 import { groupIntoSections, nameKey, roleKey } from '@/engine/roleGrouping';
 import type { Employee, Shift } from '@/engine/types';
 import { useAppState } from '@/state/AppStateContext';
@@ -119,6 +121,16 @@ export function RotaBuilder() {
   const [suppressClick, setSuppressClick] = useState(false);
   // Department (role-group) sections the manager has folded away, keyed by section key.
   const [collapsedRows, setCollapsedRows] = useState<Record<string, boolean>>({});
+  // Bulk actions: in select mode a tap on a shift toggles it instead of opening it.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [assignTo, setAssignTo] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  useEffect(() => {
+    setSelected(new Set());
+    setConfirmDelete(false);
+  }, [weekStart]);
 
   // `Shift` (engine/types) deliberately carries only a human-readable
   // `requiredRole`, but every write endpoint keys off the DB `roleId`. The
@@ -389,6 +401,57 @@ export function RotaBuilder() {
     }
   };
 
+  const toggleSelected = (s: Shift) => {
+    setConfirmDelete(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(s.id)) next.delete(s.id);
+      else next.add(s.id);
+      return next;
+    });
+  };
+
+  const endSelecting = () => {
+    setSelecting(false);
+    setSelected(new Set());
+    setAssignTo('');
+    setConfirmDelete(false);
+  };
+
+  // One write per shift through the same calls a single edit uses, so each
+  // keeps its own audit row and notification; refusals (overlap, leave) are
+  // collected and reported instead of stopping the rest.
+  const runBulk = async (verb: 'Assigned' | 'Deleted', write: (id: string) => Promise<void>) => {
+    if (!online || selected.size === 0) return;
+    setBulkBusy(true);
+    let done = 0;
+    const refusals: string[] = [];
+    for (const id of selected) {
+      try {
+        await write(id);
+        done += 1;
+      } catch (err) {
+        refusals.push(err instanceof ApiError ? err.message : 'Could not change that shift.');
+      }
+    }
+    setBulkBusy(false);
+    setSelected(new Set());
+    setConfirmDelete(false);
+    bump();
+    refreshPublishInfo();
+    say(bulkSummary(verb, done, refusals));
+  };
+
+  const assignSelected = () => runBulk('Assigned', (id) => updateRotaShift(id, { userId: assignTo === OPEN_ROW ? null : assignTo }));
+
+  const deleteSelected = () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    void runBulk('Deleted', (id) => deleteRotaShift(id));
+  };
+
   const moveShift = async (id: string, date: string, userId: string | null) => {
     if (locked) {
       say('This week is published — tap a shift to edit it instead; the staff member is notified of the change.');
@@ -588,6 +651,13 @@ export function RotaBuilder() {
               <button onClick={() => setSheet({ kind: 'saveTemplate' })} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground">
                 <Save className="h-3.5 w-3.5" /> Save as template
               </button>
+              <button
+                onClick={() => (selecting ? endSelecting() : setSelecting(true))}
+                aria-pressed={selecting}
+                className="hit-44 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:border-accent/40 hover:text-foreground"
+              >
+                <ListChecks className="h-3.5 w-3.5" /> {selecting ? 'Done selecting' : 'Select shifts'}
+              </button>
             </div>
             {/* The publish button is disabled offline; say why, right where the manager is looking, instead of a greyed button with no reason (bad-network audit, 2026-10-03). */}
             {!online && (
@@ -597,6 +667,43 @@ export function RotaBuilder() {
             )}
 
           </header>
+
+          {selecting && (
+            <div data-testid="bulk-bar" className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-raised/60 px-4 py-2 text-xs">
+              <span className="font-semibold">{selected.size} selected</span>
+              <span className="text-muted-foreground">Tap shifts to select them.</span>
+              <select
+                aria-label="Assign selected shifts to"
+                value={assignTo}
+                onChange={(e) => setAssignTo(e.target.value)}
+                className="h-11 rounded-lg border border-border bg-background px-2 text-xs"
+              >
+                <option value="">Assign to…</option>
+                <option value={OPEN_ROW}>Nobody (open shift)</option>
+                {staffDirectory
+                  .filter((s) => s.isActive)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.fullName}
+                    </option>
+                  ))}
+              </select>
+              <button
+                onClick={() => void assignSelected()}
+                disabled={!online || bulkBusy || selected.size === 0 || !assignTo}
+                className="h-11 rounded-lg bg-accent px-3 font-semibold text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Assign
+              </button>
+              <button
+                onClick={deleteSelected}
+                disabled={!online || bulkBusy || selected.size === 0}
+                className="h-11 rounded-lg border border-destructive/40 px-3 font-semibold text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {confirmDelete ? `Delete ${selected.size} shift${selected.size === 1 ? '' : 's'}?` : 'Delete'}
+              </button>
+            </div>
+          )}
 
           {flash && <p className="border-b border-border/60 bg-accent/10 px-4 py-2 text-xs text-accent">{flash}</p>}
 
@@ -664,14 +771,15 @@ export function RotaBuilder() {
                             shifts={cellShifts(d, person.userId)}
                             leave={leaveFor(d, person.userId)}
                             onAdd={() => openNew(d, person.userId)}
-                            onEdit={openEdit}
+                            onEdit={selecting ? toggleSelected : openEdit}
                             onEditLeave={(l) => setSheet({ kind: 'leave', leave: l, personName: person.name })}
                             // Offline gets the same treatment as a published/
                             // locked week: no drag, no "add shift" affordance —
                             // this is separate from the "Published · locked"
                             // badge above, which must keep reflecting real
                             // publish state, not connectivity.
-                            locked={locked || !online}
+                            locked={locked || !online || selecting}
+                            selectedIds={selecting ? selected : undefined}
                             suppressClick={suppressClick}
                             availabilityMark={person.userId ? availabilityByKey[`${person.userId}|${d}`] : undefined}
                           />
@@ -789,6 +897,31 @@ function shiftWeek(weekStart: string, deltaWeeks: number): string {
  * `touch-none` is required for the pointer sensor to own the gesture on
  * touch devices.
  */
+/**
+ * A shift in select mode: a plain toggle (no drag), so it never reads as
+ * disabled and a tap only selects or deselects it.
+ */
+function SelectableChip({ shift, selected, onToggle }: { shift: Shift; selected: boolean; onToggle: (s: Shift) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={() => onToggle(shift)}
+      className={cn(
+        'block w-full select-none rounded-md border border-accent/30 bg-accent/12 px-1.5 py-1 text-left text-[10px] leading-tight',
+        selected && 'border-accent ring-2 ring-accent',
+      )}
+    >
+      <span className="block font-semibold">{shift.start}–{shift.end}</span>
+      {shift.briefingNote && (
+        <span className="mt-0.5 flex items-center gap-1 truncate text-muted-foreground">
+          <StickyNote className="h-2.5 w-2.5 shrink-0" /> {shift.briefingNote}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function ShiftChip({
   shift,
   locked,
@@ -841,6 +974,7 @@ function Cell({
   locked,
   suppressClick,
   availabilityMark,
+  selectedIds,
 }: {
   date: string;
   userId: string | null;
@@ -852,6 +986,8 @@ function Cell({
   locked: boolean;
   suppressClick: boolean;
   availabilityMark?: AvailabilityMarkDto;
+  /** Set while the builder is in select mode: which shifts are selected. */
+  selectedIds?: Set<string>;
 }) {
   const { ref, isDropTarget } = useDroppable({ id: `${date}|${userId ?? OPEN_ROW}` });
   return (
@@ -864,9 +1000,13 @@ function Cell({
     >
       {availabilityMark && <AvailabilityBadge mark={availabilityMark} />}
       {leave && <LeaveChip leave={leave} onEdit={onEditLeave} />}
-      {shifts.map((s) => (
-        <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
-      ))}
+      {shifts.map((s) =>
+        selectedIds ? (
+          <SelectableChip key={s.id} shift={s} selected={selectedIds.has(s.id)} onToggle={onEdit} />
+        ) : (
+          <ShiftChip key={s.id} shift={s} locked={locked} suppressClick={suppressClick} onEdit={onEdit} />
+        ),
+      )}
       {/* A split shift (two segments, one person, one day) shows the day's summed hours. */}
       {userId !== null && shifts.length > 1 && (
         <p title="Hours this day" className="px-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">{totalHours(shifts).toFixed(1)}h total</p>
