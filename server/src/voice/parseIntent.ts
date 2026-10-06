@@ -1,7 +1,9 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { intentSchemaFor, type ParsedIntent } from './intentSchema.js';
+import { allowedIntentsFor, intentSchemaFor, type ParsedIntent } from './intentSchema.js';
+import { combineDateAndTime } from '../parsing/normalize.js';
+import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
@@ -35,6 +37,11 @@ export class VoiceIntentError extends Error {
 }
 
 let client: GoogleGenAI | null = null;
+
+/** Test seam: swap the Gemini client (scripted model output, no network). Pass null to restore. */
+export function __setVoiceIntentClientForTests(fake: GoogleGenAI | null): void {
+  client = fake;
+}
 
 /**
  * Below this, a real (non-UNRECOGNIZED) intent is coerced to an
@@ -90,12 +97,13 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
   if (user.systemRole !== 'STAFF') {
     const pendingSwaps = await prisma.shiftSwapRequest.findMany({
       where: { status: 'PENDING', shift: { locationId: user.locationId } },
-      include: { requestedBy: { select: { fullName: true } }, shift: { select: { date: true, startTime: true, endTime: true } } },
+      include: { requestedBy: { select: { fullName: true } }, targetUser: { select: { fullName: true } }, shift: { select: { date: true, startTime: true, endTime: true } } },
       take: 20,
     });
     ctx.pendingSwapRequests = pendingSwaps.map((r) => ({
       id: r.id,
       requesterName: r.requestedBy.fullName,
+      coverName: r.targetUser?.fullName ?? null,
       shiftLabel: `${r.shift.date.toISOString().slice(0, 10)} ${formatVenueTime(r.shift.startTime, timezone)}-${formatVenueTime(r.shift.endTime, timezone)}`,
     }));
 
@@ -221,6 +229,7 @@ export async function parseVoiceIntent(
     } else if (clientResponse.intent === 'APPLY_ROTA_TEMPLATE') {
       clientResponse = await refineApplyRotaTemplateResponse(clientResponse, context.rotaTemplates ?? []);
     }
+    clientResponse = await checkAgainstContext(clientResponse, context, user, await venueTimezoneFor(user.locationId), transcript);
 
     return { response: clientResponse, attempted, hasAdditionalRequest };
   } catch (err) {
@@ -322,6 +331,113 @@ export async function refineApplyRotaTemplateResponse(
 
   const summary = `Apply template "${best.name}" to the week of ${response.weekStart} — confirm?`;
   return { ...response, templateId: best.id, summary };
+}
+
+function clarify(reason: string, summary: string): ParsedIntent {
+  return { intent: 'UNRECOGNIZED', reason, summary };
+}
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * When the caller named exactly one weekday and the resolved date is a different weekday, ask
+ * again instead of offering the wrong day ("Friday" resolved to a Saturday).
+ */
+export function weekdayMismatch(transcript: string, response: ParsedIntent): ParsedIntent | null {
+  const said = WEEKDAY_NAMES.map((d, i) => (new RegExp(`\\b${d}\\b`, 'i').test(transcript) ? i : -1)).filter((i) => i >= 0);
+  if (said.length !== 1) return null;
+  const date =
+    response.intent === 'MARK_AVAILABILITY' || response.intent === 'CREATE_SHIFT' || response.intent === 'EDIT_SHIFT'
+      ? response.date
+      : response.intent === 'ASSIGN_SECTION'
+        ? response.shiftDate
+        : undefined;
+  if (!date) return null;
+  const actual = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+  if (Number.isNaN(actual) || actual === said[0]) return null;
+  return clarify(
+    `The caller said ${WEEKDAY_NAMES[said[0]!]}, but ${date} is a ${WEEKDAY_NAMES[actual]}.`,
+    `You said ${WEEKDAY_NAMES[said[0]!]}, but that date is a ${WEEKDAY_NAMES[actual]}. Which day did you mean?`,
+  );
+}
+
+const NOT_FOUND = (what: string) => clarify(`The ${what} wasn't one this venue has.`, `I couldn't find that ${what} at your venue. Please say it again.`);
+const PAST_DATE = clarify('The date resolved to a day that has already passed.', 'That day has already passed. Which day did you mean?');
+
+/**
+ * Propose-time backstop, after the model and the refinements above: the
+ * confirm sheet must never offer something /execute would refuse, or that
+ * the caller didn't say. Everything here is deterministic and checked against
+ * the same lists the model was given (`buildContext`), so a model that
+ * ignores its schema or invents an id is caught before a Confirm button shows:
+ *  - an intent outside the caller's role;
+ *  - any id (person, shift, section, role, request) not in the caller's venue lists;
+ *  - a date that has already passed (availability, new shifts, edits, section assignments);
+ *  - a new shift that overlaps the person's existing shift.
+ * /execute still re-checks everything on its own.
+ */
+export async function checkAgainstContext(
+  response: ParsedIntent,
+  ctx: PromptContext,
+  caller: { id: string; systemRole: SystemRole; locationId: string },
+  timezone: string,
+  transcript = '',
+): Promise<ParsedIntent> {
+  if (response.intent === 'UNRECOGNIZED') return response;
+  if (!allowedIntentsFor(caller.systemRole).includes(response.intent)) {
+    // The app recognises this exact reason and shows its role-refusal message (shared contract).
+    return clarify(VOICE_ROLE_REFUSAL, VOICE_ROLE_REFUSAL);
+  }
+  const mismatch = weekdayMismatch(transcript, response);
+  if (mismatch) return mismatch;
+  const staff = new Set(ctx.staffDirectory.map((s) => s.id));
+  const isPast = (date: string | undefined) => date !== undefined && date < ctx.today;
+  switch (response.intent) {
+    case 'MARK_AVAILABILITY':
+      return isPast(response.date) ? PAST_DATE : response;
+    case 'REQUEST_SWAP':
+      if (!ctx.callerShifts.some((s) => s.id === response.shiftId)) return NOT_FOUND('shift of yours');
+      if (!staff.has(response.targetUserId) || response.targetUserId === caller.id) return NOT_FOUND('colleague');
+      return response;
+    case 'APPROVE_SWAP':
+    case 'DECLINE_SWAP':
+      return (ctx.pendingSwapRequests ?? []).some((r) => r.id === response.swapRequestId) ? response : NOT_FOUND('pending swap request');
+    case 'APPROVE_JOIN':
+    case 'DECLINE_JOIN':
+      return (ctx.pendingJoinRequests ?? []).some((r) => r.id === response.joinRequestId) ? response : NOT_FOUND('pending join request');
+    case 'CREATE_SHIFT': {
+      if (!(ctx.roles ?? []).some((r) => r.id === response.roleId)) return NOT_FOUND('role');
+      if (response.userId !== null && !staff.has(response.userId)) return NOT_FOUND('person');
+      if (isPast(response.date)) return PAST_DATE;
+      if (response.userId !== null) {
+        const overnight = response.end <= response.start;
+        const start = combineDateAndTime(response.date, response.start, timezone);
+        const end = combineDateAndTime(response.date, response.end, timezone, overnight);
+        const clash = await prisma.shift.findFirst({
+          where: { userId: response.userId, locationId: caller.locationId, status: { not: 'CANCELLED' }, startTime: { lt: end }, endTime: { gt: start } },
+          select: { startTime: true, endTime: true },
+        });
+        if (clash) {
+          const when = `${formatVenueTime(clash.startTime, timezone)}–${formatVenueTime(clash.endTime, timezone)}`;
+          return clarify(`That person already works ${when} then.`, `They already have a shift ${when} that overlaps. Pick another time or person.`);
+        }
+      }
+      return response;
+    }
+    case 'EDIT_SHIFT':
+      if (!(ctx.weekShifts ?? []).some((s) => s.id === response.shiftId)) return NOT_FOUND('shift');
+      if (response.roleId !== undefined && !(ctx.roles ?? []).some((r) => r.id === response.roleId)) return NOT_FOUND('role');
+      if (typeof response.userId === 'string' && !staff.has(response.userId)) return NOT_FOUND('person');
+      return isPast(response.date) ? PAST_DATE : response;
+    case 'ASSIGN_SECTION':
+      if (!(ctx.floorSections ?? []).some((s) => s.id === response.sectionId)) return NOT_FOUND('section');
+      if (!staff.has(response.staffId)) return NOT_FOUND('person');
+      return isPast(response.shiftDate) ? PAST_DATE : response;
+    case 'POST_SHOUTOUT':
+      return staff.has(response.targetUserId) ? response : NOT_FOUND('person');
+    default:
+      return response;
+  }
 }
 
 /**
