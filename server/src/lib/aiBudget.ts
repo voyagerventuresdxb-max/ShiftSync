@@ -52,8 +52,13 @@ export const DEFAULT_MONTHLY_BUDGET_USD = 5;
 export const DEFAULT_VISION_DAILY_CALL_LIMIT = 60;
 /** Model calls, not commands: one voice command is two calls (transcribe + understand). */
 export const DEFAULT_VOICE_DAILY_CALL_LIMIT = 200;
-/** Postgres INTEGER max: "no overall ceiling" for the conditional UPDATE. */
-const NO_LIMIT = 2_147_483_647;
+/** All AI calls per UTC day when AI_DAILY_CALL_LIMIT is unset: unset is never unlimited. */
+export const DEFAULT_DAILY_CALL_LIMIT = 150;
+/** Per person and per venue, per UTC day, in model calls (a voice command is two). */
+export const DEFAULT_VOICE_USER_DAILY_LIMIT = 40;
+export const DEFAULT_VOICE_VENUE_DAILY_LIMIT = 100;
+export const DEFAULT_VISION_USER_DAILY_LIMIT = 10;
+export const DEFAULT_VISION_VENUE_DAILY_LIMIT = 20;
 /**
  * Deliberately at or above the highest per-token price Google lists for the
  * configured models (checked 2026-10-04: Gemini 3.6 Flash, Priority tier,
@@ -64,13 +69,17 @@ export const DEFAULT_PRICE_OUT_PER_M = 15;
 
 export const AI_PAUSED_MESSAGE = 'AI reading is paused for this month; upload Excel/CSV or add staff manually.';
 export const AI_PAUSED_TODAY_MESSAGE = "AI reading has reached today's limit and is back tomorrow; upload Excel/CSV or add staff manually.";
+export const AI_PAUSED_USER_MESSAGE = "You've used today's AI roster reading; it's back tomorrow. Upload Excel/CSV or add staff manually.";
+export const AI_PAUSED_VENUE_MESSAGE = "Your venue has used today's AI roster reading; it's back tomorrow. Upload Excel/CSV or add staff manually.";
 
 export interface AiBudgetConfig {
   monthlyBudgetUsd: number;
-  /** AI_DAILY_CALL_LIMIT: optional ceiling on all features together; null = none. 0 stops every call. */
-  dailyCallLimit: number | null;
+  /** AI_DAILY_CALL_LIMIT: ceiling on all features together (default 150). 0 stops every call. */
+  dailyCallLimit: number;
   visionDailyCallLimit: number;
   voiceDailyCallLimit: number;
+  /** Per person / per venue per day, by feature group. */
+  quotas: Record<AiFeatureGroup, { user: number; venue: number }>;
   priceInPerM: number;
   priceOutPerM: number;
 }
@@ -81,12 +90,16 @@ function positiveNumber(raw: string | undefined, fallback: number): number {
 }
 
 export function aiBudgetConfig(env: NodeJS.ProcessEnv = process.env): AiBudgetConfig {
-  const overall = positiveNumber(env.AI_DAILY_CALL_LIMIT, NaN);
+  const whole = (raw: string | undefined, fallback: number) => Math.floor(positiveNumber(raw, fallback));
   return {
     monthlyBudgetUsd: positiveNumber(env.AI_MONTHLY_BUDGET_USD, DEFAULT_MONTHLY_BUDGET_USD),
-    dailyCallLimit: Number.isNaN(overall) ? null : Math.floor(overall),
-    visionDailyCallLimit: Math.floor(positiveNumber(env.AI_VISION_DAILY_CALL_LIMIT, DEFAULT_VISION_DAILY_CALL_LIMIT)),
-    voiceDailyCallLimit: Math.floor(positiveNumber(env.AI_VOICE_DAILY_CALL_LIMIT, DEFAULT_VOICE_DAILY_CALL_LIMIT)),
+    dailyCallLimit: whole(env.AI_DAILY_CALL_LIMIT, DEFAULT_DAILY_CALL_LIMIT),
+    visionDailyCallLimit: whole(env.AI_VISION_DAILY_CALL_LIMIT, DEFAULT_VISION_DAILY_CALL_LIMIT),
+    voiceDailyCallLimit: whole(env.AI_VOICE_DAILY_CALL_LIMIT, DEFAULT_VOICE_DAILY_CALL_LIMIT),
+    quotas: {
+      voice: { user: whole(env.AI_VOICE_USER_DAILY_LIMIT, DEFAULT_VOICE_USER_DAILY_LIMIT), venue: whole(env.AI_VOICE_VENUE_DAILY_LIMIT, DEFAULT_VOICE_VENUE_DAILY_LIMIT) },
+      vision: { user: whole(env.AI_VISION_USER_DAILY_LIMIT, DEFAULT_VISION_USER_DAILY_LIMIT), venue: whole(env.AI_VISION_VENUE_DAILY_LIMIT, DEFAULT_VISION_VENUE_DAILY_LIMIT) },
+    },
     priceInPerM: positiveNumber(env.AI_PRICE_IN_PER_M, DEFAULT_PRICE_IN_PER_M),
     priceOutPerM: positiveNumber(env.AI_PRICE_OUT_PER_M, DEFAULT_PRICE_OUT_PER_M),
   };
@@ -102,12 +115,20 @@ export function budgetKeys(now: Date): { month: string; day: string } {
   return { month: iso.slice(0, 7), day: iso.slice(0, 10) };
 }
 
+export type AiLimit = 'monthly_budget' | 'daily_calls' | 'user_daily' | 'venue_daily' | 'ledger_unavailable';
+
+const LIMIT_MESSAGE: Record<AiLimit, string> = {
+  monthly_budget: 'Monthly AI budget reached.',
+  daily_calls: 'Daily AI call limit reached.',
+  user_daily: "This person's daily AI limit reached.",
+  venue_daily: "This venue's daily AI limit reached.",
+  ledger_unavailable: 'AI spend ledger unreachable.',
+};
+
 export class AiBudgetExceededError extends Error {
   /** `ledger_unavailable`: the spend counters couldn't be reached, so the call is refused (fail closed). */
-  constructor(readonly limit: 'monthly_budget' | 'daily_calls' | 'ledger_unavailable') {
-    super(
-      limit === 'monthly_budget' ? 'Monthly AI budget reached.' : limit === 'daily_calls' ? 'Daily AI call limit reached.' : 'AI spend ledger unreachable.',
-    );
+  constructor(readonly limit: AiLimit) {
+    super(LIMIT_MESSAGE[limit]);
     this.name = 'AiBudgetExceededError';
   }
 }
@@ -118,8 +139,10 @@ export interface AiCallUsage {
 }
 
 export interface AiCallRequest {
-  /** The venue the call is for (ledger row); null for operator diagnostics, which still count. */
+  /** The venue the call is for (ledger row, venue quota); null for operator diagnostics, which still count. */
   locationId: string | null;
+  /** The signed-in person the call is for (their daily quota); null for operator diagnostics. */
+  userId?: string | null;
   feature: AiFeature;
   /** Worst-case input tokens for this call (prompt + media). */
   inputTokensEstimate: number;
@@ -148,7 +171,7 @@ export async function withAiBudget<T>(
   const reserved = Number(costUsd(Math.max(0, request.inputTokensEstimate), MAX_OUTPUT_TOKENS[request.feature], config).toFixed(6));
 
   try {
-    await reserve(db, config, month, day, reserved, featureGroup(request.feature));
+    await reserve(db, config, month, day, reserved, featureGroup(request.feature), request);
   } catch (err) {
     if (err instanceof AiBudgetExceededError) throw err;
     console.error('[ai-budget] spend ledger unreachable — refusing the AI call:', err instanceof Error ? err.message : err);
@@ -175,8 +198,16 @@ export async function withAiBudget<T>(
   }
 }
 
-async function reserve(db: typeof prisma, config: AiBudgetConfig, month: string, day: string, reserved: number, group: AiFeatureGroup): Promise<void> {
-  const overall = config.dailyCallLimit ?? NO_LIMIT;
+async function reserve(
+  db: typeof prisma,
+  config: AiBudgetConfig,
+  month: string,
+  day: string,
+  reserved: number,
+  group: AiFeatureGroup,
+  request: AiCallRequest,
+): Promise<void> {
+  const overall = config.dailyCallLimit;
   await db.$transaction(async (tx) => {
     await tx.$executeRaw`INSERT INTO ai_spend_months (month) VALUES (${month}) ON CONFLICT (month) DO NOTHING`;
     await tx.$executeRaw`INSERT INTO ai_call_days (day) VALUES (${day}) ON CONFLICT (day) DO NOTHING`;
@@ -191,6 +222,18 @@ async function reserve(db: typeof prisma, config: AiBudgetConfig, month: string,
         : await tx.$executeRaw`UPDATE ai_call_days SET calls = calls + 1, voice_calls = voice_calls + 1
             WHERE day = ${day} AND calls < ${overall} AND voice_calls < ${config.voiceDailyCallLimit}`;
     if (counted === 0) throw new AiBudgetExceededError('daily_calls');
+    // Beneath the deployment-wide limits: one venue, and one person, can't spend everyone's allowance.
+    const scopes: [scope: 'venue' | 'user', id: string | null | undefined, limit: number, refusal: AiLimit][] = [
+      ['venue', request.locationId, config.quotas[group].venue, 'venue_daily'],
+      ['user', request.userId, config.quotas[group].user, 'user_daily'],
+    ];
+    for (const [scope, id, limit, refusal] of scopes) {
+      if (!id) continue;
+      await tx.$executeRaw`INSERT INTO ai_call_quotas (day, scope, scope_id, feature_group) VALUES (${day}, ${scope}, ${id}, ${group}) ON CONFLICT DO NOTHING`;
+      const ok = await tx.$executeRaw`UPDATE ai_call_quotas SET calls = calls + 1
+        WHERE day = ${day} AND scope = ${scope} AND scope_id = ${id} AND feature_group = ${group} AND calls < ${limit}`;
+      if (ok === 0) throw new AiBudgetExceededError(refusal);
+    }
   });
 }
 
@@ -230,9 +273,9 @@ export interface AiUsageSummary {
   month: string;
   monthToDateUsd: number;
   limitUsd: number;
-  /** All features together, and the optional overall ceiling (null = none). */
+  /** All features together, and the overall ceiling (AI_DAILY_CALL_LIMIT, default 150). */
   callsToday: number;
-  callLimit: number | null;
+  callLimit: number;
   /** Every AI feature is refused: monthly budget or the overall daily ceiling reached. */
   paused: boolean;
   vision: { callsToday: number; callLimit: number; paused: boolean };
@@ -252,7 +295,7 @@ export async function aiUsageSummary(locationId: string, deps: Deps = {}): Promi
   ]);
   const monthToDateUsd = Number(spend?.spentUsd ?? 0) + Number(spend?.reservedUsd ?? 0);
   const callsToday = calls?.calls ?? 0;
-  const paused = monthToDateUsd >= config.monthlyBudgetUsd || (config.dailyCallLimit !== null && callsToday >= config.dailyCallLimit);
+  const paused = monthToDateUsd >= config.monthlyBudgetUsd || callsToday >= config.dailyCallLimit;
   const feature = (used: number, limit: number) => ({ callsToday: used, callLimit: limit, paused: paused || used >= limit });
   return {
     month,

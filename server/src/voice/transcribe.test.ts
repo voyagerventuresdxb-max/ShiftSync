@@ -15,6 +15,10 @@ process.env.AI_MONTHLY_BUDGET_USD = '1000000';
 process.env.AI_DAILY_CALL_LIMIT = '1000000';
 process.env.AI_VISION_DAILY_CALL_LIMIT = '1000000';
 process.env.AI_VOICE_DAILY_CALL_LIMIT = '1000000';
+process.env.AI_VOICE_USER_DAILY_LIMIT = '1000000';
+process.env.AI_VOICE_VENUE_DAILY_LIMIT = '1000000';
+process.env.AI_VISION_USER_DAILY_LIMIT = '1000000';
+process.env.AI_VISION_VENUE_DAILY_LIMIT = '1000000';
 
 /**
  * The only mock is the Gemini client (a real 400/429 cannot be produced on
@@ -142,4 +146,27 @@ test('a refusal by the daily voice limit is "paused" and names the limit; the pr
     if (savedLimit === undefined) delete process.env.AI_VOICE_DAILY_CALL_LIMIT;
     else process.env.AI_VOICE_DAILY_CALL_LIMIT = savedLimit;
   }
+});
+
+test('a clip with no clear speech becomes "no_speech", never a command built from the vocabulary list', async () => {
+  let instruction = '';
+  for (const answer of ['NO_SPEECH', 'NO_SPEECH.', '"no_speech"']) {
+    __setVoiceClientForTests({
+      models: {
+        generateContent: async (req: { contents: { parts: { text?: string }[] }[] }) => {
+          instruction = req.contents[0]!.parts.find((p) => p.text)?.text ?? '';
+          return { text: answer };
+        },
+      },
+    } as unknown as GoogleGenAI);
+    let caught: unknown;
+    try {
+      await transcribeAudio(Buffer.from('silence'), 'audio/wav', 'Alex Example, Bar, Terrace');
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught instanceof VoiceTranscriptionError && caught.kind === 'no_speech', `answer ${answer}`);
+  }
+  assert.match(instruction, /no clear human speech .* return exactly NO_SPEECH/);
+  assert.match(instruction, /never add a name or term that wasn't said/);
 });

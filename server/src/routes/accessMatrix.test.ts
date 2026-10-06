@@ -698,8 +698,8 @@ test("shift routes ignore a body-supplied actor: the audit trail never names ano
 });
 
 test('every route the API mounts is covered by this matrix (or listed as public / token-capability)', async () => {
-  const { readdirSync, readFileSync } = await import('node:fs');
-  const dir = import.meta.dirname;
+  // Read from the live router, not the source text: a route can't escape by how it is written.
+  const { listRoutes } = await import('../lib/routeTable.js');
   const TOKEN_CAPABILITY = new Set([
     'GET /api/join/invite/:token',
     'POST /api/join/request-otp',
@@ -711,18 +711,10 @@ test('every route the API mounts is covered by this matrix (or listed as public 
     'POST /api/login-links/peek',
     'POST /api/login-links/redeem',
   ]);
-  const PUBLIC = new Set(['GET /api/identity/config', 'GET /api/push/vapid-public-key', 'GET /api/rota-leaves/:locationId']);
-  const mounts = new Map<string, string>();
-  for (const m of readFileSync(join(dir, '..', 'app.ts'), 'utf8').matchAll(/app\.use\('([^']+)', (\w+)\)/g)) mounts.set(m[2]!, m[1]!);
+  const PUBLIC = new Set(['GET /api/health', 'GET /api/health/ready', 'GET /api/identity/config', 'GET /api/push/vapid-public-key', 'GET /api/rota-leaves/:locationId']);
   const covered = new Set(CASES.map((c) => c.name.replace(/ \(.*\)$/, '').replace(/^(POST \/api\/voice\/execute).*/, '$1')));
-  const missing: string[] = [];
-  for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))) {
-    for (const m of readFileSync(join(dir, file), 'utf8').matchAll(/^(\w+Router)\.(get|post|patch|put|delete)\('([^']*)'/gm)) {
-      const prefix = mounts.get(m[1]!);
-      if (!prefix) continue;
-      const route = `${m[2]!.toUpperCase()} ${prefix}${m[3] === '/' ? '' : m[3]}`;
-      if (!covered.has(route) && !PUBLIC.has(route) && !TOKEN_CAPABILITY.has(route)) missing.push(route);
-    }
-  }
+  const routes = listRoutes(createApp());
+  assert.ok(routes.length > 90, `the route table looks incomplete (${routes.length})`);
+  const missing = routes.filter((route) => !covered.has(route) && !PUBLIC.has(route) && !TOKEN_CAPABILITY.has(route));
   assert.deepEqual(missing, [], 'add new routes to the access matrix');
 });

@@ -40,7 +40,7 @@ Server-side rules with their own suites (no e2e): the Wednesday 17:00 cover-requ
 ## Known limits
 - **Rota builder v0 is not on master yet.** Leave on the grid, copy last week, split shifts, the overlap guard and manager-only drafts are in #69 → #78 → #84, awaiting review (`docs/rota-review-guide.md`).
 - **Parser:** image rosters need the AI reader (day headers with a weekday, like `Mon 17/08`, are read since 2026-10-04).
-- **Voice consent** is a notice shown once per person per device; there is no setting to withdraw it yet.
+- **Voice consent** is a notice shown once per person per device; Profile → Voice commands → **Turn off voice on this device** withdraws it (the microphone asks again before recording).
 - **Offline copy** covers a staff member's own published weeks only, and only weeks already opened online on that device.
 - **Live updates** are refetch-on-focus/visibility/notification, not websockets. A kiosk screen left open picks up new announcements or rota edits only when reloaded (it does move to the new week on Monday).
 - **Legal pages** are drafts, marked as such, pending legal review.

@@ -51,6 +51,7 @@ after(async () => {
   await prisma.aiUsage.deleteMany({ where: { month: { in: [...monthsUsed] } } });
   await prisma.aiSpendMonth.deleteMany({ where: { month: { in: [...monthsUsed] } } });
   await prisma.aiCallDay.deleteMany({ where: { day: { in: [...daysUsed] } } });
+  await prisma.aiCallQuota.deleteMany({ where: { day: { in: [...daysUsed] } } });
   await prisma.user.deleteMany({ where: { locationId: { in: locationsMade } } });
   await prisma.location.deleteMany({ where: { id: { in: locationsMade } } });
   await prisma.$disconnect();
@@ -86,11 +87,57 @@ test('the daily call limit refuses further calls without calling the provider', 
   assert.equal(providerCalls, 2);
 });
 
-test('defaults: vision 60 and voice 200 calls a day, and no overall ceiling unless AI_DAILY_CALL_LIMIT is set', () => {
+test('defaults: vision 60 and voice 200 calls a day, 150 overall (unset is never unlimited), and per-person / per-venue quotas', () => {
   const c = aiBudgetConfig({});
-  assert.deepEqual([c.visionDailyCallLimit, c.voiceDailyCallLimit, c.dailyCallLimit], [60, 200, null]);
+  assert.deepEqual([c.visionDailyCallLimit, c.voiceDailyCallLimit, c.dailyCallLimit], [60, 200, 150]);
+  assert.deepEqual(c.quotas, { voice: { user: 40, venue: 100 }, vision: { user: 10, venue: 20 } });
   assert.equal(aiBudgetConfig({ AI_DAILY_CALL_LIMIT: '0' }).dailyCallLimit, 0);
+  assert.equal(aiBudgetConfig({ AI_DAILY_CALL_LIMIT: 'off' }).dailyCallLimit, 150, 'a non-number keeps the safe default');
   assert.equal(aiBudgetConfig({ AI_VOICE_DAILY_CALL_LIMIT: 'lots' }).voiceDailyCallLimit, 200, 'a non-number keeps the default');
+  assert.equal(aiBudgetConfig({ AI_VOICE_USER_DAILY_LIMIT: '6' }).quotas.voice.user, 6);
+});
+
+test('per-person and per-venue daily quotas refuse before the provider is called, and a refusal counts nothing', async () => {
+  const now = clock('2099-11-10T10:00:00.000Z');
+  const location = await venue('quotas');
+  const e = { ...env(1000), AI_VOICE_USER_DAILY_LIMIT: '2', AI_VOICE_VENUE_DAILY_LIMIT: '3' };
+  let providerCalls = 0;
+  const call = (userId: string) =>
+    withAiBudget({ locationId: location.id, userId, feature: 'voice_intent', inputTokensEstimate: 100 }, async () => {
+      providerCalls++;
+      return { value: 'x', usage: { inputTokens: 10, outputTokens: 10 } };
+    }, { now, env: e });
+  await call('quota-user-a');
+  await call('quota-user-a');
+  await assert.rejects(call('quota-user-a'), (err: unknown) => err instanceof AiBudgetExceededError && err.limit === 'user_daily');
+  await call('quota-user-b');
+  await assert.rejects(call('quota-user-c'), (err: unknown) => err instanceof AiBudgetExceededError && err.limit === 'venue_daily');
+  assert.equal(providerCalls, 3);
+  const day = await prisma.aiCallDay.findUniqueOrThrow({ where: { day: '2099-11-10' } });
+  assert.equal(day.calls, 3, 'refused calls are rolled back from the daily counters too');
+  const rows = await prisma.aiCallQuota.findMany({ where: { day: '2099-11-10' }, orderBy: [{ scope: 'asc' }, { scopeId: 'asc' }] });
+  // The venue refusal rolled back the whole reservation: user C has no counter row at all.
+  assert.deepEqual(rows.map((r) => [r.scope, r.scopeId, r.calls]), [['user', 'quota-user-a', 2], ['user', 'quota-user-b', 1], ['venue', location.id, 3]]);
+  // Vision has its own quotas: a spent voice allowance doesn't block roster reading.
+  await withAiBudget({ locationId: location.id, userId: 'quota-user-a', feature: 'roster_vision', inputTokensEstimate: 100 }, async () => ({ value: 'x', usage: { inputTokens: 10, outputTokens: 10 } }), { now, env: e });
+});
+
+test('parallel calls by one person never exceed their quota', async () => {
+  const now = clock('2099-12-10T10:00:00.000Z');
+  const e = { ...env(1000), AI_VOICE_USER_DAILY_LIMIT: '5' };
+  let providerCalls = 0;
+  const results = await Promise.allSettled(
+    Array.from({ length: 20 }, () =>
+      withAiBudget({ locationId: null, userId: 'quota-parallel', feature: 'voice_transcribe', inputTokensEstimate: 100 }, async () => {
+        providerCalls++;
+        await new Promise((r) => setTimeout(r, 50));
+        return { value: 'x', usage: { inputTokens: 10, outputTokens: 10 } };
+      }, { now, env: e }),
+    ),
+  );
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 5);
+  assert.equal(providerCalls, 5);
+  assert.ok(results.filter((r) => r.status === 'rejected').every((r) => (r as PromiseRejectedResult).reason?.limit === 'user_daily'));
 });
 
 test('vision and voice have separate daily limits: a spent voice allowance never blocks roster reading', async () => {

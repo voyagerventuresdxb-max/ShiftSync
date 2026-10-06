@@ -88,6 +88,8 @@ These come from the server, word for word (`server/src/routes/voice.ts`), shown 
 |---|---|
 | No AI set up on the server | "Voice commands aren't set up on this server yet. Use the app's buttons meanwhile." |
 | Today's voice limit reached (`AI_VOICE_DAILY_CALL_LIMIT`, default 200 calls ≈ 100 commands; resets at 00:00 UTC = 04:00 Dubai) | "Voice commands have reached today's limit and are back tomorrow. Use the app's buttons meanwhile." |
+| This person's daily voice quota used (`AI_VOICE_USER_DAILY_LIMIT`, default 40 calls ≈ 20 commands) | "You've used today's voice commands; they're back tomorrow. Use the app's buttons meanwhile." |
+| This venue's daily voice quota used (`AI_VOICE_VENUE_DAILY_LIMIT`, default 100 calls ≈ 50 commands) | "Your venue has used today's voice commands; they're back tomorrow. Use the app's buttons meanwhile." |
 | Monthly AI budget reached (`AI_MONTHLY_BUDGET_USD`) | "Voice commands are paused for the rest of this month (AI spending limit reached). Use the app's buttons meanwhile." |
 | AI model setting out of date | "Voice commands are switched off on this server until its AI model setting is updated. Use the app's buttons meanwhile." |
 | Google busy or unreachable | "Voice commands aren't available right now — try again later." |
@@ -96,11 +98,32 @@ These come from the server, word for word (`server/src/routes/voice.ts`), shown 
 | Microphone blocked | "Microphone access was denied or unavailable." |
 | Browser can't record | "Voice commands are not supported in this browser." |
 | Empty recording | "No audio captured — try again." |
+| The recording stayed silent (checked on the phone, nothing is sent) | "I didn't hear anything. Hold the phone a little closer and try again." |
+| The transcriber heard no speech (noise only) | "I didn't hear a command. Hold the phone a little closer and try again." |
 
 How to see them without spending money: on a **non-production** environment, set
 `AI_VOICE_DAILY_CALL_LIMIT=0` (today's limit), `AI_MONTHLY_BUDGET_USD=0` (monthly), or remove
 `GEMINI_VERTEX_PROJECT` and `GEMINI_API_KEY` (not set up), deploy, and record one command each. A
 refused command never reaches Google.
+
+## Re-test from the evaluation
+
+These failed or were borderline in the automated evaluation ([`voice-eval-report.md`](voice-eval-report.md)).
+Say each one on a real phone, in a quiet room and then with background noise, and log the
+result. Fake names: use people at your own test venue.
+
+| # | Role | Say | Expect | Seen in the evaluation |
+|---|---|---|---|---|
+| R1 | Manager | "Approve Alex's swap request." (with one pending swap from Alex) | The approve sheet for that swap | Asked to rephrase: understood, but not confident enough |
+| R2 | Manager | "Decline Alex's swap request." | The decline sheet for that swap | Same as R1 |
+| R3 | Owner | "Approve the pending swap." | The approve sheet | Asked to rephrase before the fix; fixed in the re-run |
+| R4 | Manager | "Create a bartender shift for Alex on Friday from 6 p.m. to 2 a.m." | Friday's date in the sheet; if a different day ever shows, the app must ask again | Once resolved to Saturday before the fix |
+| R5 | Manager | "Put Alex on the bar tomorrow evening." | Bar section, tomorrow, PM | Fell through before the fix |
+| R6 | Staff | "Mark me unavailable tomorrow." (with background noise) | Tomorrow, unavailable | Under-confident in noise before the fix |
+| R7 | Manager | "Post an announcement: staff meeting Monday at 3 p.m. in the bar." (with noise) | The announcement text, word for word | Under-confident in noise before the fix |
+| R8 | Manager | "Approve Riya's join request." (a pending applicant named Riya) | The approve sheet | Heard as "Riaz" once and asked again (right) |
+| R9 | Anyone | Tap the mic and say nothing for 3 seconds | "I didn't hear anything…", nothing sent | Silence became an invented command before the fix |
+| R10 | Anyone | Tap the mic with only background noise | "I didn't hear…" message | Noise became a name before the fix |
 
 ## Results log
 
