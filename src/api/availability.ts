@@ -44,6 +44,12 @@ export async function fetchAvailability(token: string, userId: string, weekStart
   return data.marks;
 }
 
+/** GET /api/availability?weekStart= — every mark at the caller's venue that week (manager/owner only), for the rota builder. */
+export async function fetchVenueAvailability(token: string, weekStart: string): Promise<(AvailabilityMarkDto & { userId: string })[]> {
+  const data = await request<{ marks: (AvailabilityMarkDto & { userId: string })[] }>(`/api/availability?weekStart=${weekStart}`, { headers: withAuth(token) });
+  return data.marks;
+}
+
 /**
  * POST /api/availability — body: { date, type, note? } — upserts one mark per
  * (userId, date). The user comes from the Bearer session server-side, never

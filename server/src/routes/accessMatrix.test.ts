@@ -289,6 +289,7 @@ const CASES: Case[] = [
   { name: 'POST /api/attendance/clock-out', method: 'POST', path: () => '/api/attendance/clock-out', body: (f) => ({ userId: f.staffA }), refuse: ['anon', 'deactivatedA', 'managerB'] },
   { name: 'GET /api/attendance/:locationId/weekly-hours', method: 'GET', path: (f) => `/api/attendance/${f.locA}/weekly-hours?weekStart=${f.monday}`, refuse: OUTSIDERS },
   // availability
+  { name: 'GET /api/availability', method: 'GET', path: (f) => `/api/availability?weekStart=${f.monday}`, refuse: ['anon', 'deactivatedA', 'staffA', 'staffB'] },
   { name: 'GET /api/availability/:userId', method: 'GET', path: (f) => `/api/availability/${f.staffA}?weekStart=${f.monday}`, refuse: OUTSIDERS },
   { name: 'POST /api/availability', method: 'POST', path: () => '/api/availability', body: (f) => ({ date: f.tuesday, type: 'PREFERRED_OFF' }), refuse: ['anon', 'deactivatedA'] },
   { name: 'DELETE /api/availability/:id', method: 'DELETE', path: (f) => `/api/availability/${f.markA}`, refuse: [...OUTSIDERS, 'managerA'] },
@@ -520,6 +521,7 @@ test('self-scoped lists never include the other venue\'s records', async () => {
     ['managerB', { method: 'GET', path: () => '/api/roles' }, [fx.roleA]],
     ['managerB', { method: 'GET', path: () => '/api/floor-feedback' }, [fx.fbA]],
     ['managerB', { method: 'GET', path: () => '/api/voice/interactions' }, [fx.locA]],
+    ['managerB', { method: 'GET', path: (f) => `/api/availability?weekStart=${f.monday}` }, [fx.markA, fx.staffA]],
   ];
   for (const [actor, c, mustNotContain] of lists) {
     const { status, text } = await call(actor, c);
@@ -584,6 +586,7 @@ const CONTROLS: [Actor, string][] = [
   ['staffA', 'POST /api/attendance/clock-in'],
   ['managerA', 'POST /api/attendance/clock-out'],
   ['staffA', 'GET /api/attendance/:locationId/weekly-hours'],
+  ['managerA', 'GET /api/availability'],
   ['staffA', 'GET /api/availability/:userId'],
   ['staffA', 'POST /api/availability'],
   ['staffA', 'DELETE /api/availability/:id'],

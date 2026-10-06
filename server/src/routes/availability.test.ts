@@ -84,6 +84,49 @@ test('POST /api/availability upserts the mark AND writes a matching AVAILABILITY
   }
 });
 
+test("GET /api/availability?weekStart= returns every mark at the caller's venue that week (people with no shift included), managers only", async () => {
+  const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
+  const mkLocation = (label: string) =>
+    prisma.location.create({ data: { organizationId: seedLocation!.organizationId, name: `__availability-test__ ${label}`, timezone: 'Asia/Dubai' } });
+  const venue = await mkLocation('venue week');
+  const other = await mkLocation('other venue');
+  const manager = await prisma.user.create({ data: { locationId: venue.id, fullName: '__availability-test__ manager', systemRole: 'MANAGER' } });
+  const staff = await prisma.user.create({ data: { locationId: venue.id, fullName: '__availability-test__ no shift yet', systemRole: 'STAFF' } });
+  const outsider = await prisma.user.create({ data: { locationId: other.id, fullName: '__availability-test__ outsider', systemRole: 'STAFF' } });
+  const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+  await prisma.availabilityMark.createMany({
+    data: [
+      { userId: staff.id, date: day('2031-03-04'), type: 'UNAVAILABLE', note: 'exam' },
+      { userId: staff.id, date: day('2031-03-11'), type: 'PREFERRED_OFF' },
+      { userId: outsider.id, date: day('2031-03-04'), type: 'UNAVAILABLE' },
+    ],
+  });
+  try {
+    const managerToken = await sessionFor(manager.id);
+    const staffToken = await sessionFor(staff.id);
+    await withServer(async (baseUrl) => {
+      const get = (token: string | null, query: string) =>
+        fetch(`${baseUrl}/api/availability${query}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const res = await get(managerToken, '?weekStart=2031-03-03');
+      assert.equal(res.status, 200);
+      const { marks } = (await res.json()) as { marks: { userId: string; date: string; type: string; note: string | null }[] };
+      assert.deepEqual(
+        marks.map(({ userId, date, type, note }) => ({ userId, date, type, note })),
+        [{ userId: staff.id, date: '2031-03-04', type: 'UNAVAILABLE', note: 'exam' }],
+        "only this venue's marks, only that week",
+      );
+      assert.equal((await get(managerToken, '?weekStart=nope')).status, 400);
+      assert.equal((await get(staffToken, '?weekStart=2031-03-03')).status, 403, 'staff read their own marks per user, not the whole venue');
+      assert.equal((await get(null, '?weekStart=2031-03-03')).status, 401);
+    });
+  } finally {
+    await prisma.availabilityMark.deleteMany({ where: { userId: { in: [staff.id, outsider.id] } } });
+    await prisma.user.deleteMany({ where: { locationId: { in: [venue.id, other.id] } } });
+    await prisma.location.deleteMany({ where: { id: { in: [venue.id, other.id] } } });
+  }
+});
+
 test("DELETE /api/availability/:id answers someone else's mark exactly like a missing one (404), and the owner can delete it", async () => {
   const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
