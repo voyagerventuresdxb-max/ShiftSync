@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
+import { regenerateKioskToken } from '../lib/kioskLinks.js';
+import { KIOSK_TOKEN_HEADER } from '../../../shared/kioskLinks.js';
 
 const prisma = new PrismaClient();
 
@@ -69,7 +71,7 @@ test('PUT /api/rota-leaves marks a DRAFT leave; staff/anonymous cannot see it un
       (await api(baseUrl, token)('GET', `/api/rota-leaves/${f.location.id}?weekStart=${WEEK}`)).body.leaves as { type: string }[];
     assert.equal((await listAs(f.mgrToken)).length, 1, 'manager sees the draft');
     assert.equal((await listAs(f.staffToken)).length, 0, 'staff never sees a draft');
-    assert.equal((await listAs(null)).length, 0, 'anonymous kiosk never sees a draft');
+    assert.equal((await api(baseUrl, null)('GET', `/api/rota-leaves/${f.location.id}?weekStart=${WEEK}`)).status, 401, 'an anonymous caller is refused');
 
     const status = await mgr('GET', `/api/shifts/${f.location.id}/publish-status?weekStart=${WEEK}`);
     assert.equal(status.body.publishedAt, null);
@@ -202,7 +204,7 @@ test('leave is refused on the other shift-writing paths too: template apply (409
     assert.equal(persisted.blockedByLeaveCount, 1);
   }));
 
-test('GET /api/rota-leaves: staff see only their own published leave; colleagues and the anonymous kiosk see none; bad dates are 400', () =>
+test('GET /api/rota-leaves: staff see only their own published leave; colleagues and the kiosk see none; bad dates are 400', () =>
   run(async (f, baseUrl) => {
     const mgr = api(baseUrl, f.mgrToken);
     await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: MON, type: 'SICK_LEAVE' });
@@ -213,8 +215,25 @@ test('GET /api/rota-leaves: staff see only their own published leave; colleagues
     const list = async (token: string | null) => (await api(baseUrl, token)('GET', `/api/rota-leaves/${f.location.id}?weekStart=${WEEK}`)).body.leaves as { userId: string }[];
     assert.deepEqual((await list(f.staffToken)).map((l) => l.userId), [f.staff.id]);
     assert.deepEqual(await list(colleagueToken), [], "a colleague never sees someone else's leave type");
-    assert.deepEqual(await list(null), [], 'the anonymous kiosk never sees leave');
     assert.equal((await list(f.mgrToken)).length, 1);
+
+    // Gated like the other rota reads: a session of this venue, or the venue's current kiosk link.
+    const read = (headers: Record<string, string>) => fetch(`${baseUrl}/api/rota-leaves/${f.location.id}?weekStart=${WEEK}`, { headers });
+    assert.equal((await read({})).status, 401, 'no session and no kiosk link: refused');
+    assert.equal((await read({ [KIOSK_TOKEN_HEADER]: 'not-a-real-token' })).status, 401, 'a wrong kiosk token: refused');
+    const { token: kioskToken } = await regenerateKioskToken(f.location.id);
+    const kiosk = await read({ [KIOSK_TOKEN_HEADER]: kioskToken });
+    assert.equal(kiosk.status, 200);
+    assert.deepEqual(((await kiosk.json()) as { leaves: unknown[] }).leaves, [], 'the kiosk screen never sees leave');
+    const otherOrg = await prisma.organization.create({ data: { name: `${TAG} other org ${Date.now()}` } });
+    try {
+      const otherLoc = await prisma.location.create({ data: { organizationId: otherOrg.id, name: `${TAG} other venue`, timezone: 'Asia/Dubai' } });
+      const outsider = await prisma.user.create({ data: { locationId: otherLoc.id, fullName: `${TAG} outsider`, systemRole: 'MANAGER' } });
+      const outsiderToken = (await issueSession(outsider.id)).plainToken;
+      assert.equal((await read({ Authorization: `Bearer ${outsiderToken}` })).status, 403, "another venue's manager: refused");
+    } finally {
+      await prisma.organization.delete({ where: { id: otherOrg.id } }).catch(() => {});
+    }
 
     assert.equal((await mgr('PUT', '/api/rota-leaves', { userId: f.staff.id, date: '2031-02-31', type: 'DAY_OFF' })).status, 400);
     assert.equal((await mgr('GET', `/api/rota-leaves/${f.location.id}?weekStart=2031-13-01`)).status, 400);
