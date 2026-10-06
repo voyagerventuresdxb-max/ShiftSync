@@ -1,4 +1,4 @@
-import express, { type ErrorRequestHandler } from 'express';
+import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import cors from 'cors';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
@@ -32,11 +32,26 @@ import { requestIdMiddleware } from './lib/requestContext.js';
 import { checkReadiness } from './lib/readiness.js';
 import { isPushRecording, pushOutbox } from './lib/push.js';
 
+/**
+ * Low-risk headers on every API response (no CSP here: the API serves JSON and files, the web
+ * app's own headers come from Vercel). Anything sent with a session or a kiosk token is never
+ * stored by a browser or proxy cache.
+ */
+const securityHeaders: RequestHandler = (req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  if (req.headers.authorization || req.headers['x-kiosk-token']) res.setHeader('Cache-Control', 'no-store');
+  next();
+};
+
 export function createApp() {
   const app = express();
+  app.disable('x-powered-by');
 
   // First, so every later log line (and the error handler's) carries this request's id.
   app.use(requestIdMiddleware);
+  app.use(securityHeaders);
   app.use(cors(corsOptionsFromEnv()));
   app.use(express.json());
 
@@ -89,6 +104,8 @@ export function createApp() {
   app.use('/api/login-links', loginLinksRouter);
   app.use('/api/kiosk', kioskRouter);
   app.use('/api/ai', aiRouter);
+  // Unknown API paths answer JSON, not Express's default HTML page.
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 
   // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
   const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {

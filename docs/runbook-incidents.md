@@ -96,8 +96,9 @@ migration names:
 
 - An HTML answer (`<!doctype html>`, `text/html`) from any `/api/*` path is the #52 signature:
   the frontend is running where the API should be. **Roll back** (§1.1).
-- In the **build log**, `Deploying as vite static site`, `caddy`, or no start command means the
-  same thing. Cancel the deployment or roll back (procedure §2.3).
+- In the **build log**, `Deploying as vite static site`, a start command of `caddy run …`, or no
+  start command means the same thing. Cancel the deployment or roll back (procedure §2.3). A
+  `caddy fmt` setup row in the plan is normal; the start row must say `npm run server:start`.
 - In the **deploy log**, a healthy boot shows, in this order: the `prisma migrate deploy`
   output, a `[phone-e164] …` line, then `ShiftSync API listening on …` (procedure §2.4).
 - `[startup] Refusing to start in production …` means the API stopped itself on purpose. The
