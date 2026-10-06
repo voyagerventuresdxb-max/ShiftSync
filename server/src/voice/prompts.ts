@@ -9,7 +9,7 @@ export interface PromptContext {
   /** Every active staff member at this location, for name resolution. */
   staffDirectory: { id: string; fullName: string }[];
   /** Only populated for manager-tier callers — the pending decisions they could be asked to act on. */
-  pendingSwapRequests?: { id: string; requesterName: string; shiftLabel: string }[];
+  pendingSwapRequests?: { id: string; requesterName: string; coverName?: string | null; shiftLabel: string }[];
   pendingJoinRequests?: { id: string; fullName: string; phone: string }[];
   /** Manager-tier only — every role at this venue, for CREATE_SHIFT/EDIT_SHIFT. */
   roles?: { id: string; name: string }[];
@@ -21,6 +21,15 @@ export interface PromptContext {
   rotaTemplates?: { id: string; name: string }[];
 }
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** "Monday 2031-03-03" for `today` plus `offset` days. */
+export function calendarDay(today: string, offset: number): string {
+  const d = new Date(`${today}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + offset);
+  return `${WEEKDAYS[d.getUTCDay()]} ${d.toISOString().slice(0, 10)}`;
+}
+
 /**
  * Builds the role-scoped system prompt. The allowed-intents list is generated
  * from the SAME array `intentSchemaFor` restricts the response schema to —
@@ -30,7 +39,10 @@ export interface PromptContext {
 export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): string {
   const allowed = allowedIntentsFor(systemRole);
   const lines = [
-    `You are ShiftSync's voice command interpreter for a hospitality venue in the UAE. Today is ${ctx.today}. The caller is ${ctx.callerName}, whose account role is ${systemRole}.`,
+    `You are ShiftSync's voice command interpreter for a hospitality venue in the UAE. Today is ${calendarDay(ctx.today, 0)}. The caller is ${ctx.callerName}, whose account role is ${systemRole}.`,
+    ``,
+    // Weekday arithmetic is where dates went wrong; the model reads the day instead of computing it.
+    `Calendar (use it for every weekday, "tomorrow", "next week" and similar — never compute dates yourself): ${Array.from({ length: 14 }, (_, i) => calendarDay(ctx.today, i)).join('; ')}. Weeks start on Monday.`,
     ``,
     `You may ONLY ever respond with one of these intents: ${allowed.join(', ')}, or UNRECOGNIZED if none of them confidently match what was said. Never invent an intent outside this list — the caller's role does not permit anything else, and any other intent will be rejected by the server regardless of what you output.`,
     ``,
@@ -47,13 +59,21 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
   }
 
   if (ctx.pendingSwapRequests?.length) {
-    lines.push(``, `Pending swap requests this caller could approve or decline (id → who requested, which shift):`);
-    lines.push(...ctx.pendingSwapRequests.map((r) => `- ${r.id} → ${r.requesterName}, ${r.shiftLabel}`));
+    lines.push(``, `Pending swap requests this caller could approve or decline (id → who requested, who was asked to cover, which shift):`);
+    lines.push(...ctx.pendingSwapRequests.map((r) => `- ${r.id} → ${r.requesterName}${r.coverName ? `, asking ${r.coverName} to cover` : ''}, ${r.shiftLabel}`));
   }
 
+  // Names only: an applicant's phone number is not needed to match "approve Riya" and is not sent.
   if (ctx.pendingJoinRequests?.length) {
-    lines.push(``, `Pending join requests this caller could approve or decline (id → name, phone):`);
-    lines.push(...ctx.pendingJoinRequests.map((r) => `- ${r.id} → ${r.fullName}, ${r.phone}`));
+    lines.push(``, `Pending join requests this caller could approve or decline (id → name):`);
+    lines.push(...ctx.pendingJoinRequests.map((r) => `- ${r.id} → ${r.fullName}`));
+  }
+
+  if (ctx.pendingSwapRequests?.length || ctx.pendingJoinRequests?.length) {
+    lines.push(
+      ``,
+      `For APPROVE_SWAP/DECLINE_SWAP/APPROVE_JOIN/DECLINE_JOIN: when exactly one pending request above matches who or what the caller named (or there is only one pending request of that kind and the caller says "the pending one"), that match is unambiguous — use its id with high confidence. If two or more could match, respond with UNRECOGNIZED and say which ones.`,
+    );
   }
 
   if (ctx.roles?.length) {
@@ -69,6 +89,7 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
   if (ctx.floorSections?.length) {
     lines.push(``, `Floor sections at this venue (name → id, for ASSIGN_SECTION — use these ids, never invent one):`);
     lines.push(...ctx.floorSections.map((s) => `- ${s.label} → ${s.id}`));
+    lines.push(`For ASSIGN_SECTION, "period" is AM for morning or lunch, and PM for afternoon, evening or night ("tomorrow evening" is PM). "On the bar" means the Bar section when one is listed.`);
   }
 
   if (ctx.rotaTemplates?.length) {
@@ -104,7 +125,7 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
     ``,
     `If a name, date, time, role, shift, or section is ambiguous or you cannot find a confident match in the lists above, respond with intent=UNRECOGNIZED and explain why in unrecognizedReason — never guess an id that isn't listed above, and never invent a date or time.`,
     `Always fill in "summary" with one plain-English sentence describing exactly what will happen if this is confirmed (except for QUERY_MY_SCHEDULE, where summary is the direct answer itself, as described above) — e.g. "Mark you unavailable on Friday, August 29th", "Approve Sarah's swap request for her Tuesday shift", "Create a Bartender shift for Ahmed, Friday 6pm-2am", or "Move Ahmed to the Bar section, Friday PM."`,
-    `Always fill in "confidence" (0 to 1) with how certain you are that this exactly matches what the caller asked for and that every id/date/time you filled in is correct — lower it whenever a name, date, or time was even slightly ambiguous before you resolved it.`,
+    `Always fill in "confidence" (0 to 1) with how certain you are that this exactly matches what the caller asked for and that every id/date/time you filled in is correct — lower it whenever a name, date, or time was even slightly ambiguous before you resolved it. A clear request whose people, dates and times all match the lists and the calendar above exactly deserves at least 0.8; keep low confidence for when you actually had to choose between possibilities.`,
     `Always fill in "hasAdditionalRequest" (true/false): set it to true if the transcript contains more than one distinct actionable request — even if you can only confidently resolve one of them into "intent". Judge this independently of "confidence": being unsure whether there's a second request must never lower your confidence in the one you did resolve, and being very confident in "intent" must never stop you from flagging a second request if one is genuinely there. Do not try to describe or resolve the second request anywhere in your response — the caller will be asked to state it again separately.`,
   );
 

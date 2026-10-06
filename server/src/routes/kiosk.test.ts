@@ -30,6 +30,7 @@ const fx = {} as {
   staffAName: string;
   staffAPhone: string;
   managerA: string;
+  ownerA: string;
   publishedShift: string;
   draftShift: string;
   briefing: string;
@@ -95,7 +96,7 @@ before(async () => {
   await prisma.shoutout.create({ data: { locationId: locA.id, employeeId: staffA.id, authorId: managerA.id, note: shoutoutNote } });
 
   Object.assign(fx, {
-    locA: locA.id, locB: locB.id, monday, staffA: staffA.id, staffAName: staffA.fullName, staffAPhone: staffA.phone!, managerA: managerA.id,
+    locA: locA.id, locB: locB.id, monday, staffA: staffA.id, staffAName: staffA.fullName, staffAPhone: staffA.phone!, managerA: managerA.id, ownerA: ownerA.id,
     publishedShift: publishedShift.id, draftShift: draftShift.id, briefing, sidework, announcement, shoutoutNote,
   });
 
@@ -260,6 +261,25 @@ test('only an owner or manager of the venue can see, regenerate or revoke its ki
   const byOwner = await call('POST', `/api/kiosk/${fx.locA}/regenerate`, bearer(sessions.ownerA));
   assert.equal(byOwner.status, 201);
   assert.equal((await call('POST', `/api/kiosk/${fx.locA}/revoke`, bearer(sessions.ownerA))).status, 200);
+});
+
+test('create, regenerate and revoke are each audit-logged with who did it, and the log never holds the token', async () => {
+  await call('POST', `/api/kiosk/${fx.locA}/revoke`, bearer(sessions.managerA));
+  const since = new Date();
+  const first = await regenerate();
+  const second = await regenerate();
+  assert.equal((await call('POST', `/api/kiosk/${fx.locA}/revoke`, bearer(sessions.ownerA))).status, 200);
+  const rows = await prisma.auditLog.findMany({
+    where: { locationId: fx.locA, createdAt: { gte: since }, action: { in: ['KIOSK_LINK_CREATED', 'KIOSK_LINK_REGENERATED', 'KIOSK_LINK_REVOKED'] } },
+    orderBy: { createdAt: 'asc' },
+  });
+  assert.deepEqual(rows.map((r) => [r.action, r.actorId, r.entityType, r.entityId]), [
+    ['KIOSK_LINK_CREATED', fx.managerA, 'Location', fx.locA],
+    ['KIOSK_LINK_REGENERATED', fx.managerA, 'Location', fx.locA],
+    ['KIOSK_LINK_REVOKED', fx.ownerA, 'Location', fx.locA],
+  ]);
+  const logged = JSON.stringify(rows);
+  for (const token of [first.token, second.token]) assert.ok(!logged.includes(token), 'no audit row holds a token');
 });
 
 test('the kiosk token opens no other route', async () => {
