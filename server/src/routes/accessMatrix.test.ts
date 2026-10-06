@@ -388,6 +388,7 @@ const CASES: Case[] = [
   { name: 'POST /api/push/subscribe', method: 'POST', path: () => '/api/push/subscribe', body: () => ({ endpoint: `https://push.invalid/${TAG}/${randomUUID()}`, keys: { p256dh: 'k', auth: 'a' } }), refuse: ['anon', 'deactivatedA'] },
   { name: 'DELETE /api/push/subscribe', method: 'DELETE', path: () => '/api/push/subscribe', body: (f) => ({ endpoint: f.pushEndpointA }), refuse: ['anon', 'deactivatedA'] },
   // rota leave
+  { name: 'GET /api/rota-leaves/:locationId', method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}`, refuse: OUTSIDERS },
   { name: 'PUT /api/rota-leaves', method: 'PUT', path: () => '/api/rota-leaves', body: (f) => ({ userId: f.staffA2, date: addDays(f.monday, 2), type: 'DAY_OFF' }), refuse: NOT_MANAGERS_OF_A },
   { name: 'DELETE /api/rota-leaves/:id', method: 'DELETE', path: (f) => `/api/rota-leaves/${f.leaveDel}`, refuse: NOT_MANAGERS_OF_A },
   // roles
@@ -487,8 +488,6 @@ const PUBLIC_BY_DESIGN: Call[] = [
   { method: 'GET', path: () => '/api/health/ready' },
   { method: 'GET', path: () => '/api/identity/config' },
   { method: 'GET', path: () => '/api/push/vapid-public-key' },
-  // Answers everyone, but only a venue member ever sees leave (checked in the self-scoped test below).
-  { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` },
 ];
 
 test('public by design: these answer an anonymous caller (a change here is a product decision, not a refactor)', async () => {
@@ -523,9 +522,6 @@ test('self-scoped lists never include the other venue\'s records', async () => {
     ['managerB', { method: 'GET', path: () => '/api/floor-feedback' }, [fx.fbA]],
     ['managerB', { method: 'GET', path: () => '/api/voice/interactions' }, [fx.locA]],
     ['managerB', { method: 'GET', path: (f) => `/api/availability?weekStart=${f.monday}` }, [fx.markA, fx.staffA]],
-    ['anon', { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` }, [fx.leaveA, fx.leaveDel]],
-    ['staffB', { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` }, [fx.leaveA, fx.leaveDel]],
-    ['managerB', { method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}` }, [fx.leaveA, fx.leaveDel]],
   ];
   for (const [actor, c, mustNotContain] of lists) {
     const { status, text } = await call(actor, c);
@@ -639,6 +635,7 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'POST /api/roles'],
   ['managerA', 'PATCH /api/roles/:id'],
   ['managerA', 'DELETE /api/roles/:id'],
+  ['staffA', 'GET /api/rota-leaves/:locationId'],
   ['managerA', 'PUT /api/rota-leaves'],
   ['managerA', 'DELETE /api/rota-leaves/:id'],
   ['staffA', 'GET /api/rota-templates/:locationId'],
@@ -711,7 +708,7 @@ test('every route the API mounts is covered by this matrix (or listed as public 
     'POST /api/login-links/peek',
     'POST /api/login-links/redeem',
   ]);
-  const PUBLIC = new Set(['GET /api/health', 'GET /api/health/ready', 'GET /api/identity/config', 'GET /api/push/vapid-public-key', 'GET /api/rota-leaves/:locationId']);
+  const PUBLIC = new Set(['GET /api/health', 'GET /api/health/ready', 'GET /api/identity/config', 'GET /api/push/vapid-public-key']);
   const covered = new Set(CASES.map((c) => c.name.replace(/ \(.*\)$/, '').replace(/^(POST \/api\/voice\/execute).*/, '$1')));
   const routes = listRoutes(createApp());
   assert.ok(routes.length > 90, `the route table looks incomplete (${routes.length})`);
