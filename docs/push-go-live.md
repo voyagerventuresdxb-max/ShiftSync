@@ -1,7 +1,10 @@
 # Push notifications go-live (VAPID)
 
 How to switch on Web Push for the live site, check it works on a real phone, and switch it
-off again. Written 2026-10-02. Nothing here has been applied to Railway or Vercel yet.
+off again. Written 2026-10-02. **Applied on 2026-10-06 (run 12):** a pair generated with the
+script (§1), the three variables set on Railway with `VAPID_SUBJECT` set to the production web
+address (`https:`), and the API redeployed; the §4 checks passed. Push is on. §5, the real-phone
+test, is still to do.
 
 Without VAPID keys the app already works: every notification is still recorded and shows
 under the bell at the top of the app. Push only adds the alert on the phone's lock screen.
@@ -79,7 +82,7 @@ under the bell at the top of the app. Push only adds the alert on the phone's lo
    The API keeps serving either way. Fix the variable and deploy again.
 2. **Public key endpoint**, through Vercel (what browsers use) and on Railway directly:
    ```
-   curl -s https://shift-sync-shift-sync1.vercel.app/api/push/vapid-public-key
+   curl -s https://shift-sync-two-ashy.vercel.app/api/push/vapid-public-key
    curl -s https://shiftsync-api-production.up.railway.app/api/push/vapid-public-key
    ```
    Both must print `{"publicKey":"B…"}`, where the key is 87 characters and the same value as
@@ -95,7 +98,7 @@ laptop. For example, A is a staff member and B is the owner.
 
 ### Android (Chrome)
 
-1. On the phone, open `https://shift-sync-shift-sync1.vercel.app` in Chrome and sign in as A.
+1. On the phone, open `https://shift-sync-two-ashy.vercel.app` in Chrome and sign in as A.
    A normal browser tab is enough. Installing isn't needed.
 2. Tap **People** in the bottom bar and scroll to **Notification preferences**. Tap
    **Enable notifications**, then **Allow** in Chrome's prompt. The panel now says *Push
@@ -109,14 +112,14 @@ laptop. For example, A is a staff member and B is the owner.
 
 Web Push on iPhone only works in a web app added to the Home Screen, never in a Safari tab.
 
-1. In Safari, open `https://shift-sync-shift-sync1.vercel.app`, tap **Share → Add to Home
+1. In Safari, open `https://shift-sync-two-ashy.vercel.app`, tap **Share → Add to Home
    Screen**, then open ShiftSync **from the Home Screen icon**.
 2. Sign in as A again. The Home Screen app doesn't share Safari's sign-in.
 3. Continue from Android step 2. iOS shows its own **Allow** prompt.
-4. **Known limit:** PR #43 (web app manifest and icons) isn't merged. Until it is, the Home
-   Screen icon may open as a plain Safari page. You can tell because Safari's address bar is
-   visible and the panel says *Push notifications aren't supported in this browser.* Then
-   iPhone push has to wait for #43. Android isn't affected.
+4. The web app manifest and icons are on master (`public/manifest.webmanifest`, linked from
+   `index.html`), so the Home Screen icon opens as an app. If it ever opens as a plain Safari
+   page instead (Safari's address bar visible, and the panel says *Push notifications aren't
+   supported in this browser.*), remove the icon and add it again from Safari.
 
 ### Other real triggers
 
@@ -142,7 +145,7 @@ Approving a join request sends nothing. The applicant has no account until then.
   Allow. On iPhone, go to Settings → Notifications → ShiftSync → Allow Notifications. Then
   reload ShiftSync and tap **Enable notifications** again.
 - **iPhone shows no prompt, or says "not supported"**: you're in a Safari tab, or the Home
-  Screen icon opened as a Safari page (see the #43 note above).
+  Screen icon opened as a Safari page (see iPhone step 4 above).
 - **Incognito or private window**: Chrome turns the Push API off there. The panel then says
   notifications are blocked, or answers *Could not enable push notifications.* Use a
   normal window.

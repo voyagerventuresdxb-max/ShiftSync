@@ -39,8 +39,15 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
 13. [ ] **Open pull requests waiting on you:** #91 (run-4 log: merge or close), #36 (MVP readiness
     report: its optional audit tests no longer match the app), #30 (superseded by the xlsx CDN
     pin), #42 (superseded by #69).
-14. [ ] **Run 10 pull requests:** #124–#129, after tonight's test. Merge order and expected
+14. [x] **Run 10 pull requests:** merged and deployed by run 12 on 2026-10-06 (`prod-20261006-244b67b`); kept for the record: #124–#129, after tonight's test. Merge order and expected
     conflicts are in [`AUTONOMOUS_RUN.md`](AUTONOMOUS_RUN.md) (run 10). Before #127 deploys, check
     `AI_DAILY_CALL_LIMIT` in Railway: when unset it now means 150 calls a day, not unlimited.
 15. [ ] **Run 10 security follow-ups** from the run 10 chat report, including one credential check
     left open since run 4.
+16. [ ] **Push on a real phone** ([`push-go-live.md`](push-go-live.md) §5): push is switched on since
+    2026-10-06. Android Chrome in a normal tab; iPhone only from the Home Screen app.
+17. [ ] **Android build:** the debug-APK workflow stops at `npm ci` because `package-lock.json` is out
+    of sync with `package.json` (development tooling packages). Decide whether a reviewed PR may
+    regenerate the lockfile; no package versions in `package.json` change.
+18. [ ] **Run 12 follow-ups** from the run 12 chat report: two items that need your decision before
+    the next run (one on the rota stack, one security follow-up).

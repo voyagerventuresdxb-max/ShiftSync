@@ -30,9 +30,9 @@ Server-side rules with their own suites (no e2e): the Wednesday 17:00 cover-requ
 | Feature | State in production | What turns it on |
 |---|---|---|
 | AI roster reading (photos, scans) | **On**: Vertex AI (`eu`), behind the in-app spend cap (USD 5 a month); up to 5 AI reads per venue in any 7 days (`AI_VISION_WEEKLY_LIMIT=5`). First real-phone test pending | `docs/vlm-go-live.md` (owner: `docs/owner-todo.md` items 3–4) |
-| Voice commands | **On** since 2026-10-05: the same Vertex AI setup as roster reading, same spend cap, 200 calls a day. First real-phone test pending | `docs/voice-test-script.md` |
+| Voice commands | **On** since 2026-10-05: the same Vertex AI setup as roster reading, same spend cap; per day 40 model calls per person and 100 per venue (one command is two calls), 150 for all AI together while `AI_DAILY_CALL_LIMIT` is unset. First real-phone test pending | `docs/voice-test-script.md` |
 | SMS sign-in codes | Flag off, no provider. Codes reach only numbers on the demo allowlist; everyone else signs in with a manager's login link | `docs/otp-delivery-uae.md` (sender-ID registration first) |
-| Push notifications | **No VAPID keys**: in-app bell only | `docs/push-go-live.md` |
+| Push notifications | **On** since 2026-10-06: VAPID keys set on Railway; every notification also stays under the in-app bell. First real-phone test pending | `docs/push-go-live.md` |
 | Android app | Shell builds locally; nothing uploaded to Play | `docs/store-readiness.md` |
 | iPhone | PWA (Add to Home Screen); no native app | — |
 | Web front end | Production URL answered without a Vercel login on 2026-10-05; confirm on a phone | owner's Vercel settings (`docs/owner-todo.md` item 1) |
