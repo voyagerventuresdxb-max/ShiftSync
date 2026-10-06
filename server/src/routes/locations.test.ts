@@ -12,9 +12,10 @@ import { VENUE_NAME_MAX_LENGTH } from '../../../shared/venueName.js';
  * the one venue name every screen reads (`GET` returns it straight back), the
  * name is trimmed, non-empty and at most VENUE_NAME_MAX_LENGTH characters,
  * owner and manager may rename and staff may not, and Organization.name
- * follows the rename only while the organization has exactly this one
- * location. Two organizations — one with a single venue, one with two — and
- * everything hangs off them, deleted in `after`.
+ * never changes — it keeps its signup-time value, the key test-venue cleanup
+ * matches on — whether the organization has one venue or several. Two
+ * organizations — one with a single venue, one with two — and everything
+ * hangs off them, deleted in `after`.
  */
 const prisma = new PrismaClient();
 const TAG = '__locations-test__';
@@ -74,22 +75,22 @@ async function names(locationId: string, organizationId: string): Promise<{ loca
   return { location: location.name, organization: organization.name };
 }
 
-test('owner renames: trimmed, returned, read back by GET, and the single-venue organization follows', async () => {
+test('owner renames: trimmed, returned, read back by GET; the single-venue organization keeps its name', async () => {
   const res = await patch(sessions.owner, fx.locSolo, { name: `  ${TAG} Casa Lumen  ` });
   assert.equal(res.status, 200);
   const { location } = (await res.json()) as { location: { id: string; name: string } };
   assert.equal(location.name, `${TAG} Casa Lumen`);
-  assert.deepEqual(await names(fx.locSolo, fx.orgSolo), { location: `${TAG} Casa Lumen`, organization: `${TAG} Casa Lumen` });
+  assert.deepEqual(await names(fx.locSolo, fx.orgSolo), { location: `${TAG} Casa Lumen`, organization: `${TAG} solo` });
 
   const get = await fetch(`${baseUrl}/api/locations/${fx.locSolo}`, { headers: { Authorization: `Bearer ${sessions.staff}` } });
   assert.equal(get.status, 200);
   assert.equal(((await get.json()) as { location: { name: string } }).location.name, `${TAG} Casa Lumen`, 'staff read the new name too');
 });
 
-test('manager renames too', async () => {
+test('manager renames too; the organization still keeps its name', async () => {
   const res = await patch(sessions.manager, fx.locSolo, { name: `${TAG} renamed by manager` });
   assert.equal(res.status, 200);
-  assert.deepEqual(await names(fx.locSolo, fx.orgSolo), { location: `${TAG} renamed by manager`, organization: `${TAG} renamed by manager` });
+  assert.deepEqual(await names(fx.locSolo, fx.orgSolo), { location: `${TAG} renamed by manager`, organization: `${TAG} solo` });
 });
 
 test('staff cannot rename', async () => {
@@ -113,7 +114,7 @@ test('blank and over-long names are refused and change nothing; exactly the maxi
   const longest = `${TAG} `.padEnd(VENUE_NAME_MAX_LENGTH, 'x');
   const ok = await patch(sessions.owner, fx.locSolo, { name: `  ${longest}  ` });
   assert.equal(ok.status, 200, 'the limit applies to the trimmed name');
-  assert.equal((await names(fx.locSolo, fx.orgSolo)).location, longest);
+  assert.deepEqual(await names(fx.locSolo, fx.orgSolo), { location: longest, organization: `${TAG} solo` });
 });
 
 test('a patch without a name leaves both names alone', async () => {

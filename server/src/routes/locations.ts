@@ -65,29 +65,15 @@ locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) =
       return res.status(400).json({ error: 'Nothing to update.' });
     }
 
-    const location = await prisma.$transaction(async (tx) => {
-      const updated = await tx.location.update({
-        where: { id },
-        data,
-        select: { id: true, name: true, venueType: true, emirate: true },
-      });
-      // Location.name is the one venue name every screen reads. Signup also
-      // copies it into Organization.name, which nothing displays — it is read
-      // only by test-venue cleanup (lib/testVenueCleanup.ts, e2e helpers),
-      // which matches test orgs by name prefix. While the organization has
-      // exactly this one location, the two names mean the same thing, so a
-      // rename keeps them in step (here, in the same transaction) rather than
-      // leaving the signup-time name behind. Once an organization has several
-      // locations, its name is the group's own and a venue rename leaves it
-      // alone. Consequence for test venues: a rename that drops the test
-      // prefix also takes the org out of reach of the cleanup.
-      if (data.name !== undefined) {
-        await tx.organization.updateMany({
-          where: { id: existing.organizationId, locations: { every: { id } } },
-          data: { name: data.name },
-        });
-      }
-      return updated;
+    // A rename touches Location.name only — the one name every screen shows.
+    // Organization.name keeps its signup-time value on purpose: nothing
+    // displays it, and test-venue cleanup (lib/testVenueCleanup.ts, e2e
+    // helpers) finds test orgs by its name prefix, so a rename must never
+    // move an org in or out of that cleanup's reach.
+    const location = await prisma.location.update({
+      where: { id },
+      data,
+      select: { id: true, name: true, venueType: true, emirate: true },
     });
     return res.status(200).json({ location });
   } catch (err) {
