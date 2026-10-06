@@ -36,7 +36,8 @@ export type ParsedIntent =
   | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
   | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
   | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
-  | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
+  /** `options`: below the confidence threshold, two or three checked readings to choose from ("which did you mean?"). */
+  | { intent: 'UNRECOGNIZED'; reason: string; summary: string; options?: ParsedIntent[] };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(apiUrl(url), init);

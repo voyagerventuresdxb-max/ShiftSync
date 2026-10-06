@@ -26,9 +26,12 @@ export type ParsedIntent =
   | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
   | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
   | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
-  | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
+  | { intent: 'UNRECOGNIZED'; reason: string; summary: string; options?: ChoosableIntent[] };
 
-function schemaFor(intents: readonly string[]) {
+/** An intent the caller can pick from a "which did you mean?" list: an action, never a question or a non-answer. */
+export type ChoosableIntent = Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' | 'QUERY_MY_SCHEDULE' }>;
+
+function readingSchema(intents: readonly string[]) {
   return {
     type: Type.OBJECT,
     properties: {
@@ -70,6 +73,29 @@ function schemaFor(intents: readonly string[]) {
       unrecognizedReason: { type: Type.STRING, nullable: true, description: 'Only for intent=UNRECOGNIZED — why this could not be resolved' },
     },
     required: ['intent', 'summary'],
+  };
+}
+
+/**
+ * The model's answer, plus up to two other complete readings when it isn't sure which one the
+ * caller meant. parseIntent.ts checks each reading like the main answer and offers the ones that
+ * pass as choices; nothing runs until the caller picks one and confirms it.
+ */
+function schemaFor(intents: readonly string[]) {
+  const main = readingSchema(intents);
+  const reading = Object.fromEntries(Object.entries(main.properties).filter(([key]) => key !== 'hasAdditionalRequest' && key !== 'unrecognizedReason'));
+  return {
+    ...main,
+    properties: {
+      ...main.properties,
+      alternatives: {
+        type: Type.ARRAY,
+        nullable: true,
+        description:
+          'Only when your confidence is below 0.6 because the words fit two or three different actions (for example approving or declining the same swap request): up to 2 OTHER complete readings, each filled in exactly like the main answer, with its own intent, ids, confidence and summary. The app shows them as choices, and nothing happens until the caller picks one and confirms. Leave empty when you are confident, or when the request is simply unclear.',
+        items: { type: Type.OBJECT, properties: { ...reading, intent: { type: Type.STRING, enum: [...intents] } }, required: ['intent', 'summary'] },
+      },
+    },
   };
 }
 

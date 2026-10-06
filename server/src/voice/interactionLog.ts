@@ -76,15 +76,20 @@ export async function logParsedInteraction(
  * silently no-ops when `logId` doesn't belong to `actorId`, consistent with
  * this call's already-established best-effort/non-blocking semantics (it's
  * wrapped in a `.catch()` at the call site).
+ *
+ * `confirmedIntent`: the intent the caller confirmed. It differs from the
+ * logged reading only when they picked another one from a "which did you
+ * mean?" list, and then the row names what was actually confirmed.
  */
 export async function updateInteractionOutcome(
   logId: string,
   actorId: string,
   outcome: VoiceInteractionOutcome,
   declineReason?: string,
+  confirmedIntent?: string,
 ): Promise<void> {
   await prisma.voiceInteractionLog.updateMany({
     where: { id: logId, actorId },
-    data: { outcome, declineReason: declineReason ?? null },
+    data: { outcome, declineReason: declineReason ?? null, ...(confirmedIntent ? { resolvedIntent: confirmedIntent } : {}) },
   });
 }

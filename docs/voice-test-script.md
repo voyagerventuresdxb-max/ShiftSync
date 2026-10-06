@@ -123,6 +123,20 @@ result. Fake names: use people at your own test venue.
 | R9 | Anyone | Tap the mic and say nothing for 3 seconds | "I didn't hear anything…", nothing sent | Silence became an invented command before the fix |
 | R10 | Anyone | Tap the mic with only background noise | "I didn't hear…" message | Noise became a name before the fix |
 
+## "Which did you mean?" choices
+
+When the app isn't sure but has two or three concrete readings, it lists them instead of asking
+you to rephrase. Tapping one shows the normal confirm sheet for it; nothing changes until
+**Confirm**. The model decides when to offer choices, so a phrase may also give a normal sheet or
+a "rephrase" message; note which one you got.
+
+| # | Role | Say | Expect |
+|---|---|---|---|
+| C1 | Manager | "Alex's swap, the pending one." (one pending swap from Alex) | The approve or decline sheet, or **Which did you mean?** with *Approve…* and *Decline…*. Tap *Decline…*: the decline sheet; the swap stays pending until you tap Confirm. |
+| C2 | Manager | Same as C1, then tap **Cancel** on the choices | The sheet closes; the swap is still pending. |
+| C3 | Staff | "Swap with Omar or approve it." | Never a manager action in the list. With only one staff reading left, the app asks you to rephrase. |
+| C4 | Manager | A phrase naming someone who isn't at your venue | That person never appears in a choice. |
+
 ## Results log
 
 Copy this table per session. Fill **Heard** from the **You said** line, **Intent** from the sheet

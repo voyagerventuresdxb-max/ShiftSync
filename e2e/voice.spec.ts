@@ -427,6 +427,38 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     expect(logs.map((l) => [l.resolvedIntent, l.confidence, l.hasAdditionalRequest, l.outcome])).toEqual([['APPROVE_JOIN', 0.42, true, 'LOW_CONFIDENCE']]);
   });
 
+  test('which did you mean: approve or decline are offered as choices; a choice opens its own Confirm, and only that runs', async ({ page }) => {
+    const { locationId } = await createVenue('choices');
+    const managerPhone = freshPhone();
+    const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    const request = await prisma.joinRequest.create({ data: { locationId, phone: freshPhone(), fullName: 'Omar Farouk' } });
+
+    await logIn(page, managerPhone, '/');
+    const said = 'Omar, the new guy, uh';
+    const approve = "Approve Omar Farouk's request to join.";
+    const decline = "Decline Omar Farouk's request to join.";
+    await speak(page, said, {
+      intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.45, summary: approve,
+      alternatives: [{ intent: 'DECLINE_JOIN', joinRequestId: request.id, confidence: 0.4, summary: decline }],
+    });
+    const sheet = sheetFor(page, said);
+    await expect(sheet.locator('.eyebrow')).toHaveText('Which did you mean?');
+    await expect(sheet.getByRole('button')).toHaveText([approve, decline, 'Cancel']);
+
+    // Choosing only shows that reading for its own Confirm: nothing has changed yet.
+    await sheet.getByRole('button', { name: decline }).click();
+    await expect(sheet.locator('.eyebrow')).toHaveText('Confirm voice command');
+    await expect(sheet.getByText(decline, { exact: true })).toBeVisible();
+    expect((await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).status).toBe('PENDING');
+
+    await sheet.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.locator('.success-block')).toContainText(decline);
+    expect((await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).status).toBe('DECLINED');
+    expect(await prisma.user.count({ where: { locationId } })).toBe(1);
+    // The log row names what was confirmed, with the model's low confidence kept.
+    expect((await voiceLogs(manager.id)).map((l) => [l.resolvedIntent, l.confidence, l.outcome])).toEqual([['DECLINE_JOIN', 0.45, 'EXECUTED']]);
+  });
+
   test('role scoping: a STAFF session cannot execute a manager intent, even when the model returns one', async ({ page }) => {
     const { locationId } = await createVenue('role-scope');
     const staffPhone = freshPhone();

@@ -1,7 +1,7 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { allowedIntentsFor, intentSchemaFor, type ParsedIntent } from './intentSchema.js';
+import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent } from './intentSchema.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
@@ -229,7 +229,15 @@ export async function parseVoiceIntent(
     } else if (clientResponse.intent === 'APPLY_ROTA_TEMPLATE') {
       clientResponse = await refineApplyRotaTemplateResponse(clientResponse, context.rotaTemplates ?? []);
     }
-    clientResponse = await checkAgainstContext(clientResponse, context, user, await venueTimezoneFor(user.locationId), transcript);
+    const timezone = await venueTimezoneFor(user.locationId);
+    clientResponse = await checkAgainstContext(clientResponse, context, user, timezone, transcript);
+    // Below the confidence gate, but the model named two or three concrete readings (approve or
+    // decline?): offer the ones that pass every check a confident answer must pass as choices,
+    // instead of asking to rephrase. Picking one only opens the normal confirm sheet.
+    if (clientResponse.intent === 'UNRECOGNIZED' && attempted.intent !== 'UNRECOGNIZED' && attempted.confidence < CONFIDENCE_THRESHOLD) {
+      const options = await offerableReadings([attempted, ...normalizeAlternatives(raw)], context, user, timezone, transcript);
+      if (options.length >= 2) clientResponse = { ...clientResponse, summary: WHICH_DID_YOU_MEAN, options };
+    }
 
     return { response: clientResponse, attempted, hasAdditionalRequest };
   } catch (err) {
@@ -331,6 +339,50 @@ export async function refineApplyRotaTemplateResponse(
 
   const summary = `Apply template "${best.name}" to the week of ${response.weekStart} — confirm?`;
   return { ...response, templateId: best.id, summary };
+}
+
+/** At most this many choices on a "which did you mean?" sheet. */
+export const MAX_VOICE_OPTIONS = 3;
+export const WHICH_DID_YOU_MEAN = 'Which did you mean?';
+
+/** The model's other readings (`alternatives`), normalized like the main answer. */
+function normalizeAlternatives(raw: Record<string, unknown>): ParsedIntent[] {
+  const list = raw.alternatives;
+  if (!Array.isArray(list)) return [];
+  return list
+    .slice(0, MAX_VOICE_OPTIONS - 1)
+    .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
+    .map((a) => normalizeParsedIntent(a));
+}
+
+/**
+ * The readings the caller may choose between: each goes through the same refinements and
+ * `checkAgainstContext` as a confident answer (the caller's role, ids in the caller's own venue,
+ * no past dates, no overlaps), so a choice can only ever be something the confirm sheet could
+ * have offered on its own. Duplicates and non-actions are dropped.
+ */
+async function offerableReadings(
+  readings: ParsedIntent[],
+  ctx: PromptContext,
+  caller: { id: string; systemRole: SystemRole; locationId: string },
+  timezone: string,
+  transcript: string,
+): Promise<ChoosableIntent[]> {
+  const options: ChoosableIntent[] = [];
+  const seen = new Set<string>();
+  for (const reading of readings) {
+    if (options.length === MAX_VOICE_OPTIONS) break;
+    let checked = reading;
+    if (checked.intent === 'PUBLISH_ROTA') checked = await refinePublishRotaResponse(checked, caller.locationId);
+    else if (checked.intent === 'APPLY_ROTA_TEMPLATE') checked = await refineApplyRotaTemplateResponse(checked, ctx.rotaTemplates ?? []);
+    checked = await checkAgainstContext(checked, ctx, caller, timezone, transcript);
+    if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+    const key = JSON.stringify({ ...checked, confidence: 0, summary: '' });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    options.push(checked);
+  }
+  return options;
 }
 
 function clarify(reason: string, summary: string): ParsedIntent {
