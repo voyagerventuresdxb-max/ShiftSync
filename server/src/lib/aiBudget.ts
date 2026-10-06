@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
+import { meterCheck, meterRecord, spendMeter } from './aiSpendMeter.js';
 
 /**
  * The hard in-app cap on Gemini / Vertex spend. EVERY model call (roster
@@ -169,6 +170,9 @@ export async function withAiBudget<T>(
   const config = aiBudgetConfig(deps.env);
   const { month, day } = budgetKeys((deps.now ?? (() => new Date()))());
   const reserved = Number(costUsd(Math.max(0, request.inputTokensEstimate), MAX_OUTPUT_TOKENS[request.feature], config).toFixed(6));
+  // Local live test runs only (off unless AI_SPEND_METER_LOG is set): stop before the call.
+  const meter = spendMeter(deps.env);
+  if (meter) meterCheck(meter, request.feature, reserved);
 
   try {
     await reserve(db, config, month, day, reserved, featureGroup(request.feature), request);
@@ -180,17 +184,20 @@ export async function withAiBudget<T>(
 
   let usage: AiCallUsage = { inputTokens: null, outputTokens: null };
   let charged = reserved;
+  let ok = false;
   try {
     const result = await call();
     usage = result.usage;
     if (usage.inputTokens !== null && usage.outputTokens !== null) {
       charged = Number(costUsd(usage.inputTokens, usage.outputTokens, config).toFixed(6));
     }
+    ok = true;
     return result.value;
   } catch (err) {
     if (providerAnsweredWithError(err)) charged = 0;
     throw err;
   } finally {
+    if (meter) meterRecord(meter, { feature: request.feature, usd: charged, worstCaseUsd: reserved, usage, ok });
     await settle(db, config, { month, request, reserved, charged, usage }).catch((err) => {
       // The call itself already happened; a ledger hiccup must not turn it into a user error.
       console.error(`[ai-budget] could not settle a ${request.feature} call:`, err instanceof Error ? err.message : err);
