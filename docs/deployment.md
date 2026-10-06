@@ -181,7 +181,7 @@ rule (the caller's origin if it is in `FRONTEND_ORIGIN`, else the first entry).
   the device (localStorage) and removes it from the address bar.
 - Refused kiosk reads are limited to 20 per 15 minutes per client (keyed like the OTP limiter);
   a valid token or a session is never limited.
-- Regenerate and revoke are not in the audit log (no audit action covers kiosk links yet).
+- Create, regenerate and revoke are audit-logged (`KIOSK_LINK_CREATED`, `KIOSK_LINK_REGENERATED`, `KIOSK_LINK_REVOKED`, with who did it; never the link itself).
 
 ## Rollback
 

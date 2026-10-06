@@ -2,7 +2,7 @@ import { gridToTsvText } from './parseWorkbook.js';
 import { PDFParse } from 'pdf-parse';
 import { isOvernight, parseDateCell, parseTimeCell, resolveDayMonthDate } from './normalize.js';
 import { getVisionProvider, VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
-import { AI_PAUSED_MESSAGE, AI_PAUSED_TODAY_MESSAGE, AiBudgetExceededError } from '../lib/aiBudget.js';
+import { AI_PAUSED_MESSAGE, AI_PAUSED_TODAY_MESSAGE, AI_PAUSED_USER_MESSAGE, AI_PAUSED_VENUE_MESSAGE, AiBudgetExceededError } from '../lib/aiBudget.js';
 import { enforceNoDoubleShifts } from './shiftConstraints.js';
 import { parseRotaFile, processRowsIntoRoster } from './deterministicParser.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
@@ -50,7 +50,11 @@ export const VISION_ERROR_MESSAGES: Record<VisionErrorCode, string> = {
 
 /** VISION_ERROR_MESSAGES, except a refusal by the daily call limit says it is back tomorrow. */
 function visionErrorMessage(code: VisionErrorCode, cause: unknown): string {
-  if (code === 'vision_paused' && cause instanceof AiBudgetExceededError && cause.limit === 'daily_calls') return AI_PAUSED_TODAY_MESSAGE;
+  if (code === 'vision_paused' && cause instanceof AiBudgetExceededError) {
+    if (cause.limit === 'daily_calls') return AI_PAUSED_TODAY_MESSAGE;
+    if (cause.limit === 'user_daily') return AI_PAUSED_USER_MESSAGE;
+    if (cause.limit === 'venue_daily') return AI_PAUSED_VENUE_MESSAGE;
+  }
   return VISION_ERROR_MESSAGES[code];
 }
 
@@ -182,6 +186,8 @@ export interface VisionCallOptions {
   localFallback?: boolean;
   /** The venue the read is for — recorded in the AI usage ledger. */
   locationId?: string | null;
+  /** The signed-in person the read is for (their daily AI quota). */
+  userId?: string | null;
 }
 
 /** Test seam kept for existing tests: swaps the Gemini SDK client inside the real provider. */
@@ -272,7 +278,7 @@ export async function parseRosterGrid(
     return { ...result, templateLabel: 'Deterministic local parser (AI roster reading not configured)' };
   }
 
-  const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart, locationId: options.locationId ?? null });
+  const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart, locationId: options.locationId ?? null, userId: options.userId ?? null });
   if ('code' in read) {
     if (mode === 'off') throw new VisionIngestionError(visionErrorMessage(read.code, read.cause), read.cause, read.code);
     console.warn(`[parseVision] Falling back to the deterministic local parser for a grid roster (${read.code}).`);
@@ -303,7 +309,7 @@ export async function parseRosterImage(
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision_unconfigured', undefined);
   }
 
-  const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart, locationId: options.locationId ?? null });
+  const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart, locationId: options.locationId ?? null, userId: options.userId ?? null });
   if ('code' in read) {
     if (mode === 'off') throw new VisionIngestionError(visionErrorMessage(read.code, read.cause), read.cause, read.code);
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, read.code, read.cause);

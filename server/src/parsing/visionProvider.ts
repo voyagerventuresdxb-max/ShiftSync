@@ -21,6 +21,8 @@ export type VisionInput = {
   weekStart?: string;
   /** The venue the read is for (AI usage ledger); null for operator diagnostics. */
   locationId?: string | null;
+  /** The signed-in person the read is for (their daily AI quota). */
+  userId?: string | null;
 } & (
   | { kind: 'file'; data: Buffer; mimeType: string }
   | { kind: 'grid'; text: string }
@@ -166,7 +168,7 @@ export class GeminiVisionProvider implements VisionProvider {
       try {
         // Every attempt is its own model call, so each one goes through the spend cap.
         const response = await withAiBudget(
-          { locationId: input.locationId ?? null, feature: 'roster_vision', inputTokensEstimate: visionInputEstimate(input) },
+          { locationId: input.locationId ?? null, userId: input.userId ?? null, feature: 'roster_vision', inputTokensEstimate: visionInputEstimate(input) },
           async () => {
             const r = await genai.models.generateContent({
               model: attempt.model,
