@@ -19,8 +19,8 @@ import OnboardingScreenShell from './OnboardingScreenShell';
  * Organization + Location + Owner User and mints the session in one call.
  * That's why the venue's name is asked for here alongside the code and the
  * owner's name: the server needs it to create the Location. Venue (the next
- * step) loads that Location and lets the manager refine it (type, city,
- * floor sections).
+ * step) loads that Location and lets the manager refine it (name, type,
+ * city).
  *
  *  - 'phone'  — enter phone, request a code.
  *  - 'otp'    — the code plus the two facts a brand-new venue needs.

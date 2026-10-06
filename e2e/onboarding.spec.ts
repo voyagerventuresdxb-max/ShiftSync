@@ -104,6 +104,10 @@ test.describe('onboarding — full real gate', () => {
     // Keeps the test prefix: a rename carries over to the organization's name,
     // which is what cleanupTestOrgs matches on.
     await page.getByPlaceholder('e.g. Sefarina, DIFC').fill(testVenueName('onboarding-full-renamed'));
+    // Floor sections are not set up here any more (the old stepper saved
+    // nothing — docs/floor-sections.md): just a pointer to the Floor Plan page.
+    await expect(page.getByRole('main').getByText('Later, on the Floor Plan page')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^(Fewer sections|More sections|Set up later)$/ })).toHaveCount(0);
     await continueThroughVenue(page);
     await uploadRoster(page);
     await resolveReviewRows(page);
