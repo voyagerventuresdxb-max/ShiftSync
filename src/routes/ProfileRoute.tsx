@@ -2,6 +2,7 @@ import { Suspense, lazy, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { ACCOUNT_DELETED_REASON, deleteAccount } from '../api/identity';
+import { hasVoiceConsent, withdrawVoiceConsent } from '../lib/voiceConsent';
 
 // Owner-only, so staff never download it.
 const AiConnectionPanel = lazy(() => import('../components/AiConnectionPanel'));
@@ -12,6 +13,7 @@ export default function ProfileContent() {
   // 'confirm' shows what deletion does before anything happens; nothing is sent until the second click.
   const [step, setStep] = useState<'idle' | 'confirm' | 'deleting'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [voiceAgreed, setVoiceAgreed] = useState(() => (session ? hasVoiceConsent(session.user.id) : false));
 
   if (!session) {
     return <p className="panel p-5 text-sm text-muted-foreground">Sign in via Join to see your profile.</p>;
@@ -47,6 +49,30 @@ export default function ProfileContent() {
           <AiConnectionPanel token={session.token} />
         </Suspense>
       )}
+
+      <section className="panel p-5" data-testid="voice-consent">
+        <p className="eyebrow">Voice commands</p>
+        {voiceAgreed ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              You agreed to voice commands on this device: your recordings are sent to Google's Gemini AI service to be turned into text.
+            </p>
+            <button
+              className="btn btn-ghost mt-3 hit-44"
+              onClick={() => {
+                withdrawVoiceConsent(session.user.id);
+                setVoiceAgreed(false);
+              }}
+            >
+              Turn off voice on this device
+            </button>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground" role="status">
+            Voice is off on this device. The microphone asks you again before it records anything.
+          </p>
+        )}
+      </section>
 
       <section className="panel p-5" data-testid="delete-account">
         <p className="eyebrow">Delete account</p>

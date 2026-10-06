@@ -29,7 +29,7 @@ Nothing here is legal advice.
 
 - Apple 5.1.2(i) (added 2025-11-13): "You must clearly disclose where personal data will be shared with third parties, including with third-party AI, and obtain explicit permission before doing so." 5.1.1(ii): an "easily accessible and understandable way to withdraw consent" [A1], [A5].
 - Google: no AI-specific rule found; the prominent-disclosure rule applies when a use is outside "the reasonable expectation of the user", with consent by "affirmative user action" [G1].
-- **ShiftSync:** roster photos/scans go to the AI reader only after the manager agrees, per file (the consent step in the roster-escalation PR). **To do:** the same explicit opt-in before the first voice command (audio goes to Gemini), with a settings toggle to withdraw; a manual alternative exists for both (Excel/CSV or "add staff by hand"; buttons instead of voice).
+- **ShiftSync:** roster photos/scans go to the AI reader only after the manager agrees, per file (the consent step in the roster-escalation PR). Voice: a notice before the first recording on each device (audio goes to Gemini; the recording isn't kept), and Profile → Voice commands → **Turn off voice on this device** withdraws it until the person agrees again; a manual alternative exists for both (Excel/CSV or "add staff by hand"; buttons instead of voice).
 
 ## 4. "Wrapped website" rejection risk
 
@@ -53,7 +53,7 @@ Nothing here is legal advice.
 
 - [ ] Counsel reviews and finalises `/privacy` and `/terms` (entity, jurisdiction, UAE PDPL wording, retention periods) and removes the DRAFT banner.
 - [ ] Public account-deletion web page for Play Console (§1).
-- [ ] Explicit voice opt-in + withdraw toggle (§3).
+- [x] Explicit voice opt-in + withdraw toggle (§3) — built 2026-10-05.
 - [ ] Apple privacy labels and Play Data safety form filled from §2.
 - [ ] Native push, camera picker, offline screen in the shell (§4); App Links; secure token storage.
 - [ ] Play: target API 36, closed test (12 testers × 14 days) if the account is personal.

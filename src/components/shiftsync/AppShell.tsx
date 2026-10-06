@@ -11,29 +11,12 @@ import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
 import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
+import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
+import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
 const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
-
-const voiceConsentKey = (userId: string) => `shiftsync.voiceConsent.${userId}`;
-
-/** Unreadable storage (private mode, blocked site data) means the notice is shown again — never skipped. */
-function hasVoiceConsent(userId: string): boolean {
-  try {
-    return localStorage.getItem(voiceConsentKey(userId)) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function saveVoiceConsent(userId: string): void {
-  try {
-    localStorage.setItem(voiceConsentKey(userId), '1');
-  } catch {
-    // Not remembered: the notice is shown again next time.
-  }
-}
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -225,8 +208,10 @@ export function AppShell() {
         const { intent, voiceLogId, hasAdditionalRequest } = await parseVoiceIntent(session.token, transcript);
         // Role check BEFORE the confirm sheet: a STAFF session must never be
         // shown a "Confirm" for a manager action the server would refuse
-        // anyway (the server's 403 on /execute stays the real guard).
-        if (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(session.user.systemRole, intent.intent)) {
+        // anyway (the server's 403 on /execute stays the real guard). The
+        // parse step refuses it too, with this same shared reason.
+        const refusedForRole = intent.intent === 'UNRECOGNIZED' && intent.reason === VOICE_ROLE_REFUSAL;
+        if (refusedForRole || (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(session.user.systemRole, intent.intent))) {
           setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
           return;
         }
@@ -269,15 +254,22 @@ export function AppShell() {
       });
       const mimeType = pickRecorderMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const meter = startLevelMeter(stream);
       audioChunksRef.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
       recorder.onstop = () => {
+        const peak = meter.stop();
         stream.getTracks().forEach((t) => t.stop());
         const finalType = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(audioChunksRef.current, { type: finalType });
         audioChunksRef.current = [];
+        // A silent clip is never sent (see lib/audioLevel.ts).
+        if (peak !== null && isSilent(peak)) {
+          setVoiceBanner({ kind: 'error', message: "I didn't hear anything. Hold the phone a little closer and try again." });
+          return;
+        }
         void handleRecordingComplete(blob);
       };
       mediaRecorderRef.current = recorder;
