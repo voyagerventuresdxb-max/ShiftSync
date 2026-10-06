@@ -138,6 +138,8 @@ test.describe('bad network — offline and slow links', () => {
     await expect(page.getByRole('button', { name: /Publish & notify|Publish changes/ })).toBeEnabled({ timeout: 20_000 });
     const publish = page.waitForResponse((r) => /\/api\/shifts\/[^/]+\/publish$/.test(r.url()));
     await page.getByRole('button', { name: /Publish & notify|Publish changes/ }).click();
+    // The seeded shift has nobody assigned, so publishing takes a second, explicit tap.
+    await page.getByRole('button', { name: 'Publish with 1 uncovered shift?' }).click();
     expect((await publish).status()).toBe(200);
   });
 
