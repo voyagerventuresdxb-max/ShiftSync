@@ -65,7 +65,8 @@ stores).
 ## Push notifications
 
 - [ ] VAPID key pair generated, set on Railway, and checked on a real Android phone and iPhone.
-  Follow: [`push-go-live.md`](push-go-live.md).
+  Follow: [`push-go-live.md`](push-go-live.md). Keys generated and set on Railway on 2026-10-06 (run 12);
+  the real-phone check is still to do.
 
 ## Stores and legal
 

@@ -16,6 +16,46 @@ For the owner reviewing the rota PRs before any of them merges. Every statement 
 
 All seven were refreshed against master `94cd7c9` on 2026-10-05 (merge commits, nothing force-pushed); each PR has a comment listing the conflict resolutions.
 
+## Run 12 refresh (2026-10-06)
+
+All seven branches were refreshed on master `244b67b` (which now includes #124–#131), merge
+commits only, nothing force-pushed. Still not merged (owner switch `ROTA = NO`).
+
+What changed on the stack in this refresh:
+- **#69 — access matrix after #126.** Master now checks route coverage from the live router; the
+  conflict kept that check and this branch's existing route classification (see Known limits below).
+- **#69 — voice test data.** Master's offline voice corpus (#125) creates draft shifts; with the
+  stack's draft rule a staff caller only sees published shifts, so the corpus now publishes the
+  staff caller's own fixture shifts.
+- **#69 — golden-path spec.** It records for a moment before stopping the voice command (since
+  #125 a silent recording is not sent, and the test browser's fake microphone only beeps now
+  and then).
+- **Gate on each top branch (#108–#111):** typecheck, lint 0 errors, unit 120–123, server 712–713 with the access matrix (3 skipped), full e2e 95/95, 95/95, 98/98 and 96/96 (`CI=1 --retries=0`); #69, #78 and #84 each: typecheck, lint, unit and server. One load-dependent AI-quota test failed once on #109 while another suite ran on the machine and passed 2/2 alone. Each PR has a comment with its merge commit and results.
+
+### Migrations (all additive)
+| Migration | PR | What it does |
+|---|---|---|
+| `20260925075120_add_rota_leave` | #69 | New `LeaveType` and `RotaLeaveStatus` types, new `rota_leaves` table with its indexes and foreign keys. Nothing existing changes. |
+| `20260925123450_add_leave_audit_actions` | #69 | Adds `LEAVE_MARKED` and `LEAVE_REMOVED` to `AuditAction`. |
+| `20261003140000_shift_no_overlap_per_user` | #84 | Enables `btree_gist` and adds an exclusion constraint on `shifts` (one person, no overlapping shifts). No column or data change. **It refuses to apply if overlapping shifts already exist** — and migrations run at API start, so that would fail the deploy's health check. Run the read-only detection query in `docs/split-shift-overlap-guard.md` against production before merging #84. |
+
+### 15-minute click-through
+Local, with `npm run db:seed:demo` (made-up staff) as in "How to run it" above; two browsers.
+1. (2 min) Owner: open next week → it shows as a draft. Staff browser: the draft is invisible.
+2. (3 min) Owner: add 11:00–15:00 and 18:00–23:00 for one person on one day → "9.0h total". Try
+   14:00–19:00 → refused inside the sheet with the reason.
+3. (2 min) Mark Annual Leave on another day for that person, then try a shift there → refused;
+   Half Day → allowed.
+4. (2 min) Leave one shift unassigned and publish → the first tap warns (#108), the second
+   publishes. Staff browser: both segments in Personal Rota, two rows in My Shifts.
+5. (2 min) "Select shifts", pick three, **Assign to…** one person where one would overlap → two
+   land, one is refused with the reason (#111).
+6. (2 min) Mark someone with no shift unavailable → the builder shows the badge on their row (#109).
+7. (2 min) Copy last week into an empty week → segments copy, leave doesn't, conflicts listed.
+
+### Known limits (added in run 12)
+- A planned tightening of who may read the leave list (to match the other rota reads) is not in the stack yet; it needs an owner decision (run 12 report).
+
 ## What changed
 
 ### #69: rota v0
