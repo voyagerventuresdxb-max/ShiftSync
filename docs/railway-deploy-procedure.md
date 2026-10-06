@@ -84,8 +84,11 @@ runs migrations. It still has **no healthcheck** until §3 is done.
    `Custom start command detected, skipping Caddy start`, build `npx prisma generate` and
    deploy `npm run server:start`.
 
-   **If you ever see `Deploying as vite static site`, `caddy`, or no start command, cancel
-   the deployment before it goes live, or roll back (§4) at once.**
+   **If you ever see `Deploying as vite static site`, a start command of `caddy run …`, or no
+   start command, cancel the deployment before it goes live, or roll back (§4) at once.**
+   A `caddy` *setup* row in the Nixpacks plan (`pkgs: caddy`, `cmds: caddy fmt …`) is normal:
+   it appears on every healthy build. Only the **start** row matters, and it must say
+   `npm run server:start`.
 4. **Deploy log:** `prisma migrate deploy` output, then the `[phone-e164] …` line, then
    `ShiftSync API listening on …`. If VAPID is set, `[push] … disabled` must not appear.
 5. **Check it is the API, not a static site:**

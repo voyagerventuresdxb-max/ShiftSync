@@ -1,19 +1,25 @@
-# Rota stack review guide (#69 → #78 → #84)
+# Rota stack review guide (#69 → #78 → #84 → #108–#111)
 
-For the owner reviewing the three rota PRs before any of them merges. Every statement below comes from the PRs' code, tests and descriptions; nothing here is a plan.
+For the owner reviewing the rota PRs before any of them merges. Every statement below comes from the PRs' code, tests and descriptions; nothing here is a plan.
 
 | PR | Branch | Builds on | What it is |
 |---|---|---|---|
 | #69 | `rebase/rota-v0-on-master` | master | "Golden path rota v0" (#42) replayed onto master: build a week, publish, staff see it, edit by voice, staff see the change |
 | #78 | `feat/rota-split-shifts` | #69 | Split shifts: one person, two segments on one day |
 | #84 | `feat/split-shift-db-guard` | #78 | The database half of the no-overlap rule, plus roster import |
+| #108 | `feat/rota-uncovered-flags` | #84 | Uncovered-shift flags, and a second tap to publish a week that has them |
+| #109 | `feat/rota-availability-all` | #84 | Everyone's availability in the builder, in one request |
+| #110 | `test/rota-builder-ui` | #84 | Click-through tests for collapse, notes, copy-week and templates (tests only) |
+| #111 | `feat/rota-bulk-actions` | #84 | Select several shifts, then assign or delete them together |
 
-All three were refreshed against master on 2026-10-04 (merge commits, nothing force-pushed); each PR has a comment listing the conflict resolutions.
+#108–#111 each build on #84 independently. Merge order: #69, #78, #84, then #108–#111 in any order.
+
+All seven were refreshed against master `94cd7c9` on 2026-10-05 (merge commits, nothing force-pushed); each PR has a comment listing the conflict resolutions.
 
 ## What changed
 
 ### #69: rota v0
-- **Drafts are private.** A draft shift is visible only to a manager of its own venue (`server/src/lib/shiftVisibility.ts`): the rota read, My Shifts, voice, swap requests and clock-in all apply it. Staff never see builder or upload controls.
+- **Drafts are private.** A draft shift is visible only to a manager of its own venue (`server/src/lib/shiftVisibility.ts`): the rota read, My Shifts, voice, swap requests and clock-in all apply it. Staff never see builder or upload controls. Since the 2026-10-05 refresh the week read also follows master's rule: it needs a session of the venue or the venue's kiosk link, and a kiosk screen sees published shifts only.
 - **Leave on the grid** (`RotaLeave`, `shared/leaveTypes.ts`): Day Off, Annual Leave, Sick Leave, Unpaid Leave block a shift that day (create, edit, bulk, template apply, voice, swap approval: a 409 with the reason; roster upload skips the row). Half Day can sit beside a shift. Leave publishes with the shifts. Staff see only their own published leave; nobody else sees a leave type.
 - **Copy last week** (`src/engine/copyWeek.ts`): copies shifts into the shown week as drafts; leave, notes and sidework are not copied; rows blocked by leave, for inactive staff, or already present are skipped and reported.
 - **Collapsible role sections** in the builder.
@@ -35,8 +41,24 @@ All three were refreshed against master on 2026-10-04 (merge commits, nothing fo
 - A constraint violation maps to the same `409` as the app-level check.
 - **Roster import** now refuses a file that overlaps stored shifts or itself (all or nothing).
 
+### #108: uncovered shifts
+- A header badge ("N uncovered shifts"), "N open" under each day, and the Open shifts row turns to the warning colour.
+- Publishing a week with uncovered shifts takes two taps: the first only warns, the second publishes. The confirm resets when the week or the count changes.
+- Client only (`src/engine/openShifts.ts`); no schema or API change.
+
+### #109: everyone's availability
+- `GET /api/availability?weekStart=` returns every availability mark at the caller's own venue for that week (managers and owners; the venue comes from the session). The builder makes this one call instead of one per person.
+- Unavailable and preferred-off badges show for everyone in the grid, including people with no shift yet; the tooltip shows the note.
+
+### #110: builder click-through tests
+- `e2e/rota-builder-ui.spec.ts`: collapse and expand a role section, a briefing note from edit to the staff member's rota, copy last week, save and apply a template. No app code.
+
+### #111: bulk actions
+- "Select shifts" mode in the builder header, then **Assign to…** (a person, or nobody) or **Delete** (asks once, then deletes).
+- Each shift is written on its own through the same calls a single edit uses, so each keeps its own audit row and notification. A refused shift (overlap, leave) doesn't stop the others; the result says how many were refused and why.
+
 ## How to run it
-1. `git worktree add ../ShiftSync-rota origin/feat/split-shift-db-guard` (the top of the stack contains all three).
+1. `git worktree add ../ShiftSync-rota origin/feat/split-shift-db-guard` (contains #69, #78 and #84; use one of #108–#111's branches to see that PR on top).
 2. `npm install`, then `npm run db:setup` (local Docker Postgres, your own branch schema).
 3. `npm run db:seed:demo -- --phones=<owner>,<staff>,<applicant>` for a populated venue (made-up staff). Put the three numbers in `ECHO_ALLOWED_PHONES` in your local `.env` to receive codes on screen.
 4. `npm run dev:all`, open `http://localhost:5173`, sign in as the owner number.
@@ -51,19 +73,21 @@ All three were refreshed against master on 2026-10-04 (merge commits, nothing fo
 - [ ] Copy last week into an empty week: segments copy, leave doesn't, conflicts are listed as skipped.
 - [ ] Save the week as a template and apply it to another week; apply it again on top: refused, not doubled.
 - [ ] Voice (needs a Gemini key locally): "Move Omar's shift to six till midnight" → confirm sheet → the change lands.
+- [ ] (#108) Leave a shift unassigned and publish: the first tap only warns, the second publishes.
+- [ ] (#109) Mark someone with no shift unavailable for a day: the builder shows the badge on their row.
+- [ ] (#111) "Select shifts", pick three, **Assign to…** one person where one would overlap: two land, one is refused with the reason.
 
 ## Known limits (from the PRs)
-- The **rota golden-path e2e spec** stops at its own precondition (VAPID keys + local push receiver) because master's e2e config now runs with push off. #99 (now on master) added a push outbox for e2e; switch that spec's two push assertions to it when #69 is refreshed again.
-- **#84 conflicts with master's on-behalf fix** in shift publish (Stage B, Run 5): #69 already takes the publisher from the session only, which is stricter; keep #69's lines.
+- Resolved in the 2026-10-05 refresh: the rota golden-path e2e asserts pushes through the e2e push outbox; shift publish takes the publisher from the session only (#69's lines kept where #84 met master's on-behalf change); the upload notice has master's current wording.
 - The leave-vs-shift rule is application-level only (a concurrent shift + leave write for the same person and day can both pass); the overlap rule has the database guard.
 - Breaks are not subtracted from hour totals. A staff member with only leave (no shifts) in a week sees the empty state. A `breakMinutes`-only edit to a published shift doesn't notify.
 - Swap notifications format times in UTC (`swapActions.shiftLabelOf`).
 - The touch-target spec doesn't seed leave, so leave chips and the leave sheet aren't measured.
-- The Scheduling upload notice on the stack still has the pre-#93 wording ("Excel/CSV/text-PDF rosters are never sent anywhere"); master's newer copy wins when the stack is refreshed.
+- "Department" sections in the builder are the fixed front-of-house role list (Bartender, Host and Chef fall under "Other"); `/api/my-shifts` doesn't carry the briefing note (#110's audit).
 - Not in scope: compliance or overtime logic, staff self-scheduling.
 
 ## Screenshots
-Captured from the top of the stack with the demo seed (made-up personas), at 390×844 and 1280×800, in `C:\dev\_autonomous-run-artifacts\demo-screens\` (not committed):
+Captured on 2026-10-05 from the refreshed #84 (master `94cd7c9`) with the demo seed (made-up personas), at 390×844 and 1280×800, in `C:\dev\_autonomous-run-artifacts\demo-screens-run10\` (not committed; the 2026-10-04 set is in `demo-screens\`):
 | File (`-390.png` and `-1280.png`) | Shows |
 |---|---|
 | `01`–`05-onboarding-*` | Welcome, Venue, Roster, Review (a synthetic roster), Invite |
@@ -74,6 +98,7 @@ Captured from the top of the stack with the demo seed (made-up personas), at 390
 | `23-rota-save-as-template` | The Save-as-template sheet |
 | `30-floor-plan` | Floor plan with section pins |
 | `40-people-pending-approval` | People with a pending join request |
+| `49-voice-first-use-notice` | The notice before a person's first voice recording on a device |
 | `50-voice-confirm-sheet` | Voice confirm sheet (transcription and intent faked) |
 | `60-staff-home`, `61-staff-my-shifts` | Staff Home and My Shifts |
 | `70`–`73-join-*` | Staff join: the link, phone and code, waiting for approval, "You're in" |
