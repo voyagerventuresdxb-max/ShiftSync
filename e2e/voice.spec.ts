@@ -453,7 +453,8 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     expect(await prisma.user.findUnique({ where: { phone: applicantPhone } })).toBeNull();
     expect(await prisma.auditLog.count({ where: { locationId, action: 'JOIN_APPROVED' } })).toBe(0);
     const logs = await voiceLogs(staff.id);
-    expect(logs.map((l) => [l.resolvedIntent, l.outcome])).toEqual([['APPROVE_JOIN', 'PENDING_CONFIRMATION']]);
+    // The parse step refused it too (role check), so the log says so rather than "pending confirmation".
+    expect(logs.map((l) => [l.resolvedIntent, l.outcome])).toEqual([['APPROVE_JOIN', 'REJECTED_PERMISSION']]);
 
     // /execute is the boundary that holds on its own, even for a hand-crafted request.
     const direct = await page.request.post('/api/voice/execute', {
