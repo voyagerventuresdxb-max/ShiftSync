@@ -896,6 +896,54 @@ Per-window p95 at most 113 ms. No deploy-log lines (no deploys).
   or script paused, not an outage. The poll before it was healthy, and the next check (run 12
   preconditions, 2026-10-06 17:20 Dubai) found health and readiness 200 on the same deployment.
 
+---
+
+# Autonomous run 12 — 2026-10-06 (merge, deploy, push go-live)
+
+Owner switches: merge yes, live model calls no, rota stack not merged. Merge commits only
+(master merged into each branch first), nothing force-pushed, one gate per PR, secrets scan
+before every push, at most two API deploys from GitHub source (pinned Railway CLI), additive
+migrations only. No live model calls; voice tests used the scripted model and the e2e fake.
+Security wording outcome-only; specifics went to the owner in the chat report.
+
+## Preconditions: passed
+GitHub push rights; the run 9 and run 10 reports match git history and production. Required
+production variables present, `NODE_ENV=production`, dev-bypass / error-injection /
+base-URL-override variables absent, health and readiness 200. Rollback reference: `5fd67c0c`
+(`ee65d9d`).
+
+## Stages
+
+| Stage | Result |
+|---|---|
+| 1 — observer | Full summary appended to the run 10 report (#130). Polls stopped at 01:22 when the computer went to sleep, before the 03:00 end; no outage observed. |
+| 2 — rehearsal, review, APK | All open PRs except #30 (would add a dependency) and #42 (superseded by #69) merged on a local branch; unit, server and e2e three times each. No flaky tests; three deterministic failures, all root-caused: weekday-dependent voice test data (fixed on #125), a test interaction between #69 and #125 (fixed on #69), and a page that never finished loading after #126 (app fix #131). Review: one more fix on #125 (the silence check never blocks a recording it could not measure). Debug-APK workflow: **failed** at `npm ci` — `package-lock.json` is out of sync with `package.json` (development tooling packages); no APK. |
+| 3 — findings | The findings log has no entries; skipped. |
+| 4 — merge and deploy | Merged in order: #124 `e17f9b4`, #125 `66d6f17`, #127 `41d171a`, #126 `df39bef`, #128 `b4994d0`, #131 `dce7cdf`, #129 `4ba7bfb`, #130 `244b67b`. Conflicts: `MEMORY.md` (both kept) and two `AppShell.tsx` import lines for #128 (both kept). Final full gate on master: e2e 92/92. Deploy `822ce3d5` on `244b67b`: SUCCESS, two additive migrations applied (37/37), health and readiness 200 twice; one failed health poll at the switch-over. Smoke test without sign-in as expected (codes, refusals, response headers). Vercel build for `244b67b` succeeded. Tag `prod-20261006-244b67b`. No rollback. |
+| 5 — rota stack | All seven refreshed on master `244b67b` with merge commits, nothing force-pushed, not merged. #69: the access-matrix test conflict kept master's live-router check; two test fixes for interactions with #125 (the rota golden-path spec records before stopping; the voice corpus publishes the staff caller's fixture shifts). Full gate on the four top branches (#108–#111): full e2e 95/95, 95/95, 98/98, 96/96, server suite with the access matrix. Review guide refreshed (#132). **Not done:** the planned tightening of the leave read (5a) — it needs an access-matrix test change that this run's tool permissions refused; nothing committed; owner decision. |
+| 6 — push | Railway variables only (no Vercel change). Pair generated with the repo script into a folder outside every repository, checked locally against a mock push service (subscribe, delivery with a valid signature, a failing push service, no keys), the three variables staged with deploys skipped (`VAPID_SUBJECT` = the production web address), then deploy `a8dfc425` on `244b67b`: SUCCESS, health and readiness 200 twice, push enabled in the deploy log, unauthenticated push routes refused. Key files deleted afterwards. |
+| 7 — voice choices | #133, draft, not merged: below the confidence threshold, two or three checked readings are offered as choices; each passes the same role, venue, date and overlap checks as a confident answer; a choice only opens the normal confirm sheet; the voice log names the confirmed reading. Mocked server, unit and e2e tests; real-phone cases C1–C4 in `voice-test-script.md`. Full e2e 93/93. |
+| 8 — pilot gaps | #132 (docs only) merged: `pilot-gaps.md`, push status, the push page's web address and manifest note, voice limits, rota review guide, owner to-do. |
+| 9 — housekeeping | Five run worktrees removed and their merged local branches deleted; one kept on purpose (it holds a local branch for an owner decision, below). Worktrees from earlier runs untouched. Free disk 28 GB. |
+
+Gates: typecheck, lint 0 errors (18 existing warnings), unit, server suite, relevant e2e
+(`CI=1 --retries=0`), secrets scan clean. One load-dependent test (the parallel per-person AI
+quota test) failed three times while another worktree's e2e suite ran on the same machine and passed
+2/2 alone each time.
+
+## Production after the run
+API `a8dfc425` on `244b67b` (`prod-20261006-244b67b`), health and readiness 200, push on.
+
+## Blocked or for the owner
+- **Rota leave read (stage 5a):** blocked as above; the change is described in the chat report.
+- **One security follow-up** is held for the owner (details in the chat report); a fix is ready on a local branch, deliberately not pushed.
+- **Debug APK:** needs a reviewed lockfile regeneration (`owner-todo.md` item 17).
+- **Observer:** the end-time check failed (the computer slept); recorded in the run 10 summary.
+- **Local main checkout:** a stray command in this run reverted one uncommitted local file there; nothing in the repository or production was affected; details in the chat report.
+- Push, voice and the new AI quotas still need the real-phone checks in `owner-todo.md`.
+
+---
+
 # Autonomous run 13 — 2026-10-07 (roster import, venue name, floor sections, voice)
 
 Fixes for the owner's real-phone findings of 7 Oct. Merge commits only; one PR per stage. The
