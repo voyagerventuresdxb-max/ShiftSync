@@ -15,6 +15,7 @@
  */
 import * as XLSX from 'xlsx';
 import { cellToText, isOvernight } from './normalize.js';
+import { detectWeek, parseDayLabel } from './weekDetection.js';
 import { readWorkbook } from './parseWorkbook.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
 
@@ -172,21 +173,46 @@ export function parseRotaFile(
   return processRowsIntoRoster(rawRows, weekStart);
 }
 
+/**
+ * Where the day columns are and which date each one is: the first row printing at least two
+ * day headers ("17-Aug", "Mon 17/08", "Monday"), dated as printed (weekDetection.ts). Null when
+ * no such row exists (the columns are then taken positionally, Monday first, from weekStart).
+ */
+function headerDates(rows: unknown[][], weekStart?: string): { rowIndex: number; dates: Map<number, string> } | null {
+  for (let r = 0; r < Math.min(rows.length, 15); r++) {
+    const row = rows[r] ?? [];
+    const labels = row.map((cell) => parseDayLabel(cell instanceof Date || typeof cell === 'number' ? cell : cellToText(cell).trim()));
+    const cols = labels.map((l, c) => (l && !l.numericOnly ? c : -1)).filter((c) => c >= 0);
+    if (cols.length < 2) continue;
+    const titles = rows.slice(0, r).flatMap((x) => (x ?? []).map((c) => cellToText(c).trim()).filter(Boolean));
+    const today = weekStart ?? new Date().toISOString().slice(0, 10);
+    const { dates } = detectWeek(cols.map((c) => labels[c]!), titles, { today, clientWeekStart: weekStart ?? null });
+    const map = new Map<number, string>();
+    cols.forEach((c, i) => dates[i] && map.set(c, dates[i]!));
+    return { rowIndex: r, dates: map };
+  }
+  return null;
+}
+
 export function processRowsIntoRoster(rows: unknown[][], weekStart?: string): ParsedVisionResult {
   const parsedRows: ParsedShiftRow[] = [];
   const issues: RowIssue[] = [];
   const leaveRecords: ParsedVisionResult['leaveRecords'] = [];
   const anomalies: ParsedVisionResult['anomalies'] = [];
 
-  // The week's seven dates, in column order, starting at weekStart (a Monday, like every rota week in this app).
+  // Dates as the header prints them; without a header row, the week's seven dates in column
+  // order from weekStart (a Monday, like every rota week in this app).
+  const header = headerDates(rows, weekStart);
   const dayDates = weekStart ? weekDates(weekStart) : null;
+  const firstDayCol = header ? Math.min(...header.dates.keys()) : 2;
 
   let rowNumber = 1;
-  for (const row of rows) {
+  for (const [r, row] of rows.entries()) {
     if (!row || row.length < 2) continue;
+    if (header && r <= header.rowIndex) continue;
 
-    const possibleName = cellToText(row[0]).trim();
-    const possibleRole = cellToText(row[1]).trim();
+    const possibleName = cellToText(row[firstDayCol >= 2 ? firstDayCol - 1 : 0]).trim();
+    const possibleRole = firstDayCol >= 2 ? cellToText(row[firstDayCol - 2]).trim() : '';
 
     // Skip header rows and empty name cells.
     if (!possibleName || possibleName.toLowerCase().includes('name') || possibleName.toLowerCase().includes('employee')) {
@@ -195,13 +221,15 @@ export function processRowsIntoRoster(rows: unknown[][], weekStart?: string): Pa
 
     const roleCategory = resolveRoleCategory(possibleRole);
 
-    // Map remaining columns to days of the week.
-    const dayCells = row.slice(2);
+    // Map the day columns to their dates. A row with nothing shift- or leave-like in any day
+    // column (a title, a section banner, a caption) is not a staff row.
+    const dayCells = header ? [...header.dates.keys()].map((c) => row[c]) : row.slice(2);
+    if (!dayCells.some((cell) => parseShiftCell(cell).type === 'WORKING' || /^(off|a\/l|al|ul|sl|ph|sick)$/i.test(cellToText(cell).trim()))) continue;
     dayCells.forEach((cell, dayIndex) => {
       const parsed = parseShiftCell(cell);
       if (parsed.type === 'OFF') return;
 
-      const date = dayDates ? dayDates[dayIndex] : null;
+      const date = header ? [...header.dates.values()][dayIndex] ?? null : dayDates ? dayDates[dayIndex] : null;
       if (!date) {
         // No weekStart provided — cannot assign a date.
         anomalies.push({

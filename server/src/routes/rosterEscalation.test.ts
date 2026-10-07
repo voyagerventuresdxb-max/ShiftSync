@@ -8,7 +8,7 @@ import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 import { RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
 import { MockVisionProvider, VisionProviderError, __setVisionProviderForTests, type VisionInput } from '../parsing/visionProvider.js';
-import { __setGridParserForTests } from './schedules.js';
+import { __setGridParserForTests, __setReadingCacheForTests } from './schedules.js';
 
 /**
  * POST /api/schedules/upload — when a roster goes to the AI reader (and when it must not).
@@ -20,18 +20,22 @@ const XLSX: typeof XLSXNS = ((XLSXNS as unknown as { default?: typeof XLSXNS }).
 const prisma = new PrismaClient();
 const PNG = readFileSync('server/scripts/fixtures/vlm-check-roster.png');
 const AI_NAME = 'Zed Testperson';
+// The AI reader's transcription (vlmPrompt.ts schema): one day column, one person.
 const AI_RESPONSE = JSON.stringify({
-  venueTemplateNotes: '',
-  legend: [],
-  documentAnomalies: [],
-  employees: [
-    {
-      rawName: AI_NAME,
-      role: 'Bartender',
-      cells: [{ date: '2031-03-03', rawText: '10-18', period: null, interpretation: 'worked_shift', startTime: '10:00', endTime: '18:00', leaveCode: null, confidence: 0.95, needsReview: false, reviewReason: null }],
-    },
-  ],
+  title: null,
+  days: ['03/03/2031'],
+  key: [],
+  pages: [{ p: 1, rows: 1, sec: [{ h: null, n: 1, ppl: [{ nm: AI_NAME, t: 'Bartender', i: 1, c: ['10-18'] }] }], unread: [] }],
 });
+// The same reading, column by column: a photo or scan is read both ways and the two compared.
+const AI_COLUMN_RESPONSE = JSON.stringify({
+  title: null,
+  days: ['03/03/2031'],
+  key: [],
+  pages: [{ p: 1, rows: 1, ppl: [{ i: 1, nm: AI_NAME, t: 'Bartender', h: null }], cols: [{ d: 0, c: [{ i: 1, x: '10-18' }] }], unread: [] }],
+});
+const aiReader = () =>
+  new MockVisionProvider((input: VisionInput) => ({ raw: input.framing === 'columns' ? AI_COLUMN_RESPONSE : AI_RESPONSE, model: 'mock-model', usage: { promptTokens: null, outputTokens: null } }));
 
 let locationId = '';
 let staffToken = '';
@@ -53,6 +57,8 @@ before(async () => {
 beforeEach(async () => {
   __setVisionProviderForTests(null);
   __setGridParserForTests(null);
+  // These tests are about the gates; each starts with no cached AI reading (see readingCache tests).
+  __setReadingCacheForTests(null);
   delete process.env.ROSTER_ESCALATE_EMPTY_ROLE_SHARE;
   delete process.env.AI_VISION_WEEKLY_LIMIT;
   await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: null, visionFallbackUses: [] } });
@@ -61,6 +67,7 @@ beforeEach(async () => {
 after(async () => {
   __setVisionProviderForTests(null);
   __setGridParserForTests(null);
+  __setReadingCacheForTests(undefined);
   for (const [k, v] of [['GEMINI_VERTEX_PROJECT', savedEnv.project], ['GEMINI_API_KEY', savedEnv.key], ['ROSTER_ESCALATE_EMPTY_ROLE_SHARE', savedEnv.share]] as const) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -144,7 +151,7 @@ test('a STAFF session cannot upload a roster (an AI read costs the venue): 403',
 });
 
 test('image, AI configured, no consent: 422 ai_consent_required and nothing is sent', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const { status, body } = await upload(image);
   assert.equal(status, 422);
@@ -156,18 +163,18 @@ test('image, AI configured, no consent: 422 ai_consent_required and nothing is s
 });
 
 test('image with consent: read by the provider, preview returned, weekly allowance recorded', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const { status, body } = await upload(image, { aiConsent: true });
   assert.equal(status, 200, JSON.stringify(body));
-  assert.equal(mock.calls.length, 1);
+  assert.deepEqual(mock.calls.map((c) => c.framing ?? 'rows').sort(), ['columns', 'rows'], 'a photo is read twice, person by person and day by day');
   assert.equal(mock.calls[0]!.kind, 'file');
   assert.equal(body.preview[0].employeeName, AI_NAME);
   assert.equal(await allowanceUsed(), true);
 });
 
 test('image with consent but the weekly allowance already used: 422 with the manual path, nothing sent', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: new Date(), visionFallbackUses: [new Date()] } });
   const { status, body } = await upload(image, { aiConsent: true });
@@ -182,21 +189,21 @@ test('AI_VISION_WEEKLY_LIMIT=2: a second read this week goes through, a third is
   process.env.AI_VISION_WEEKLY_LIMIT = '2';
   const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
   await prisma.location.update({ where: { id: locationId }, data: { visionFallbackUses: [eightDaysAgo, new Date()] } });
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   assert.equal((await upload(image, { aiConsent: true })).status, 200);
-  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.calls.length, 2);
   const loc = await prisma.location.findUniqueOrThrow({ where: { id: locationId }, select: { visionFallbackUses: true } });
   assert.equal(loc.visionFallbackUses.length, 2, 'the expired read was dropped, the new one recorded');
   const third = await upload(image, { aiConsent: true });
   assert.equal(third.status, 422);
   assert.match(third.body.error, /limited to 2 times per venue per week/);
-  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.calls.length, 2);
 });
 
 test('AI_VISION_WEEKLY_LIMIT=0: AI roster reading is off, nothing sent', async () => {
   process.env.AI_VISION_WEEKLY_LIMIT = '0';
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const { status, body } = await upload(image, { aiConsent: true });
   assert.equal(status, 422);
@@ -205,7 +212,7 @@ test('AI_VISION_WEEKLY_LIMIT=0: AI roster reading is off, nothing sent', async (
 });
 
 test('image over the 5 MB AI cap: 422, nothing sent', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const big = Buffer.concat([PNG, Buffer.alloc(5 * 1024 * 1024 + 1)]);
   const { status, body } = await upload({ ...image, data: big }, { aiConsent: true });
@@ -236,7 +243,7 @@ test('image, provider answers but every model is retired: 422 vision_model_unava
 });
 
 test('a clean spreadsheet never goes to the AI reader, even when one is configured', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const { status, body } = await upload(sheet(CLEAN_GRID), { aiConsent: true });
   assert.equal(status, 200);
@@ -246,7 +253,7 @@ test('a clean spreadsheet never goes to the AI reader, even when one is configur
 });
 
 test('too many empty roles, no consent: the local result is shown with an escalation offer; nothing sent', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const { status, body } = await upload(sheet(NO_ROLES_GRID));
   assert.equal(status, 200);
@@ -255,26 +262,37 @@ test('too many empty roles, no consent: the local result is shown with an escala
   assert.equal(mock.calls.length, 0);
 });
 
-test('too many empty roles, with consent: the grid goes to the provider as text and its result replaces the local one', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+test('too many empty roles, with consent: the grid goes to the provider as text and is cross-checked against the local reading', async () => {
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const { status, body } = await upload(sheet(NO_ROLES_GRID), { aiConsent: true });
   assert.equal(status, 200);
   assert.deepEqual([body.escalation.reason, body.escalation.status], ['empty_roles', 'used']);
   assert.equal((mock.calls[0] as VisionInput).kind, 'grid');
-  assert.equal(body.preview[0].employeeName, AI_NAME);
+  // Nobody is dropped. The person only the AI reader saw is listed, but none of their shifts is
+  // saved on the AI's word alone (nothing confirms the day): each is shown to check. The people
+  // only the built-in reader found stay, marked as such; their shifts, read from the file's own
+  // cells, carry no flag of their own.
+  assert.ok(!body.preview.some((r: { employeeName: string }) => r.employeeName === AI_NAME));
+  assert.ok(body.anomalies.some((a: { employeeName: string | null; reason: string }) => a.employeeName === AI_NAME && /Only the AI reader saw this person/.test(a.reason)));
+  assert.ok(body.people.some((p: { name: string; flags: { kind: string }[] }) => p.name === AI_NAME && p.flags.some((f) => f.kind === 'ai_only')));
+  assert.deepEqual(body.readPeople.map((p: { name: string; readerSource: string }) => `${p.name}|${p.readerSource}`), [`${AI_NAME}|ai`, 'Test Alpha|table', 'Test Beta|table']);
+  assert.ok(body.people.filter((p: { name: string }) => p.name === 'Test Alpha').every((p: { flags: { kind: string }[] }) => p.flags.some((f) => f.kind === 'table_only')));
+  assert.ok(body.preview.filter((r: { employeeName: string }) => r.employeeName === 'Test Alpha').every((r: { flags?: string[] }) => !r.flags));
+  assert.equal(body.reading.ai, 'used');
+  assert.ok(body.reading.disagreements >= 3);
   assert.equal(await allowanceUsed(), true);
 });
 
 test('the empty-role share is configurable: ROSTER_ESCALATE_EMPTY_ROLE_SHARE=1 never escalates on roles', async () => {
-  __setVisionProviderForTests(new MockVisionProvider(AI_RESPONSE));
+  __setVisionProviderForTests(aiReader());
   process.env.ROSTER_ESCALATE_EMPTY_ROLE_SHARE = '1';
   const { body } = await upload(sheet(NO_ROLES_GRID));
   assert.equal(body.escalation, undefined);
 });
 
 test('ALL-CAPS venue: escalation offered with its own reason', async () => {
-  __setVisionProviderForTests(new MockVisionProvider(AI_RESPONSE));
+  __setVisionProviderForTests(aiReader());
   const { status, body } = await upload(sheet(ALL_CAPS_GRID));
   assert.equal(status, 200);
   assert.deepEqual([body.escalation.reason, body.escalation.status], ['all_caps_venue', 'needs_consent']);
@@ -311,7 +329,7 @@ test('grid parser proves it dropped data: with no AI, 422 roster_extraction_anom
 });
 
 test('grid parser proves it dropped data: AI configured asks for consent, then reads the grid', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   __setGridParserForTests(() => {
     throw new RosterExtractionAnomalyError('dropped');
@@ -328,7 +346,7 @@ test('grid parser proves it dropped data: AI configured asks for consent, then r
 });
 
 test('a layout no local parser recognises asks for consent before going to the AI reader', async () => {
-  const mock = new MockVisionProvider(AI_RESPONSE);
+  const mock = aiReader();
   __setVisionProviderForTests(mock);
   const daysAsRows = xlsx([
     ['Day', 'Test Alpha', 'Test Beta'],
@@ -338,4 +356,53 @@ test('a layout no local parser recognises asks for consent before going to the A
   assert.equal(status, 422);
   assert.deepEqual([body.errorCode, body.escalationReason], ['ai_consent_required', 'unrecognized_layout']);
   assert.equal(mock.calls.length, 0);
+});
+
+// --- the reading in the upload response (rosterContract.ts) ---------------------------------------
+
+test('upload response: every person read (no-shift people too), unread rows, the printed week and the reading report; preview rows carry their reading', async () => {
+  // The client sends weekStart 2031-03-03, but the roster prints its own dates: those win.
+  const printed = xlsx([
+    ['', '24-Aug', '25-Aug'],
+    ['', 'MONDAY', 'TUESDAY'],
+    ['SUPERVISORS', '', ''],
+    ['Test Alpha', '9-17', '9-17'],
+    ['Test Blank', '', ''],
+  ]);
+  const { status, body } = await upload(sheet(printed));
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.deepEqual(body.readPeople.map((p: { name: string; section: string; readerSource: string }) => `${p.name}|${p.section}|${p.readerSource}`), ['Test Alpha|SUPERVISORS|table', 'Test Blank|SUPERVISORS|table']);
+  assert.deepEqual(body.unreadRows, []);
+  assert.equal(body.week.weekStart, '2026-08-24');
+  assert.equal(body.week.source, 'printed_dates');
+  assert.deepEqual(body.reading, { ai: 'not_used', table: 'used', rowsDetected: 2, peopleFound: 2, rereadPages: [], disagreements: 0, fromCache: false, note: 'Read by the built-in reader only.' });
+  assert.deepEqual(body.preview.map((r: { date: string }) => r.date), ['2026-08-24', '2026-08-25']);
+  assert.equal(body.preview[0].personKey, body.readPeople[0].personKey);
+  assert.equal(body.preview[0].section, 'SUPERVISORS');
+  assert.equal(body.preview[0].readerSource, 'table');
+});
+
+test('upload response: a weekday-only roster uses the week the client sent', async () => {
+  const { status, body } = await upload(sheet(CLEAN_GRID));
+  assert.equal(status, 200);
+  assert.equal(body.week.weekStart, '2031-03-03');
+  assert.equal(body.week.needsConfirmation, false);
+  assert.deepEqual([...new Set(body.preview.map((r: { date: string }) => r.date))], ['2031-03-03', '2031-03-04']);
+});
+
+test('the same photo uploaded again is read from the venue\'s cache: no AI call, no allowance, no consent needed', async () => {
+  __setReadingCacheForTests(undefined); // the real per-venue cache table
+  const mock = aiReader();
+  __setVisionProviderForTests(mock);
+  const first = await upload(image, { aiConsent: true });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.reading.ai, 'used');
+  await prisma.location.update({ where: { id: locationId }, data: { lastVisionFallbackUsedAt: null, visionFallbackUses: [] } });
+  const again = await upload(image);
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.deepEqual([again.body.reading.ai, again.body.reading.fromCache], ['cached', true]);
+  assert.equal(mock.calls.length, 2, 'no further model call');
+  assert.equal(await allowanceUsed(), false, 'no allowance used for the cached read');
+  assert.equal(again.body.preview[0].employeeName, AI_NAME);
+  assert.equal(await prisma.rosterReadingCache.count({ where: { locationId } }), 1);
 });

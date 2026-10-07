@@ -3,11 +3,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PreviewRow, TemplateDefinition } from '../parsing/types.js';
+import type { PersonPreview } from '../parsing/rosterContract.js';
 
 interface CachedBatch {
   locationId: string;
   templateId: TemplateDefinition['id'] | null;
   rows: PreviewRow[];
+  /** The preview's people (absent on batches cached before people existed: confirm derives them from rows). */
+  people?: PersonPreview[];
   createdAt: number;
 }
 
@@ -38,10 +41,10 @@ class UploadCache {
     this.load();
   }
 
-  put(locationId: string, templateId: TemplateDefinition['id'] | null, rows: PreviewRow[]): string {
+  put(locationId: string, templateId: TemplateDefinition['id'] | null, rows: PreviewRow[], extras: { people?: PersonPreview[] } = {}): string {
     this.sweep();
     const batchId = randomUUID();
-    this.batches.set(batchId, { locationId, templateId, rows, createdAt: Date.now() });
+    this.batches.set(batchId, { locationId, templateId, rows, ...(extras.people ? { people: extras.people } : {}), createdAt: Date.now() });
     this.save();
     return batchId;
   }

@@ -137,12 +137,54 @@ failing closed, not a credentials problem. Run it inside the service instead:
 access refused, model unavailable, today's / this month's limit reached, Google not answering).
 It never shows a key, project id or provider message. Owners only; 3 runs per 5 minutes.
 
+## How an upload is read (what the AI reader does, and what it never does)
+
+`server/src/parsing/readUpload.ts` decides, the same for the upload route and the eval harness:
+
+- **Spreadsheets** (XLSX / CSV) are read by the built-in table reader; the AI reader is asked only
+  when that reading can't be trusted (unrecognised layout, rows it couldn't read, many empty roles,
+  ALL-CAPS names), and only with the manager's consent.
+- **Text PDFs** are read by the AI reader (the PDF goes as a file, at high media resolution, with
+  its own text layer page by page) and cross-checked row by row by the table reader, which reads
+  the same text layer. Without consent, or with the AI off, paused or out of allowance, the table
+  reader's result stands on its own. When the two put the same times on different days, the
+  file's own days stand and the person is flagged — unless the table reader had to infer the day
+  (a cell longer than its column); then neither day is imported and both readings are shown.
+- **Photos and image-only (scanned) PDFs** have no text layer, so the AI reader reads them
+  **twice at the same time**: person by person, and day column by day column (a differently framed
+  prompt and schema in `vlmPrompt.ts`). The two readings are compared cell by cell
+  (`aiCrossCheck.ts`): what both read is imported; a day the two read differently is **not**
+  imported at all — it is shown to the manager as a cell to look at, with both readings — so a
+  misread is never saved as a shift. A name the two spelled differently is kept with both
+  spellings and marked "check the spelling". When many cells differ, the review says the photo was
+  hard to read and suggests uploading the original PDF or spreadsheet. A page the two readings
+  disagree on for more than 20% of its days (`PAGE_DISAGREEMENT_LIMIT`) is not trusted at all:
+  nothing from it is imported, and each person's week is shown with both readings (agreement on
+  such a page can be the same slip twice). That makes a photo or scan
+  two model calls per page (plus at most one re-read of a page that came back short), all in
+  parallel, so the wait is that of the slowest call.
+- The model only **transcribes** what is printed. Dates come from the printed day headers, times
+  from the cell text, by the same rules as the table reader ("7a-3p", "12n", "1830-0200", leave
+  codes such as "O", "X", "REQ", "S/L"); an open-ended cell ("4CL", "4pm-close", "open-3pm",
+  "IN 10") is flagged with a plain explanation written by the server, and its missing end is never
+  invented. Titles, headings, totals, footer lines and names that couldn't be read ("[?]") are
+  never imported as people. Each call has `GEMINI_VISION_TIMEOUT_MS` (75 s), and the
+  whole upload `ROSTER_AI_BUDGET_MS` (95 s, inside the ~120 s the web proxy waits); whatever isn't
+  read in time is listed as unread rows.
+- **Cache:** a complete AI reading (for a photo or scan, both readings) — or one still short after
+  its re-read, whose rows it couldn't read stay listed — is stored per venue in
+  the `roster_reading_cache` table, keyed by the sha256 of the file's bytes and the prompt/schema
+  version. Uploading the same file again at that venue reuses it: no model call, no spend, no
+  weekly allowance, no consent prompt. Only the reading is stored (what the model transcribed —
+  names and cell text, like the shifts the manager imports), never the file. Changing the prompt
+  or schema changes the version, so old entries are simply not used.
+
 ## 6. Photo-roster test on a phone
 
 1. On a phone, sign in as a manager of a **test venue** (AI reading is limited to `AI_VISION_WEEKLY_LIMIT` reads per venue in any 7 days, so don't spend a real venue's allowance). Open **Scheduling** → the roster upload panel. It states that image and scanned-PDF rosters are read by a third-party AI service outside the UAE.
 2. Take a photo of a printed roster with **made-up names** (or the sample image from `server/scripts/fixtures/vlm-check-roster.png` shown on another screen).
 3. The **review screen** must show the shifts read from the photo; nothing is saved until you confirm.
-4. Railway logs for that request: `[parseVision] image/PDF read by vertex-gemini model=… — … chars, tokens in/out=…/…, N shifts`. The log carries counts only, never the names.
+4. Railway logs for that request: `[roster-reading] AI read: N call(s), …`, `[roster-reading] AI cross-check read: …`, `[roster-reading] AI cross-check: N people, N disagreement(s), N/N cell(s) left to check.` and `[schedules.upload] read: N shifts, N people, …`. The logs carry counts only, never the names. Upload the same photo again: `AI reading reused from this venue's cache … no model call`.
 
 ## 7. Turning it off, rotating the key
 
@@ -217,3 +259,9 @@ prices. Prices checked on 2026-10-04 on Google's
 and has a per-feature output ceiling (roster vision 16,384, voice transcription 1,024, voice intent
 2,048 tokens). Re-check the pricing page before raising the budget; if Google raises prices above
 the defaults, raise `AI_PRICE_IN_PER_M` / `AI_PRICE_OUT_PER_M` to match.
+
+Per upload, roughly (a ~20-person, one-page roster; a recorded live read was ~3,100 input and
+~1,700 output tokens; the second, column-by-column read of a photo writes about 1.6× as much):
+a text PDF is one call (≈ $0.035 at the cap's 3 / 15 prices, ≈ $0.01 at the `eu` list price until
+2026-12-31); a photo or scan is two (≈ $0.09 at the cap's prices, ≈ $0.025 at list price), plus
+one more if a page has to be re-read. A re-upload of the same file costs nothing (cache).

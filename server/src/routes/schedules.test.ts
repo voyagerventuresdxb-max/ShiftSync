@@ -6,7 +6,7 @@ import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 import { uploadCache } from '../store/uploadCache.js';
 import type { PreviewRow } from '../parsing/types.js';
-import { canonicalRoleName } from '../parsing/resolveRows.js';
+import { canonicalRoleName, personKeyOf } from '../parsing/resolveRows.js';
 
 const prisma = new PrismaClient();
 
@@ -124,11 +124,13 @@ test('schedules.ts POST /upload/:batchId/confirm still works normally for a real
 
 // 2026-09-05 — found by the mandatory review of the requireManager diff
 // above: buildEntry used to unconditionally write a SHIFT_CREATED audit row
-// even when persistShifts created zero shifts (every row skipped for an
-// unresolved role), pointing at the batchId instead of a real Shift id — a
-// false compliance-audit entry. Fixed to only write when createdCount > 0,
-// matching floorPlan.ts's publish route's identical guard.
-test('schedules.ts POST /upload/:batchId/confirm does not write a false audit-log entry when every row is skipped (no resolvable role)', async () => {
+// even when persistShifts created zero shifts, pointing at the batchId
+// instead of a real Shift id — a false compliance-audit entry. Fixed to only
+// write when shifts were created, matching floorPlan.ts's publish route's
+// identical guard. (Since the 2026-10 review rework an unresolved role no
+// longer skips a row — the person is imported as "Team member" — so the
+// nothing-created case is now every person skipped by the manager.)
+test('schedules.ts POST /upload/:batchId/confirm does not write a false audit-log entry when nothing is created (every person skipped)', async () => {
   const seedLocation = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(seedLocation, 'seed data (a location) must exist to run this test');
 
@@ -138,14 +140,14 @@ test('schedules.ts POST /upload/:batchId/confirm does not write a false audit-lo
   const manager = await prisma.user.create({
     data: { locationId: location.id, fullName: '__authgap-test__ no-op manager', systemRole: 'MANAGER' },
   });
-  // resolvedRoleId: null -> persistShifts skips this row entirely (no valid Shift.roleId FK to satisfy).
   const batchId = uploadCache.put(location.id, null, [fakeRow({ resolvedRoleId: null })]);
 
   try {
     const token = await sessionFor(manager.id);
     await withServer(async (baseUrl) => {
       const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-      const confirm = await fetch(`${baseUrl}/api/schedules/upload/${batchId}/confirm`, { method: 'POST', headers, body: JSON.stringify({}) });
+      const people = [{ personKey: personKeyOf(fakeRow({})), action: 'skip' }];
+      const confirm = await fetch(`${baseUrl}/api/schedules/upload/${batchId}/confirm`, { method: 'POST', headers, body: JSON.stringify({ people }) });
       assert.equal(confirm.status, 201);
       const body = (await confirm.json()) as { createdCount: number; skippedCount: number };
       assert.equal(body.createdCount, 0);

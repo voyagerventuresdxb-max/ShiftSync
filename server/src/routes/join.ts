@@ -16,8 +16,12 @@ import {
 import {
   decideJoinRequest,
   fileJoinRequest,
+  importedRecordWhere,
   joinAttemptsExhaustedMessage,
   joinDeclinedMessage,
+  joinLinkPlan,
+  JOIN_LINK_CHOICE_MESSAGE,
+  JOIN_LINK_TARGET_INVALID_MESSAGE,
   JOIN_PHONE_TAKEN_ERROR,
 } from '../lib/actions/joinActions.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
@@ -194,7 +198,11 @@ joinRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
   }
 });
 
-/** GET /api/join/:locationId/pending — list PENDING join requests for Pending Approvals. Manager-only, own location. */
+/**
+ * GET /api/join/:locationId/pending — list PENDING join requests for Pending Approvals. Manager-only, own location.
+ * Each request carries `link` (joinActions.ts JoinLinkPlan): the imported staff record it will claim
+ * ('link'), the records the manager must choose between ('choose'), or 'new'.
+ */
 joinRouter.get('/:locationId/pending', requireSession, requireManager, async (req, res) => {
   try {
     const { locationId } = req.params;
@@ -213,6 +221,9 @@ joinRouter.get('/:locationId/pending', requireSession, requireManager, async (re
         })
       : [];
     const declinesByPhone = new Map(declines.map((d) => [d.phone, d]));
+    const imported = requests.length
+      ? await prisma.user.findMany({ where: importedRecordWhere(locationId), select: { id: true, fullName: true, role: { select: { name: true } } } })
+      : [];
     return res.status(200).json({
       requests: requests.map((r) => {
         const d = declinesByPhone.get(r.phone);
@@ -223,6 +234,7 @@ joinRouter.get('/:locationId/pending', requireSession, requireManager, async (re
           createdAt: r.createdAt.toISOString(),
           previousDeclines: d?._count._all ?? 0,
           lastDeclinedAt: (d?._max.reviewedAt ?? d?._max.createdAt)?.toISOString() ?? null,
+          link: joinLinkPlan(r.fullName, imported),
         };
       }),
     });
@@ -233,12 +245,18 @@ joinRouter.get('/:locationId/pending', requireSession, requireManager, async (re
 });
 
 /**
- * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle? }
+ * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle?, linkTo? }
  * Approving creates a real, active User from the request's phone/fullName
  * and links it back onto the request — this is the one place a JoinRequest
- * ever produces a real staff member. Manager-only, scoped to the caller's
- * own location; the reviewer is always the authenticated caller — there is
- * no legitimate on-behalf-of case for reviewing someone else's join request.
+ * ever produces a real staff member — or claims the roster-imported record
+ * that is this person. `linkTo`: an imported record's id, or "new". Without
+ * it, an approval that could be more than one imported record (or only
+ * partly matches one) is a 409 `link_choice_required` with `candidates`;
+ * a `linkTo` that isn't an imported, never-signed-in staff record of this
+ * venue is a 400 `link_target_invalid`. 200: { status, userId, linked }.
+ * Manager-only, scoped to the caller's own location; the reviewer is always
+ * the authenticated caller — there is no legitimate on-behalf-of case for
+ * reviewing someone else's join request.
  */
 joinRouter.patch('/:requestId', requireSession, requireManager, async (req, res) => {
   try {
@@ -252,16 +270,25 @@ joinRouter.patch('/:requestId', requireSession, requireManager, async (req, res)
     if (!ownedOrNotFound(req, res, jr, 'That join request could not be found.')) return;
 
     const jobTitle = req.body?.jobTitle ? String(req.body.jobTitle).trim() : null;
+    const rawLinkTo: unknown = req.body?.linkTo ?? null;
+    if (rawLinkTo !== null && (typeof rawLinkTo !== 'string' || !rawLinkTo.trim() || rawLinkTo.length > 64)) {
+      return res.status(400).json({ error: 'linkTo must be a staff record id or "new".' });
+    }
+    const linkTo = decision === 'approve' && typeof rawLinkTo === 'string' ? rawLinkTo.trim() : null;
 
-    const outcome = await decideJoinRequest({ requestId, decision, reviewedById: req.user!.id, jobTitle });
+    const outcome = await decideJoinRequest({ requestId, decision, reviewedById: req.user!.id, jobTitle, linkTo });
 
     if (outcome.result === 'not_found') return res.status(404).json({ error: `Join request "${requestId}" not found.` });
     if (outcome.result === 'already_reviewed') {
       return res.status(409).json({ error: 'This request has already been reviewed.' });
     }
     if (outcome.result === 'phone_taken') return res.status(409).json({ error: JOIN_PHONE_TAKEN_ERROR });
+    if (outcome.result === 'link_choice_required') {
+      return res.status(409).json({ error: JOIN_LINK_CHOICE_MESSAGE, errorCode: 'link_choice_required', candidates: outcome.candidates });
+    }
+    if (outcome.result === 'link_target_invalid') return res.status(400).json({ error: JOIN_LINK_TARGET_INVALID_MESSAGE, errorCode: 'link_target_invalid' });
 
-    return res.status(200).json({ status: outcome.status, userId: outcome.userId });
+    return res.status(200).json({ status: outcome.status, userId: outcome.userId, linked: outcome.linked ?? false });
   } catch (err) {
     console.error('[join.decide] failed', err);
     return res.status(500).json({ error: 'Unexpected error while deciding the join request.' });

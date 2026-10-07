@@ -66,6 +66,8 @@ export async function withAuditedTransaction<T>(
   client: typeof prisma,
   mutate: (tx: Prisma.TransactionClient) => Promise<T>,
   buildEntry: (result: T) => AuditLogEntryInput | null | undefined,
+  /** Prisma's interactive-transaction limits, for a mutation bigger than the 5s default allows (a roster import). */
+  options?: { maxWait?: number; timeout?: number },
 ): Promise<T> {
   return client.$transaction(async (tx) => {
     const result = await mutate(tx);
@@ -74,5 +76,5 @@ export async function withAuditedTransaction<T>(
       await writeAuditLog(tx, entry);
     }
     return result;
-  });
+  }, options);
 }

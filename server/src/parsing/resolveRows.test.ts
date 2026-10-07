@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PrismaClient } from '@prisma/client';
-import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey } from './resolveRows.js';
+import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey, buildVenueMatchContext, resolveRoleLabel, isRoleTitle } from './resolveRows.js';
 import type { ParsedShiftRow } from './types.js';
 
 interface FakeRole {
@@ -15,10 +15,16 @@ interface FakeUser {
   roleId: string | null;
 }
 
-function fakePrisma(roles: FakeRole[], users: FakeUser[]): PrismaClient {
+function fakePrisma(
+  roles: FakeRole[],
+  users: FakeUser[],
+  aliases: { roleAliases?: { normalizedLabel: string; roleId: string }[]; nameAliases?: { normalizedName: string; userId: string }[] } = {},
+): PrismaClient {
   return {
     role: { findMany: async () => roles },
     user: { findMany: async () => users },
+    rosterRoleAlias: { findMany: async () => aliases.roleAliases ?? [] },
+    rosterNameAlias: { findMany: async () => aliases.nameAliases ?? [] },
   } as unknown as PrismaClient;
 }
 
@@ -52,7 +58,7 @@ test('falls back to an existing employee\'s own role when the file specifies no 
   assert.match(infoIssue!.message, /inferred from their existing staff record/i);
 });
 
-test('does NOT apply the fallback when the file specifies a role that simply fails to resolve (typo/unknown role) — stays blocked', async () => {
+test('does NOT apply the row fallback when the file specifies a role that simply fails to resolve (typo/unknown role) — flagged, not blocking', async () => {
   const roles = [{ id: 'role-mgmt', name: 'Management' }];
   const users = [{ id: 'user-kalim', fullName: 'Kalim', roleId: 'role-mgmt' }];
   const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
@@ -66,12 +72,16 @@ test('does NOT apply the fallback when the file specifies a role that simply fai
     false,
     'the fallback must not fire for a non-blank unresolved role',
   );
-  const errorIssue = previewRows[0].issues.find((i) => i.severity === 'error');
-  assert.ok(errorIssue);
-  assert.match(errorIssue!.message, /does not exist for this location/i);
+  // Non-blocking since the 2026-10 review rework: the person is imported as "Team member" (or
+  // under their existing role) unless the manager assigns one.
+  assert.equal(previewRows[0].issues.some((i) => i.severity === 'error'), false);
+  const roleIssue = previewRows[0].issues.find((i) => i.field === 'role');
+  assert.ok(roleIssue);
+  assert.equal(roleIssue!.severity, 'warning');
+  assert.match(roleIssue!.message, /does not exist for this location/i);
 });
 
-test('does NOT apply the fallback when the employee has no existing role on file either — stays blocked', async () => {
+test('does NOT apply the fallback when the employee has no existing role on file either — role stays unresolved', async () => {
   const roles = [{ id: 'role-mgmt', name: 'Management' }];
   const users = [{ id: 'user-kalim', fullName: 'Kalim', roleId: null }];
   const { previewRows } = await resolveRowsAgainstDatabase(fakePrisma(roles, users), 'loc-1', [
@@ -349,4 +359,16 @@ test('an Arabic role label distinguishes correctly from a different Arabic role 
   ]);
 
   assert.equal(previewRows[0].resolvedRoleId, 'role-a', 'must resolve to the matching Arabic role, not the other one');
+});
+
+test('any "… Manager" title resolves to Management, unless the venue has a closer role of its own', () => {
+  const roles = [{ id: 'r-mgmt', name: 'Management' }, { id: 'r-events', name: 'Events Manager' }];
+  const ctx = buildVenueMatchContext(roles, [], [], []);
+  assert.equal(resolveRoleLabel('Ops Manager', ctx), 'r-mgmt');
+  assert.equal(resolveRoleLabel('Night Managers', ctx), 'r-mgmt');
+  assert.equal(resolveRoleLabel('Events Manager', ctx), 'r-events', "the venue's own role wins");
+  assert.equal(resolveRoleLabel('Bar Back', ctx), null);
+  assert.equal(isRoleTitle('Ops Manager'), true);
+  assert.equal(isRoleTitle('Waiter 3'), true);
+  assert.equal(isRoleTitle('Test Alpha'), false);
 });

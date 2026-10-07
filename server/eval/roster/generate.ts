@@ -122,4 +122,10 @@ export async function generateCorpus(dir = CORPUS_DIR): Promise<string[]> {
 if (process.argv[1] && /generate\.ts$/.test(process.argv[1])) {
   const files = await generateCorpus();
   console.log(`[eval:roster] wrote ${files.length} rosters + truth files to ${CORPUS_DIR}`);
+  if (process.argv.includes('--families')) {
+    // The layout families (Chromium renders the PDFs and photos; not committed, see familyCorpus.ts).
+    const { generateFamilies, FAMILY_DIR } = await import('./familyCorpus.js');
+    const written = await generateFamilies();
+    console.log(`[eval:roster] wrote ${written.length} layout-family rosters + truth files to ${FAMILY_DIR}`);
+  }
 }

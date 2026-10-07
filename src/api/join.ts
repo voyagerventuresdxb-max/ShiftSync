@@ -13,13 +13,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(apiUrl(url), init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    let errorCode: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as { error?: string; errorCode?: string };
       if (body?.error) message = body.error;
+      errorCode = body?.errorCode;
     } catch {
       // non-JSON error body; keep the generic message
     }
-    throw new ApiError(message, res.status, retryAfterSeconds(res) ?? undefined);
+    throw new ApiError(message, res.status, retryAfterSeconds(res) ?? undefined, errorCode);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -53,6 +55,21 @@ export async function verifyJoinOtp(input: {
   });
 }
 
+/** A staff member imported from a roster (never signed in) that a join request might be. */
+export interface JoinLinkCandidate {
+  userId: string;
+  fullName: string;
+  roleName: string | null;
+  /** 'exact': the same full name; 'close': a first name only, a nickname, an initial, another spelling. */
+  match: 'exact' | 'close';
+}
+
+/**
+ * What approving does about imported staff (server/src/lib/actions/joinActions.ts JoinLinkPlan):
+ * 'link' claims that one record, 'choose' needs the manager to pick (or "new person"), 'new' adds them.
+ */
+export type JoinLinkPlan = { kind: 'link'; candidate: JoinLinkCandidate } | { kind: 'choose'; candidates: JoinLinkCandidate[] } | { kind: 'new' };
+
 export interface JoinRequestDto {
   id: string;
   phone: string;
@@ -61,6 +78,8 @@ export interface JoinRequestDto {
   /** Times this phone was declined at this venue before. */
   previousDeclines: number;
   lastDeclinedAt: string | null;
+  /** Absent from older servers. */
+  link?: JoinLinkPlan;
 }
 
 /** GET /api/join/:locationId/pending — manager-only; the caller's own location. */
@@ -72,7 +91,9 @@ export async function fetchPendingJoinRequests(token: string, locationId: string
 }
 
 /**
- * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle? }
+ * PATCH /api/join/:requestId — body: { decision: 'approve'|'decline', jobTitle?, linkTo? }
+ * `linkTo`: the imported staff record this person is (its id), or 'new'. An approval that
+ * needs that choice and lacks it is a 409 `link_choice_required`.
  * Manager-only; the reviewer is always the authenticated caller, resolved
  * server-side from the Bearer token — never accepted from the body.
  */
@@ -80,8 +101,8 @@ export async function decideJoinRequest(
   token: string,
   requestId: string,
   decision: 'approve' | 'decline',
-  input?: { jobTitle?: string },
-): Promise<{ status: string; userId?: string }> {
+  input?: { jobTitle?: string; linkTo?: string },
+): Promise<{ status: string; userId?: string; linked?: boolean }> {
   return request(`/api/join/${requestId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
