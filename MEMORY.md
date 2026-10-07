@@ -216,8 +216,8 @@
 - [x] Run 13: onboarding floor-sections stepper removed (it saved nothing); Floor Plan empty state "Add your first section" with named sections (#138).
 - [x] Run 13: `package-lock.json` synced (#135); unexpected API errors answer with a generic message (#136).
 ## Next Sprint Goals
-- [ ] Run 13 open: roster import rebuilt (#140: staff created, printed week, two readers, idempotent re-import, shared review) — holdout gate narrowly not met on dense photos; decision in docs/owner-todo.md item 19.
-- [ ] Run 13 open: voice person lookup and new confirm sheet (#133, #139) — gated and live-tested; merge together with #140 and the API deploy.
+- [ ] Open: roster import rebuilt (#140: staff created, printed week, two readers, idempotent re-import, shared review, shifted day headings never saved) — run 14 holdout gate not met on one case (a lower-case name with no shifts all week is left out without a note); docs/owner-todo.md item 19.
+- [x] Run 14 (2026-10-07): voice person lookup against the venue (spelling variants, short forms, sound-alikes; "Which one?" for shared or close names), sections/roles vocabulary, confirm sheet with full name, role, date and time (#133, #139) — merged and deployed.
 - [ ] SMS go-live (#51): owner confirms a UAE trade licence, registers a domestic sender ID with a provider still accepting UAE registrations (Twilio's are on hold), adds that provider behind `SmsSender` if not Twilio, sets the provider vars, tests a du and an Etisalat number, then `SMS_OTP_ENABLED=true` and removes `ALLOW_DEV_OTP_ECHO`. WhatsApp authentication templates as the default channel are the cheaper next step (`docs/otp-delivery-uae.md`).
 - [ ] #53 production cleanup is still the human's to run: `railway ssh` into `shiftsync-api` (needs an SSH key on the Railway account) once this branch is deployed, then follow `docs/test-venue-cleanup.md` (dry run with `--name "__deploy-check__ floor plan 2026-09-30"`, then `--confirm`).
 - [x] `/people` doesn't live-refresh — done 2026-10-02 (entry above). Still not live: PolicyDocuments, FloorFeedbackReview, the role list.

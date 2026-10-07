@@ -54,6 +54,11 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
     run 13). Either accept that risk and have the next run merge #133 → #139 → #140 and deploy the
     API once, or ask for another round first. Until then production keeps the old importer and the
     old voice sheet; the venue-name fix and the floor-plan empty state are already live.
-20. [ ] **Temporary test-week AI limits** (with that deploy): `AI_MONTHLY_BUDGET_USD=30` and
-    `AI_VISION_WEEKLY_LIMIT=30` on Railway, **temporary for the test week only**; set them back
-    (unset / `5`) after the test week. Not applied in run 13 (no deploy happened).
+    **Run 14 update:** #133 and #139 are merged and deployed (new voice sheet live). #140 is still
+    open: after eight holdout rounds one case remains — a person whose name is typed all in lower
+    case and who has no shifts all week is left out without a note (details in
+    [`AUTONOMOUS_RUN.md`](AUTONOMOUS_RUN.md) run 14). Production keeps the old importer until #140
+    passes a fresh holdout and is deployed.
+20. [ ] **Temporary test-week AI limits:** `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30`
+    on Railway, **TEMPORARY test-week values**: applied with the run 14 API deploy on 2026-10-07
+    (before: unset / `5`). Set them back (unset / `5`) after the test week.
