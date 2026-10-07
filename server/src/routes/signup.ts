@@ -7,6 +7,7 @@ import { findUserByPhone } from './identity.js';
 import { toE164, INVALID_PHONE_ERROR } from '../lib/phone.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
+import { VENUE_NAME_MAX_LENGTH } from '../../../shared/venueName.js';
 import { devOtpEchoFor, logDevOtpEcho } from '../lib/devOtpEcho.js';
 import { sendOtpSms, SMS_SEND_FAILED_ERROR } from '../lib/sms.js';
 
@@ -66,6 +67,9 @@ signupRouter.post('/verify-otp', requireOtpEnabled, async (req, res) => {
     if (!phone) return res.status(400).json({ error: INVALID_PHONE_ERROR });
     if (!fullName) return res.status(400).json({ error: 'fullName is required.' });
     if (!venueName) return res.status(400).json({ error: 'venueName is required.' });
+    if (venueName.length > VENUE_NAME_MAX_LENGTH) {
+      return res.status(400).json({ error: `venueName must be ${VENUE_NAME_MAX_LENGTH} characters or fewer.` });
+    }
 
     const result = await verifyOtpCode(phone, 'SIGNUP', code);
     if (!result.ok) return res.status(401).json({ error: result.reason });
