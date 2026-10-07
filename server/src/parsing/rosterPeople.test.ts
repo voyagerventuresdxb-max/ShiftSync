@@ -87,9 +87,9 @@ test('an exact name match (accents in either Unicode form) is matched; a remembe
     { id: 'u-jose', fullName: 'José Ramos', roleId: null },
     { id: 'u-bash', fullName: 'Bastian Rao', roleId: null },
   ];
-  const { people, previewRows } = await resolveRowsAgainstDatabase(fakePrisma([], users, { nameAliases: [{ normalizedName: 'bash', userId: 'u-bash' }] }), 'loc-1', [
+  const { people, previewRows } = await resolveRowsAgainstDatabase(fakePrisma([], users, { nameAliases: [{ normalizedName: 'bast', userId: 'u-bash' }] }), 'loc-1', [
     row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'José Ramos' }),
-    row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Bash' }),
+    row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Bast' }),
   ]);
   assert.equal(people[0]!.status, 'matched');
   assert.equal(people[0]!.matchedUserId, 'u-jose');
@@ -106,7 +106,7 @@ test('close names are only ever suggestions (needs_decision + possible_match), n
     { id: 'u-john', fullName: 'John Smith', roleId: null },
   ];
   const { people, previewRows } = await resolveRowsAgainstDatabase(fakePrisma([], users), 'loc-1', [
-    row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'Bash' }),
+    row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'Bast' }),
     row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Maria L.' }),
     row({ rowNumber: 3, sourceRowIndex: 3, employeeName: 'Jose Ramos' }),
     row({ rowNumber: 4, sourceRowIndex: 4, employeeName: 'Jon Smith' }),
@@ -114,7 +114,7 @@ test('close names are only ever suggestions (needs_decision + possible_match), n
   ]);
   const byName = new Map(people.map((p) => [p.name, p]));
   for (const [name, userId] of [
-    ['Bash', 'u-bash'],
+    ['Bast', 'u-bash'],
     ['Maria L.', 'u-maria'],
     ['Jose Ramos', 'u-jose'],
     ['Jon Smith', 'u-john'],

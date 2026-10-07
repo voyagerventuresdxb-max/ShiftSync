@@ -174,24 +174,24 @@ test('close names are never merged without the manager; "same person" links and 
   try {
     await withServer(async (baseUrl) => {
       // No decision sent: the nickname becomes a NEW person, never silently merged.
-      const a = await stage(venue.locationId, [shift(`${TAG} Bash`, 1, WEEK_A[0]!)]);
+      const a = await stage(venue.locationId, [shift(`${TAG} Bast`, 1, WEEK_A[0]!)]);
       assert.equal(a.people[0]!.status, 'needs_decision');
       assert.equal(a.people[0]!.suggestedAction, 'create', 'a nickname is never preselected as the same person');
       const legacy = await confirm(baseUrl, venue.token, a.batchId, {});
       assert.equal(legacy.body.createdPeople, 1);
       assert.equal((await prisma.shift.count({ where: { userId: bastian.id } })), 0);
-      await prisma.user.deleteMany({ where: { locationId: venue.locationId, fullName: `${TAG} Bash` } });
+      await prisma.user.deleteMany({ where: { locationId: venue.locationId, fullName: `${TAG} Bast` } });
 
       // The manager says "same person".
-      const b = await stage(venue.locationId, [shift(`${TAG} Bash`, 1, WEEK_A[1]!)]);
+      const b = await stage(venue.locationId, [shift(`${TAG} Bast`, 1, WEEK_A[1]!)]);
       const linked = await confirm(baseUrl, venue.token, b.batchId, { people: [{ personKey: b.people[0]!.personKey, action: 'link', userId: bastian.id }] });
       assert.equal(linked.status, 201, linked.body.error ?? '');
       assert.equal(linked.body.linkedPeople, 1);
       assert.equal(linked.body.createdPeople, 0);
       assert.equal(await prisma.shift.count({ where: { userId: bastian.id } }), 1);
 
-      // Next import: "Bash" is matched straight away.
-      const c = await stage(venue.locationId, [shift(`${TAG} Bash`, 1, WEEK_B[0]!)]);
+      // Next import: "Bast" is matched straight away.
+      const c = await stage(venue.locationId, [shift(`${TAG} Bast`, 1, WEEK_B[0]!)]);
       assert.equal(c.people[0]!.status, 'matched');
       assert.equal(c.people[0]!.matchedUserId, bastian.id);
     });

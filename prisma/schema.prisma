@@ -1038,7 +1038,7 @@ model RosterRoleAlias {
 }
 
 /// Roster import memory, per venue: a name as printed on a roster (normalized) that the
-/// manager linked to an existing staff member ("Same person"), e.g. "Bash" -> Bastian Rao.
+/// manager linked to an existing staff member ("Same person"), e.g. "Bast" -> Bastian Rao.
 /// The next import matches that printed name straight to the same person.
 model RosterNameAlias {
   id             String   @id @default(cuid())

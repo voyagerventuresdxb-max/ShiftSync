@@ -65,7 +65,7 @@ export function PersonCard({
   const questions = timeQuestions(rows);
   const detailsId = `rr-details-${person.personKey}`;
   const displayName = choice.action === 'create' ? choice.name || person.name : person.name;
-  // Linked to someone whose name differs from the roster's ("Bash" -> Bastian Rao): say who.
+  // Linked to someone whose name differs from the roster's ("Bast" -> Bastian Rao): say who.
   const linkedTo = choice.action === 'link' && choice.userId !== person.matchedUserId ? match?.candidates.find((c) => c.userId === choice.userId)?.fullName : undefined;
 
   return (
