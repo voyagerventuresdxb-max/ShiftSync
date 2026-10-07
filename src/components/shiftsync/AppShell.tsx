@@ -18,11 +18,12 @@ import { NOTHING_HEARD, UNSUPPORTED, micProblem, offlineProblem, requestProblem,
 import { voiceExamples } from '@/lib/voiceExamples';
 import type { VoiceOrigin } from '@/lib/voiceSteps';
 import { VoiceProgress } from '@/components/shiftsync/VoiceProgress';
+// Not lazy: it is what opens when the phone is offline, when a lazy chunk could not be fetched.
+import { VoiceComposer } from '@/components/shiftsync/VoiceComposer';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
 const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
-const VoiceComposer = lazy(() => import('@/components/shiftsync/VoiceComposer').then((m) => ({ default: m.VoiceComposer })));
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -174,8 +175,6 @@ export function AppShell() {
   const [voiceExecProblem, setVoiceExecProblem] = useState<VoiceProblem | null>(null);
   // The typed command box: opened from the dock, and on every voice problem (with the problem shown above the box).
   const [composer, setComposer] = useState<{ open: boolean; text: string; problem: VoiceProblem | null }>({ open: false, text: '', problem: null });
-  const [composerNeeded, setComposerNeeded] = useState(false);
-  if (composer.open && !composerNeeded) setComposerNeeded(true);
   const [typedSending, setTypedSending] = useState(false);
   const examples = voiceExamples(session?.user.systemRole ?? 'STAFF');
 
@@ -571,20 +570,16 @@ export function AppShell() {
         </Suspense>
       )}
 
-      {composerNeeded && (
-        <Suspense fallback={null}>
-          <VoiceComposer
-            open={composer.open}
-            value={composer.text}
-            onChange={handleComposerChange}
-            problem={composer.problem}
-            sending={typedSending}
-            examples={examples}
-            onSend={handleTypedSend}
-            onCancel={handleComposerCancel}
-          />
-        </Suspense>
-      )}
+      <VoiceComposer
+        open={composer.open}
+        value={composer.text}
+        onChange={handleComposerChange}
+        problem={composer.problem}
+        sending={typedSending}
+        examples={examples}
+        onSend={handleTypedSend}
+        onCancel={handleComposerCancel}
+      />
 
       {voiceConsentNeeded && (
         <Suspense fallback={null}>
