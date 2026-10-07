@@ -46,8 +46,19 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
     left open since run 4.
 16. [ ] **Push on a real phone** ([`push-go-live.md`](push-go-live.md) §5): push is switched on since
     2026-10-06. Android Chrome in a normal tab; iPhone only from the Home Screen app.
-17. [ ] **Android build:** the debug-APK workflow stops at `npm ci` because `package-lock.json` is out
-    of sync with `package.json` (development tooling packages). Decide whether a reviewed PR may
-    regenerate the lockfile; no package versions in `package.json` change.
+17. [x] **Android build:** fixed by #135 (merged 2026-10-07, run 13).
 18. [ ] **Run 12 follow-ups** from the run 12 chat report: two items that need your decision before
     the next run (one on the rota stack, one security follow-up).
+19. [ ] **Run 13 decision — roster import (#140):** its holdout gate was not met (one dense photo
+    roster, one footer fragment, three shifted shifts; details in [`AUTONOMOUS_RUN.md`](AUTONOMOUS_RUN.md)
+    run 13). Either accept that risk and have the next run merge #133 → #139 → #140 and deploy the
+    API once, or ask for another round first. Until then production keeps the old importer and the
+    old voice sheet; the venue-name fix and the floor-plan empty state are already live.
+    **Run 14 update:** #133 and #139 are merged and deployed (new voice sheet live). #140 is still
+    open: after eight holdout rounds one case remains — a person whose name is typed all in lower
+    case and who has no shifts all week is left out without a note (details in
+    [`AUTONOMOUS_RUN.md`](AUTONOMOUS_RUN.md) run 14). Production keeps the old importer until #140
+    passes a fresh holdout and is deployed.
+20. [ ] **Temporary test-week AI limits:** `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30`
+    on Railway, **TEMPORARY test-week values**: applied with the run 14 API deploy on 2026-10-07
+    (before: unset / `5`). Set them back (unset / `5`) after the test week.

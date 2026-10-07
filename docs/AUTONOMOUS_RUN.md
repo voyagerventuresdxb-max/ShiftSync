@@ -895,3 +895,221 @@ Per-window p95 at most 113 ms. No deploy-log lines (no deploys).
   was no longer running afterwards. 01:22 → 03:00 (97 minutes) has no observations: laptop asleep
   or script paused, not an outage. The poll before it was healthy, and the next check (run 12
   preconditions, 2026-10-06 17:20 Dubai) found health and readiness 200 on the same deployment.
+
+---
+
+# Autonomous run 12 — 2026-10-06 (merge, deploy, push go-live)
+
+Owner switches: merge yes, live model calls no, rota stack not merged. Merge commits only
+(master merged into each branch first), nothing force-pushed, one gate per PR, secrets scan
+before every push, at most two API deploys from GitHub source (pinned Railway CLI), additive
+migrations only. No live model calls; voice tests used the scripted model and the e2e fake.
+Security wording outcome-only; specifics went to the owner in the chat report.
+
+## Preconditions: passed
+GitHub push rights; the run 9 and run 10 reports match git history and production. Required
+production variables present, `NODE_ENV=production`, dev-bypass / error-injection /
+base-URL-override variables absent, health and readiness 200. Rollback reference: `5fd67c0c`
+(`ee65d9d`).
+
+## Stages
+
+| Stage | Result |
+|---|---|
+| 1 — observer | Full summary appended to the run 10 report (#130). Polls stopped at 01:22 when the computer went to sleep, before the 03:00 end; no outage observed. |
+| 2 — rehearsal, review, APK | All open PRs except #30 (would add a dependency) and #42 (superseded by #69) merged on a local branch; unit, server and e2e three times each. No flaky tests; three deterministic failures, all root-caused: weekday-dependent voice test data (fixed on #125), a test interaction between #69 and #125 (fixed on #69), and a page that never finished loading after #126 (app fix #131). Review: one more fix on #125 (the silence check never blocks a recording it could not measure). Debug-APK workflow: **failed** at `npm ci` — `package-lock.json` is out of sync with `package.json` (development tooling packages); no APK. |
+| 3 — findings | The findings log has no entries; skipped. |
+| 4 — merge and deploy | Merged in order: #124 `e17f9b4`, #125 `66d6f17`, #127 `41d171a`, #126 `df39bef`, #128 `b4994d0`, #131 `dce7cdf`, #129 `4ba7bfb`, #130 `244b67b`. Conflicts: `MEMORY.md` (both kept) and two `AppShell.tsx` import lines for #128 (both kept). Final full gate on master: e2e 92/92. Deploy `822ce3d5` on `244b67b`: SUCCESS, two additive migrations applied (37/37), health and readiness 200 twice; one failed health poll at the switch-over. Smoke test without sign-in as expected (codes, refusals, response headers). Vercel build for `244b67b` succeeded. Tag `prod-20261006-244b67b`. No rollback. |
+| 5 — rota stack | All seven refreshed on master `244b67b` with merge commits, nothing force-pushed, not merged. #69: the access-matrix test conflict kept master's live-router check; two test fixes for interactions with #125 (the rota golden-path spec records before stopping; the voice corpus publishes the staff caller's fixture shifts). Full gate on the four top branches (#108–#111): full e2e 95/95, 95/95, 98/98, 96/96, server suite with the access matrix. Review guide refreshed (#132). **Not done:** the planned tightening of the leave read (5a) — it needs an access-matrix test change that this run's tool permissions refused; nothing committed; owner decision. |
+| 6 — push | Railway variables only (no Vercel change). Pair generated with the repo script into a folder outside every repository, checked locally against a mock push service (subscribe, delivery with a valid signature, a failing push service, no keys), the three variables staged with deploys skipped (`VAPID_SUBJECT` = the production web address), then deploy `a8dfc425` on `244b67b`: SUCCESS, health and readiness 200 twice, push enabled in the deploy log, unauthenticated push routes refused. Key files deleted afterwards. |
+| 7 — voice choices | #133, draft, not merged: below the confidence threshold, two or three checked readings are offered as choices; each passes the same role, venue, date and overlap checks as a confident answer; a choice only opens the normal confirm sheet; the voice log names the confirmed reading. Mocked server, unit and e2e tests; real-phone cases C1–C4 in `voice-test-script.md`. Full e2e 93/93. |
+| 8 — pilot gaps | #132 (docs only) merged: `pilot-gaps.md`, push status, the push page's web address and manifest note, voice limits, rota review guide, owner to-do. |
+| 9 — housekeeping | Five run worktrees removed and their merged local branches deleted; one kept on purpose (it holds a local branch for an owner decision, below). Worktrees from earlier runs untouched. Free disk 28 GB. |
+
+Gates: typecheck, lint 0 errors (18 existing warnings), unit, server suite, relevant e2e
+(`CI=1 --retries=0`), secrets scan clean. One load-dependent test (the parallel per-person AI
+quota test) failed three times while another worktree's e2e suite ran on the same machine and passed
+2/2 alone each time.
+
+## Production after the run
+API `a8dfc425` on `244b67b` (`prod-20261006-244b67b`), health and readiness 200, push on.
+
+## Blocked or for the owner
+- **Rota leave read (stage 5a):** blocked as above; the change is described in the chat report.
+- **One security follow-up** is held for the owner (details in the chat report); a fix is ready on a local branch, deliberately not pushed.
+- **Debug APK:** needs a reviewed lockfile regeneration (`owner-todo.md` item 17).
+- **Observer:** the end-time check failed (the computer slept); recorded in the run 10 summary.
+- **Local main checkout:** a stray command in this run reverted one uncommitted local file there; nothing in the repository or production was affected; details in the chat report.
+- Push, voice and the new AI quotas still need the real-phone checks in `owner-todo.md`.
+
+---
+
+# Autonomous run 13 — 2026-10-07 (roster import, venue name, floor sections, voice)
+
+Fixes for the owner's real-phone findings of 7 Oct. Merge commits only; one PR per stage. The
+Stage 1 holdout gate was not met, so Stage 1 was not merged and **nothing was deployed**.
+
+## Stages
+
+| Stage | Status | PRs | Merged / deployed |
+|---|---|---|---|
+| 0 State | done | — | prod healthy; repo still public, so one prepared fix stays local |
+| 1 Roster reading | **gate not met** after four graded rounds | #140 (open) | not merged |
+| 2 Venue name | done | #137 | merged; frontend live via Vercel; API part waits for the next deploy |
+| 3 Floor sections | done | #138 | merged; frontend live |
+| 4 Voice | done; live script passed (0 changes without Confirm) | #133, #139 (open, gated) | not merged: the new sheet needs the new API |
+| Owner-decision PRs | done | #135 lockfile, #136 generic error message | merged (API part of #136 waits for the next deploy) |
+| 5 Deploy | **not done** (Stage 1 gate) | — | API unchanged: `a8dfc425` on `244b67b` |
+| 6 End-to-end QA | done on a local stack | — | — |
+| 7 Housekeeping | done | — | — |
+
+Every merged PR: master merged in, then typecheck, lint, unit, server (incl. the access matrix),
+full e2e (CI=1) and the secrets scan. Known flakes re-run alone twice (all passed):
+`voice.spec.ts` consent / role scoping / compound request, and the `aiBudget` parallel-quota test
+under full-suite load.
+
+## Root causes found
+- **Roster import created no staff.** Confirm wrote shifts only: a name with no matching staff
+  member became an unassigned shift and the name was discarded. The review counted rows ("10 new
+  staff"), hid new people after confirm, skipped people without a resolvable role, and a second
+  import duplicated every shift.
+- **Wrong week.** The client never sent the week and the server defaulted to the current week;
+  weekday-only headers, a weekday row above the date row, the positional fallback and the AI
+  prompt all anchored to today.
+- **AI reads of photos and scans** timed out at the shared 30 s timeout and, with a longer
+  timeout, ran out of output tokens.
+- **Venue name.** The header read the name fetched once per session; the Venue step saved the
+  new name without telling the app.
+- **Floor-sections stepper** saved nothing (documented in `docs/floor-sections.md`).
+- **Voice shout-out.** A shout-out to someone not on the staff list fell to a generic fallback;
+  separately, a first name two people share could be resolved silently.
+
+## Stage 1: failure report
+Measured by an independent reviewer on holdout sets the developers never saw (made-up names;
+two real reference layouts: a colour-coded decimal-hours grid exported to PDF, and a scanned
+free-text grid). Each round's failures were passed on only as structural descriptions, and the
+next round was graded on a fresh set.
+
+| Holdout | Staff recall (≥ 99) | Precision (100) | Exact time (≥ 99) | Week (100) | Silent drops (0) |
+|---|---|---|---|---|---|
+| v1, production code (baseline) | 0.1 % | — (no staff created) | — | 26 % | many |
+| v1, round 1 | 99.6 | 97.0 | 99.9 | 100 | 2 people / 41 shifts |
+| v1, round 2 | 100 | 100 | 99.9 | 100 | 0 |
+| v2 (fresh), round 2 | 99.4 | 96.6 | 96.4 | 100 | 2 / 13 |
+| v3 (fresh), round 3 | 99.9 | 99.5 | 98.9 | 100 | 1 / 18 |
+| v4 (fresh), round 4 | 99.6 | 99.9 | 99.9 | 93.5 | 3 / 20 |
+
+What still fails on v4: one dense, angled 44-person photo (the two AI reads disagreed on most
+cells, the page was withheld, and 3 people in its bottom section were never read); one footer
+fragment read as a person when the AI cross-check was not used; 3 shifts a day off in a text PDF
+with h.mm clock times; 3 cells on a low-contrast scan that both AI reads got wrong. The two
+"week" misses are the two photos that saved nothing (the detected week was right on 31/31).
+
+What works on v4: 2-page and 40+ text PDFs and scans (all people, all shifts exact), blurry and
+fax-like images, every spreadsheet and CSV, free-text times, nickname / duplicate / two-section
+cases (all flagged, never merged silently), re-imports (0 new staff, 0 new shifts, answered
+from the per-venue cache), p50 / p95 time to the review screen 13.6 s / 27.6 s, about USD 0.11
+per AI import.
+
+The two real reference files, run end to end through the local app on a phone-sized screen with
+the live reader: every person created, every shift in the printed week, a repeat import and the
+same roster as a photo matched everyone with no new staff or shifts.
+
+Recommendation: merge #133 → #139 → #140 and deploy the API once, if the owner accepts the
+remaining photo risk (the review screen shows a "hard to read" note and asks for the original
+file); or keep #140 open for one more round on dense photos and footer fragments.
+
+## Live AI spend
+About USD 16.0 of the USD 20.00 ceiling (stop value 18.00), metered per call. No quota, billing
+or permission errors.
+
+## Production after the run
+API unchanged (`a8dfc425` on `244b67b`); no Railway variable changed; no tag. Vercel serves
+master with #135–#138.
+
+# Autonomous run 14 — 2026-10-07 (roster import gate, voice name resolution, join linking)
+
+Follow-up to run 13: the remaining roster-reading misses, join-approval linking, voice commands
+against real staff and section names, merges and one API deploy. Merge commits only.
+
+## Stages
+
+| Stage | Status | PRs | Merged / deployed |
+|---|---|---|---|
+| 0 Repository visibility | stopped: the run's GitHub account has write, not admin, access | — | visibility unchanged, so one prepared fix stays unmerged |
+| A Roster reading | **gate not met** after eight graded rounds (v5–v12) | #140 | not merged |
+| B Join-approval linking | done | #140 | in #140, not merged |
+| V Voice: names, sections, roles | done; 0 wrong person; live sample as expected | #139 | merged and deployed |
+| C Merges | #139 merged; #140 held back by the Stage A gate | #133 (earlier), #139, #141 and #134 (docs) | — |
+| D Deploy | done: one API deploy, without the roster import | — | API on master `6dc6aee` (deployment `04138955`) |
+| E Housekeeping | done | — | — |
+
+Every merged PR: master merged in, then typecheck, lint, unit, server (incl. the access matrix),
+full e2e (CI=1) and the secrets scan. Flaky tests re-run alone twice and passed: the `aiBudget`
+parallel-quota test (fails only under the suite's one-connection pool cap) and, new this run,
+`offline-schedule.spec.ts` "signing out wipes the saved copy" (passed on its automatic retry).
+
+## Roster reading (Stage A)
+
+Fixed this run, all in #140 (not merged, so not in production yet):
+- **Shifts a day off**: a day heading printed one or two days left or right of its columns is
+  detected on both readers, including day headings over AM | PM sub-columns and a leading
+  number / position column. Such a page saves no shift: everyone on it is listed, every day is
+  shown to check, and a note asks for the original file.
+- **Footer fragments**: a footer or legend line is never read as a person.
+- **Reader disagreement noise**: where the file's own text was read with certainty, it wins and
+  the AI reading is counted, not flagged. Rows flagged on clean text PDFs: about 30 % of rows in two-reader uploads before (v4), 3.1 % on v5 and 0 % on the clean text PDF read by both readers in v10.
+- **Names typed in lower case** are read as people (shown title-cased) when their row has day
+  content like the other person rows.
+- **Progress on the review screen**: uploading, reading, cross-checking and matching steps.
+
+Graded by the independent reviewer on fresh holdout sets each round (made-up names; failures
+passed on as structural descriptions only):
+
+| Holdout | Precision (100) | Recall (≥ 99) | Exact time (≥ 99) | Wrong-day saved (0) | Week | Verdict |
+|---|---|---|---|---|---|---|
+| v5 | 99.5 | 85.2 | 99.1 | 27 | 88.9 % | fail |
+| v6 | 98.8 | 90.5 | 91.5 | 24 | 90 % | fail |
+| v7 | 100 | 99.1 | 100 | 1 | 83.3 % | fail |
+| v8 (AI declined) | 100 | 97.2 | 17.5 / 100 | 20 | right | fail |
+| v9 | 100 | 95.7 | 100 | 0 | right | fail: names typed in lower case |
+| v10 | 100 | 98.7 | 100 | 0 | right | fail: 1 person dropped |
+| v11 | 100 | 96.4 | 100 | 0 | right | fail: 2 people dropped |
+| v12 | 100 | 98.2 | 100 | 0 | right | fail: 1 person dropped |
+
+Real reference layouts end to end on a local stack: both reference files keep every person and every shift in the printed week in the recorded-answer replay after each fix (21/21 people and 160/160 shifts; 18/18 and 62/62).
+
+What still fails: a person whose name is typed all in lower case **and** who has no shifts all week (whole-week leave) is left out of the review without a note. Every other v9–v12 case passed: no shift saved on a wrong day, every saved time exact, precision 100 %, the week right. #140 stays open for that one fix plus a fresh holdout.
+
+## Join-approval linking (Stage B)
+A join request that matches imported staff by name never links on its own when more than one
+record could match or the match is by first name only: the manager picks the person (or "new
+person") explicitly. Tests: two people sharing a first name, an exact full-name match, no match.
+Manager approval is still required.
+
+## Voice (stage V)
+- The server decides who a spoken name means, within the caller's own venue only: spelling
+  variants, short forms, sound-alike names and edit distance. An exact full name settles; a
+  one-word name settles only when no close alternative exists at the venue; shared or close
+  names show "Which one?" with each person's role; nothing close offers the team list. Nothing
+  runs before Confirm, and a voice command never creates a person.
+- Sections, roles and service words are checked against the venue's own lists the same way.
+- Optional spelling hint to the model: the caller's venue's active staff display names, section
+  names and role names only (see `docs/vlm-go-live.md`).
+- Confirm sheets spell out the full name, role, day, date and time.
+- Name-resolution harness on two real rosters (local only, counts only): 39 real staff, checked in their own venue and in one combined venue (first name, full name, 3–5 mishearings, nickname; model answer absent, right or wrong): 1,872 checks, **0 wrong person**. Exact names with no close alternative at the venue resolve 100 %; counting the "Which one?" asked when a close alternative exists (for example a one-word name that another staff name extends) as misses, exact-name resolution is 90.5 % and 93.1 % on the two venues. Hardest: shared first names (always asked), short names that are the start of a colleague's longer name, and heavily misheard long names (offered as "Did you mean").
+- Live sample on a local real-roster venue (9 commands: shout-outs by first name, full name,
+  shared first name, a mangled name and a missing name; create shift; assign section; "who is
+  working tonight"; an unrelated request): every result as expected, no wrong person, nothing
+  saved without Confirm.
+- `docs/voice-test-script.md` has a 12-minute demo flow with made-up names.
+
+## Live AI spend
+Run 14: about USD 2.25 of the USD 3.00 ceiling (stop value 2.50), metered per call. No quota, billing
+or permission errors. The meter's worst-case check left no room for further AI reads near the
+end of the run, so the last holdout round was graded with the AI reader declined.
+
+## Production after the run
+API deployment `04138955` on master `6dc6aee` (#133, #135–#139), deployed once with `redeploy --from-source`; health 200 twice (direct and through Vercel), readiness 200 (37 of 37 migrations, none pending), Vercel build succeeded, smoke checks without signing in passed. Railway: `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30` (temporary, owner-todo item 20); nothing else changed. Tag `prod-20261007-6dc6aee`. Rollback reference: `a8dfc425` on `244b67b`.
+
+What production can do now: the new voice sheet with person lookup, "Which one?", section and role checks and full dates; venue name everywhere; floor-plan empty state. What it cannot do yet: the rebuilt roster import (#140) — production keeps the old importer, which does not create staff from a roster.
