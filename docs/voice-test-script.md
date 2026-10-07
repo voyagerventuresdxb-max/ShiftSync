@@ -251,6 +251,7 @@ month, year).
 | E2 | Anyone | Airplane mode on; tap the mic | Box **You're offline**: "Voice needs a connection, so nothing was recorded. Reconnect and try again." Type something, **Send**: "Nothing was sent. Reconnect, then send it again — your words are kept below." Airplane mode off, **Send**: the sheet appears. |
 | E3 | Manager | Get any preview, airplane mode on, tap **Confirm** | The sheet stays open with **You're offline**: "Nothing was sent and nothing changed. Reconnect, then tap Confirm again." Reconnect and **Confirm**: done once, not twice. |
 | E4 | Anyone | On a slow connection (or a dev build with `window.__shiftsyncVoiceTimeoutMs = 1000` set in the console), send a command | After 25 seconds (1 s on the dev setting): box **Taking too long**: "The assistant didn't answer within 25 seconds, so I stopped waiting. Nothing changed. Try again, or type it below." The words are kept. |
+| E4b | Manager | Get any preview, then make **Confirm** slow (very weak signal, or the dev setting above) | The sheet stays open with **Taking too long**: "No answer after 25 seconds. It may still have gone through — check before you confirm again." Tap **Confirm** again: "Done: …", and the change exists once, never twice. |
 | E5 | Anyone | Non-production with no AI key; send a typed command | Box **Assistant unavailable** with the server's sentence (see the table above). |
 | E6 | Anyone | More than 30 commands in 5 minutes, or a spent daily limit | Box **Limit reached** with the server's sentence. |
 

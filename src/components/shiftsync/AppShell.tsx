@@ -14,7 +14,7 @@ import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 import { choosableFor } from '@/lib/voiceChoices';
-import { NOTHING_HEARD, UNSUPPORTED, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
+import { NOTHING_HEARD, UNSUPPORTED, alreadyDone, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
 import { voiceExamples } from '@/lib/voiceExamples';
 import type { VoiceOrigin } from '@/lib/voiceSteps';
 import { VoiceProgress } from '@/components/shiftsync/VoiceProgress';
@@ -438,8 +438,7 @@ export function AppShell() {
     }
     setVoiceExecuting(true);
     setVoiceExecProblem(null);
-    try {
-      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
+    const done = () => {
       if (voiceResult.hasAdditionalRequest) {
         // Keep the sheet open, transitioned into its follow-up state
         // (VoiceCommandSheet's `executed` prop) — the sheet's own "Done: …"
@@ -450,7 +449,17 @@ export function AppShell() {
         setVoiceBanner({ kind: 'success', message: `Done: ${voiceResult.intent.summary}` });
         setVoiceResult(null);
       }
+    };
+    try {
+      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
+      done();
     } catch (err) {
+      // A Confirm tapped again after a timeout or a dropped connection, for a command the first
+      // tap already did: the server runs it once and says so, which is success, not an error.
+      if (alreadyDone(err)) {
+        done();
+        return;
+      }
       const problem = requestProblem(err, { stage: 'execute', online: navigator.onLine });
       if (problem.kind === 'offline' || problem.kind === 'timeout') {
         // Passing trouble: the sheet stays open with the reason, so Confirm can be tapped again.

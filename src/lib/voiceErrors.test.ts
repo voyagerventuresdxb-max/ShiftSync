@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError, VoiceOfflineError, VoiceTimeoutError } from '@/api/voice';
-import { IPHONE_MIC_HELP, micProblem, offlineProblem, requestProblem } from './voiceErrors';
+import { IPHONE_MIC_HELP, alreadyDone, micProblem, offlineProblem, requestProblem } from './voiceErrors';
 
 const understand = { stage: 'understand' as const, online: true };
 
@@ -69,4 +69,10 @@ test('429 and the spend cap are "limit reached", keeping the server message', ()
 test('any other server answer keeps its message; an unknown failure gets a plain one', () => {
   assert.equal(requestProblem(new ApiError('That shift overlaps another one.', 409), { stage: 'execute', online: true }).message, 'That shift overlaps another one.');
   assert.equal(requestProblem(new Error('boom'), understand).message, 'Could not process the voice command.');
+});
+
+test('a repeated Confirm the server already did (409 voice_already_executed) counts as done; other 409s do not', () => {
+  assert.equal(alreadyDone(new ApiError('That command has already been done.', 409, undefined, 'voice_already_executed')), true);
+  assert.equal(alreadyDone(new ApiError('That shift overlaps another one.', 409)), false);
+  assert.equal(alreadyDone(new VoiceTimeoutError(25)), false);
 });

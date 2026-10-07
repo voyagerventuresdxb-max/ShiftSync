@@ -67,6 +67,14 @@ export function offlineProblem(stage: VoiceStage | 'record'): VoiceProblem {
   return { kind: 'offline', title: "You're offline", message };
 }
 
+/**
+ * /execute refused a second run of the same command (same voiceLogId): the first Confirm already
+ * did it, even though its answer never arrived (timeout, dropped connection). Treated as done.
+ */
+export function alreadyDone(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.errorCode === 'voice_already_executed';
+}
+
 /** "Request failed (503)": the server said nothing more useful than its status. */
 const GENERIC = /^Request failed \(\d+\)$/;
 

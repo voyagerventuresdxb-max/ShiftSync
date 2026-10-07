@@ -57,10 +57,13 @@ interface Calls {
 type Reply = { status?: number; body: unknown; delayMs?: number };
 
 /**
- * Stubs the three voice endpoints. `parse` answers each parse-intent call in turn (the last one
+ * Stubs the three voice endpoints. `parse` (and `execute`) answer each call in turn (the last one
  * repeats); a plain intent object becomes the contract's 200 body. Records every call.
  */
-async function stubVoice(page: Page, { parse = [], transcript = '' }: { parse?: (Reply | Record<string, unknown>)[]; transcript?: string } = {}): Promise<Calls> {
+async function stubVoice(
+  page: Page,
+  { parse = [], execute = [{ body: { executed: true, result: {} } }], transcript = '' }: { parse?: (Reply | Record<string, unknown>)[]; execute?: Reply[]; transcript?: string } = {},
+): Promise<Calls> {
   const calls: Calls = { parse: [], execute: [], transcribe: 0 };
   const fulfil = async (route: Route, reply: Reply) => {
     if (reply.delayMs) await new Promise((r) => setTimeout(r, reply.delayMs));
@@ -81,7 +84,7 @@ async function stubVoice(page: Page, { parse = [], transcript = '' }: { parse?: 
   });
   await page.route('**/api/voice/execute', async (route) => {
     calls.execute.push(route.request().postDataJSON() as Calls['execute'][number]);
-    await fulfil(route, { body: { executed: true, result: {} } });
+    await fulfil(route, execute[Math.min(calls.execute.length - 1, execute.length - 1)]!);
   });
   return calls;
 }
@@ -341,6 +344,32 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
       "The assistant didn't answer within 1 second, so I stopped waiting. Nothing changed. Try again, or type it below.",
     );
     await expect(box.getByLabel('Type it instead')).toHaveValue("Who's working tonight?");
+  });
+
+  test('a Confirm that timed out stays on the sheet; tapped again, the server says it was already done, and that is Done', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as { __shiftsyncVoiceTimeoutMs?: number }).__shiftsyncVoiceTimeoutMs = 1000;
+    });
+    await signIn(page, 'MANAGER');
+    const summary = 'Post an announcement to all staff.';
+    const calls = await stubVoice(page, {
+      parse: [{ intent: 'POST_ANNOUNCEMENT', content: 'Staff meeting Monday at 3pm.', confidence: 0.95, summary }],
+      execute: [
+        { body: { executed: true, result: {} }, delayMs: 4000 },
+        { status: 409, body: { error: 'That command has already been done.', errorCode: 'voice_already_executed' } },
+      ],
+    });
+
+    await typeCommand(page, 'Announce staff meeting Monday at 3');
+    const s = sheet(page);
+    await s.getByRole('button', { name: 'Confirm' }).click();
+    await expect(s.getByRole('alert')).toContainText('Taking too long');
+    await expect(s.getByRole('alert')).toContainText('It may still have gone through — check before you confirm again.');
+    await s.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.locator('.success-block')).toContainText(`Done: ${summary}`);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    // Both taps carried the same voice log, which is what lets the server run it only once.
+    expect(calls.execute.map((c) => (c as { voiceLogId?: string }).voiceLogId)).toEqual(['log-1', 'log-1']);
   });
 
   test('503 and 429: "assistant unavailable" and "limit reached", in the server\'s own words, with the typed box', async ({ page }) => {
