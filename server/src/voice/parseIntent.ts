@@ -1,8 +1,8 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type ReadingDetails } from './intentSchema.js';
-import { MAX_PEOPLE_CHOICES, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
+import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type PersonQuestion, type ReadingDetails } from './intentSchema.js';
+import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
@@ -204,6 +204,8 @@ export async function parseVoiceIntent(
             responseMimeType: 'application/json',
             responseSchema: schema,
             maxOutputTokens: MAX_OUTPUT_TOKENS.voice_intent,
+            // The same words should get the same answer: no sampling variety (seen live run to run).
+            temperature: 0,
             thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
           },
         });
@@ -217,6 +219,8 @@ export async function parseVoiceIntent(
     const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
     const lowConfidence = attempted.intent !== 'UNRECOGNIZED' && attempted.confidence < CONFIDENCE_THRESHOLD;
     let clientResponse: ParsedIntent = lowConfidence ? lowConfidenceResponse(attempted.summary) : attempted;
+    // A recognised command missing something it needs: ask for exactly that, not "didn't catch that".
+    if (attempted.intent === 'UNRECOGNIZED') clientResponse = askForMissing(raw, context, user, transcript) ?? clientResponse;
 
     // PUBLISH_ROTA/APPLY_ROTA_TEMPLATE get a further, deterministic
     // refinement pass on top of the confidence gate above — see spec
@@ -481,6 +485,12 @@ export async function checkAgainstContext(
   if (mismatch) return mismatch;
   // The person a command names is looked up in the caller's own venue, never taken on the model's
   // word: nobody by that name, or more than one, is put to the caller as a question.
+  // "Move Alex's shift to 7pm": a name that is whose shift it already is names no new person.
+  if (response.intent === 'EDIT_SHIFT' && response.userId === null && response.targetUserName?.trim()) {
+    const { shiftId } = response;
+    const current = (ctx.weekShifts ?? []).find((s) => s.id === shiftId)?.assigneeName;
+    if (current && nameFits(response.targetUserName, current)) response = { ...response, userId: undefined, targetUserName: undefined };
+  }
   const slot = personSlot(response);
   if (slot) {
     const found = resolvePerson(slot.heard, slot.id, ctx.staffDirectory, transcript, caller.id);
@@ -702,12 +712,22 @@ async function askWhichPerson(
     return { intent: 'UNRECOGNIZED', summary, reason, person: { heard, status: 'ambiguous' }, ...choices };
   }
 
+  return missingPerson(found, caller, transcript, options);
+}
+
+/** "I couldn't find Rana on your team.", with any close names as choices and, for managers, where to add them. */
+function missingPerson(
+  found: Extract<PersonResolution, { kind: 'missing' }>,
+  caller: { systemRole: SystemRole },
+  transcript: string,
+  options: ChoosableIntent[],
+): ParsedIntent {
   const heard = saidAloud(found.heard, transcript) ? found.heard : '';
   const who = heard || 'that person';
   const canAddStaff = caller.systemRole !== 'STAFF';
   const addHint = canAddStaff ? `If ${heard || 'they'} ${heard ? 'is' : 'are'} new, add them in People first, then try again.` : 'Check the name and try again.';
   const reason = options.length ? `Did you mean ${options.length === 1 ? 'this person' : 'one of these'}? ${addHint}` : addHint;
-  return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...choices };
+  return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...(options.length ? { options } : {}) };
 }
 
 /**
@@ -729,126 +749,234 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
   // absent score must never be treated as "the model was certain."
   const rawConfidence = raw.confidence;
   const confidence = typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : 0;
+  // Every key is required by the schema, so "not given" arrives as null — or, from a model that
+  // ignores it, as "" or not at all. All three are the same here: missing.
+  const missing = missingFields(raw);
+  const value = (key: string) => text(raw[key]);
 
-  switch (intent) {
-    case 'MARK_AVAILABILITY':
-      if (typeof raw.date === 'string' && (raw.availabilityType === 'UNAVAILABLE' || raw.availabilityType === 'PREFERRED_OFF')) {
-        return { intent: 'MARK_AVAILABILITY', date: raw.date, type: raw.availabilityType, confidence, summary };
-      }
-      break;
-    case 'REQUEST_SWAP':
-      if (typeof raw.shiftId === 'string' && (typeof raw.targetUserId === 'string' || named)) {
+  if (!missing?.length) {
+    switch (intent) {
+      case 'MARK_AVAILABILITY':
+        return { intent: 'MARK_AVAILABILITY', date: value('date')!, type: raw.availabilityType as 'UNAVAILABLE' | 'PREFERRED_OFF', confidence, summary };
+      case 'REQUEST_SWAP':
         return {
           intent: 'REQUEST_SWAP',
-          shiftId: raw.shiftId,
-          targetUserId: typeof raw.targetUserId === 'string' ? raw.targetUserId : '',
+          shiftId: value('shiftId')!,
+          targetUserId: value('targetUserId') ?? '',
           targetUserName: heardName,
-          reason: typeof raw.reason === 'string' ? raw.reason : null,
+          reason: value('reason') ?? null,
           confidence,
           summary,
         };
-      }
-      break;
-    case 'APPROVE_SWAP':
-    case 'DECLINE_SWAP':
-      if (typeof raw.swapRequestId === 'string') {
-        return { intent, swapRequestId: raw.swapRequestId, confidence, summary };
-      }
-      break;
-    case 'APPROVE_JOIN':
-    case 'DECLINE_JOIN':
-      if (typeof raw.joinRequestId === 'string') {
-        return { intent, joinRequestId: raw.joinRequestId, confidence, summary };
-      }
-      break;
-    case 'CREATE_SHIFT':
-      if (typeof raw.roleId === 'string' && typeof raw.date === 'string' && typeof raw.start === 'string' && typeof raw.end === 'string') {
+      case 'APPROVE_SWAP':
+      case 'DECLINE_SWAP':
+        return { intent, swapRequestId: value('swapRequestId')!, confidence, summary };
+      case 'APPROVE_JOIN':
+      case 'DECLINE_JOIN':
+        return { intent, joinRequestId: value('joinRequestId')!, confidence, summary };
+      case 'CREATE_SHIFT':
         return {
           intent: 'CREATE_SHIFT',
-          roleId: raw.roleId,
-          date: raw.date,
-          start: raw.start,
-          end: raw.end,
-          userId: typeof raw.userId === 'string' ? raw.userId : null,
+          roleId: value('roleId')!,
+          date: value('date')!,
+          start: value('start')!,
+          end: value('end')!,
+          userId: value('userId') ?? null,
           ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
-      }
-      break;
-    case 'EDIT_SHIFT':
-      if (typeof raw.shiftId === 'string') {
+      case 'EDIT_SHIFT': {
+        // The person on the shift: a new one (an id, or a name to look up), taken off (clearAssignee),
+        // or — null, with no name — unchanged. Every key is always sent, so a bare null can't mean "off".
+        const userId = value('userId') ?? (raw.clearAssignee === true ? null : named ? null : undefined);
         return {
           intent: 'EDIT_SHIFT',
-          shiftId: raw.shiftId,
-          roleId: typeof raw.roleId === 'string' ? raw.roleId : undefined,
-          date: typeof raw.date === 'string' ? raw.date : undefined,
-          start: typeof raw.start === 'string' ? raw.start : undefined,
-          end: typeof raw.end === 'string' ? raw.end : undefined,
-          userId: typeof raw.userId === 'string' || raw.userId === null ? raw.userId : undefined,
-          ...(named ? { targetUserName: heardName } : {}),
+          shiftId: value('shiftId')!,
+          roleId: value('roleId'),
+          date: value('date'),
+          start: value('start'),
+          end: value('end'),
+          userId,
+          ...(named && raw.clearAssignee !== true ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
       }
-      break;
-    case 'PUBLISH_ROTA':
-      if (typeof raw.weekStart === 'string') {
-        return { intent: 'PUBLISH_ROTA', weekStart: raw.weekStart, confidence, summary };
-      }
-      break;
-    case 'APPLY_ROTA_TEMPLATE':
-      if (typeof raw.weekStart === 'string' && typeof raw.templateName === 'string') {
+      case 'PUBLISH_ROTA':
+        return { intent: 'PUBLISH_ROTA', weekStart: value('weekStart')!, confidence, summary };
+      case 'APPLY_ROTA_TEMPLATE':
         return {
           intent: 'APPLY_ROTA_TEMPLATE',
-          templateId: typeof raw.templateId === 'string' ? raw.templateId : null,
-          templateName: raw.templateName,
-          weekStart: raw.weekStart,
+          templateId: value('templateId') ?? null,
+          templateName: value('templateName')!,
+          weekStart: value('weekStart')!,
           confidence,
           summary,
         };
-      }
-      break;
-    case 'POST_ANNOUNCEMENT':
-      if (typeof raw.content === 'string') {
-        return { intent: 'POST_ANNOUNCEMENT', content: raw.content, confidence, summary };
-      }
-      break;
-    case 'POST_SHOUTOUT':
-      if ((typeof raw.targetUserId === 'string' || named) && typeof raw.content === 'string') {
+      case 'POST_ANNOUNCEMENT':
+        return { intent: 'POST_ANNOUNCEMENT', content: raw.content as string, confidence, summary };
+      case 'POST_SHOUTOUT':
         return {
           intent: 'POST_SHOUTOUT',
-          targetUserId: typeof raw.targetUserId === 'string' ? raw.targetUserId : '',
+          targetUserId: value('targetUserId') ?? '',
           targetUserName: heardName,
-          content: raw.content,
+          content: raw.content as string,
           confidence,
           summary,
         };
-      }
-      break;
-    case 'QUERY_MY_SCHEDULE':
-      return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
-    case 'ASSIGN_SECTION':
-      if (typeof raw.sectionId === 'string' && (typeof raw.staffId === 'string' || named) && typeof raw.shiftDate === 'string' && (raw.period === 'AM' || raw.period === 'PM')) {
+      case 'QUERY_MY_SCHEDULE':
+        return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
+      case 'ASSIGN_SECTION':
         return {
           intent: 'ASSIGN_SECTION',
-          sectionId: raw.sectionId,
-          staffId: typeof raw.staffId === 'string' ? raw.staffId : '',
-          shiftDate: raw.shiftDate,
-          period: raw.period,
-          dutyLabel: typeof raw.dutyLabel === 'string' ? raw.dutyLabel : null,
+          sectionId: value('sectionId')!,
+          staffId: value('staffId') ?? '',
+          shiftDate: value('shiftDate')!,
+          period: raw.period as 'AM' | 'PM',
+          dutyLabel: value('dutyLabel') ?? null,
           ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
-      }
-      break;
+    }
   }
-  // Not understood, or an answer missing what it needs: the caller is told so in plain words.
-  // The model's own sentences are kept only when they read like one (see forCaller).
+  // Not understood, or an answer missing what it needs (parseVoiceIntent turns the latter into a
+  // question about exactly what's missing): the caller is told so in plain words. The model's own
+  // sentences are kept only when they read like one (see forCaller).
   return {
     intent: 'UNRECOGNIZED',
     reason: forCaller(raw.unrecognizedReason) ?? VOICE_TRY_AGAIN,
     summary: (intent === 'UNRECOGNIZED' ? forCaller(raw.summary) : null) ?? VOICE_DIDNT_CATCH,
+  };
+}
+
+/** A non-empty string, or undefined: null, "", whitespace and anything else count as not given. */
+function text(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() !== '' ? v : undefined;
+}
+
+/**
+ * What each action needs before it can be offered, in the order the caller is asked for it. "person"
+ * is an id or a name as said (looked up later). CREATE_SHIFT's person is optional (an open shift).
+ */
+const NEEDS: Record<string, (raw: Record<string, unknown>) => Record<string, boolean>> = {
+  MARK_AVAILABILITY: (r) => ({ date: !!text(r.date), availabilityType: r.availabilityType === 'UNAVAILABLE' || r.availabilityType === 'PREFERRED_OFF' }),
+  REQUEST_SWAP: (r) => ({ person: !!(text(r.targetUserId) || text(r.targetUserName)), shiftId: !!text(r.shiftId) }),
+  APPROVE_SWAP: (r) => ({ swapRequestId: !!text(r.swapRequestId) }),
+  DECLINE_SWAP: (r) => ({ swapRequestId: !!text(r.swapRequestId) }),
+  APPROVE_JOIN: (r) => ({ joinRequestId: !!text(r.joinRequestId) }),
+  DECLINE_JOIN: (r) => ({ joinRequestId: !!text(r.joinRequestId) }),
+  CREATE_SHIFT: (r) => ({ date: !!text(r.date), start: !!text(r.start), end: !!text(r.end), roleId: !!text(r.roleId) }),
+  EDIT_SHIFT: (r) => ({ shiftId: !!text(r.shiftId) }),
+  ASSIGN_SECTION: (r) => ({
+    person: !!(text(r.staffId) || text(r.targetUserName)),
+    sectionId: !!text(r.sectionId),
+    shiftDate: !!text(r.shiftDate),
+    period: r.period === 'AM' || r.period === 'PM',
+  }),
+  PUBLISH_ROTA: (r) => ({ weekStart: !!text(r.weekStart) }),
+  APPLY_ROTA_TEMPLATE: (r) => ({ templateName: !!text(r.templateName), weekStart: !!text(r.weekStart) }),
+  POST_ANNOUNCEMENT: (r) => ({ content: !!text(r.content) }),
+  POST_SHOUTOUT: (r) => ({ person: !!(text(r.targetUserId) || text(r.targetUserName)), content: !!text(r.content) }),
+  QUERY_MY_SCHEDULE: () => ({}),
+};
+
+/** For a known intent: what its answer lacks ([] when complete). Null for UNRECOGNIZED or anything unknown. */
+export function missingFields(raw: Record<string, unknown>): string[] | null {
+  const needs = typeof raw.intent === 'string' ? NEEDS[raw.intent] : undefined;
+  if (!needs) return null;
+  return Object.entries(needs(raw))
+    .filter(([, ok]) => !ok)
+    .map(([key]) => key);
+}
+
+/** How the caller is asked for each missing part, by intent (default: by key). */
+const ASK: Record<string, string> = {
+  date: 'which day',
+  availabilityType: 'are you unavailable, or would you just prefer it off',
+  shiftId: 'which shift',
+  swapRequestId: 'which one',
+  joinRequestId: 'whose request',
+  roleId: 'which role',
+  start: 'what time does it start',
+  end: 'what time does it end',
+  sectionId: 'which section',
+  shiftDate: 'which day',
+  period: 'morning or evening',
+  weekStart: 'which week',
+  templateName: 'which template',
+  content: 'what should it say',
+};
+const ASK_PERSON: Record<string, string> = { REQUEST_SWAP: 'who should cover it', ASSIGN_SECTION: 'who', POST_SHOUTOUT: 'who is it for' };
+
+/** "a, b, and c" — the questions as one. */
+function joinAsks(asks: string[]): string {
+  return asks.length < 2 ? (asks[0] ?? '') : `${asks.slice(0, -1).join(', ')}, and ${asks[asks.length - 1]}`;
+}
+
+/**
+ * A recognised command missing something it needs (seen live: a new shift with no end or role, a
+ * section move with no section, day or period): say what was understood and ask for exactly what
+ * is missing, instead of "I didn't catch that". The person named is still looked up — nobody by
+ * that name is said so; a shared first name is part of the question. Nothing is offered to
+ * confirm: the caller adds the missing part and tries again. Null when the answer isn't one.
+ */
+export function askForMissing(
+  raw: Record<string, unknown>,
+  ctx: PromptContext,
+  caller: { id: string; systemRole: SystemRole },
+  transcript: string,
+): ParsedIntent | null {
+  const missing = missingFields(raw);
+  const intent = raw.intent as string;
+  if (!missing?.length) return null;
+  if (!allowedIntentsFor(caller.systemRole).includes(intent)) return clarify(VOICE_ROLE_REFUSAL, VOICE_ROLE_REFUSAL);
+
+  // Who it's about, looked up exactly as for a complete answer.
+  const personKey = intent === 'ASSIGN_SECTION' ? 'staffId' : intent === 'CREATE_SHIFT' || intent === 'EDIT_SHIFT' ? 'userId' : intent === 'REQUEST_SWAP' || intent === 'POST_SHOUTOUT' ? 'targetUserId' : null;
+  const heard = text(raw.targetUserName) ?? '';
+  const modelId = personKey ? (text(raw[personKey]) ?? null) : null;
+  let person: string | null = null;
+  const asks: string[] = [];
+  let personQuestion: PersonQuestion | undefined;
+  if (personKey && (heard || modelId)) {
+    const found = resolvePerson(heard, modelId, ctx.staffDirectory, transcript, caller.id);
+    if (found.kind === 'missing') return missingPerson(found, caller, transcript, []);
+    if (found.kind === 'one') person = found.person.fullName;
+    if (found.kind === 'ambiguous') {
+      person = found.heard;
+      personQuestion = { heard: found.heard, status: 'ambiguous' };
+      asks.push(found.people.length <= MAX_PEOPLE_CHOICES ? `which ${found.heard} (${found.people.map((p) => p.fullName).join(' or ')})` : `which ${found.heard} (say their full name)`);
+    }
+    if (found.kind === 'unknown' && !missing.includes('person') && intent !== 'CREATE_SHIFT' && intent !== 'EDIT_SHIFT') asks.push(ASK_PERSON[intent] ?? 'who');
+  }
+  for (const key of missing) asks.push(key === 'person' ? (ASK_PERSON[intent] ?? 'who') : (ASK[key] ?? `which ${key}`));
+
+  const day = (key: string) => (text(raw[key]) ? dayLabel(raw[key] as string) : null);
+  const role = text(raw.roleId) ? (ctx.roles ?? []).find((r) => r.id === raw.roleId)?.name : undefined;
+  const section = text(raw.sectionId) ? (ctx.floorSections ?? []).find((s) => s.id === raw.sectionId)?.label : undefined;
+  const bit = (cond: unknown, s: string) => (cond ? s : '');
+  const what: Record<string, string> = {
+    MARK_AVAILABILITY: `time off for you${bit(day('date'), ` on ${day('date')}`)}`,
+    REQUEST_SWAP: `a swap request${bit(person, ` for ${person} to cover`)}`,
+    APPROVE_SWAP: 'a swap request to approve',
+    DECLINE_SWAP: 'a swap request to decline',
+    APPROVE_JOIN: 'a join request to approve',
+    DECLINE_JOIN: 'a join request to decline',
+    CREATE_SHIFT: `a new ${bit(role, `${role} `)}shift${bit(person, ` for ${person}`)}${bit(day('date'), ` on ${day('date')}`)}${bit(text(raw.start), ` from ${raw.start}`)}${bit(text(raw.end), ` until ${raw.end}`)}`,
+    EDIT_SHIFT: 'a shift change',
+    ASSIGN_SECTION: `a section move${bit(person, ` for ${person}`)}${bit(section, ` to the ${section}`)}${bit(day('shiftDate'), ` on ${day('shiftDate')}`)}${bit(raw.period === 'AM' || raw.period === 'PM', `, ${raw.period}`)}`,
+    PUBLISH_ROTA: 'the rota to publish',
+    APPLY_ROTA_TEMPLATE: `a rota template${bit(text(raw.templateName), ` (“${raw.templateName}”)`)}${bit(day('weekStart'), ` for the week of ${day('weekStart')}`)}`,
+    POST_ANNOUNCEMENT: 'an announcement',
+    POST_SHOUTOUT: `a shout-out${bit(person, ` for ${person}`)}${bit(text(raw.content), ` saying “${raw.content}”`)}`,
+  };
+  return {
+    intent: 'UNRECOGNIZED',
+    summary: `I've got ${what[intent] ?? 'that'} — ${joinAsks(asks)}?`,
+    reason: 'Add it to what I heard and tap Try again, or say the whole thing again.',
+    incomplete: { intent, missing },
+    ...(personQuestion ? { person: personQuestion } : {}),
   };
 }

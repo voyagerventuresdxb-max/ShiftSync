@@ -42,6 +42,13 @@ export function normalizeName(s: string): string {
 }
 
 const tokens = (s: string) => normalizeName(s).split(' ').filter(Boolean);
+
+/** Every word of the name as said is one of this full name's words ("Alex" fits "Alex Morgan"). */
+export function nameFits(heard: string, fullName: string): boolean {
+  const words = tokens(heard);
+  const name = tokens(fullName);
+  return words.length > 0 && words.every((w) => name.includes(w));
+}
 const firstName = (p: StaffEntry) => tokens(p.fullName)[0] ?? '';
 const byName = (a: StaffEntry, b: StaffEntry) => a.fullName.localeCompare(b.fullName);
 

@@ -14,8 +14,8 @@ import { cleanupFixture, LEAK_STRINGS, PEOPLE, seedFixture, snapshot, type Fixtu
 import { CALLER } from './score.js';
 
 /**
- * Voice commands that name a person, through the real parse and execute routes with a scripted
- * model (no network). The person is looked up in the caller's own venue: someone who isn't there
+ * Voice commands that name a person, or leave out a part they need, through the real parse and
+ * execute routes with a scripted model (no network). The person is looked up in the caller's own venue: someone who isn't there
  * gets a plain "I couldn't find Rana on your team.", a first name two or three people share is a
  * "Which Karim?" question with one complete reading per person, and nothing changes until one is
  * confirmed. Made-up names only.
@@ -32,6 +32,8 @@ let fx: Fixture;
 let server: Server;
 let base = '';
 let next: Record<string, unknown> = {};
+/** The last request the scripted model received. */
+let lastRequest: { config?: { temperature?: number; responseSchema?: { required?: string[] } } } = {};
 
 async function tokenFor(role: keyof typeof CALLER): Promise<string> {
   parseIntentRateLimiter.resetKey(fx.users[CALLER[role]]);
@@ -41,7 +43,12 @@ async function tokenFor(role: keyof typeof CALLER): Promise<string> {
 before(async () => {
   fx = await seedFixture(prisma);
   __setVoiceIntentClientForTests({
-    models: { generateContent: async () => ({ text: JSON.stringify(next), usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }) },
+    models: {
+      generateContent: async (request: typeof lastRequest) => {
+        lastRequest = request;
+        return { text: JSON.stringify(next), usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } };
+      },
+    },
   } as unknown as GoogleGenAI);
   server = createApp().listen(0);
   await new Promise((r) => server.once('listening', r));
@@ -249,6 +256,91 @@ test('not understood, with no reason from the model: human words, never the old 
   const q = question(intent);
   assert.equal(q.summary, VOICE_DIDNT_CATCH);
   assert.match(q.reason, /^Try again with who, what and when/);
+  // A recognised command with nothing filled in is asked about, not "didn't catch that".
   const shapeless = question((await parse('MANAGER', 'give a shout-out', { intent: 'POST_SHOUTOUT', confidence: 0.9, summary: 'x' })).intent);
-  assert.equal(shapeless.summary, VOICE_DIDNT_CATCH);
+  assert.equal(shapeless.summary, "I've got a shout-out — who is it for, and what should it say?");
+});
+
+// Seen live (real model, every key optional, temperature unset): recognised commands with parts left
+// out, at 0.95 confidence. They used to end in the generic "I didn't catch what you'd like to do.".
+const dayAhead = (n: number) => {
+  const d = new Date(`${fx.today}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const label = (iso: string) => new Date(`${iso}T00:00:00.000Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+test('the model is asked for every key, at temperature 0', async () => {
+  await parse('MANAGER', 'Give Layla a shout-out saying great job', shoutout('Layla', null));
+  assert.equal(lastRequest.config?.temperature, 0);
+  assert.ok(lastRequest.config?.responseSchema?.required?.includes('end'));
+  assert.ok(lastRequest.config?.responseSchema?.required?.includes('sectionId'));
+});
+
+test('a new shift with no end or role (live answer): says what it has, asks for exactly those two; nothing changes', async () => {
+  const date = dayAhead(3);
+  const before = await snapshot(prisma, locations());
+  const { intent, voiceLogId } = await parse('MANAGER', 'Create a bartender shift for Alex on Friday from 6 p.m. to 2 a.m.', {
+    intent: 'CREATE_SHIFT', summary: 'Create a Bartender shift for Alex Morgan on Friday, October 9th from 18:00 to 02:00.', confidence: 0.95,
+    date, start: '18:00', templateId: null, templateName: null, weekStart: null,
+  });
+  const q = question(intent);
+  assert.equal(q.summary, `I've got a new shift on ${label(date)} from 18:00 — what time does it end, and which role?`);
+  assert.deepEqual(q.incomplete, { intent: 'CREATE_SHIFT', missing: ['end', 'roleId'] });
+  assert.doesNotMatch(`${q.summary} ${q.reason}`, /didn't catch|supported command/i);
+  assert.equal(q.options, undefined);
+  assert.equal(await snapshot(prisma, locations()), before);
+  assert.equal((await logRow(voiceLogId)).declineReason, 'incomplete:CREATE_SHIFT:end,roleId');
+});
+
+test('a section move with no section, day or period (live answer): names the person, asks for those three', async () => {
+  const { intent } = await parse('MANAGER', 'Put Alex on the bar tomorrow evening.', {
+    intent: 'ASSIGN_SECTION', summary: 'Put Alex on the bar tomorrow evening.', confidence: 0.95, staffId: fx.users.alex, targetUserName: 'Alex', userId: null, weekStart: null,
+  });
+  const q = question(intent);
+  assert.equal(q.summary, `I've got a section move for ${PEOPLE.alex.name} — which section, which day, and morning or evening?`);
+  assert.deepEqual(q.incomplete?.missing, ['sectionId', 'shiftDate', 'period']);
+  assert.equal(q.person, undefined);
+});
+
+test('"Put Karim on the terrace…" missing its parts still asks which Karim; with its parts, it is the "Which Karim?" choice', async () => {
+  const said = 'Put Karim on the terrace tomorrow evening.';
+  const partial = question(
+    (await parse('MANAGER', said, { intent: 'ASSIGN_SECTION', summary: 'Put Karim on the terrace.', confidence: 0.95, staffId: null, targetUserName: 'Karim', userId: null, weekStart: null })).intent,
+  );
+  assert.equal(partial.summary, `I've got a section move for Karim — which Karim (${PEOPLE.karim2.name} or ${PEOPLE.karim.name}), which section, which day, and morning or evening?`);
+  assert.deepEqual(partial.person, { heard: 'Karim', status: 'ambiguous' });
+  const complete = question(
+    (await parse('MANAGER', said, {
+      intent: 'ASSIGN_SECTION', summary: 'Put Karim on the terrace.', confidence: 0.95, staffId: null, targetUserName: 'Karim', userId: null, weekStart: null,
+      sectionId: fx.sections.Terrace, shiftDate: dayAhead(1), period: 'PM', dutyLabel: null,
+    })).intent,
+  );
+  assert.equal(complete.summary, 'Which Karim did you mean?');
+  assert.equal(complete.options?.length, 2);
+});
+
+test('a shout-out to someone missing, with the note left out too: the person comes first', async () => {
+  const q = question((await parse('MANAGER', 'Give Rana a shout-out', { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Rana', content: null, confidence: 0.9, summary: 'x' })).intent);
+  assert.equal(q.summary, "I couldn't find Rana on your team.");
+});
+
+test('every key sent, null where unused: a complete answer is unaffected', async () => {
+  const nulls = Object.fromEntries(['targetUserId', 'userId', 'staffId', 'clearAssignee', 'date', 'availabilityType', 'shiftId', 'swapRequestId', 'joinRequestId', 'roleId', 'start', 'end', 'sectionId', 'shiftDate', 'period', 'dutyLabel', 'weekStart', 'templateName', 'templateId', 'reason', 'unrecognizedReason', 'alternatives'].map((k) => [k, null]));
+  const { intent } = await parse('MANAGER', 'Give Layla a shout-out saying great job', { ...nulls, intent: 'POST_SHOUTOUT', targetUserName: 'Layla', content: 'Great job', confidence: 0.95, summary: 'Give Layla a shout-out.', hasAdditionalRequest: false });
+  assert.equal(intent.intent, 'POST_SHOUTOUT');
+  const staffAsked = question((await parse('STAFF', 'Give Karim a shout-out', { ...nulls, intent: 'POST_SHOUTOUT', targetUserName: 'Karim', content: null, confidence: 0.9, summary: 'x' })).intent);
+  assert.equal(staffAsked.reason, VOICE_ROLE_REFUSAL, 'an out-of-role command missing parts is still refused for the role, not asked about');
+});
+
+test('"Move Alex\'s shift to 7pm", every key sent: the name is whose shift it is, not a new person — the person stays', async () => {
+  const { intent } = await parse('MANAGER', "Move Alex's shift tomorrow to start at 7 p.m.", {
+    intent: 'EDIT_SHIFT', shiftId: fx.shifts['alex+1'], start: '19:00', end: null, date: null, roleId: null,
+    userId: null, targetUserName: 'Alex', clearAssignee: null, confidence: 0.92, summary: "Move Alex's shift to 19:00.",
+  });
+  assert.equal(intent.intent, 'EDIT_SHIFT');
+  if (intent.intent !== 'EDIT_SHIFT') return;
+  assert.equal(intent.userId, undefined);
+  assert.equal(intent.start, '19:00');
+  assert.ok(!('person' in (intent.details ?? {})), 'no change of person in the preview');
 });

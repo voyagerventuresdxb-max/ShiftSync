@@ -335,6 +335,8 @@ export const CORPUS: VoiceCase[] = [
   }),
   // The model's pick disagrees with the name it heard: both are put to the caller.
   c(M, 'name-style', 'Give Layla a shout-out for training the new staff.', WHICH('user:layla', 'user:omar'), {
+    // Live, a model that picks Layla is right too; scripted, its pick is Omar's id.
+    accept: [I('POST_SHOUTOUT', { targetUserId: 'user:layla', content: 'words:training' })],
     model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'user:omar', targetUserName: 'lit:Layla', content: 'lit:Thanks for training the new staff' } },
   }),
   c(S, 'name-style', 'Ask Karim to cover my shift tomorrow.', WHICH('user:karim', 'user:karim2'), {

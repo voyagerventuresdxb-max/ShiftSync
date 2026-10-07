@@ -58,3 +58,9 @@ test('a staff caller gets the people rule (for swaps) but not the shout-out one'
   assert.match(staffPrompt, /put the name exactly as you heard it/);
   assert.ok(!staffPrompt.includes('For POST_SHOUTOUT'));
 });
+
+test('every key is asked for, with the parts a new shift and a section move need named', () => {
+  const prompt = buildSystemPrompt('MANAGER', ctx);
+  assert.match(prompt, /Every key in the response is required/);
+  assert.match(prompt, /for CREATE_SHIFT that is the role, date, start AND end; for ASSIGN_SECTION the section, date AND period/);
+});

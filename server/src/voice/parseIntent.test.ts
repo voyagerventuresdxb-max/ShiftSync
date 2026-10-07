@@ -5,6 +5,7 @@ import {
   buildContext,
   normalizeHasAdditionalRequest,
   normalizeParsedIntent,
+  missingFields,
   refinePublishRotaResponse,
   refineApplyRotaTemplateResponse,
 } from './parseIntent.js';
@@ -468,4 +469,47 @@ test('normalizeParsedIntent: "not understood" is worded for the caller; model te
   // A known intent missing what it needs: never its own summary on a "not understood" sheet.
   const broken = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', confidence: 0.9, summary: 'Give Omar a shoutout.' });
   assert.ok(broken.intent === 'UNRECOGNIZED' && broken.summary === "I didn't catch what you'd like to do.");
+});
+
+test('missingFields and normalizeParsedIntent agree: a complete answer normalizes; any one required part missing (absent, null or "") does not, and is named', () => {
+  const complete: Record<string, Record<string, unknown>> = {
+    MARK_AVAILABILITY: { date: '2031-03-07', availabilityType: 'UNAVAILABLE' },
+    REQUEST_SWAP: { shiftId: 's1', targetUserId: 'u1' },
+    APPROVE_SWAP: { swapRequestId: 'w1' },
+    DECLINE_SWAP: { swapRequestId: 'w1' },
+    APPROVE_JOIN: { joinRequestId: 'j1' },
+    DECLINE_JOIN: { joinRequestId: 'j1' },
+    CREATE_SHIFT: { roleId: 'r1', date: '2031-03-07', start: '18:00', end: '02:00' },
+    EDIT_SHIFT: { shiftId: 's1' },
+    ASSIGN_SECTION: { sectionId: 'f1', staffId: 'u1', shiftDate: '2031-03-07', period: 'PM' },
+    PUBLISH_ROTA: { weekStart: '2031-03-03' },
+    APPLY_ROTA_TEMPLATE: { templateName: 'Weekend', weekStart: '2031-03-03' },
+    POST_ANNOUNCEMENT: { content: 'Staff meeting at 3.' },
+    POST_SHOUTOUT: { targetUserId: 'u1', content: 'Great job' },
+  };
+  const personKey: Record<string, string> = { REQUEST_SWAP: 'targetUserId', ASSIGN_SECTION: 'staffId', POST_SHOUTOUT: 'targetUserId' };
+  for (const [intent, fields] of Object.entries(complete)) {
+    const raw = { intent, ...fields, confidence: 0.9, summary: 's' };
+    assert.deepEqual(missingFields(raw), [], intent);
+    assert.equal(normalizeParsedIntent(raw).intent, intent, intent);
+    for (const key of Object.keys(fields)) {
+      for (const gone of [undefined, null, '']) {
+        const partial: Record<string, unknown> = { ...raw, [key]: gone };
+        assert.equal(normalizeParsedIntent(partial).intent, 'UNRECOGNIZED', `${intent} without ${key}=${String(gone)}`);
+        assert.ok(missingFields(partial)!.includes(key === personKey[intent] ? 'person' : key), `${intent} names ${key}`);
+      }
+    }
+  }
+  assert.equal(missingFields({ intent: 'UNRECOGNIZED' }), null);
+  assert.equal(missingFields({ intent: 'DELETE_EVERYTHING' }), null);
+});
+
+test('normalizeParsedIntent: EDIT_SHIFT with every key sent — a bare null person means "unchanged", clearAssignee means "take them off", a name is a new person', () => {
+  const base = { intent: 'EDIT_SHIFT', shiftId: 's1', start: '19:00', roleId: null, date: null, end: null, confidence: 0.9, summary: 's' };
+  const unchanged = normalizeParsedIntent({ ...base, userId: null, targetUserName: null, clearAssignee: null });
+  assert.ok(unchanged.intent === 'EDIT_SHIFT' && unchanged.userId === undefined && unchanged.roleId === undefined && unchanged.start === '19:00');
+  const off = normalizeParsedIntent({ ...base, userId: null, targetUserName: null, clearAssignee: true });
+  assert.ok(off.intent === 'EDIT_SHIFT' && off.userId === null);
+  const someone = normalizeParsedIntent({ ...base, userId: null, targetUserName: 'Layla', clearAssignee: null });
+  assert.ok(someone.intent === 'EDIT_SHIFT' && someone.userId === null && someone.targetUserName === 'Layla');
 });

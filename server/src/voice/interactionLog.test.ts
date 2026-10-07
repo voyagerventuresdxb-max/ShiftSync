@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { outcomeAtParseTime, personNoteAtParseTime, shouldPromptForAdditionalRequest } from './interactionLog.js';
+import { outcomeAtParseTime, noteAtParseTime, shouldPromptForAdditionalRequest } from './interactionLog.js';
 import type { VoiceIntentResolution } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
 
@@ -63,15 +63,26 @@ test('shouldPromptForAdditionalRequest: false -> false regardless of intent', ()
   assert.equal(shouldPromptForAdditionalRequest(resolution(intent, intent, false)), false);
 });
 
-test('personNoteAtParseTime: a question about a person is noted by kind and count only; anything else is not', () => {
+test('noteAtParseTime: a question about a person is noted by kind and count only; anything else is not', () => {
   const attempted: ParsedIntent = { intent: 'POST_SHOUTOUT', targetUserId: '', targetUserName: 'Karim', content: 'Great job', confidence: 0.9, summary: 'x' };
   const option: ParsedIntent = { intent: 'POST_SHOUTOUT', targetUserId: 'u1', targetUserName: 'Karim Saleh', content: 'Great job', confidence: 0.9, summary: 'Give Karim Saleh a shout-out.' };
   const asked: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'Pick one.', summary: 'Which Karim did you mean?', person: { heard: 'Karim', status: 'ambiguous' }, options: [option, { ...option, targetUserId: 'u2' }] };
-  const note = personNoteAtParseTime(resolution(attempted, asked));
+  const note = noteAtParseTime(resolution(attempted, asked));
   assert.equal(note, 'person_ambiguous:2');
   assert.ok(!/karim|great|u1/i.test(note!));
   const missing: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'x', summary: "I couldn't find Rana on your team.", person: { heard: 'Rana', status: 'missing' } };
-  assert.equal(personNoteAtParseTime(resolution(attempted, missing)), 'person_missing:0');
-  assert.equal(personNoteAtParseTime(resolution(attempted, attempted)), null);
-  assert.equal(personNoteAtParseTime(resolution(attempted, { intent: 'UNRECOGNIZED', reason: 'x', summary: 'y' })), null);
+  assert.equal(noteAtParseTime(resolution(attempted, missing)), 'person_missing:0');
+  assert.equal(noteAtParseTime(resolution(attempted, attempted)), null);
+  assert.equal(noteAtParseTime(resolution(attempted, { intent: 'UNRECOGNIZED', reason: 'x', summary: 'y' })), null);
+});
+
+test('noteAtParseTime: a recognised command missing parts is noted by intent and field names only', () => {
+  const attempted: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'x', summary: 'y' };
+  const asked: ParsedIntent = {
+    intent: 'UNRECOGNIZED', reason: 'Add it…', summary: "I've got a section move for Karim — which Karim (Karim Aziz or Karim Saleh), which section, which day, and morning or evening?",
+    incomplete: { intent: 'ASSIGN_SECTION', missing: ['sectionId', 'shiftDate', 'period'] }, person: { heard: 'Karim', status: 'ambiguous' },
+  };
+  const note = noteAtParseTime(resolution(attempted, asked));
+  assert.equal(note, 'person_ambiguous:0 incomplete:ASSIGN_SECTION:sectionId,shiftDate,period');
+  assert.ok(!/karim/i.test(note!));
 });

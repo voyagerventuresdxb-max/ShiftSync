@@ -58,7 +58,8 @@ export type PersonQuestion = { heard: string; status: 'missing' | 'ambiguous' };
 
 export type ParsedIntent =
   | (Action & { details?: ReadingDetails })
-  | { intent: 'UNRECOGNIZED'; reason: string; summary: string; options?: ChoosableIntent[]; person?: PersonQuestion };
+  /** `incomplete`: a recognised command missing what it needs (`missing`: field names, "person" for who); the sentence asks for exactly that. */
+  | { intent: 'UNRECOGNIZED'; reason: string; summary: string; options?: ChoosableIntent[]; person?: PersonQuestion; incomplete?: { intent: string; missing: string[] } };
 
 /** An intent the caller can pick from a "which did you mean?" list: an action, never a question or a non-answer. */
 export type ChoosableIntent = Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' | 'QUERY_MY_SCHEDULE' }>;
@@ -91,7 +92,12 @@ function readingSchema(intents: readonly string[]) {
         type: Type.STRING,
         nullable: true,
         description:
-          'For CREATE_SHIFT/EDIT_SHIFT — the id from the provided staff list of the one person whose name matches. Null for an open/unassigned shift (then leave targetUserName empty), or when the named person is not in the list or shares their name with someone else (then still fill targetUserName). For EDIT_SHIFT, leave it out entirely when the person on the shift does not change.',
+          'For CREATE_SHIFT/EDIT_SHIFT — the id from the provided staff list of the one person whose name matches. Null for an open/unassigned shift (then leave targetUserName empty), or when the named person is not in the list or shares their name with someone else (then still fill targetUserName). For EDIT_SHIFT, null when the person on the shift does not change (to take them off the shift, set clearAssignee instead).',
+      },
+      clearAssignee: {
+        type: Type.BOOLEAN,
+        nullable: true,
+        description: 'For EDIT_SHIFT only: true when the caller asks to take the person off the shift and leave it open. Null otherwise.',
       },
       start: { type: Type.STRING, nullable: true, description: 'HH:MM, for CREATE_SHIFT/EDIT_SHIFT' },
       end: { type: Type.STRING, nullable: true, description: 'HH:MM, for CREATE_SHIFT/EDIT_SHIFT' },
@@ -132,8 +138,52 @@ function readingSchema(intents: readonly string[]) {
           'Required when intent=UNRECOGNIZED: one short, friendly sentence to the caller saying what was missing or unclear and what to say instead (e.g. "Say which day, for example \\"next Friday\\"."). Never mention intents, ids, lists, schemas or commands.',
       },
     },
-    required: ['intent', 'summary'],
   };
+}
+
+/**
+ * Every key is required (the nullable ones answer null when they don't apply): a model left free to
+ * omit keys was seen live dropping a new shift's end and role, and a section move's section, day
+ * and period, at high confidence. The order puts the intent first, then who it is about, then the
+ * rest of its details, and the sentences and confidence last — written once the details are.
+ */
+const KEY_ORDER = [
+  'intent',
+  'targetUserName',
+  'targetUserId',
+  'userId',
+  'staffId',
+  'clearAssignee',
+  'date',
+  'availabilityType',
+  'shiftId',
+  'swapRequestId',
+  'joinRequestId',
+  'roleId',
+  'start',
+  'end',
+  'sectionId',
+  'shiftDate',
+  'period',
+  'dutyLabel',
+  'weekStart',
+  'templateName',
+  'templateId',
+  'content',
+  'reason',
+  'summary',
+  'confidence',
+  'unrecognizedReason',
+  'hasAdditionalRequest',
+  'alternatives',
+] as const;
+
+/** `required` and `propertyOrdering` for an object with these properties: all of them, in KEY_ORDER. */
+function everyKey(properties: Record<string, unknown>): { required: string[]; propertyOrdering: string[] } {
+  const keys = KEY_ORDER.filter((k) => k in properties);
+  const unordered = Object.keys(properties).filter((k) => !(KEY_ORDER as readonly string[]).includes(k));
+  if (unordered.length) throw new Error(`intentSchema: no order for ${unordered.join(', ')}`);
+  return { required: [...keys], propertyOrdering: [...keys] };
 }
 
 /**
@@ -144,19 +194,17 @@ function readingSchema(intents: readonly string[]) {
 function schemaFor(intents: readonly string[]) {
   const main = readingSchema(intents);
   const reading = Object.fromEntries(Object.entries(main.properties).filter(([key]) => key !== 'hasAdditionalRequest' && key !== 'unrecognizedReason'));
-  return {
-    ...main,
-    properties: {
-      ...main.properties,
-      alternatives: {
-        type: Type.ARRAY,
-        nullable: true,
-        description:
-          'Only when your confidence is below 0.6 because the words fit two or three different actions (for example approving or declining the same swap request): up to 2 OTHER complete readings, each filled in exactly like the main answer, with its own intent, ids, confidence and summary. The app shows them as choices, and nothing happens until the caller picks one and confirms. Leave empty when you are confident, or when the request is simply unclear.',
-        items: { type: Type.OBJECT, properties: { ...reading, intent: { type: Type.STRING, enum: [...intents] } }, required: ['intent', 'summary'] },
-      },
+  const properties = {
+    ...main.properties,
+    alternatives: {
+      type: Type.ARRAY,
+      nullable: true,
+      description:
+        'Only when your confidence is below 0.6 because the words fit two or three different actions (for example approving or declining the same swap request): up to 2 OTHER complete readings, each filled in exactly like the main answer, with its own intent, ids, confidence and summary. The app shows them as choices, and nothing happens until the caller picks one and confirms. Null when you are confident, or when the request is simply unclear.',
+      items: { type: Type.OBJECT, properties: { ...reading, intent: { type: Type.STRING, enum: [...intents] } }, ...everyKey(reading) },
     },
   };
+  return { ...main, properties, ...everyKey(properties) };
 }
 
 const STAFF_SCHEMA = schemaFor(STAFF_INTENTS);

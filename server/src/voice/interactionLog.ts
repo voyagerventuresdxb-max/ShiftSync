@@ -38,14 +38,19 @@ export function shouldPromptForAdditionalRequest(resolution: VoiceIntentResoluti
 }
 
 /**
- * Why a parse ended in a question about a person, for the log: the kind and how many people were
- * offered ("person_missing:0", "person_ambiguous:2"). Counts and kinds only — never a name, a
- * note's text or an id. Null for every other outcome.
+ * Why a parse ended in a question rather than a Confirm, for the log: about a person (the kind, and
+ * how many people were offered: "person_missing:0", "person_ambiguous:2") and/or a recognised
+ * command missing parts ("incomplete:CREATE_SHIFT:end,roleId"). Kinds, counts and field names
+ * only — never a name, a note's text or an id. Null for every other outcome.
  */
-export function personNoteAtParseTime(resolution: VoiceIntentResolution): string | null {
+export function noteAtParseTime(resolution: VoiceIntentResolution): string | null {
   const { response } = resolution;
-  if (response.intent !== 'UNRECOGNIZED' || !response.person) return null;
-  return `person_${response.person.status}:${response.options?.length ?? 0}`;
+  if (response.intent !== 'UNRECOGNIZED') return null;
+  const notes = [
+    response.person ? `person_${response.person.status}:${response.options?.length ?? 0}` : null,
+    response.incomplete ? `incomplete:${response.incomplete.intent}:${response.incomplete.missing.join(',')}` : null,
+  ].filter(Boolean);
+  return notes.length ? notes.join(' ') : null;
 }
 
 /**
@@ -72,9 +77,9 @@ export async function logParsedInteraction(
       confidence,
       hasAdditionalRequest: resolution.hasAdditionalRequest,
       outcome: outcomeAtParseTime(resolution),
-      // Why nothing was offered outright, when the person named couldn't be pinned down. If the
-      // caller then picks someone and confirms, /execute records the outcome as usual.
-      declineReason: personNoteAtParseTime(resolution),
+      // Why nothing was offered outright: a person who couldn't be pinned down, or a missing part.
+      // If the caller then picks someone and confirms, /execute records the outcome as usual.
+      declineReason: noteAtParseTime(resolution),
     },
     select: { id: true },
   });
