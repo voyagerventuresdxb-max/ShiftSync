@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { fetchLocation, updateLocation, VENUE_TYPES } from '../../api/locations';
 import { useIdentity } from '../../state/IdentityContext';
+import { useAppState } from '../../state/AppStateContext';
+import { VENUE_NAME_MAX_LENGTH } from '../../../shared/venueName';
 import OnboardingScreenShell from './OnboardingScreenShell';
 import { computeCanContinue } from './venueValidation';
 
@@ -40,6 +42,7 @@ export default function VenueScreen({
   onContinue: () => void;
 }) {
   const { session } = useIdentity();
+  const { setVenueName } = useAppState();
 
   const [name, setName] = useState('');
   // Account already collected this exact value (it's how the Location got
@@ -99,7 +102,9 @@ export default function VenueScreen({
     setError(null);
     setSaving(true);
     try {
-      await updateLocation(session.token, locationId, { name: name.trim(), venueType, emirate: city });
+      const saved = await updateLocation(session.token, locationId, { name: name.trim(), venueType, emirate: city });
+      // The app header (and every other venue-name reader) shows the saved name now, not after a reload.
+      setVenueName(saved.name);
       onContinue();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save venue details.');
@@ -184,6 +189,7 @@ export default function VenueScreen({
           >
             <input
               value={name}
+              maxLength={VENUE_NAME_MAX_LENGTH}
               onChange={(e) => setName(e.target.value)}
               // The fallback input (name empty, editingName false) must become
               // a real edit session on focus — otherwise the first keystroke
