@@ -14,6 +14,7 @@ import {
   headerLine,
   initialChoice,
   initialReviewState,
+  readerLabel,
   reviewBlockers,
   reviewPeople,
   reviewWeek,
@@ -194,7 +195,11 @@ export function RosterReview({ upload, onConfirm, confirming, error, createdById
           {noRole.length > 0 && <span className="text-warning"> · {noRole.length} without a role</span>}
         </p>
         <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-foreground/50">
-          {upload.templateDetected && <span className="rounded-full border border-border px-2.5 py-1">{upload.templateDetected}</span>}
+          {readerLabel(upload.reading) && (
+            <span className="rounded-full border border-border px-2.5 py-1" data-testid="rr-reader">
+              {readerLabel(upload.reading)}
+            </span>
+          )}
           {upload.reading?.fromCache && (
             <span className="rounded-full border border-accent/40 px-2.5 py-1 text-accent" data-testid="rr-from-cache">
               Read from previous upload
@@ -298,7 +303,7 @@ export function RosterReview({ upload, onConfirm, confirming, error, createdById
                 <button
                   type="button"
                   aria-pressed={reviewedAnomalies.has(i)}
-                  className={segmentClass(reviewedAnomalies.has(i))}
+                  className={cn(segmentClass(reviewedAnomalies.has(i)), 'min-w-[6.5rem] shrink-0 whitespace-nowrap')}
                   onClick={() =>
                     setReviewedAnomalies((prev) => {
                       const next = new Set(prev);

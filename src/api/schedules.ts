@@ -119,6 +119,10 @@ export interface ReadingReport {
   disagreements: number;
   /** "Read from previous upload": nothing was billed. */
   fromCache: boolean;
+  /** How the reading was checked, in plain words. */
+  note?: string;
+  /** A photo or scan read twice by the AI reader and the readings compared. */
+  crossChecked?: boolean;
 }
 
 export type PersonStatus = 'matched' | 'new' | 'needs_decision';

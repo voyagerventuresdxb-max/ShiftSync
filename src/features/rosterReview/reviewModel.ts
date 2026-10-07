@@ -5,6 +5,7 @@ import type {
   ConfirmResponse,
   PersonPreview,
   PreviewRow,
+  ReadingReport,
   RosterRowEdit,
   UnreadRow,
   UploadResponse,
@@ -104,6 +105,20 @@ export function unreadRowsOf(upload: Pick<UploadResponse, 'unreadRows'>): Unread
 }
 
 /** "Found 12 people · 2 rows couldn't be read". */
+/**
+ * Which reader read the roster, in plain words for the header chip (never the parser's
+ * internal label). Null when the upload carries no reading report.
+ */
+export function readerLabel(reading: ReadingReport | undefined): string | null {
+  if (!reading) return null;
+  const ai = reading.ai === 'used' || reading.ai === 'cached';
+  if (ai && reading.table === 'used') return "Read by the AI reader, checked against the file's text";
+  if (ai && reading.crossChecked) return 'Read twice by the AI reader';
+  if (ai) return 'Read by the AI reader';
+  if (reading.table === 'used') return "Read from the file's text";
+  return null;
+}
+
 export function headerLine(peopleCount: number, unreadCount: number): string {
   const people = `Found ${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}`;
   if (unreadCount === 0) return people;

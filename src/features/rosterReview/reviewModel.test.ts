@@ -5,6 +5,7 @@ import {
   buildConfirmRequest,
   formatWeekLabel,
   headerLine,
+  readerLabel,
   importResultLines,
   initialChoice,
   initialReviewState,
@@ -212,4 +213,13 @@ test('result lines name created / matched / duplicates-skipped', () => {
     '40 shifts added',
     '3 shifts were already on the rota — not added twice',
   ]);
+});
+
+test('the reader chip says who read the roster in plain words, never the parser\'s internal label', () => {
+  const base = { rowsDetected: null, peopleFound: 3, rereadPages: [], disagreements: 0, fromCache: false };
+  assert.equal(readerLabel({ ...base, ai: 'not_used', table: 'used' }), "Read from the file's text");
+  assert.equal(readerLabel({ ...base, ai: 'used', table: 'used' }), "Read by the AI reader, checked against the file's text");
+  assert.equal(readerLabel({ ...base, ai: 'used', table: 'not_applicable', crossChecked: true }), 'Read twice by the AI reader');
+  assert.equal(readerLabel({ ...base, ai: 'cached', table: 'not_applicable' }), 'Read by the AI reader');
+  assert.equal(readerLabel(undefined), null);
 });
