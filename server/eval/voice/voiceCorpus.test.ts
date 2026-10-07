@@ -103,16 +103,27 @@ test('every case, with a well-behaved model: the expected confirm sheet, and not
     const after = await snapshot(prisma, locations());
     if (before !== after) failures.push(`${c.id} changed data during parse`);
     const s = scoreCase(fx, c, intent, hasAdditionalRequest, caller);
-    if (!s.ok) failures.push(`${c.id} "${c.text}" → ${intent.intent}${'reason' in intent ? ` (${intent.reason})` : ''}`);
+    if (!s.ok) failures.push(`${c.id} "${c.text}" → ${intent.intent}${'reason' in intent ? ` (${intent.summary} / ${intent.reason})` : ''}`);
     if (s.leak) failures.push(`${c.id} leaked another venue or a number`);
   }
   assert.deepEqual(failures, []);
 });
 
+test('scoring: a "not understood" answer in the old generic wording fails, even where nothing should be offered', () => {
+  const kevin = CORPUS.find((c) => c.text === 'Give Kevin a shoutout.')!;
+  const old: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'Could not confidently match this to a supported command.', summary: 'Give Kevin a shoutout.' };
+  assert.deepEqual([scoreCase(fx, kevin, old, false, 'hannah').ok, scoreCase(fx, kevin, old, false, 'hannah').robotic], [false, true]);
+  const plain = CORPUS.find((c) => c.text === 'uh')!;
+  assert.equal(scoreCase(fx, plain, old, false, 'sam').ok, false);
+  const human: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'Try again with who, what and when.', summary: "I didn't catch what you'd like to do." };
+  assert.equal(scoreCase(fx, plain, human, false, 'sam').ok, true);
+  // A person question must be about the person: a generic "didn't catch that" is not enough.
+  assert.equal(scoreCase(fx, kevin, human, false, 'hannah').ok, false);
+});
+
 test('every adversarial model answer is refused before a Confirm, and /execute refuses it where required; no data changes', async () => {
   const failures: string[] = [];
   for (const c of CORPUS.filter((x) => x.adversarial)) {
-    const caller = CALLER[c.role];
     const raw = rawModelOutput(fx, c, 'adversarial');
     const before = await snapshot(prisma, locations());
     const { intent } = await parse(await tokenFor(c.role), c.text, raw);

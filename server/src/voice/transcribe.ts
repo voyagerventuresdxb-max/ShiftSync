@@ -102,6 +102,33 @@ export function classifyGeminiFailure(err: ApiError): VoiceFailureKind {
  *   before calling this function, or verify behavior empirically, since an
  *   unsupported mimetype will surface as a Gemini ApiError below.
  */
+/** At most this many terms, and this many characters, in the transcription vocabulary hint. */
+export const VOCABULARY_MAX_TERMS = 150;
+export const VOCABULARY_MAX_CHARS = 4000;
+
+/**
+ * The bounded spelling hint sent with a recording: the caller's own venue's ACTIVE staff display
+ * names, its section names and its role names (the caller passes only those), plus a few fixed
+ * scheduling words. Anything that looks like contact data — an email address, or a run of six or
+ * more digits such as a phone number — is dropped even if it was typed into a name, duplicates are
+ * removed, and the list is capped by count and length. It only helps spelling: the server's own
+ * lookup (people.ts) decides who a person is, never the model.
+ */
+export function buildVocabularyHint(staffNames: string[], sectionNames: string[], roleNames: string[]): string {
+  const looksLikeContact = (t: string) => /@/.test(t) || /\d[\d\s().+-]{5,}\d/.test(t) || /\d{6,}/.test(t);
+  const terms = [...staffNames, ...sectionNames, ...roleNames, 'rota', 'floor', 'section', 'swap', 'cover', 'shift']
+    .map((t) => t.replace(/\s+/g, ' ').trim())
+    .filter((t) => t && t.length <= 80 && !looksLikeContact(t));
+  const out: string[] = [];
+  let length = 0;
+  for (const t of new Set(terms)) {
+    if (out.length === VOCABULARY_MAX_TERMS || length + t.length + 2 > VOCABULARY_MAX_CHARS) break;
+    out.push(t);
+    length += t.length + 2;
+  }
+  return out.join(', ');
+}
+
 export async function transcribeAudio(buffer: Buffer, mimeType: string, vocabularyHint?: string, locationId: string | null = null, userId: string | null = null): Promise<string> {
   const genai = getClient();
   const sentAs = geminiMimeTypeFor(mimeType);

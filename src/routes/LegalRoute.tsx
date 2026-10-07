@@ -58,7 +58,12 @@ export function PrivacyContent() {
         <li>Account: your name, mobile number (used to sign in), and the venue and role your manager set; optionally a job title and preferred language.</li>
         <li>Work records: shifts, availability, cover/swap requests, attendance clock-ins, announcements, shout-outs and floor feedback.</li>
         <li>Sign-in: one-time codes and login links (stored hashed or expiring), and session records.</li>
-        <li>Voice commands, if you use them: the audio is sent for transcription and the text of the command is kept in an activity log.</li>
+        <li>
+          Voice commands, if you use them: the audio is sent for transcription with a short spelling list from your own venue only — the
+          names of its current team members as shown in the app, and its section and role names (never phone numbers, email addresses,
+          applicants, former staff or anyone at another venue). ShiftSync itself decides who a named person is, from your venue's team
+          list, and asks you when a name could mean more than one person. The text of the command is kept in an activity log.
+        </li>
         <li>Rosters a manager uploads: spreadsheets and text PDFs are read on our own server; a preview is held for about 15 minutes until confirmed.</li>
         <li>Notifications: if you turn on push notifications, your browser's push address.</li>
       </ul>

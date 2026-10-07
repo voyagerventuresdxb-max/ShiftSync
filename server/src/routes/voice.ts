@@ -4,7 +4,7 @@ import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager } from '../middleware/requireSession.js';
 import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
-import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
+import { buildVocabularyHint, transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import type { AiBudgetExceededError } from '../lib/aiBudget.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
@@ -41,6 +41,8 @@ function isNonEmptyString(v: unknown): v is string {
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Longest command /parse-intent reads; the sheet's edit box allows 300 characters. */
+const MAX_TRANSCRIPT_CHARS = 500;
 const TIME_RE = /^\d{2}:\d{2}$/;
 
 /**
@@ -193,16 +195,13 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
         prisma.floorSection.findMany({ where: { locationId: req.user!.locationId }, select: { label: true } }),
         prisma.role.findMany({ where: { locationId: req.user!.locationId }, select: { name: true } }),
       ]);
-      const vocabularyTerms = [
-        ...staff.map((s) => s.fullName),
-        ...sections.map((s) => s.label),
-        ...roles.map((r) => r.name),
-        'rota', 'floor', 'section', 'swap', 'cover', 'shift',
-      ];
-      // Cap (and, as a side effect, de-dupe via Set) so a venue with hundreds
-      // of staff/sections/roles doesn't blow up the prompt appended to every
-      // transcription — this is a hint, not a directory.
-      vocabulary = [...new Set(vocabularyTerms)].slice(0, 150).join(', ');
+      // Capped, de-duplicated, contact-looking text dropped (buildVocabularyHint): a venue with
+      // hundreds of staff/sections/roles doesn't blow up the prompt — this is a hint, not a directory.
+      vocabulary = buildVocabularyHint(
+        staff.map((s) => s.fullName),
+        sections.map((s) => s.label),
+        roles.map((r) => r.name),
+      );
     } catch (vocabErr) {
       console.error('[voice.transcribe] failed to build vocabulary hint, transcribing without it', vocabErr);
       vocabulary = undefined;
@@ -247,6 +246,9 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
   try {
     const transcript = String(req.body?.transcript ?? '').trim();
     if (!transcript) return res.status(400).json({ error: 'transcript is required.' });
+    // A recording is at most 10 seconds, but the confirm sheet also lets people type a correction
+    // ("Try again"): keep that to a spoken-command length before anything is sent to the model.
+    if (transcript.length > MAX_TRANSCRIPT_CHARS) return res.status(400).json({ error: 'That command is too long. Keep it to a sentence or two.' });
 
     const resolution = await parseVoiceIntent(transcript, {
       id: req.user!.id,
@@ -323,7 +325,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
     declineReason?: string,
   ) => {
     if (voiceLogId) {
-      await updateInteractionOutcome(voiceLogId, req.user!.id, outcome, declineReason).catch((err) =>
+      // What the caller confirmed: another reading than the logged one only after a "which did you mean?" choice.
+      const confirmed = typeof intent?.intent === 'string' && intent.intent !== 'UNRECOGNIZED' && ALL_INTENTS.includes(intent.intent) ? intent.intent : undefined;
+      await updateInteractionOutcome(voiceLogId, req.user!.id, outcome, declineReason, confirmed).catch((err) =>
         console.error('[voice.execute] failed to update interaction log', err),
       );
     }

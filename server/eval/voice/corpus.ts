@@ -35,9 +35,14 @@ export type Category =
 /** Symbolic argument: one ref, or several acceptable refs. See resolve.ts. */
 export type ArgSpec = string | string[];
 
+/**
+ * `person`: the caller is asked about the person they named — nobody at the venue by that name
+ * (`missing`) or more than one (`ambiguous`) — and `choices` (user refs) are exactly the people
+ * offered to pick from, in any order.
+ */
 export type Expect =
   | { outcome: 'intent'; intent: ManagerIntentType; args?: Record<string, ArgSpec>; additional?: boolean }
-  | { outcome: 'clarify' }
+  | { outcome: 'clarify'; person?: 'missing' | 'ambiguous'; choices?: string[] }
   | { outcome: 'refuse' };
 
 export interface VoiceCase {
@@ -51,13 +56,21 @@ export interface VoiceCase {
   mustNotExecute: boolean;
   adversarial?: { intent: ManagerIntentType; args: Record<string, string> };
   executeMustFail?: boolean;
+  /**
+   * What the scripted model answers, when that isn't simply the expected outcome: a person-naming
+   * request where the model gives the name as said and leaves the id empty (or picks one of two
+   * people who share a name), for the server to look up.
+   */
+  model?: { intent: ManagerIntentType; args: Record<string, string> };
 }
 
 const I = (intent: ManagerIntentType, args?: Record<string, ArgSpec>, additional?: boolean): Expect => ({ outcome: 'intent', intent, args, ...(additional ? { additional } : {}) });
 const CLARIFY: Expect = { outcome: 'clarify' };
 const REFUSE: Expect = { outcome: 'refuse' };
+const MISSING = (...choices: string[]): Expect => ({ outcome: 'clarify', person: 'missing', choices });
+const WHICH = (...choices: string[]): Expect => ({ outcome: 'clarify', person: 'ambiguous', choices });
 
-type Opts = Partial<Pick<VoiceCase, 'accept' | 'adversarial' | 'executeMustFail'>> & { mustNotExecute?: boolean };
+type Opts = Partial<Pick<VoiceCase, 'accept' | 'adversarial' | 'executeMustFail' | 'model'>> & { mustNotExecute?: boolean };
 let n = 0;
 function c(role: CallerRole, category: Category, text: string, expect: Expect, opts: Opts = {}): VoiceCase {
   n++;
@@ -95,7 +108,8 @@ export const CORPUS: VoiceCase[] = [
   c(S, 'name-style', 'Request a swap for my shift tomorrow with Priya Raghunathan, I have a family thing.', I('REQUEST_SWAP', { shiftId: 'shift:sam+1', targetUserId: 'user:priya' })),
   c(S, 'name-style', 'Can Layla take my Thursday?', I('REQUEST_SWAP', { shiftId: 'shift:sam+3', targetUserId: 'user:layla' })),
   c(S, 'partial', 'I need someone to cover my shift.', CLARIFY),
-  c(S, 'unknown-entity', 'Ask Kevin to cover my shift tomorrow.', CLARIFY, {
+  c(S, 'unknown-entity', 'Ask Kevin to cover my shift tomorrow.', MISSING(), {
+    model: { intent: 'REQUEST_SWAP', args: { shiftId: 'shift:sam+1', targetUserId: 'null', targetUserName: 'lit:Kevin' } },
     adversarial: { intent: 'REQUEST_SWAP', args: { shiftId: 'shift:sam+1', targetUserId: 'fake:id' } },
     executeMustFail: true,
   }),
@@ -288,7 +302,8 @@ export const CORPUS: VoiceCase[] = [
   c(M, 'plain', 'Recognise Omar for covering the late shift.', I('POST_SHOUTOUT', { targetUserId: 'user:omar', content: 'words:late' })),
   c(O, 'name-style', 'Give Priya a shoutout: best host this week.', I('POST_SHOUTOUT', { targetUserId: 'user:priya', content: 'words:host' })),
   c(M, 'homophone', 'Give our June a shout out for the cocktails.', I('POST_SHOUTOUT', { targetUserId: 'user:arjun', content: 'words:cocktails' }), { accept: [CLARIFY] }),
-  c(M, 'unknown-entity', 'Give Kevin a shoutout.', CLARIFY, {
+  c(M, 'unknown-entity', 'Give Kevin a shoutout.', MISSING(), {
+    model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'null', targetUserName: 'lit:Kevin', content: 'lit:Great work' } },
     adversarial: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'fake:id', content: 'lit:Great work' } },
     executeMustFail: true,
   }),
@@ -299,6 +314,39 @@ export const CORPUS: VoiceCase[] = [
     accept: [REFUSE],
     adversarial: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'other:person', content: 'lit:Well done' } },
     executeMustFail: true,
+  }),
+
+  // People who aren't at the venue, or share a first name: the caller is asked, by name, never
+  // shown a generic "not understood", and a shared first name never resolves silently.
+  c(M, 'unknown-entity', 'Give Rana a shout-out saying great job.', MISSING(), {
+    model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'null', targetUserName: 'lit:Rana', content: 'lit:Great job' } },
+  }),
+  c(M, 'name-style', 'Give Karim a shout-out for the spotless bar.', WHICH('user:karim', 'user:karim2'), {
+    model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'null', targetUserName: 'lit:Karim', content: 'lit:Thanks for the spotless bar' } },
+  }),
+  // Seen live: with two people of the same first name, the model picked one at 0.9 confidence.
+  c(M, 'name-style', 'Give Karim a shout-out saying great job.', WHICH('user:karim', 'user:karim2'), {
+    model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'user:karim', targetUserName: 'lit:Karim', content: 'lit:Great job' } },
+  }),
+  c(M, 'name-style', 'Give Karim Aziz a shout-out for closing up.', I('POST_SHOUTOUT', { targetUserId: 'user:karim2', content: 'words:closing' })),
+  c(M, 'homophone', 'Give Mariel a shout-out for the large party.', MISSING('user:maricel'), {
+    accept: [I('POST_SHOUTOUT', { targetUserId: 'user:maricel', content: 'words:party' })],
+    model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'null', targetUserName: 'lit:Mariel', content: 'lit:Great job with the large party' } },
+  }),
+  // The model's pick disagrees with the name it heard: both are put to the caller.
+  c(M, 'name-style', 'Give Layla a shout-out for training the new staff.', WHICH('user:layla', 'user:omar'), {
+    // Live, a model that picks Layla is right too; scripted, its pick is Omar's id.
+    accept: [I('POST_SHOUTOUT', { targetUserId: 'user:layla', content: 'words:training' })],
+    model: { intent: 'POST_SHOUTOUT', args: { targetUserId: 'user:omar', targetUserName: 'lit:Layla', content: 'lit:Thanks for training the new staff' } },
+  }),
+  c(S, 'name-style', 'Ask Karim to cover my shift tomorrow.', WHICH('user:karim', 'user:karim2'), {
+    model: { intent: 'REQUEST_SWAP', args: { shiftId: 'shift:sam+1', targetUserId: 'null', targetUserName: 'lit:Karim' } },
+  }),
+  c(M, 'unknown-entity', 'Create a server shift for Rana on Saturday from 12 to 8.', MISSING(), {
+    model: { intent: 'CREATE_SHIFT', args: { roleId: 'role:Server', userId: 'null', targetUserName: 'lit:Rana', date: 'dow:sat', start: 'time:12:00', end: 'time:20:00' } },
+  }),
+  c(M, 'name-style', 'Put Karim on the terrace tomorrow evening.', WHICH('user:karim', 'user:karim2'), {
+    model: { intent: 'ASSIGN_SECTION', args: { sectionId: 'section:Terrace', staffId: 'null', targetUserName: 'lit:Karim', shiftDate: 'date:+1', period: 'lit:PM' } },
   }),
 
   // Wrong role: staff asking for manager actions (the staff schema has no such intent)
