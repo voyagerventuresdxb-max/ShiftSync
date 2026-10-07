@@ -439,8 +439,16 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       perPage,
       !anchored,
     );
+    // A page whose day columns couldn't be lined up with its header: no shift from it is saved,
+    // however many readings agree (they can agree on the same day off); everyone is listed and
+    // every day shown to check.
+    const unlined = table.unanchoredPages;
+    const unlinedNote = unlined.length
+      ? `The day columns on page${unlined.length === 1 ? '' : 's'} ${unlined.join(', ')} couldn't be lined up with the day headings, so no shift from ${unlined.length === 1 ? 'it' : 'them'} was imported: everyone on ${unlined.length === 1 ? 'it' : 'them'} is listed and every day is shown to check. Upload the original file or a corrected export to import the shifts.`
+      : null;
+    const withUnlinedNote = (o: UploadReadOutcome): UploadReadOutcome => (unlinedNote && o.ok ? { ...o, reading: { ...o.reading, note: [unlinedNote, o.reading.note].filter(Boolean).join(' ') } } : o);
     if ('ai' in read) {
-      if (tableResult) return tableOnly(tableResult, read, reason, { tableState });
+      if (tableResult) return withUnlinedNote(tableOnly(tableResult, read, reason, { tableState }));
       if (dataLoss && read.code === 'vision_unconfigured') return { ok: false, status: 422, body: { error: withManualPath(dataLoss.message), errorCode: 'roster_extraction_anomaly' } };
       return refused(read, reason);
     }
@@ -473,8 +481,12 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       }
       merged.unreadRows = unread;
     }
+    if (unlined.length) {
+      const off = new Set(unlined);
+      merged.rows = merged.rows.map((r) => (r.sourcePage == null || off.has(r.sourcePage) ? { ...r, inferredDay: true } : r));
+    }
     const result = complete(merged, 'ai', ctx);
-    return {
+    return withUnlinedNote({
       ok: true,
       result,
       reading: report(result, {
@@ -488,7 +500,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
         crossChecked: read.crossChecked,
         cells,
       }),
-    };
+    });
   }
 
   // --- spreadsheets ---------------------------------------------------------------------------------

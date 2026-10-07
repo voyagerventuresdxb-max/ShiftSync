@@ -98,7 +98,7 @@ test('a header printed a column left of its columns: the table reader finds ever
   assert.deepEqual(shown, truth());
 });
 
-test('the same file with the AI reader: read twice like a photo; a day is saved where two independent readers agree, never where only one put it', async () => {
+test('the same file with the AI reader: read twice like a photo, but no day saved from a page whose columns could not be lined up; everyone listed', async () => {
   const pdf = await shiftedHeaderPdf();
   const ghost = { nm: 'Test Ghost', t: null, i: 7, c: ['09:00-17:00', '', '', '', '', '', ''] };
   // The row reading slips Alpha a day right and lists someone nobody else sees; the column reading slips Beta a day left.
@@ -107,14 +107,15 @@ test('the same file with the AI reader: read twice like a photo; a day is saved 
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
   assert.equal(outcome.reading.crossChecked, true, 'read twice');
-  assert.deepEqual(keys(outcome.result.rows), truth(), 'every day: the file\'s text and one AI reading agree on it');
+  assert.deepEqual(outcome.result.rows, [], 'agreeing readings are not enough on a page whose day columns could not be lined up');
+  assert.deepEqual(outcome.result.people?.map((p) => p.name), PEOPLE.map(([n]) => n), 'everyone listed');
+  assert.match(outcome.reading.note ?? '', /couldn't be lined up/);
   assert.ok(!outcome.result.rows.some((r) => r.employeeName === 'Test Ghost'), 'a shift only one reading saw is never saved');
   assert.ok(!outcome.result.people?.some((p) => p.name === 'Test Ghost'));
   assert.ok(outcome.result.unreadRows?.some((u) => u.text.startsWith('Test Ghost') && /Only an AI reading listed this row/.test(u.reason)), 'shown, as a row to check');
-  assert.match(outcome.reading.note ?? '', /only the days the file's own text and an AI reading agree on were imported/);
 });
 
-test('a text PDF the built-in reader can\'t read at all: the AI reader reads it twice and only what both readings agree on is saved', async () => {
+test('a text PDF the built-in reader can\'t read at all (header off its columns): the AI reader reads it twice, nothing is saved from the page', async () => {
   const pdf = await shiftedHeaderPdf();
   const broken = () => {
     throw new RosterExtractionAnomalyError('test: the grid could not be read');
@@ -126,8 +127,9 @@ test('a text PDF the built-in reader can\'t read at all: the AI reader reads it 
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
   assert.equal(outcome.reading.crossChecked, true);
-  assert.deepEqual(keys(outcome.result.rows), truth().filter((k) => k !== 'Test Alpha|2026-04-19|10:00-18:00'), 'what both readings agree on, nothing else');
+  assert.deepEqual(outcome.result.rows, [], 'the header is off its columns: shown to check, never saved');
   assert.ok(outcome.result.anomalies.some((a) => a.employeeName === 'Test Alpha' && a.date === '2026-04-19'));
+  assert.ok(outcome.result.anomalies.filter((a) => a.date).length >= truth().length, 'every day shown to check');
   // Too much read differently (a row slipped in one reading): nothing from the page, said loudly.
   const slipped = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'rota.pdf', size: pdf.length + 1 }, ctx({ provider: twoReadings(reading({ 'Test Alpha': 1, 'Test Beta': -1 }), reading({})), gridParser: broken as never }));
   assert.ok(slipped.ok);

@@ -77,6 +77,7 @@ const CLOCK: [string, string, string[]][] = [
   ['Test Beta', 'Waiter 2', ['OFF', '18:00-02:00', 'OFF', '18:30-01:00', '', '21:00-03:00', 'OFF']],
   ['Test Gamma', 'Runner 1', ['10:00-15:00', '', '10:00-15:00', 'OFF', 'AL', '18:30-01:00', '20:00-00:00']],
   ['Test Delta', 'Runner 2', ['09:30-15:00', 'OFF', '', '18:00-02:00', 'OFF', '11:00-19:00', '18:30-01:00']],
+  ['Test Epsilon', 'Runner 3', ['OFF', 'OFF', '', 'OFF', 'OFF', '', 'OFF']],
 ];
 async function clockPdf(shift: number): Promise<Buffer> {
   const doc = await PDFDocument.create();
@@ -113,7 +114,7 @@ test('a header shifted half a day either way (two AM | PM sub-columns): never a 
   }
 });
 
-test('a header shifted one or two days right (the last label past the grid; No. and position columns): never a day saved off', async () => {
+test('a header shifted one or two days right (the last label past the grid; No. and position columns): no shift saved, everyone listed', async () => {
   for (const shift of [1, 2]) {
     const pdf = await clockPdf(shift);
     const outcome = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'rota.pdf', size: pdf.length }, ctx());
@@ -121,24 +122,46 @@ test('a header shifted one or two days right (the last label past the grid; No. 
     if (!outcome.ok) continue;
     assert.deepEqual(outcome.result.people?.map((p) => p.name), CLOCK.map(([n]) => n), `shift ${shift}`);
     assert.deepEqual(outcome.result.rows, [], `shift ${shift}: shown to check, never saved on the shifted header alone`);
-    // Read twice by the AI reader as well: a day two readers agree on is saved — on its own day.
+    assert.match(outcome.reading.note ?? '', /couldn't be lined up/);
+    // Read twice by the AI reader as well — both readings agree on one cell a day off (Alpha's
+    // Monday read as Tuesday): still nothing saved from the page, every day shown, everyone listed.
+    const cellsOf = (c: string[], i: number) => (i === 0 ? ['', c[0]!, ...c.slice(2)] : [...c]);
     const answer: ReadingAnswer = {
       title: null,
       days: WEEK.map((_, d) => `${DAYS[d]!.slice(0, 3)} ${WEEK[d]!.slice(8)}/04`),
       key: [],
-      pages: [{ p: 1, rows: CLOCK.length, sec: [{ h: null, n: CLOCK.length, ppl: CLOCK.map(([nm, t, c], i) => ({ nm, t, i: i + 1, c: [...c] })) }], unread: [] }],
+      pages: [{ p: 1, rows: CLOCK.length, sec: [{ h: null, n: CLOCK.length, ppl: CLOCK.map(([nm, t, c], i) => ({ nm, t, i: i + 1, c: cellsOf(c, i) })) }], unread: [] }],
     };
     const columns = {
       title: null,
       days: answer.days,
       key: [],
-      pages: [{ p: 1, rows: CLOCK.length, ppl: CLOCK.map(([nm, t], i) => ({ i: i + 1, nm, t, h: null })), cols: answer.days.map((_, d) => ({ d, c: CLOCK.map(([, , c], i) => ({ i: i + 1, x: c[d]! })).filter((x) => x.x) })), unread: [] }],
+      pages: [{ p: 1, rows: CLOCK.length, ppl: CLOCK.map(([nm, t], i) => ({ i: i + 1, nm, t, h: null })), cols: answer.days.map((_, d) => ({ d, c: CLOCK.map(([, , c], i) => ({ i: i + 1, x: cellsOf(c, i)[d]! })).filter((x) => x.x) })), unread: [] }],
     };
     const provider = new MockVisionProvider((input: VisionInput) => ({ raw: JSON.stringify(input.framing === 'columns' ? columns : answer), model: 'mock', usage: { promptTokens: 1, outputTokens: 1 } }));
     const read = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'rota.pdf', size: pdf.length + shift }, ctx({ aiConsent: true, provider }));
     assert.ok(read.ok);
-    if (read.ok) assert.deepEqual(keys(read.result.rows), clockTruth(), `shift ${shift}: every day where two readers agree, on its own day`);
+    if (!read.ok) continue;
+    assert.deepEqual(read.result.rows, [], `shift ${shift}: agreement between AI readings is not enough on a page whose columns couldn't be lined up`);
+    assert.deepEqual(read.result.people?.map((p) => p.name), CLOCK.map(([n]) => n), `shift ${shift}: everyone listed, the person with no shifts too`);
+    assert.ok(read.result.anomalies.filter((a) => a.date).length >= clockTruth().length - 1, `shift ${shift}: every day shown to check`);
+    assert.match(read.reading.note ?? '', /couldn't be lined up/);
   }
+});
+
+test('a zero-shift person the two AI readings agree on is listed (a photo, nothing from a table reader)', async () => {
+  const CLOCK_: typeof CLOCK = [...CLOCK, ['Test Zeta', 'Runner 4', ['', '', '', '', '', '', '']]];
+  const days = WEEK.map((_, d) => `${DAYS[d]!.slice(0, 3)} ${WEEK[d]!.slice(8)}/04`);
+  const answer: ReadingAnswer = { title: null, days, key: [], pages: [{ p: 1, rows: CLOCK_.length, sec: [{ h: null, n: CLOCK_.length, ppl: CLOCK_.map(([nm, t, c], i) => ({ nm, t, i: i + 1, c: [...c] })) }], unread: [] }] };
+  const columns = { title: null, days, key: [], pages: [{ p: 1, rows: CLOCK_.length, ppl: CLOCK_.map(([nm, t], i) => ({ i: i + 1, nm, t, h: null })), cols: days.map((_, d) => ({ d, c: CLOCK_.map(([, , c], i) => ({ i: i + 1, x: c[d]! })).filter((x) => x.x) })), unread: [] }] };
+  const provider = new MockVisionProvider((input: VisionInput) => ({ raw: JSON.stringify(input.framing === 'columns' ? columns : answer), model: 'mock', usage: { promptTokens: 1, outputTokens: 1 } }));
+  const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+  const read = await readUploadedRoster({ buffer: png, mimetype: 'image/png', originalname: 'rota.png', size: png.length }, ctx({ aiConsent: true, provider }));
+  assert.ok(read.ok);
+  if (!read.ok) return;
+  assert.ok(read.result.people?.some((p) => p.name === 'Test Epsilon'), 'the person with no shifts all week is listed');
+  assert.ok(read.result.people?.some((p) => p.name === 'Test Zeta'), 'the person with an empty week is listed');
+  assert.deepEqual(keys(read.result.rows), clockTruth());
 });
 
 test('table reader only: footer lines split at their ligatures ("Offi cial copy – for sta ff only", "Final version (fl uid – check daily)") are never people', async () => {
