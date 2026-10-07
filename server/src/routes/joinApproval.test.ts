@@ -389,3 +389,58 @@ test('PATCH /api/join/:id approve: a phone already held by a user is a 409 (not 
     await cleanup([location.id, elsewhere.location.id], [taken, fresh]);
   }
 });
+
+test('PATCH /api/join/:id approve: a request that could be more than one imported person needs the manager\'s choice (409 with candidates); the choice links exactly that record; another venue\'s record is a 400; staff are refused', async () => {
+  const { location, users } = await makeVenue('link choice', [{ fullName: `${TAG} Owner`, systemRole: 'OWNER' }]);
+  const elsewhere = await makeVenue('link choice elsewhere');
+  const { plainToken } = await issueSession(users[0]!.id);
+  const [applicantPhone, staffPhone] = [phone(), phone()];
+  const staff = await prisma.user.create({ data: { locationId: location.id, fullName: `${TAG} staff`, systemRole: 'STAFF', phone: staffPhone } });
+  const staffToken = (await issueSession(staff.id)).plainToken;
+  // Made-up names: two people imported from a roster share the applicant's first name.
+  const halloumi = await prisma.user.create({ data: { locationId: location.id, fullName: 'Tarek Halloumi', systemRole: 'STAFF' } });
+  const benali = await prisma.user.create({ data: { locationId: location.id, fullName: 'Tarek Benali', systemRole: 'STAFF' } });
+  const foreign = await prisma.user.create({ data: { locationId: elsewhere.location.id, fullName: 'Tarek Halloumi', systemRole: 'STAFF' } });
+  const jr = await prisma.joinRequest.create({ data: { locationId: location.id, phone: applicantPhone, fullName: 'Tarek', status: 'PENDING' } });
+  try {
+    await withServer(async (baseUrl) => {
+      const approve = (body: Record<string, unknown>, token = plainToken) => send(baseUrl, 'PATCH', `/api/join/${jr.id}`, { decision: 'approve', ...body }, token);
+      // The pending list already says what approving will need.
+      const list = await fetch(`${baseUrl}/api/join/${location.id}/pending`, { headers: { Authorization: `Bearer ${plainToken}` } });
+      const { requests } = (await list.json()) as { requests: { id: string; link: { kind: string; candidates?: { fullName: string; match: string }[] } }[] };
+      const listed = requests.find((r) => r.id === jr.id)!;
+      assert.equal(listed.link.kind, 'choose');
+      assert.deepEqual(listed.link.candidates!.map((c) => `${c.fullName}:${c.match}`), ['Tarek Benali:close', 'Tarek Halloumi:close']);
+
+      assert.equal((await approve({ linkTo: halloumi.id }, staffToken)).status, 403, 'staff cannot approve');
+
+      const noChoice = await approve({});
+      assert.equal(noChoice.status, 409);
+      const refused = (await noChoice.json()) as { errorCode: string; error: string; candidates: { userId: string }[] };
+      assert.equal(refused.errorCode, 'link_choice_required');
+      assert.match(refused.error, /Choose who they are/);
+      assert.deepEqual(refused.candidates.map((c) => c.userId).sort(), [benali.id, halloumi.id].sort());
+
+      assert.equal((await approve({ linkTo: 42 })).status, 400);
+      const crossVenue = await approve({ linkTo: foreign.id });
+      assert.equal(crossVenue.status, 400);
+      assert.equal(((await crossVenue.json()) as { errorCode: string }).errorCode, 'link_target_invalid');
+      assert.equal((await prisma.joinRequest.findUniqueOrThrow({ where: { id: jr.id } })).status, 'PENDING');
+      assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: foreign.id } })).phone, null);
+
+      const ok = await approve({ linkTo: halloumi.id });
+      assert.equal(ok.status, 200);
+      assert.deepEqual(await ok.json(), { status: 'APPROVED', userId: halloumi.id, linked: true });
+      assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: halloumi.id } })).phone, applicantPhone);
+      assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: benali.id } })).phone, null, 'the other Tarek is untouched');
+
+      // They sign in as the record they were linked to (and its shifts).
+      const login = await verifyLogin(baseUrl, applicantPhone);
+      assert.equal(login.status, 200);
+      assert.equal((login.body.user as { id: string }).id, halloumi.id);
+    });
+  } finally {
+    await prisma.session.deleteMany({ where: { user: { locationId: location.id } } });
+    await cleanup([location.id, elsewhere.location.id], [applicantPhone, staffPhone]);
+  }
+});
