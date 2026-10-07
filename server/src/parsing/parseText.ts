@@ -17,6 +17,7 @@ import { DEFAULT_VENUE_TIMEZONE } from './normalize.js';
 import { isOvernight, parseTimeCell } from './normalize.js';
 import { detectWeek, parseDayLabel, parseTitleDate, type DayLabel } from './weekDetection.js';
 import type { WeekDetection } from './rosterContract.js';
+import { nonPersonReason } from './personKey.js';
 import type { ParsedShiftRow, RowIssue } from './types.js';
 
 /** A weekday as a whole word ("Fri"), never inside a name ("Simon", "Sunil", "Monica"). */
@@ -92,6 +93,9 @@ export function parseRosterText(
       });
       return;
     }
+
+    // A footer or sign-off line that happens to carry a date and a time is no one's shift.
+    if (parsed.employeeName && nonPersonReason(parsed.employeeName)) return;
 
     const rowNumber = rows.length + 1;
     const rowIssues: RowIssue[] = [];

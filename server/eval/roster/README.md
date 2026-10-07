@@ -148,6 +148,41 @@ and scans disagree on 0.8–4.8% of their days. The lower shift recall on A is t
 pages, by design. On the private DEV files: 21 / 21 people, 160 / 160 exact, 0 extra; 18 / 18,
 62 / 62.
 
+### Round 5 (after a fourth holdout): 70 rosters
+
+Ten variants added, new forms of the classes the fourth holdout found: A26 / B36 (text PDFs whose
+day headers are left-aligned over right-aligned cells — decimal sub-cells and "18.30-01.00" clock
+times — with mostly overnight shifts), A27 / B37 (overnight shifts in CSV and XLSX: 18.5–26, 18.5–28,
+18.30–01.00, 21.00–03.00), A28 / B38 (sign-off and form lines under the grid, with and without
+values beside them; in B38 the text layer splits their words at ff / fi / fl), A29 / B39 (clean
+text PDFs the mock AI reads like a live one: every time in another notation, a row slipped a day
+from an empty cell on, a misread digit), A30 / B40 (a low-contrast scan and photo whose two
+readings read a few cells the same wrong way). New columns: shifts saved on the wrong day, rows
+flagged (a row flag or a note on that person's day), pages withheld. Before = the Round 4 readers.
+
+| mock AI reader | staff recall | precision | saved exact | wrong times saved | wrong day | rows flagged | pages withheld |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A before (30 rosters) | 100.0% | 99.7% | 99.5% | 21 | 16 | 2.9% | 0 |
+| A after | 84.6% | 100.0% | 100.0% | 0 | 0 | 0.1% | 4 (776 shifts) |
+| B before (40 rosters) | 100.0% | 99.7% | 99.4% | 17 | 35 | 3.7% | 0 |
+| B after | 97.6% | 100.0% | 100.0% | 0 | 0 | 0.5% | 1 (97 shifts) |
+
+Per class, before → after: day headers aligned unlike their cells (A26, B36; table reader alone)
+16 and 35 shifts on the wrong day, 18 / 108 and 23 / 69 exact → 0, 108 / 108, 69 / 69; across a
+135-layout probe (header and cell alignment × day width × notation, text PDF, table reader alone)
+445 shifts on the wrong day → 0. Sign-off lines (A28, B38) precision 91.6% and 90.9% → 100%. Rows
+flagged on the 35 clean text PDFs 2.0% → 0.4% (all of text PDFs 4.3% → 0.4%): where the table
+reader read a cell from the file's own text for certain, an AI difference is counted in the
+reading report, not flagged; what stays flagged is a real conflict (a cell whose day or am / pm the
+table reader had to infer, read otherwise by the AI; a shift or person only one reader found). On
+the recorded live reading of the real text-PDF layout (DEV-A, whose AI reading slips several rows a
+day): 150 of 160 rows flagged → 0, the 70 AI differences counted. Photos and scans: 5 wrong times
+saved silently (A30, B40: both readings agreed on them) → 0; a page whose readings leave over 6% of
+its days in doubt (read differently or marked unsure) saves nothing — no people, no shifts — and
+says so (A22, A23, A25, A30, B40); readable photos stay at 0.8–4.8%. The lower staff and shift
+recall is those withheld pages, by design. Private DEV files: 21 / 21 people, 160 / 160 exact,
+0 extra; 18 / 18, 62 / 62.
+
 ## Corpus (`spec.ts` → `corpus/`)
 
 18 rosters, week of Monday 2026-08-17: day grid, per-row title column, long-format template,

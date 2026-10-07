@@ -117,12 +117,16 @@ export interface ReadingReport {
   peopleFound: number;
   rereadPages: number[];
   disagreements: number;
+  /** Cells the AI cross-check read differently where the file's own text was read for certain (used, not flagged). */
+  aiDifferedCells?: number;
   /** "Read from previous upload": nothing was billed. */
   fromCache: boolean;
   /** How the reading was checked, in plain words. */
   note?: string;
   /** A photo or scan read twice by the AI reader and the readings compared. */
   crossChecked?: boolean;
+  /** Pages of a photo or scan nothing was imported from (hard to read), with why. */
+  withheldPages?: { page: number; reason: string }[];
 }
 
 export type PersonStatus = 'matched' | 'new' | 'needs_decision';

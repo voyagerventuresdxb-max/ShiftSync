@@ -120,7 +120,7 @@ test('aiReadRoster: with too little time left no re-read is started, and the sho
   assert.deepEqual(outcome.shortPages, [{ page: 1, expected: 2, read: 1 }]);
 });
 
-test('reconcileReadings: matching shifts are "both"; one-reader people and shifts are kept and flagged; times that differ keep the printed text\'s with both readings', () => {
+test('reconcileReadings: matching shifts are "both"; one-reader people are kept (an AI-only one flagged); times that differ on a cell the table reader had to guess keep the printed text\'s with both readings', () => {
   const ai = mapReadingAnswer(
     answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', '10-18']), person('Test Betta', 2, ['12-20', '']), person('Test Only Ai', 3, ['9-17', ''])] }]),
     { today: TODAY, clientWeekStart: null },
@@ -129,14 +129,15 @@ test('reconcileReadings: matching shifts are "both"; one-reader people and shift
     [
       ['', '24-Aug', '25-Aug'],
       ['', 'MONDAY', 'TUESDAY'],
-      ['Test Alpha', '9-17', '11-18'],
+      // "11-6pm": the table reader has to guess the start's am / pm.
+      ['Test Alpha', '9-17', '11-6pm'],
       ['Test Beta', '12-20', ''],
       ['Test Only Table', '', '9-17'],
     ],
     TODAY,
     { today: TODAY, clientWeekStart: null },
   );
-  const { result, disagreements } = reconcileReadings(ai, table);
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
   const row = (name: string, date: string) => result.rows.find((r) => r.employeeName === name && r.date === date)!;
   assert.equal(row('Test Alpha', '2026-08-24').readerSource, 'both');
   assert.deepEqual(row('Test Alpha', '2026-08-25').flags, ['times_differ']);
@@ -147,10 +148,67 @@ test('reconcileReadings: matching shifts are "both"; one-reader people and shift
   assert.equal(beta.readerSource, 'both');
   assert.deepEqual(beta.nameAlternatives, [{ reader: 'ai', name: 'Test Betta' }]);
   assert.deepEqual(row('Test Only Ai', '2026-08-24').flags, ['ai_only']);
-  assert.deepEqual(row('Test Only Table', '2026-08-25').flags, ['table_only']);
+  // A person only the table reader read, from the file's own text for certain: kept as read (the person is marked table-only).
+  assert.equal(row('Test Only Table', '2026-08-25').flags, undefined);
   assert.equal(result.people!.find((p) => p.name === 'Test Only Table')!.readerSource, 'table');
-  assert.equal(disagreements, 4, 'times differ, a misread name, one AI-only person, one table-only person');
+  assert.equal(disagreements, 4, 'times differ on a guessed cell, a misread name, one AI-only person, one table-only person');
+  assert.equal(aiDiffCells, 0);
   assert.equal(new Set(result.rows.map((r) => r.rowNumber)).size, result.rows.length, 'row numbers stay unique');
+});
+
+test('reconcileReadings: where the table reader read a cell from the file\'s own text for certain, the AI reading it otherwise is counted, never flagged', () => {
+  const ai = mapReadingAnswer(
+    answer([{ p: 1, rows: 2, ppl: [person('Test Alpha', 1, ['9-16', '']), person('Test Beta', 2, ['OFF', '12-20'])] }]),
+    { today: TODAY, clientWeekStart: null },
+  );
+  ai.anomalies.push({ employeeName: 'Test Beta', date: '2026-08-25', rawText: '12-20', reason: 'The AI was unsure.', confidence: 0.4, rowNumber: null });
+  const table = parseExcelGrid(
+    [
+      ['', '24-Aug', '25-Aug'],
+      ['', 'MONDAY', 'TUESDAY'],
+      ['Test Alpha', '9-17', '10-18'],
+      ['Test Beta', 'OFF', '12-20'],
+    ],
+    TODAY,
+    { today: TODAY, clientWeekStart: null },
+  );
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}|${(r.flags ?? []).join(',')}`), [
+    'Test Alpha|2026-08-24|09:00-17:00|',
+    'Test Alpha|2026-08-25|10:00-18:00|',
+    'Test Beta|2026-08-25|12:00-20:00|',
+  ]);
+  assert.equal(disagreements, 0);
+  assert.equal(aiDiffCells, 2, "Monday's other times and Tuesday's shift the AI missed");
+  assert.deepEqual(result.anomalies, [], "the AI's note on a day the file's text settled is not shown");
+});
+
+test('reconcileReadings: a day the PDF reader inferred is confirmed when the AI reads the same; when the AI puts those times on another day, neither is written', () => {
+  const grid = [
+    ['', '24-Aug', '25-Aug'],
+    ['', 'MONDAY', 'TUESDAY'],
+    ['Test Alpha', '9-17', ''],
+    ['Test Beta', '', '10-18'],
+  ];
+  // Both cells' days inferred from the column alignment (grid columns 1 and 2 of rows 3 and 4).
+  const inferredCells = [{ page: null, row: 3, col: 1 }, { page: null, row: 4, col: 2 }];
+  const table = parseExcelGrid(grid, TODAY, { today: TODAY, clientWeekStart: null, inferredCells });
+  assert.deepEqual(table.rows.map((r) => r.flags), [['low_confidence'], ['low_confidence']], 'never saved silently on its own');
+  const ai = mapReadingAnswer(answer([{ p: 1, rows: 2, ppl: [person('Test Alpha', 1, ['9-17', '']), person('Test Beta', 2, ['10-18', ''])] }]), { today: TODAY, clientWeekStart: null });
+  const { result, disagreements } = reconcileReadings(ai, table);
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}|${(r.flags ?? []).join(',')}`), ['Test Alpha|2026-08-24|'], 'the AI confirms Alpha\'s Monday');
+  assert.ok(result.rows.every((r) => r.inferredDay === undefined));
+  assert.deepEqual(result.anomalies.filter((a) => a.employeeName === 'Test Beta').map((a) => a.date).sort(), ['2026-08-24', '2026-08-25']);
+  assert.ok(result.anomalies.every((a) => /same times on different days/.test(a.reason)));
+  assert.equal(disagreements, 2);
+});
+
+test('reconcileReadings: a week the file prints for certain stands over an AI reading of another week (counted, nothing to confirm)', () => {
+  const ai = mapReadingAnswer({ ...answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]), days: ['31-Aug MONDAY', '1-Sep TUESDAY'] }, { today: TODAY, clientWeekStart: null });
+  const table = parseExcelGrid([['', '24-Aug', '25-Aug'], ['', 'MONDAY', 'TUESDAY'], ['Test Alpha', '9-17', '']], TODAY, { today: TODAY, clientWeekStart: null });
+  const { result } = reconcileReadings(ai, table);
+  assert.equal(result.week?.weekStart, '2026-08-24');
+  assert.equal(result.week?.needsConfirmation, false);
 });
 
 // --- the upload path (readUpload.ts) with a mock AI reader ---------------------------------------
@@ -331,13 +389,21 @@ test('reconcileReadings: a segment only the AI saw, on a day the table reader re
     TODAY,
     { today: TODAY, clientWeekStart: null },
   );
-  const { result, disagreements } = reconcileReadings(ai, table);
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
   const day = result.rows.filter((r) => r.employeeName === 'Test Gamma' && r.date === '2026-08-24');
   assert.equal(day.length, 1, 'no extra shift from the AI-only segment');
   assert.equal(day[0]!.startTime, '09:00');
-  assert.deepEqual(day[0]!.flags, ['times_differ']);
-  assert.deepEqual(day[0]!.alternatives?.map((a) => `${a.reader}:${a.startTime}-${a.endTime}`), ['table:09:00-13:00', 'ai:18:00-22:00']);
-  assert.equal(disagreements, 1);
+  assert.equal(day[0]!.flags, undefined, "the file's own text read for certain: the AI's extra segment is counted, not flagged");
+  assert.equal(disagreements, 0);
+  assert.equal(aiDiffCells, 1);
+  // The same cell where the table reader had to guess am / pm ("9-1pm"): the AI's other reading is shown.
+  const guessed = parseExcelGrid([['', '24-Aug', '25-Aug'], ['', 'MONDAY', 'TUESDAY'], ['Test Gamma', '9-1pm', '']], TODAY, { today: TODAY, clientWeekStart: null });
+  const again = reconcileReadings(ai, guessed);
+  const cell = again.result.rows.filter((r) => r.employeeName === 'Test Gamma' && r.date === '2026-08-24');
+  assert.equal(cell.length, 1);
+  assert.deepEqual(cell[0]!.flags, ['times_differ']);
+  assert.deepEqual(cell[0]!.alternatives?.map((a) => `${a.reader}:${a.startTime}-${a.endTime}`), ['table:09:00-13:00', 'ai:18:00-22:00']);
+  assert.equal(again.disagreements, 1);
 });
 
 test('reconcileReadings: the same times on different days on a row whose day the table reader had to infer — neither day is written; both are shown', () => {
@@ -443,14 +509,73 @@ test('photo cross-check: a cell the two readings read differently writes nothing
   assert.match(outcome.reading.note!, /^This photo was hard to read — 4 cells need checking/, 'every compared cell differed');
 });
 
-test('photo cross-check: many cells read two ways — the reading says the photo was hard to read and how many cells need checking', async () => {
+test('photo cross-check: a few cells read two ways on a page the readings otherwise agree on — what both read is written, the rest shown to check', async () => {
+  const names = Array.from({ length: 26 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
+  // One Tuesday of 52 days read two ways (under 6% of the page): the agree-only rule.
+  const first = answer([{ p: 1, rows: 26, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 1 ? '18 23.5' : '9 17'])) }]);
+  const second = answer([{ p: 1, rows: 26, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 1 ? '18 23' : '9 17'])) }]);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 4'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  assert.ok(outcome.ok);
+  assert.equal(outcome.result.rows.length, 26 + 25, 'every agreed Monday and Tuesday is written');
+  assert.equal(outcome.result.people?.length, 26);
+  assert.equal(outcome.reading.withheldPages, undefined);
+  assert.ok(outcome.result.anomalies.some((a) => a.employeeName === 'Test Person A' && a.date === '2026-08-25'));
+});
+
+test('photo cross-check: a page the two readings leave too much of in doubt saves nothing — no people, no shifts — and says so (5 of 52 days read differently)', async () => {
   const names = Array.from({ length: 26 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
   const first = answer([{ p: 1, rows: 26, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 5 ? '18 23.5' : '9 17'])) }]);
   const second = answer([{ p: 1, rows: 26, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 5 ? '18 23' : '9 17'])) }]);
-  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 4'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 4b'), mimetype: 'image/png', originalname: 'r.png', size: 6 }, ctx({ provider: twoFramings(first, second) }));
   assert.ok(outcome.ok);
-  assert.match(outcome.reading.note!, /^This photo was hard to read — 5 cells need checking; for best results upload the original PDF or spreadsheet\./);
-  assert.equal(outcome.result.rows.length, 26 + 21, 'every agreed Monday and Tuesday is written');
+  assert.deepEqual(outcome.result.rows, []);
+  assert.deepEqual(outcome.result.people, []);
+  assert.deepEqual(outcome.result.leaveRecords, []);
+  assert.deepEqual(outcome.result.anomalies, [], 'nothing to tick through: the page is shown as not read');
+  assert.equal(outcome.reading.withheldPages?.length, 1);
+  assert.match(outcome.reading.withheldPages![0]!.reason, /^Page 1 was hard to read: the two AI readings disagreed on, or were unsure of, 5 of its 52 days, so nothing from it was imported — no people, no shifts\. Upload the original PDF or spreadsheet/);
+  assert.deepEqual(outcome.result.unreadRows?.map((u) => u.reason), [outcome.reading.withheldPages![0]!.reason]);
+  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so nothing from it was imported: no people, no shifts\. For best results upload the original PDF or spreadsheet/);
+});
+
+test('photo cross-check: cells both readings agree on but either marks unsure count against the page — a low-contrast scan read the same wrong way twice saves nothing', async () => {
+  const names = Array.from({ length: 12 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
+  // Every cell agreed; the row reading was unsure of a Tuesday for two people in twelve (2 of 24 days, over 6%).
+  const ppl = names.map((n, i) => ({ ...person(n, i + 1, ['10 15', '9 17']), ...(i < 2 ? { q: [1] } : {}) }));
+  const first: ReadingAnswer = { ...answer([]), pages: [{ p: 1, rows: 12, sec: [{ h: null, n: 12, ppl }], unread: [] }] };
+  const second = answer([{ p: 1, rows: 12, ppl: names.map((n, i) => person(n, i + 1, ['10 15', '9 17'])) }]);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 9'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(outcome.result.rows, []);
+  assert.deepEqual(outcome.result.people, []);
+  assert.match(outcome.reading.withheldPages![0]!.reason, /unsure of, 2 of its 24 days/);
+});
+
+test('photo cross-check: a two-page scan whose second page is hard to read imports page 1 only; a person printed only on page 2 is never created', async () => {
+  const p1 = Array.from({ length: 6 }, (_, i) => `Test Front ${String.fromCharCode(65 + i)}`);
+  const p2 = Array.from({ length: 6 }, (_, i) => `Test Back ${String.fromCharCode(65 + i)}`);
+  const mock = new MockVisionProvider((input: VisionInput) => {
+    const page = input.focus!.page;
+    const names = page === 1 ? p1 : p2;
+    // Page 2: the two readings read most Tuesdays differently.
+    const tue = (i: number) => (page === 2 && i < 4 ? (input.framing === 'columns' ? '18 23' : '18 23.5') : '9 17');
+    const a = answer([{ p: page, rows: 6, ppl: names.map((n, i) => person(n, i + 1, ['10 15', tue(i)])) }]);
+    return out(input.framing === 'columns' ? JSON.stringify(columnsOf(a)) : a);
+  });
+  const pdf = await (async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.addPage([200, 200]);
+    return Buffer.from(await doc.save());
+  })();
+  const outcome = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'scan.pdf', size: pdf.length }, ctx({ provider: mock }));
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  assert.deepEqual(outcome.result.people?.map((p) => p.name), p1);
+  assert.ok(outcome.result.rows.every((r) => r.employeeName.startsWith('Test Front')));
+  assert.equal(outcome.result.rows.length, 12);
+  assert.deepEqual(outcome.reading.withheldPages?.map((w) => w.page), [2]);
+  assert.match(outcome.reading.note!, /so nothing from page 2 was imported: no people, no shifts/);
 });
 
 test('photo cross-check: a name the two readings spelled differently keeps one spelling and carries the other — never settled silently', async () => {
@@ -469,9 +594,24 @@ test('photo cross-check: when the second reading fails the first stands, the rep
   const cache = memoryReadingCache();
   const outcome = await readUploadedRoster({ buffer: Buffer.from('png 3'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: mock, cache }));
   assert.ok(outcome.ok);
-  assert.deepEqual(outcome.result.people?.map((p) => p.name), ['Test Alpha']);
-  assert.match(outcome.reading.note!, /second AI reading could not be made/);
+  // Nothing to check the first reading against: nothing is imported, and the review says why.
+  assert.deepEqual(outcome.result.people, []);
+  assert.deepEqual(outcome.result.rows, []);
+  assert.match(outcome.reading.note!, /^The second AI reading of this photo or scan could not be made, so it could not be checked and nothing was imported/);
+  assert.equal(outcome.reading.withheldPages?.length, 1);
   assert.equal(cache.size(), 0);
+});
+
+test('photo cross-check: when the first reading fails and only the second answers, nothing is imported either', async () => {
+  const mock = new MockVisionProvider((input: VisionInput) => {
+    if (input.framing !== 'columns') throw new VisionProviderError('busy', 'busy');
+    return out(JSON.stringify(columnsOf(answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]))));
+  });
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 3b'), mimetype: 'image/png', originalname: 'r.png', size: 6 }, ctx({ provider: mock }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(outcome.result.people, []);
+  assert.deepEqual(outcome.result.rows, []);
+  assert.ok(outcome.result.unreadRows?.some((u) => /could not be checked and nothing from it was imported/.test(u.reason)));
 });
 
 test('photo cross-check: a multi-page scan is read day by day per page, all pages at once', async () => {
@@ -530,7 +670,7 @@ test('photo cross-check: a name read very differently on the same row of both re
   assert.equal(outcome.result.rows.length, 2, 'the cells both read are written');
 });
 
-test('photo cross-check: a page the two readings disagree on too much is not trusted — nothing from it is imported, every week is shown with both readings', async () => {
+test('photo cross-check: a page the two readings disagree on too much is not trusted — nothing from it is imported, not even its people', async () => {
   const names = Array.from({ length: 6 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
   // Most days read two ways; the agreed ones can't be trusted either.
   const first = answer([{ p: 1, rows: 6, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 3 ? '18 23.5' : '9 17'])) }]);
@@ -538,12 +678,9 @@ test('photo cross-check: a page the two readings disagree on too much is not tru
   const outcome = await readUploadedRoster({ buffer: Buffer.from('png 7'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
   assert.ok(outcome.ok);
   assert.deepEqual(outcome.result.rows, []);
-  assert.equal(outcome.result.people?.length, 6, 'everyone is still listed');
-  const week = outcome.result.anomalies.find((a) => a.employeeName === 'Test Person A' && a.date === null)!;
-  assert.equal(week.rawText, 'First reading: Mon 24 10:00–15:00; Tue 25 18:00–23:30 · second reading: Mon 24 10:00–15:00; Tue 25 18:00–23:00');
-  assert.match(week.reason, /could not be read reliably/);
-  assert.ok(outcome.result.unreadRows?.some((u) => /disagreed on 3 of its 12 days/.test(u.reason)));
-  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on too much of it, so none of its shifts were imported/);
+  assert.deepEqual(outcome.result.people, []);
+  assert.ok(outcome.result.unreadRows?.some((u) => /disagreed on, or were unsure of, 3 of its 12 days/.test(u.reason)));
+  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so nothing from it was imported/);
 });
 
 test('photo reading: a row whose name could not be read ("[?]") is an unread row, never a person', async () => {
@@ -570,12 +707,12 @@ test("reconcileReadings: a name one reader wrote with its title after a slash is
   assert.deepEqual(result.people?.map((p) => p.name), ['Test Alpha']);
 });
 
-test("reconcileReadings: the same times on different days on a row the table reader placed where it sits — the file's days stand, the person is flagged", () => {
+test("reconcileReadings: the same times on different days on a row the table reader placed where it sits — the file's days stand; the AI's slip is counted, not flagged", () => {
   const ai = mapReadingAnswer(answer([{ p: 1, rows: 1, ppl: [person('Test Delta', 1, ['9-17', ''])] }]), { today: TODAY, clientWeekStart: null });
   const table = parseExcelGrid([['', '24-Aug', '25-Aug'], ['', 'MONDAY', 'TUESDAY'], ['Test Delta', '', '9-17']], TODAY, { today: TODAY, clientWeekStart: null });
-  const { result } = reconcileReadings(ai, table);
-  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime}`), ['2026-08-25 09:00']);
-  const flag = result.anomalies.find((a) => a.employeeName === 'Test Delta' && a.date === null)!;
-  assert.match(flag.reason, /put some of these times on other days/);
-  assert.equal(flag.rawText, 'Built-in reader: 08-25 09:00–17:00 · AI reader: 08-24 09:00–17:00');
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
+  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime} ${(r.flags ?? []).join(',')}`), ['2026-08-25 09:00 ']);
+  assert.deepEqual(result.anomalies, []);
+  assert.equal(disagreements, 0);
+  assert.equal(aiDiffCells, 2);
 });

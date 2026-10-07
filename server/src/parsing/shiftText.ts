@@ -160,14 +160,19 @@ function inferTwelveHour(tokens: Token[]): boolean {
 
 /**
  * The segments printed in a time cell, or null when the cell is not purely times (a code, a
- * note, a name) or its times don't pair up. `inferred` is true when am/pm had to be inferred.
+ * note, a name) or its times don't pair up. `inferred` is true when am/pm had to be inferred, or
+ * a dotted time that reads either way (".25", ".50") had no other cell of the roster to say how.
  */
 export function parseShiftText(raw: string, opts: ShiftTextOptions = {}): { segments: ShiftSegment[]; inferred: boolean } | null {
   const text = normalizeTimeText(raw);
   if (!text || !/\d/.test(text)) return null;
   const tokens = readTokens(text, opts);
   if (!tokens || tokens === AMBIGUOUS || tokens.length < 2 || tokens.length % 2 !== 0 || tokens.length > 6) return null;
-  const inferred = inferTwelveHour(tokens);
+  // Hours past midnight are an end ("18.5 26"); a start past midnight ("30-15.00", a cell whose
+  // first digits were cut off) is not a time anyone starts at.
+  for (let i = 0; i < tokens.length; i += 2) if (tokens[i]!.minutes > 1440) return null;
+  const dotGuessed = !opts.dotMeans && /(?<![\d.])\d{1,2}\.(25|50)(?![\d.])/.test(text);
+  const inferred = inferTwelveHour(tokens) || dotGuessed;
   const segments: ShiftSegment[] = [];
   for (let i = 0; i < tokens.length; i += 2) {
     const s = tokens[i]!.minutes % 1440;
@@ -176,6 +181,28 @@ export function parseShiftText(raw: string, opts: ShiftTextOptions = {}): { segm
     segments.push({ start: hhmm(s), end: hhmm(e), overnight: e <= s });
   }
   return { segments, inferred };
+}
+
+/**
+ * True when a cell's segments follow one another within one day: each starts at or after the
+ * last one ended, and the last ends within 24 hours of the first start ("10-15 / 18-23",
+ * "18.30-01.00"). Times that overlap or run on past a day ("18:30-01:00 18:00-02:00") are two
+ * days' cells run together, not one day.
+ */
+export function withinOneDay(segments: { start: string; end: string }[]): boolean {
+  const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  let first: number | null = null;
+  let last = -1;
+  for (const s of segments) {
+    for (const t of [s.start, s.end]) {
+      let m = minutes(t);
+      // One segment may start where the last ended ("16-18, 18-26").
+      while (m < last) m += 1440;
+      first ??= m;
+      last = m;
+    }
+  }
+  return first === null || last - first <= 1440;
 }
 
 /**

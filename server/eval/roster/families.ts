@@ -117,6 +117,20 @@ export interface VariantSpec {
   narrowDays?: boolean;
   /** Dense photo: some cells both AI readings slip on the same way (mock). */
   sharedSlips?: boolean;
+  /** How the day header text sits in its cell (default centred). */
+  headerAlign?: 'left' | 'center' | 'right';
+  /** How the day cells' text sits in its cell (default centred; left with narrowDays). */
+  dayAlign?: 'left' | 'center' | 'right';
+  /** Family B: day column width in px (default 150, 54 with narrowDays). */
+  dayWidth?: number;
+  /** Mostly evening shifts that cross midnight (18:30–01:00, 18.5–26, 21–02). */
+  overnight?: boolean;
+  /** Sign-off and form lines under the grid: the text in the name column, and per day (never people). */
+  signOffRows?: [string, string[]][];
+  /** Text PDF: the mock AI reader reads like a live one — other notations, a row slipped a day, a misread digit (mock). */
+  aiNoise?: boolean;
+  /** A low-contrast scan: both readings read a few cells the same wrong way; the row read marks some unsure (mock). */
+  lowContrast?: boolean;
   seed: number;
 }
 
@@ -201,6 +215,12 @@ export interface FamilyTruth {
     combined?: 'slash' | 'paren';
     /** A dense photo where both readings slip the same way on some cells (mock). */
     sharedSlips?: boolean;
+    /** Sign-off and form lines under the grid (never people): name-column text and per-day text. */
+    signOffs?: { label: string; cells: string[] }[];
+    /** The mock AI reads a text PDF like a live one: other notations, a slipped row, a misread digit. */
+    aiNoise?: boolean;
+    /** A low-contrast scan (the mock's readings share a few wrong cells and mark some unsure). */
+    lowContrast?: boolean;
   };
   pageCount: number;
   people: TruthPerson[];
@@ -390,6 +410,21 @@ const A_DAYS: [number, number][][] = [
   [[1080, 1560]], // PM only 18-26
   [[600, 960]], // AM only 10-16
 ];
+/** Evening shifts that cross midnight (overnight variants). */
+const A_NIGHTS: [number, number][][] = [
+  [[1110, 1560]], // PM only 18.5-26
+  [[960, 1080], [1110, 1500]], // 16-18, 18.5-25
+  [[1260, 1560]], // PM only 21-26
+  [[1110, 1680]], // PM only 18.5-28
+  [[720, 960], [1080, 1440]], // 12-16, 18-24
+];
+const B_NIGHTS: [number, number][][] = [
+  [[1110, 1500]], // 18:30-01:00
+  [[1080, 1560]], // 18:00-02:00
+  [[1260, 1620]], // 21:00-03:00
+  [[630, 900], [1110, 1500]], // 10:30-15:00, 18:30-01:00
+  [[1200, 1440]], // 20:00-00:00
+];
 const A_LEGEND = [
   { fill: '#ffff00', label: 'Holiday' },
   { fill: '#c0c0c0', label: 'Unpaid' },
@@ -494,7 +529,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
             cells.push(r() < 0.85 ? { kind: 'colour', meaning: pick(r, A_LEAVE_FILLS).label } : { kind: 'blank' });
             shiftFills.push(null);
           } else if (r() < 0.62) {
-            cells.push({ kind: 'shift', segs: pick(r, A_DAYS) });
+            cells.push({ kind: 'shift', segs: pick(r, spec.overnight ? A_NIGHTS : A_DAYS) });
             shiftFills.push(r() < 0.25 ? pick(r, A_SHIFT_FILLS).fill : null);
           } else {
             cells.push(r() < 0.9 ? { kind: 'colour', meaning: pick(r, A_LEAVE_FILLS).label } : { kind: 'blank' });
@@ -533,7 +568,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
       for (let d = 0; d < 7; d++) {
         const x = r();
         if (allLeave) cells.push({ kind: 'leave', code: spec.freeCodes ? 'HOL' : 'UL' });
-        else if (x < 0.45) cells.push({ kind: 'shift', segs: pick(r, B_SHIFTS) });
+        else if (x < 0.45) cells.push({ kind: 'shift', segs: pick(r, spec.overnight ? B_NIGHTS : B_SHIFTS) });
         else if (x < 0.68) cells.push({ kind: 'leave', code: spec.freeCodes ? pick(r, ['O', 'X', '-', 'DO']) : 'OFF' });
         else if (x < 0.84) cells.push({ kind: 'leave', code: pick(r, spec.freeCodes ? B_LEAVE_FREE : ['UL', 'UL', 'AL', 'SL', 'PH']) });
         else if (x < 0.92) cells.push({ kind: 'open', text: pick(r, spec.freeCodes ? B_OPEN_FREE : B_OPEN) });
@@ -680,6 +715,17 @@ export const FAMILY_VARIANTS: VariantSpec[] = [
   A({ id: 'A25-dense-photo-shared-slips', format: 'png', people: 30, hardToRead: true, sharedSlips: true, tags: ['dense photo', 'the two readings disagree on most cells, and slip the same way on some'] }, 125),
   A({ id: 'A22-dense-photo', format: 'png', people: 42, hardToRead: true, tags: ['42-person photo', 'many PM-only and half days', 'the two readings disagree on many cells'] }, 122),
   A({ id: 'A23-angled-scan-half-days', format: 'pdf-image', hardToRead: true, weekStart: AUG24, tags: ['scan', 'half days', 'the two readings disagree on many cells'] }, 123),
+  // Round 5: new forms of the classes a fourth holdout found.
+  A({ id: 'A26-offset-header-overnight-pdf', format: 'pdf-text', headerAlign: 'left', dayAlign: 'right', overnight: true, tags: ['day headers left-aligned over right-aligned sub-cells', 'decimal 18.5-26 / 18.5-28 overnight', 'text PDF'] }, 126),
+  A({ id: 'A27-overnight-csv', format: 'csv', overnight: true, weekStart: AUG24, tags: ['decimal hours past midnight (26, 28)', 'csv'] }, 127),
+  A({ id: 'A28-signoff-xlsx', format: 'xlsx', signOffRows: [['Verified by', ['Date:', '', '', '____________']], ['Duty manager:', []], ['Reviewed', ['by', '', '____________']]], tags: ['sign-off and form lines under the grid, with values beside them', 'xlsx'] }, 128),
+  A({ id: 'A29-ai-noise-pdf', format: 'pdf-text', aiNoise: true, notation: 'dot-cells', tags: ['clean text PDF', 'an AI reading like a live one: other notations, a slipped row, a misread digit'] }, 129),
+  A({ id: 'A30-low-contrast-scan', format: 'pdf-image', lowContrast: true, tags: ['low-contrast scan', 'both readings read a few cells the same wrong way'] }, 130),
+  B({ id: 'B36-offset-header-dot-clock-pdf', format: 'pdf-text', notation: 'dot24', headerAlign: 'left', dayAlign: 'right', dayWidth: 140, overnight: true, tags: ['"18.30-01.00" clock times', 'day headers left-aligned over right-aligned cells', 'overnight shifts', 'text PDF'] }, 236),
+  B({ id: 'B37-overnight-xlsx', format: 'xlsx', notation: 'dot24', overnight: true, weekStart: APR20, tags: ['overnight shifts 18.30-01.00, 21.00-03.00', 'xlsx'] }, 237),
+  B({ id: 'B38-signoff-ligatures-pdf', format: 'pdf-text', ligatures: true, lead: ['name', 'title'], signOffRows: [['Verified by: ____________', ['', 'Date: ____________']], ['Certified by', []], ['Officer in charge ........', ['', '', '', 'Page 1 of 1']]], tags: ['sign-off lines whose words the text layer splits at ligatures', 'with and without values beside them', 'text PDF'] }, 238),
+  B({ id: 'B39-ai-noise-pdf', format: 'pdf-text', aiNoise: true, notation: 'colon24', tags: ['clean text PDF', 'an AI reading like a live one: other notations, a slipped row, a misread digit'] }, 239),
+  B({ id: 'B40-low-contrast-photo', format: 'png', lowContrast: true, weekStart: APR20, tags: ['low-contrast photo', 'both readings read a few cells the same wrong way'] }, 240),
 ];
 
 export const FILE_EXT: Record<OutputFormat, string> = { 'pdf-text': 'pdf', 'pdf-image': 'pdf', png: 'png', xlsx: 'xlsx', csv: 'csv' };

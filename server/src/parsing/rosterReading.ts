@@ -344,12 +344,24 @@ export function withPersonKeys(rows: ParsedShiftRow[], people: ReadPerson[]): Pa
 
 export interface Reconciled {
   result: ParsedVisionResult;
+  /** Real conflicts between the readers, each flagged or shown to check. */
   disagreements: number;
+  /**
+   * Days (person and date) the AI cross-check read differently where the file's own text was
+   * read for certain and was used: counted for the reading report, never flagged.
+   */
+  aiDiffCells: number;
 }
 
 const segKey = (r: { startTime: string; endTime: string }) => `${r.startTime}-${r.endTime}`;
 const alt = (reader: 'ai' | 'table', r: ParsedShiftRow): ShiftAlternative => ({ reader, startTime: r.startTime, endTime: r.endTime, overnight: r.overnight });
 const withFlag = (r: ParsedShiftRow, flag: RowFlag): ParsedShiftRow => ({ ...r, flags: [...new Set([...(r.flags ?? []), flag])] });
+/** A table reading the AI read the same way: an inferred day or am / pm is confirmed, its "check" flag dropped. */
+function confirmed(r: ParsedShiftRow): ParsedShiftRow {
+  const { inferredDay, inferredTimes: _times, flags, ...rest } = r;
+  const kept = (flags ?? []).filter((f) => !(f === 'low_confidence' && inferredDay));
+  return kept.length ? { ...rest, flags: kept } : rest;
+}
 
 /**
  * Cross-checks the AI reading (primary) against the table reading. Either may be null (then the
@@ -366,8 +378,11 @@ export function reconcileReadings(
     placementUncertain?: Set<string>;
   } = {},
 ): Reconciled {
-  if (!ai || !table) return { result: (ai ?? table)!, disagreements: 0 };
+  if (!ai || !table) return { result: (ai ?? table)!, disagreements: 0, aiDiffCells: 0 };
   let disagreements = 0;
+  let aiDiffCells = 0;
+  /** Per final name: the days the file's own text settled (an AI note on such a day is the AI's misreading). */
+  const settled = new Map<string, Set<string>>();
   const aiPeople = ai.people ?? peopleFromRows(ai.rows, ai.leaveRecords, 'ai');
   const tablePeople = table.people ?? peopleFromRows(table.rows, table.leaveRecords, 'table');
 
@@ -473,31 +488,47 @@ export function reconcileReadings(
     }
     const tableRows = rowsOf(table, t).map(fix);
     const dates = [...new Set([...aiRows, ...tableRows].map((r) => r.date))].sort();
-    // The same times on different days: one reader put a row's cells a day or two off. When the
-    // table reader placed this row's cells where they sit in the file, its days stand and the
-    // person is flagged; when it had to infer a day (a cell longer than its column), neither
-    // reading of those days is written and each is shown with both readings.
+    // Where the table reader read a day from the file's own text for certain (the text sits in
+    // its day's column and its times need no guess), that day stands whatever the AI read: an AI
+    // difference there is a misreading of text the file prints exactly. It is counted for the
+    // reading report, never flagged. A real conflict is flagged: a day the table reader had to
+    // infer (a cell running on past its column, an am / pm left out) that the AI read otherwise,
+    // the same times put on different days with no certain reading, or a shift only the AI saw.
+    const uncertainPerson = opts.placementUncertain?.has(t.personKey) ?? false;
+    const certain = (day: ParsedShiftRow[]) => !uncertainPerson && day.length > 0 && day.every((r) => !r.inferredDay && !r.inferredTimes);
+    const tableOn = (date: string) => tableRows.filter((r) => r.date === date).sort((x, y) => x.startTime.localeCompare(y.startTime));
+    const leaveRead = new Map(leaveOf(table, t).map((l) => [l.date, l]));
+    const settledDates = new Set<string>();
+    settled.set(name, settledDates);
+    const dayKey = (day: ParsedShiftRow[]) => day.map(segKey).sort().join(',');
+    const dayNo = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+    /** The table reader's day (within two days) holding the times the AI read on `date`. */
+    const tableDayOf = (aDay: ParsedShiftRow[], date: string) =>
+      [...new Set(tableRows.map((r) => r.date))].find((d) => d !== date && Math.abs(dayNo(d) - dayNo(date)) <= 2 && dayKey(tableOn(d)) === dayKey(aDay));
+    // The same times on different days: one reader put a row's cells a day or two off.
     const shiftedAll = shiftedDays(tableRows, aiRows);
-    const shifted = opts.placementUncertain?.has(t.personKey) ? shiftedAll : new Set<string>();
-    if (shiftedAll.size && !shifted.size) {
-      disagreements++;
-      const said = (rows: ParsedShiftRow[]) =>
-        [...shiftedAll].sort().map((d) => ({ d, times: rows.filter((r) => r.date === d).map((r) => `${r.startTime}–${r.endTime}`).join(' · ') })).filter((x) => x.times).map((x) => `${x.d.slice(5)} ${x.times}`).join('; ') || 'nothing';
-      anomalies.push({
-        employeeName: name,
-        date: null,
-        rawText: `Built-in reader: ${said(tableRows)} · AI reader: ${said(aiRows)}`,
-        reason: "The AI reader put some of these times on other days. The file's own text was kept; check the days on the roster.",
-        confidence: 0.5,
-        rowNumber: null,
-      });
-    }
+    const said = (day: ParsedShiftRow[]) => day.map((r) => `${r.startTime}–${r.endTime}`).join(' · ') || 'nothing';
     for (const date of dates) {
       const aDay = aiRows.filter((r) => r.date === date).sort((x, y) => x.startTime.localeCompare(y.startTime));
-      const tDay = tableRows.filter((r) => r.date === date).sort((x, y) => x.startTime.localeCompare(y.startTime));
-      if (shifted.has(date)) {
-        disagreements++;
-        const said = (day: ParsedShiftRow[]) => day.map((r) => `${r.startTime}–${r.endTime}`).join(' · ') || 'nothing';
+      const tDay = tableOn(date);
+      if (dayKey(aDay) === dayKey(tDay)) {
+        // Both readers read this day the same way: a day the table reader inferred is confirmed.
+        settledDates.add(date);
+        rows.push(...tDay.map((r) => confirmed({ ...r, readerSource: 'both', roleName: r.roleName || aDay[0]?.roleName || '' })));
+        continue;
+      }
+      const leave = leaveRead.get(date);
+      const fromCertainDay = !tDay.length && shiftedAll.has(date) && certain(tableOn(tableDayOf(aDay, date) ?? ''));
+      if (certain(tDay) || (!tDay.length && leave && !leave.inferredDay && !uncertainPerson) || fromCertainDay) {
+        // The file's own text settles this day: it stands, and the AI's other reading is only counted.
+        settledDates.add(date);
+        aiDiffCells++;
+        rows.push(...tDay.map((r) => ({ ...r, readerSource: aDay.length ? ('both' as const) : ('table' as const) })));
+        continue;
+      }
+      disagreements++;
+      if (shiftedAll.has(date)) {
+        // No certain reading of which day these times belong to: neither day is written; both are shown.
         anomalies.push({
           employeeName: name,
           date,
@@ -508,64 +539,44 @@ export function reconcileReadings(
         });
         continue;
       }
-      const tLeft = [...tDay];
-      const aLeft: ParsedShiftRow[] = [];
-      for (const r of aDay) {
-        const same = tLeft.findIndex((x) => segKey(x) === segKey(r));
-        if (same >= 0) {
-          tLeft.splice(same, 1);
-          rows.push({ ...r, readerSource: 'both', roleName: r.roleName || tDay[0]?.roleName || '' });
-        } else aLeft.push(r);
-      }
-      // Same day, different times: the table reader's times stay (they are the file's own
-      // printed text, read exactly), and the AI's reading travels with them as an alternative.
-      const differing: ParsedShiftRow[] = [];
-      while (aLeft.length && tLeft.length) {
-        const r = aLeft.shift()!;
-        const x = tLeft.shift()!;
-        disagreements++;
-        differing.push({ ...withFlag({ ...x, readerSource: 'both' }, 'times_differ'), roleName: x.roleName || r.roleName, alternatives: [alt('table', x), alt('ai', r)] });
-      }
-      // A segment only the AI saw on a day the table reader also read is not a new shift: it
-      // is shown as another reading of that day, for the manager to pick.
-      if (aLeft.length && tDay.length) {
-        disagreements += aLeft.length;
-        const anchor = differing[0] ?? (() => {
-          const x = tDay[0]!;
-          const i = rows.findIndex((row) => row.personKey === person.personKey && row.date === date && segKey(row) === segKey(x));
-          const [kept] = i >= 0 ? rows.splice(i, 1) : [{ ...x, readerSource: 'both' as const }];
-          const flagged = { ...withFlag(kept!, 'times_differ'), alternatives: [alt('table', x)] };
-          differing.unshift(flagged);
-          return flagged;
-        })();
-        anchor.alternatives = [...(anchor.alternatives ?? []), ...aLeft.map((r) => alt('ai', r))];
-        aLeft.length = 0;
-      }
-      rows.push(...differing);
-      // A day only the AI read, for a person the table reader read in full: the file's own text
-      // shows nothing that day (an AI reading that slipped by a column looks exactly like this),
-      // so no shift is written; the manager is shown the AI's reading as a cell to look at.
-      if (aLeft.length) {
-        disagreements++;
+      if (!tDay.length) {
+        // A shift only the AI saw, on a day the file's text shows nothing: never written, shown to check.
         anomalies.push({
           employeeName: name,
           date,
-          rawText: `AI reader: ${aLeft.map((r) => `${r.startTime}–${r.endTime}`).join(' · ')}`,
+          rawText: `AI reader: ${said(aDay)}`,
           reason: "The AI reader saw a shift here, but the file's own text shows none on this day. If it's right, add it on the rota after importing.",
           confidence: 0.5,
           rowNumber: null,
         });
+        continue;
       }
-      for (const x of tLeft) {
-        disagreements++;
-        rows.push(withFlag({ ...x, readerSource: 'table' }, 'table_only'));
+      // A day the table reader had to infer (or whose am / pm it had to guess), read differently
+      // by the AI: the table reader's times stay, with the AI's reading as an alternative.
+      const tLeft = [...tDay];
+      const aLeft: ParsedShiftRow[] = [];
+      for (const r of aDay) {
+        const same = tLeft.findIndex((x) => segKey(x) === segKey(r));
+        // A segment both read on this day is confirmed, whatever else differs.
+        if (same >= 0) rows.push(confirmed({ ...tLeft.splice(same, 1)[0]!, readerSource: 'both' }));
+        else aLeft.push(r);
       }
+      const anchor = aLeft.length ? tLeft.shift() ?? null : null;
+      if (anchor) rows.push({ ...withFlag({ ...anchor, readerSource: 'both' }, 'times_differ'), alternatives: [alt('table', anchor), ...aLeft.map((r) => alt('ai', r))] });
+      else if (aLeft.length) {
+        // Every table segment matched one of the AI's; the AI saw more: shown as another reading of the day.
+        const x = rows.findIndex((row) => row.personKey === person.personKey && row.date === date);
+        if (x >= 0) rows[x] = { ...withFlag(rows[x]!, 'times_differ'), alternatives: [alt('table', rows[x]!), ...aLeft.map((r) => alt('ai', r))] };
+      }
+      for (const x of tLeft) rows.push(withFlag({ ...x, readerSource: 'table' }, 'table_only'));
     }
-    const leaveDates = new Set<string>();
-    for (const l of [...leaveOf(ai, a), ...leaveOf(table, t)]) {
+    // Leave: the file's own text first; the AI's only on a day the file's text shows nothing.
+    const leaveDates = new Set<string>(tableRows.map((r) => r.date));
+    for (const l of [...leaveOf(table, t), ...leaveOf(ai, a)]) {
       if (leaveDates.has(l.date)) continue;
       leaveDates.add(l.date);
-      leaveRecords.push({ ...l, employeeName: name });
+      const { inferredDay: _inferred, ...record } = l;
+      leaveRecords.push({ ...record, employeeName: name });
     }
   }
   for (const t of tablePeople) {
@@ -578,7 +589,8 @@ export function reconcileReadings(
     disagreements++;
     people.push({ ...t, readerSource: 'table' });
     nameMap.set(t.name, t.name);
-    rows.push(...rowsOf(table, t).map((r) => withFlag({ ...r, personKey: t.personKey, readerSource: 'table' }, 'table_only')));
+    // The person is marked as found by the table reader only; a row it read for certain is the file's own text.
+    rows.push(...rowsOf(table, t).map((r) => ({ ...r, personKey: t.personKey, readerSource: 'table' as const })).map((r) => (r.inferredDay || r.inferredTimes ? withFlag(r, 'table_only') : r)));
     leaveRecords.push(...leaveOf(table, t));
   }
 
@@ -593,6 +605,8 @@ export function reconcileReadings(
     for (const a of result.anomalies) {
       if (a.employeeName && refused.has(normName(a.employeeName))) continue;
       const employeeName = a.employeeName ? nameMap.get(a.employeeName) ?? a.employeeName : null;
+      // The AI's note on a day the file's own text settled (an unsure or unreadable cell) is not shown.
+      if (source === 'ai' && employeeName && a.date && settled.get(employeeName)?.has(a.date)) continue;
       const key = `${employeeName ?? ''}|${a.date ?? ''}|${a.rawText}`;
       if (keyed.has(key)) continue;
       keyed.add(key);
@@ -611,7 +625,8 @@ export function reconcileReadings(
   }
 
   const week = reconcileWeeks(ai.week, table.week);
-  if (week.disagree) disagreements++;
+  if (week.disagree === 'flagged') disagreements++;
+  else if (week.disagree === 'settled') aiDiffCells++;
   return {
     result: {
       templateLabel: ai.templateLabel,
@@ -625,17 +640,24 @@ export function reconcileReadings(
       ...(week.week ? { week: week.week } : {}),
     },
     disagreements,
+    aiDiffCells,
   };
 }
 
-/** The table reader's week when it read printed dates (the file's own text); else the AI's. */
-function reconcileWeeks(ai: WeekDetection | undefined, table: WeekDetection | undefined): { week: WeekDetection | undefined; disagree: boolean } {
-  if (!ai || !table) return { week: table ?? ai, disagree: false };
+/**
+ * The table reader's week when it read printed dates (the file's own text); else the AI's. A
+ * week the file prints for certain (dates or a title, nothing to confirm) stands over an AI
+ * reading of another week ('settled': counted, not flagged); otherwise a difference asks the
+ * manager to confirm the week ('flagged').
+ */
+function reconcileWeeks(ai: WeekDetection | undefined, table: WeekDetection | undefined): { week: WeekDetection | undefined; disagree: 'flagged' | 'settled' | null } {
+  if (!ai || !table) return { week: table ?? ai, disagree: null };
   const printed = (w: WeekDetection) => w.source === 'printed_dates' || w.source === 'title';
   const base = printed(table) || !printed(ai) ? table : ai;
-  if (ai.weekStart === table.weekStart) return { week: base, disagree: false };
+  if (ai.weekStart === table.weekStart) return { week: base, disagree: null };
+  if (printed(table) && !table.needsConfirmation) return { week: table, disagree: 'settled' };
   return {
     week: { ...base, needsConfirmation: true, reason: `The two readers placed this roster in different weeks (${table.weekStart} and ${ai.weekStart}). Check the week before confirming.` },
-    disagree: true,
+    disagree: 'flagged',
   };
 }

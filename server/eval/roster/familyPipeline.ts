@@ -117,6 +117,7 @@ export async function readLikeUploadRoute(
       people: result.people ?? [],
       unreadRows: result.unreadRows ?? [],
       weekStart: result.week.weekStart,
+      withheldPages: (reading.withheldPages ?? []).map((w) => w.page),
     },
     path: `ai=${reading.ai} table=${reading.table}${reading.rereadPages.length ? ` reread=${reading.rereadPages.join(',')}` : ''}${reading.disagreements ? ` disagree=${reading.disagreements}` : ''}`,
     aiCalls,

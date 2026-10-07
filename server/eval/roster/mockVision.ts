@@ -17,6 +17,12 @@
  *
  * The day-column-by-day-column (columns) read of a photo or scan is independent: it has none of
  * the above, but misreads a different name and misses one cell of its own.
+ *
+ * Round 5: a text PDF read like a live AI reads it (`aiNoise`: every time in another notation, one
+ * row slipped a day to the left from an empty cell on, a digit misread in one cell); a sign-off
+ * line under the grid listed as a person with its day texts; and a low-contrast scan whose two
+ * readings read a few cells the same wrong way, read others differently, and whose row read marks
+ * some cells unsure.
  */
 import { rng, type FamilyTruth } from './families.js';
 
@@ -58,6 +64,10 @@ export interface Perturbations {
   faint: { name: string; as: string } | null;
   /** The column read's own mistakes: a different misread name, and one cell it misses. */
   columns: { misread: { name: string; as: string } | null; missedCell: { name: string; day: number } | null };
+  /** A text PDF read like a live AI: a row slipped left a day from an empty cell on, and a cell with a misread digit. */
+  noise: { slipped: { name: string; day: number } | null; digit: { name: string; day: number } | null };
+  /** Low-contrast scan: cells both readings read the same wrong way, cells the column read reads differently, cells the row read marks unsure. */
+  faded: { shared: { name: string; day: number }[]; colDiff: { name: string; day: number }[]; unsure: { name: string; day: number }[] };
 }
 
 function hashSeed(id: string): number {
@@ -131,7 +141,7 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
     misread: misreadPerson ? { name: misreadPerson.name, as: misreadName(misreadPerson.name, r) } : null,
     missingPage: truth.pageCount > 1 ? truth.pageCount : null,
     swapNameTitle: !!truth.printed.nameFirst && truth.family === 'B',
-    footerAsPerson: truth.printed.totals?.[0] ?? (truth.printed.footers?.length ? { label: truth.printed.footers[0]!, cells: [] } : null),
+    footerAsPerson: truth.printed.totals?.[0] ?? (truth.printed.footers?.length ? { label: truth.printed.footers[0]!, cells: [] } : truth.printed.signOffs?.[0] ?? null),
     colourOverText,
     slid,
     misread18,
@@ -144,7 +154,62 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
       misread: colMisread ? { name: colMisread.name, as: misreadName(colMisread.name, r2) } : null,
       missedCell: colMissed ? { name: colMissed.name, day: (colMissed.cells ?? []).findIndex(hasTimes) } : null,
     },
+    noise: noiseCells(truth, used),
+    faded: fadedCells(truth),
   };
+}
+
+/** Live-like AI misreadings of a text PDF: one row slipped a day from an empty cell on, one digit misread. */
+function noiseCells(truth: FamilyTruth, used: Set<string>): Perturbations['noise'] {
+  if (!truth.printed.aiNoise) return { slipped: null, digit: null };
+  const free = truth.people.filter((p) => !used.has(p.name));
+  let slipped: Perturbations['noise']['slipped'] = null;
+  for (const p of free) {
+    const cells = p.cells ?? [];
+    const day = cells.findIndex((c, d) => d >= 1 && d <= 4 && !c && cells.slice(d + 1).some(hasTimes));
+    if (day >= 0) {
+      slipped = { name: p.name, day };
+      break;
+    }
+  }
+  const digitPerson = free.find((p) => p.name !== slipped?.name && (p.cells ?? []).some(hasTimes));
+  return { slipped, digit: digitPerson ? { name: digitPerson.name, day: (digitPerson.cells ?? []).findIndex(hasTimes) } : null };
+}
+
+/**
+ * Low-contrast scan: both readings struggle, so as well as reading about one time cell in forty the
+ * same wrong way (which no comparison can catch), they read about one in sixteen differently and
+ * the row read marks about one in twenty unsure — a page harder to read than any readable one.
+ */
+function fadedCells(truth: FamilyTruth): Perturbations['faded'] {
+  const out: Perturbations['faded'] = { shared: [], colDiff: [], unsure: [] };
+  if (!truth.printed.lowContrast) return out;
+  const r = rng(hashSeed(`${truth.id}#faded`));
+  for (const p of truth.people) {
+    (p.cells ?? []).forEach((c, day) => {
+      if (!hasTimes(c)) return;
+      const x = r();
+      if (x < 0.025) out.shared.push({ name: p.name, day });
+      else if (x < 0.085) out.colDiff.push({ name: p.name, day });
+      else if (x < 0.135) out.unsure.push({ name: p.name, day });
+    });
+  }
+  return out;
+}
+
+/** A cell's first time read an hour later ("18.5 26" -> "19.5 26", "4pm to 2am" -> "5pm to 2am"): a misread digit. */
+const laterStart = (cell: string) => cell.replace(/^(\d{1,2})/, (m) => String(Number(m) === 12 ? 1 : (Number(m) + 1) % 24));
+
+/** The same times in another notation, as a live AI writes them: "6:30pm – 1am", "18:30 - 00:00", "midnight". */
+function otherNotation(truth: FamilyTruth, name: string, day: number): string | null {
+  const segs = truth.shifts.filter((s) => s.name === name && s.date === truth.week.dates[day]);
+  if (!segs.length) return null;
+  const twelve = (t: string) => {
+    const [h, m] = t.split(':').map(Number) as [number, number];
+    if (h === 0 && m === 0) return 'midnight';
+    return `${h % 12 === 0 ? 12 : h % 12}${m ? `:${String(m).padStart(2, '0')}` : ''}${h < 12 ? 'am' : 'pm'}`;
+  };
+  return day % 2 === 0 ? segs.map((s) => `${twelve(s.start)} – ${twelve(s.end)}`).join(' / ') : segs.map((s) => `${s.start} - ${s.end}`).join(', ');
 }
 
 /** Dense photo: about two cells in five of the half-day kind read differently by one of the two readings. */
@@ -239,6 +304,15 @@ function rowReadCells(truth: FamilyTruth, name: string, cells: string[], p: Pert
     out[s.day] = '';
   }
   if (p.misread18?.name === name) out[p.misread18.day] = out[p.misread18.day]!.split(' ').map((t, k, all) => (t === '18' && all.indexOf('18') === k ? '18.5' : t)).join(' ');
+  if (truth.printed.aiNoise) {
+    // Every time in another notation (the same times), then a misread digit and a slipped row.
+    out.forEach((c, d) => {
+      if (hasTimes(c)) out[d] = otherNotation(truth, name, d) ?? c;
+    });
+    if (p.noise.digit?.name === name) out[p.noise.digit.day] = laterStart(out[p.noise.digit.day]!);
+    if (p.noise.slipped?.name === name) out.splice(p.noise.slipped.day, 1).length && out.push('');
+  }
+  for (const f of p.faded.shared) if (f.name === name) out[f.day] = laterStart(out[f.day]!);
   return out;
 }
 
@@ -266,6 +340,7 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
           out[s.day + 1] = out[s.day]!;
           out[s.day] = '';
         }
+        for (const f of [...p.faded.shared, ...p.faded.colDiff]) if (f.name === person.name) out[f.day] = laterStart(out[f.day]!);
         return out;
       };
       const cols = truth.week.dates.map((_, d) => ({
@@ -302,7 +377,9 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
         const copied = p.combinedCopied.includes(person.name) ? (truth.printed.combined === 'slash' ? `${person.name} / ${person.role}` : `${person.name} (${person.role})`) : null;
         const name = copied ?? (p.misread?.name === person.name ? p.misread.as : p.faint?.name === person.name ? p.faint.as : person.name);
         const title = copied ? null : truth.family === 'B' ? person.role || null : null;
-        sec.ppl.push(p.swapNameTitle && title ? { nm: title, t: name, i, c: cells } : { nm: name, t: title, i, c: cells });
+        const unsure = p.faded.unsure.filter((f) => f.name === person.name).map((f) => f.day);
+        const q = unsure.length ? { q: unsure } : {};
+        sec.ppl.push(p.swapNameTitle && title ? { nm: title, t: name, i, c: cells, ...q } : { nm: name, t: title, i, c: cells, ...q });
       }
       if (p.footerAsPerson && page === lastPage && !request.focus?.rows?.to) {
         const sec = sections[sections.length - 1] ?? (sections[0] = { h: null, n: 0, ppl: [] });

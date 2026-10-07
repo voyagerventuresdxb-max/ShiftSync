@@ -5,7 +5,10 @@
  * first, and the two are compared cell by cell: what both read is written; a cell the two read
  * differently is not written at all — it is shown to the manager as a cell to look at, with both
  * readings — so a misread is never saved as a shift. A person only one reading listed is kept,
- * flagged. Nothing either read saw is dropped silently. Logs carry counts only.
+ * flagged. A page the two readings don't vouch for (too many days read differently or marked
+ * unsure) is not trusted at all: nothing from it is imported — no
+ * people, no shifts — and the review says so and asks for the original file. Nothing either
+ * read saw is dropped silently. Logs carry counts only.
  */
 import { columnsToRows, isColumnAnswer, type ReadingAnswer } from './vlmPrompt.js';
 import { VisionProviderError, type VisionInput, type VisionProvider } from './visionProvider.js';
@@ -91,22 +94,22 @@ function levenshtein(a: string, b: string): number {
 
 /**
  * The share of a page's days (person and day, with anything in either reading) the two readings
- * may disagree on before the page as a whole is not trusted. Two readings that slip
- * independently disagree on about the sum of their slip rates, and on a hard page they also
- * slip the SAME way on some cells — agreement that is wrong, which no comparison can catch. On
- * the eval's photos and scans (server/eval/roster) every readable page disagrees on under 5% of
- * its days (0.8–4.8%), a dense 42-person photo on 15%, an angled scan with many half days on
- * 23%, and a dense photo whose readings also slip the same way on 52%. 20% leaves four times
- * the readable pages' worst; past it, each reading is off on at least one day in ten, and if
- * even one slip in five is repeated by the other reading, over 2% of the AGREED days are wrong
- * — more than the whole budget for wrong times. So nothing from such a page is imported and
- * every person's week is shown with both readings.
+ * may leave in doubt — read differently, or marked unsure by either (a cell the model flagged, a
+ * shorthand it had to interpret, a 14-hour-plus reading) — before the page as a whole is not
+ * trusted. Two readings that slip independently disagree on about the sum of their slip rates;
+ * on a hard page (dense, angled, faint, low contrast) they also slip the SAME way on some cells:
+ * agreement that is wrong, which no comparison can catch, and which grows with the slips. On the
+ * eval's photos and scans every readable page leaves 0.8–4.8% of its days in doubt (the recorded
+ * live scan of the real bar roster 1.7%), a dense 42-person photo 15%, an angled scan with half
+ * days 23%, a dense photo whose readings also slip together 52% — and a low-contrast scan the
+ * last holdout graded saved wrong cells both readings agreed on. 6% keeps every readable page
+ * with a quarter to spare over its worst; at 6% each reading slips on about one day in thirty,
+ * and even if one slip in five were shared, under 1% of the agreed days could be wrong. Past it
+ * the page saves nothing: a photo may fail loudly, never save wrong data silently.
  */
-export const PAGE_DISAGREEMENT_LIMIT = 0.2;
+export const PAGE_DOUBT_LIMIT = 0.06;
 /** Too few days to judge a page by (a page with two people on it). */
 const PAGE_MIN_DAYS = 10;
-
-const weekdayOf = (date: string) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(`${date}T00:00:00Z`).getUTCDay()]!;
 
 const CELL_DIFFERS = "The two AI readings of this photo or scan disagree on this day, so neither was imported. Check the roster and add the shift on the rota if there is one.";
 
@@ -119,29 +122,31 @@ const CELL_DIFFERS = "The two AI readings of this photo or scan disagree on this
  * shifts, flagged. A name the two spelled differently keeps the first spelling and carries the
  * other (the review asks which is right). `cellsToCheck` counts the cells left to the manager.
  */
+/** A page not trusted: how many of its days were left in doubt, of how many. */
+export interface WithheldPage {
+  page: number;
+  doubtful: number;
+  compared: number;
+}
+
 export function crossCheckAiReadings(
   first: ParsedVisionResult,
   second: ParsedVisionResult | null,
-): { result: ParsedVisionResult; disagreements: number; cellsToCheck: number; cellsCompared: number; unreliablePages: { page: number; toCheck: number; compared: number }[] } {
-  if (!second) return { result: first, disagreements: 0, cellsToCheck: 0, cellsCompared: 0, unreliablePages: [] };
+): { result: ParsedVisionResult; disagreements: number; cellsToCheck: number; cellsCompared: number; withheldPages: WithheldPage[] } {
+  if (!second) return { result: first, disagreements: 0, cellsToCheck: 0, cellsCompared: 0, withheldPages: [] };
   let disagreements = 0;
   let cellsToCheck = 0;
   let cellsCompared = 0;
-  /** Per page: days compared and days read differently. */
-  const pageDays = new Map<number, { compared: number; toCheck: number }>();
-  const tally = (page: number | null, differs: boolean) => {
-    const t = pageDays.get(page ?? 1) ?? { compared: 0, toCheck: 0 };
+  /** Per page: days compared, days read differently, and days left in doubt (read differently or marked unsure). */
+  const pageDays = new Map<number, { compared: number; toCheck: number; doubtful: number }>();
+  const tally = (page: number | null, differs: boolean, unsure: boolean) => {
+    const t = pageDays.get(page ?? 1) ?? { compared: 0, toCheck: 0, doubtful: 0 };
     t.compared++;
     if (differs) t.toCheck++;
+    if (differs || unsure) t.doubtful++;
     pageDays.set(page ?? 1, t);
   };
-  /** Each person's week as each reading has it, for a page that turns out not to be trusted. */
-  const weeks = new Map<string, { name: string; page: number; first: Map<string, string>; second: Map<string, string> }>();
-  const noteWeek = (p: ReadPerson, which: 'first' | 'second', date: string, text: string) => {
-    const w = weeks.get(p.personKey) ?? { name: p.name, page: p.sourcePage ?? 1, first: new Map(), second: new Map() };
-    w[which].set(date, text);
-    weeks.set(p.personKey, w);
-  };
+  const unsureOf = (rows: ParsedShiftRow[]) => rows.some((r) => r.flags?.includes('low_confidence'));
   const aPeople = first.people ?? [];
   const bPeople = second.people ?? [];
   const samePage = (a: ReadPerson, b: ReadPerson) => a.sourcePage === null || b.sourcePage === null || a.sourcePage === b.sourcePage;
@@ -187,11 +192,6 @@ export function crossCheckAiReadings(
     nameMap.set(p.name, p.name);
     for (const r of rowsOf(result, p)) rows.push({ row: withFlag({ ...r, personKey: p.personKey, readerSource: 'ai' }, 'low_confidence'), from });
     leaveRecords.push(...leaveOf(result, p));
-    const pRows = rowsOf(result, p);
-    const pLeave = leaveOf(result, p);
-    for (const date of new Set([...pRows.map((r) => r.date), ...pLeave.map((l) => l.date)])) {
-      noteWeek(p, from === 'a' ? 'first' : 'second', date, cellText(pRows.filter((r) => r.date === date), pLeave.filter((l) => l.date === date).map((l) => l.leaveCode)));
-    }
     anomalies.push({ employeeName: p.name, date: null, rawText: p.name, reason: `Only one of the two AI readings listed ${p.name}. Check the roster before importing them.`, confidence: 0.5, rowNumber: null });
   };
 
@@ -224,8 +224,6 @@ export function crossCheckAiReadings(
       const aCodes = [...new Set(aLeave.filter((l) => l.date === date).map((l) => l.leaveCode))].sort();
       const bCodes = [...new Set(bLeave.filter((l) => l.date === date).map((l) => l.leaveCode))].sort();
       cellsCompared++;
-      noteWeek(person, 'first', date, cellText(aDay, aCodes));
-      noteWeek(person, 'second', date, cellText(bDay, bCodes));
       // What both readings saw is written; anything else in this cell is not.
       const bLeft = [...bDay];
       const aLeft: ParsedShiftRow[] = [];
@@ -238,7 +236,7 @@ export function crossCheckAiReadings(
       }
       const timesAgree = aLeft.length === 0 && bLeft.length === 0;
       const codesAgree = aCodes.join('/') === bCodes.join('/');
-      tally(a.sourcePage, !(timesAgree && codesAgree));
+      tally(a.sourcePage, !(timesAgree && codesAgree), unsureOf(aDay) || unsureOf(bDay));
       if (timesAgree && codesAgree) {
         // Leave: a code both readings saw on a day with no times.
         if (aCodes.length && !aDay.length) leaveRecords.push({ ...aLeave.find((l) => l.date === date)!, employeeName: a.name });
@@ -264,33 +262,20 @@ export function crossCheckAiReadings(
   }
   for (const b of bPeople) if (!usedB.has(b)) addAlone(b, second, 'b');
 
-  // A page the two readings disagree on too much is not trusted at all: nothing from it is
-  // imported, and every person on it is shown with both readings of their week.
-  const unreliablePages = [...pageDays]
-    .filter(([, t]) => t.compared >= PAGE_MIN_DAYS && t.toCheck / t.compared > PAGE_DISAGREEMENT_LIMIT)
-    .map(([page, t]) => ({ page, ...t }))
+  // A page the two readings don't vouch for is not trusted at all: nothing from it is imported —
+  // no people, no shifts, no leave — and the review shows the page as not read.
+  const withheldPages = [...pageDays]
+    .filter(([, t]) => t.compared >= PAGE_MIN_DAYS && t.doubtful / t.compared > PAGE_DOUBT_LIMIT)
+    .map(([page, t]) => ({ page, doubtful: t.doubtful, compared: t.compared }))
     .sort((x, y) => x.page - y.page);
-  const untrusted = new Set(unreliablePages.map((u) => u.page));
-  const pageOfName = new Map(people.map((p) => [p.name, p.sourcePage ?? 1]));
-  const onUntrustedPage = (name: string | null) => !!name && untrusted.has(pageOfName.get(name) ?? 1);
+  const untrusted = new Set(withheldPages.map((u) => u.page));
+  const withheldNames = new Set(people.filter((p) => untrusted.has(p.sourcePage ?? 1)).map((p) => p.name));
   if (untrusted.size) {
-    for (let i = rows.length - 1; i >= 0; i--) if (untrusted.has(rows[i]!.row.sourcePage ?? 1) || onUntrustedPage(rows[i]!.row.employeeName)) rows.splice(i, 1);
-    for (let i = leaveRecords.length - 1; i >= 0; i--) if (onUntrustedPage(leaveRecords[i]!.employeeName)) leaveRecords.splice(i, 1);
-    for (let i = anomalies.length - 1; i >= 0; i--) if (anomalies[i]!.date && onUntrustedPage(anomalies[i]!.employeeName)) anomalies.splice(i, 1);
-    const said = (days: Map<string, string>) =>
-      [...days].sort(([x], [y]) => x.localeCompare(y)).map(([d, text]) => `${weekdayOf(d)} ${Number(d.slice(8))} ${text}`).join('; ') || 'nothing';
-    for (const w of weeks.values()) {
-      if (!untrusted.has(w.page)) continue;
-      anomalies.push({
-        employeeName: w.name,
-        date: null,
-        rawText: `First reading: ${said(w.first)} · second reading: ${said(w.second)}`,
-        reason: `This page of the photo could not be read reliably, so none of ${w.name}'s shifts were imported. Both readings are shown; check the roster and add the shifts on the rota.`,
-        confidence: 0.2,
-        rowNumber: null,
-      });
-    }
-    cellsToCheck = [...pageDays].reduce((n, [page, t]) => n + (untrusted.has(page) ? t.compared : 0), cellsToCheck - unreliablePages.reduce((n, u) => n + u.toCheck, 0));
+    for (let i = people.length - 1; i >= 0; i--) if (untrusted.has(people[i]!.sourcePage ?? 1)) people.splice(i, 1);
+    for (let i = rows.length - 1; i >= 0; i--) if (untrusted.has(rows[i]!.row.sourcePage ?? 1) || withheldNames.has(rows[i]!.row.employeeName)) rows.splice(i, 1);
+    for (let i = leaveRecords.length - 1; i >= 0; i--) if (withheldNames.has(leaveRecords[i]!.employeeName)) leaveRecords.splice(i, 1);
+    for (let i = anomalies.length - 1; i >= 0; i--) if (anomalies[i]!.employeeName && withheldNames.has(anomalies[i]!.employeeName!)) anomalies.splice(i, 1);
+    cellsToCheck = [...pageDays].reduce((n, [page, t]) => n + (untrusted.has(page) ? 0 : t.toCheck), 0);
   }
 
   // Renumber; anomalies of either reading keep pointing at their shifts.
@@ -303,6 +288,7 @@ export function crossCheckAiReadings(
   for (const [from, result] of [['a', first], ['b', second]] as const) {
     for (const x of result.anomalies) {
       const employeeName = x.employeeName ? nameMap.get(x.employeeName) ?? x.employeeName : null;
+      if (employeeName && withheldNames.has(employeeName)) continue;
       const key = `${employeeName ?? ''}|${x.date ?? ''}|${x.rawText}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -314,15 +300,9 @@ export function crossCheckAiReadings(
 
   const listed = people.map((p) => normName(p.name));
   const unread = new Map<string, UnreadRow>();
-  for (const u of unreliablePages) {
-    unread.set(`page-${u.page}`, {
-      page: u.page,
-      row: null,
-      text: '',
-      reason: `This page could not be read reliably: the two AI readings disagreed on ${u.toCheck} of its ${u.compared} days. None of its shifts were imported; upload the original PDF or spreadsheet, or add them by hand.`,
-    });
-  }
+  for (const u of withheldPages) unread.set(`page-${u.page}`, { page: u.page, row: null, text: '', reason: withheldPageReason(u) });
   for (const u of [...(first.unreadRows ?? []), ...(second.unreadRows ?? [])]) {
+    if (untrusted.has(u.page ?? 1)) continue;
     if (u.text && listed.some((n) => normName(u.text).includes(n))) continue;
     unread.set(`${u.page}|${u.row}|${normName(u.text)}`, u);
   }
@@ -332,7 +312,8 @@ export function crossCheckAiReadings(
     disagreements++;
     week = { ...first.week, needsConfirmation: true, reason: `The two AI readings placed this roster in different weeks (${first.week.weekStart} and ${second.week.weekStart}). Check the week before confirming.` };
   }
-  console.log(`[roster-reading] AI cross-check: ${people.length} people, ${disagreements} disagreement(s), ${cellsToCheck}/${cellsCompared} cell(s) left to check, ${unreliablePages.length} page(s) not trusted${unreliablePages.length ? ` (${unreliablePages.map((u) => `page ${u.page}: ${u.toCheck}/${u.compared} days read differently`).join(', ')})` : ''}.`);
+  const doubt = [...pageDays].map(([page, t]) => `page ${page}: ${t.doubtful}/${t.compared}`).join(', ');
+  console.log(`[roster-reading] AI cross-check: ${people.length} people, ${disagreements} disagreement(s), ${cellsToCheck}/${cellsCompared} cell(s) left to check, days in doubt ${doubt || 'none'}, ${withheldPages.length} page(s) not trusted.`);
   return {
     result: {
       ...first,
@@ -346,6 +327,11 @@ export function crossCheckAiReadings(
     disagreements,
     cellsToCheck,
     cellsCompared,
-    unreliablePages,
+    withheldPages,
   };
+}
+
+/** What the review says about a page nothing was imported from. */
+export function withheldPageReason(u: WithheldPage): string {
+  return `Page ${u.page} was hard to read: the two AI readings disagreed on, or were unsure of, ${u.doubtful} of its ${u.compared} days, so nothing from it was imported — no people, no shifts. Upload the original PDF or spreadsheet, or add them by hand.`;
 }

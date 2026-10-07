@@ -77,6 +77,13 @@ export interface ParsedShiftRow extends RowReadingInfo {
   overnight: boolean;
   breakMinutes: number;
   managerNotes: string | null;
+  /**
+   * Table reader only, never sent to the client: this shift's day was inferred from how a PDF's
+   * columns line up (pdfTableExtractor inferredCells), not read from where its text sits.
+   */
+  inferredDay?: boolean;
+  /** Table reader only, never sent to the client: am / pm had to be inferred ("10:30-4:00-8:00-12", "6-11pm"). */
+  inferredTimes?: boolean;
 }
 
 export interface ParsedWorkbookResult {
@@ -153,6 +160,8 @@ export interface LeaveRecord {
   date: string;
   leaveCode: string;
   category: 'leave' | 'day_off' | 'public_holiday';
+  /** Table reader only, dropped before the client sees it: the day was inferred from a PDF's column alignment. */
+  inferredDay?: boolean;
 }
 
 export interface ParsedVisionResult {

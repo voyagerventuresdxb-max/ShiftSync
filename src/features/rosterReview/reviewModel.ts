@@ -119,6 +119,18 @@ export function readerLabel(reading: ReadingReport | undefined): string | null {
   return null;
 }
 
+/**
+ * The "hard to read" notice of a photo or scan nothing was imported from on some page: the
+ * reading's own note (it says which pages, that nothing from them was imported, and asks for
+ * the original file), with the pages. Null when every page was imported.
+ */
+export function hardToReadNotice(reading: ReadingReport | undefined): { text: string; pages: number[] } | null {
+  const pages = (reading?.withheldPages ?? []).map((w) => w.page);
+  if (!pages.length) return null;
+  const text = reading?.note?.trim() || 'This photo was hard to read, so nothing from it was imported. For best results upload the original PDF or spreadsheet, or add the people by hand.';
+  return { text, pages };
+}
+
 export function headerLine(peopleCount: number, unreadCount: number): string {
   const people = `Found ${peopleCount} ${peopleCount === 1 ? 'person' : 'people'}`;
   if (unreadCount === 0) return people;
