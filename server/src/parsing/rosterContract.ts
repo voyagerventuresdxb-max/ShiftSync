@@ -98,6 +98,11 @@ export interface ReadingReport {
   rereadPages: number[];
   /** Reader disagreements turned into flags. */
   disagreements: number;
+  /**
+   * Cells (person and day) the AI cross-check read differently where the built-in reader read
+   * the file's own text for certain: the file's text was used and nothing was flagged.
+   */
+  aiDifferedCells?: number;
   /** "Read from previous upload": the AI reading came from the per-venue cache; nothing was billed. */
   fromCache: boolean;
   /** How the reading was checked, in plain words (e.g. a photo has no table reader to cross-check against). */

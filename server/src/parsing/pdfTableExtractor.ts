@@ -33,6 +33,8 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { isConsecutiveDayRun, parseDayLabel, type DayLabel } from './weekDetection.js';
 import { columnHeading } from './personKey.js';
+import { interpretCell } from './deterministicGridParser.js';
+import { sheetDotStyle, withinOneDay } from './shiftText.js';
 
 // Points pdfjs at its bundled standard-font metrics so it can measure
 // non-embedded standard fonts (Helvetica, etc.) without a network fetch or a
@@ -199,6 +201,14 @@ interface Geometry {
   anchor: 'left' | 'centre' | 'right';
   /** Per day: where its cells' aligned edge sits (null when too few cells fit to tell). */
   edges: (number | null)[];
+  /** Each day's whole band (both halves of a split day). */
+  dayBands: Band[];
+  /**
+   * Another reading of the day columns that fits the page's text almost as well (a header whose
+   * text sits off-centre over cells aligned another way). Where the two give an item different
+   * days, its day is inferred, not read. Null when no other reading comes close.
+   */
+  rival: { dayBands: Band[]; step: number } | null;
 }
 
 /** Mean distance from the median: how tightly a set of positions lines up. */
@@ -237,10 +247,25 @@ function dayCellAnchor(body: RowCluster[], columns: Band[], dayColumns: number[]
   return none;
 }
 
+/** A day cell longer than its column, running on into its neighbours (to the right, or — right-aligned — to the left). */
+function runsOn(p: PositionedItem, g: Pick<Geometry, 'daysFrom' | 'step'>): boolean {
+  return p.x1 - p.x0 > g.step * 0.9 && (cx(p) >= g.daysFrom || p.x1 > g.daysFrom + g.step * 0.25);
+}
+
+/**
+ * Whether a day cell running on past its column was placed for certain: its aligned edge sits
+ * on a day's own edge (left- or right-aligned cells), or its middle on a day's middle (centred).
+ */
+function runOnPlacedForCertain(p: PositionedItem, g: Pick<Geometry, 'anchor' | 'edges' | 'dayBands' | 'step'>): boolean {
+  const known = g.edges.filter((e): e is number => e !== null);
+  if (g.anchor === 'left') return known.some((e) => Math.abs(e - p.x0) <= 1.5);
+  if (g.anchor === 'right') return known.some((e) => Math.abs(e - p.x1) <= 1.5);
+  return g.dayBands.some((b) => Math.abs((b.x0 + b.x1) / 2 - cx(p)) <= g.step * 0.12);
+}
+
 /** Where a text item belongs across the page: its middle, or — for a day cell longer than its column — its aligned edge. */
 function placeOf(p: PositionedItem, g: Pick<Geometry, 'daysFrom' | 'step' | 'anchor' | 'edges'>): number {
-  const runsOn = p.x1 - p.x0 > g.step * 0.9 && cx(p) >= g.daysFrom;
-  if (!runsOn || g.anchor === 'centre') return cx(p);
+  if (!runsOn(p, g) || g.anchor === 'centre') return cx(p);
   // The day whose cells start (or end) where this one does: the header above it may be off-centre.
   const known = g.edges.filter((e): e is number => e !== null);
   if (g.anchor === 'left') {
@@ -354,26 +379,197 @@ function splitByLabels(leading: Band[], labels: { x: number }[], body: RowCluste
   return bands;
 }
 
-/** Column geometry from a page's header rows and body rows. */
-function deriveGeometry(rows: RowCluster[], headerIdx: number, periodIdx: number | null, bodyStart: number): Geometry {
-  const days = headerDays(rows[headerIdx]!)!;
-  // One centre per printed day (a header merged across sub-columns prints once; repeats collapse).
-  const centres: number[] = [];
+/** One printed phrase per day of a header row, left to right (a header merged across sub-columns prints once). */
+function dayHeads(row: RowCluster): Phrase[] | null {
+  const days = headerDays(row);
+  if (!days) return null;
+  const heads: Phrase[] = [];
   for (const d of days) {
-    const c = cx(d.phrase);
-    if (centres.length && Math.abs(c - centres[centres.length - 1]!) < 4) continue;
-    centres.push(c);
+    if (heads.length && Math.abs(cx(d.phrase) - cx(heads[heads.length - 1]!)) < 4) continue;
+    heads.push(d.phrase);
   }
-  const step = centres.length > 1 ? (centres[centres.length - 1]! - centres[0]!) / (centres.length - 1) : 90;
-  const bands: Band[] = centres.map((c, i) => ({
-    x0: i === 0 ? c - step / 2 : (centres[i - 1]! + c) / 2,
-    x1: i === centres.length - 1 ? c + step / 2 : (c + centres[i + 1]!) / 2,
-  }));
+  return heads;
+}
+
+/** The small gap between a header's text and its column's edge, when the text sits against that edge. */
+const EDGE_PAD = 1.5;
+
+/** How a day header's text may sit in its column: centred over it, or against its left or right edge. */
+type HeaderAnchor = 'centre' | 'left' | 'right';
+/** Where an AM | PM split falls in a day: between the labels' middles, mid-day, or against a label's edge. */
+type SplitRule = 'labels' | 'middle' | 'left' | 'right';
+
+/** The day bands a header row gives when its texts sit `anchor` in their columns. */
+function dayBandsFrom(heads: Phrase[], anchor: HeaderAnchor): { bands: Band[]; step: number } | null {
+  const n = heads.length;
+  const xs = heads.map((h) => (anchor === 'left' ? h.x0 : anchor === 'right' ? h.x1 : cx(h)));
+  const step = n > 1 ? (anchor === 'centre' ? (xs[n - 1]! - xs[0]!) / (n - 1) : median(xs.slice(1).map((x, i) => x - xs[i]!))) : 90;
+  if (!(step > 0)) return null;
+  const bands: Band[] =
+    anchor === 'centre'
+      ? xs.map((c, i) => ({ x0: i === 0 ? c - step / 2 : (xs[i - 1]! + c) / 2, x1: i === n - 1 ? c + step / 2 : (c + xs[i + 1]!) / 2 }))
+      : anchor === 'left'
+        ? xs.map((x, i) => ({ x0: x - EDGE_PAD, x1: i < n - 1 ? xs[i + 1]! - EDGE_PAD : x - EDGE_PAD + step }))
+        : xs.map((x, i) => ({ x0: i > 0 ? xs[i - 1]! + EDGE_PAD : x + EDGE_PAD - step, x1: x + EDGE_PAD }));
+  return bands.every((b) => b.x1 > b.x0) ? { bands, step } : null;
+}
+
+/** Where each day band splits into AM | PM (null for a day the AM | PM row doesn't split). */
+function periodSplits(bands: Band[], period: RowCluster | null, rule: SplitRule): (number | null)[] {
+  return bands.map((band) => {
+    const inside = (p: PositionedItem) => cx(p) >= band.x0 && cx(p) < band.x1;
+    const am = period?.items.find((p) => /^am$/i.test(p.text) && inside(p));
+    const pm = period?.items.find((p) => /^pm$/i.test(p.text) && inside(p));
+    if (!am || !pm || cx(am) >= cx(pm)) return null;
+    const at = rule === 'middle' ? (band.x0 + band.x1) / 2 : rule === 'left' ? pm.x0 - EDGE_PAD : rule === 'right' ? am.x1 + EDGE_PAD : (cx(am) + cx(pm)) / 2;
+    return at > cx(am) && at < cx(pm) ? at : (cx(am) + cx(pm)) / 2;
+  });
+}
+
+const toMinutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+
+/** Times a person can work in one day: one to three stretches of 30 minutes to 16 hours, in order, within 24 hours. */
+function plausibleDay(intervals: { start: string; end: string }[]): boolean {
+  if (intervals.length > 3) return false;
+  const lengthOk = (iv: { start: string; end: string }) => {
+    const length = (toMinutes(iv.end) - toMinutes(iv.start) + 1440) % 1440 || 1440;
+    return length >= 30 && length <= 16 * 60;
+  };
+  return intervals.every(lengthOk) && withinOneDay(intervals);
+}
+
+/** A count ("4", "12"): a headcount or totals cell, not a time. */
+const isCount = (text: string) => /^\d{1,3}$/.test(text.trim());
+/** Text a day cell may hold: a time, or a leave / day-off code. */
+const dayLike = (text: string) => (/\d/.test(text) && !isCount(text)) || interpretCell(text).kind === 'leave';
+
+/** Items of one row placed in each day column by their middles (cells running on are left out: they are placed by alignment). */
+function cellsByColumn(row: RowCluster, columns: Band[], step: number): PositionedItem[][] {
+  const out = columns.map(() => [] as PositionedItem[]);
+  for (const p of row.items) {
+    if (p.x1 - p.x0 > step * 0.9) continue;
+    const c = cx(p);
+    const k = columns.findIndex((b) => c >= b.x0 && c < b.x1);
+    if (k >= 0) out[k]!.push(p);
+  }
+  return out;
+}
+
+const joinedText = (items: PositionedItem[]) => [...items].sort((a, b) => a.x0 - b.x0).reduce((text, item, k, all) => (k === 0 ? item.text : `${text}${glue(all[k - 1]!, item)}${item.text}`), '');
+
+/**
+ * How well one reading of the day columns fits the page: every day cell it gives that reads as
+ * times a person can work counts for it; a cell that reads as nothing (two days' texts run
+ * together, a time split from its pair, a 30-hour day) and a time left just outside the days
+ * count against it. Codes and counts weigh nothing either way: a colour key's words beside the
+ * grid ("Holiday", "Sick") read as leave in any column.
+ */
+function fitOf(body: RowCluster[], dayColumns: Band[], days: { from: number; to: number }, step: number, read: (text: string) => number): number {
+  let score = 0;
+  let straddling = 0;
+  for (const row of body) {
+    for (const items of cellsByColumn(row, dayColumns, step)) if (items.length) score += read(joinedText(items));
+    for (const p of row.items) {
+      if (p.x1 - p.x0 > step * 0.9) continue;
+      const c = cx(p);
+      const outside = (c >= days.from - step && c < days.from) || (c >= days.to && c < days.to + step);
+      if (outside && /\d/.test(p.text) && !isCount(p.text)) score--;
+      const column = dayColumns.find((b) => c >= b.x0 && c < b.x1);
+      if (column && (p.x0 < column.x0 - 1 || p.x1 > column.x1 + 1)) straddling++;
+    }
+  }
+  // Between readings that read the cells equally well, the one whose columns no text crosses.
+  return score - straddling / 1000;
+}
+
+interface DayLayout {
+  dayBands: Band[];
+  /** Day columns left to right (a split day gives two) and, per day, its columns' indexes in that list. */
+  dayColumns: Band[];
+  perDay: number[][];
+  step: number;
+  score: number;
+}
+
+/**
+ * The day columns, read from the header and checked against the body. A header's text sits
+ * centred over its column, or against its left or right edge — and the body's cells may sit
+ * another way (a left-aligned date over right-aligned times): then the middles between headers
+ * are not the column edges, and a short cell lands in the next day. Each way the header could
+ * sit (and each way an AM | PM row could split the days) is tried on the body, and the one whose
+ * cells read best wins; the plain middles win a tie. The runner-up is kept when it fits almost
+ * as well and gives some cell another day: there, the cell's day is inferred, not read.
+ */
+function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: number | null, body: RowCluster[]): { best: DayLayout; rival: DayLayout | null } {
+  const period = periodIdx !== null ? rows[periodIdx]! : null;
+  const timeOptions = { dotMeans: sheetDotStyle(body.flatMap((r) => r.items.map((p) => p.text))) };
+  const memo = new Map<string, number>();
+  const read = (text: string) => {
+    let v = memo.get(text);
+    if (v === undefined) {
+      const cell = interpretCell(text, timeOptions);
+      v = cell.kind === 'shifts' ? (plausibleDay(cell.intervals) ? 1 : -1) : cell.kind === 'unresolved' && !isCount(text) ? -1 : 0;
+      memo.set(text, v);
+    }
+    return v;
+  };
+  const first = dayHeads(rows[dayRowIdxs[0]!]!)!;
+  const layouts: DayLayout[] = [];
+  const rules: SplitRule[] = period ? ['labels', 'middle', 'left', 'right'] : ['labels'];
+  const options: { from: { bands: Band[]; step: number } }[] = [];
+  for (const r of dayRowIdxs) {
+    const heads = dayHeads(rows[r]!);
+    if (!heads || heads.length !== first.length) continue;
+    for (const anchor of ['centre', 'left', 'right'] as HeaderAnchor[]) {
+      const from = dayBandsFrom(heads, anchor);
+      if (from) options.push({ from });
+    }
+  }
+  // Every reading is judged on the same cells: one too long for the narrowest reading's day runs on in all of them.
+  const step = Math.min(...options.map((o) => o.from.step));
+  for (const { from } of options) {
+    for (const rule of rules) {
+      const splits = periodSplits(from.bands, period, rule);
+      const dayColumns: Band[] = [];
+      const perDay: number[][] = [];
+      from.bands.forEach((band, i) => {
+        const at = splits[i];
+        if (at === null || at === undefined) {
+          perDay.push([dayColumns.length]);
+          dayColumns.push(band);
+        } else {
+          perDay.push([dayColumns.length, dayColumns.length + 1]);
+          dayColumns.push({ x0: band.x0, x1: at }, { x0: at, x1: band.x1 });
+        }
+      });
+      const days = { from: from.bands[0]!.x0, to: from.bands[from.bands.length - 1]!.x1 };
+      layouts.push({ dayBands: from.bands, dayColumns, perDay, step: from.step, score: fitOf(body, dayColumns, days, step, read) });
+    }
+  }
+  // The first is the plain reading (centred header, AM | PM between its labels): it wins ties.
+  const best = layouts.reduce((a, b) => (b.score > a.score ? b : a));
+  const dayOf = (l: DayLayout, x: number) => l.dayBands.findIndex((b) => x >= b.x0 && x < b.x1);
+  const items = body.flatMap((r) => r.items).filter((p) => p.x1 - p.x0 <= step * 0.9 && dayLike(p.text));
+  const differs = (l: DayLayout) => items.some((p) => dayOf(l, cx(p)) !== dayOf(best, cx(p)));
+  const cells = body.reduce((n, r) => n + cellsByColumn(r, best.dayColumns, step).filter((c) => c.length).length, 0);
+  const margin = Math.max(2, Math.ceil(cells * 0.02));
+  const rival = layouts.filter((l) => l !== best && l.score >= best.score - margin && differs(l)).sort((a, b) => b.score - a.score)[0] ?? null;
+  return { best, rival };
+}
+
+/** Column geometry from a page's header rows and body rows. */
+function deriveGeometry(rows: RowCluster[], dayRowIdxs: number[], periodIdx: number | null, bodyStart: number): Geometry {
+  const body = rows.slice(bodyStart);
+  const { best, rival } = chooseDayLayout(rows, dayRowIdxs, periodIdx, body);
+  const bands = best.dayBands;
+  const step = best.step;
   const left = bands[0]!.x0;
   const right = bands[bands.length - 1]!.x1;
-  const body = rows.slice(bodyStart);
+  // The leading columns come from text left of the days — not from a right-aligned day cell
+  // running on to the left into them.
+  const lead = body.map((row) => ({ ...row, items: row.items.filter((p) => !(cx(p) < left && p.x1 > left + step * 0.25)) }));
   // Column labels near the day header ("NAME" | "POSITION", "#" | "EMPLOYEE") part columns printed too close for a gap.
-  const leading = splitByLabels(textChannels(body, -Infinity, left), leadingLabels(rows, headerIdx - 3, bodyStart + 3, left), body, left);
+  const leading = splitByLabels(textChannels(lead, -Infinity, left), leadingLabels(rows, dayRowIdxs[0]! - 3, bodyStart + 3, left), lead, left);
   // Day cells' alignment, from the cells that fit their column (decided before the notes columns,
   // so a long Sunday cell running on past the grid is not a notes column).
   const dayBandIdx = bands.map((_, i) => i);
@@ -381,22 +577,10 @@ function deriveGeometry(rows: RowCluster[], headerIdx: number, periodIdx: number
   const placed = body.map((row) => ({ ...row, items: row.items.filter((p) => placeOf(p, geo) >= right) }));
   const trailing = textChannels(placed, right, Infinity);
   const columns: Band[] = leading.length ? [...leading] : [{ x0: left - 1, x1: left - 1 }];
-  const dayColumnIndexes: number[][] = [];
-  const period = periodIdx !== null ? rows[periodIdx]! : null;
-  for (const band of bands) {
-    const am = period?.items.find((p) => /^am$/i.test(p.text) && cx(p) >= band.x0 && cx(p) < band.x1);
-    const pm = period?.items.find((p) => /^pm$/i.test(p.text) && cx(p) >= band.x0 && cx(p) < band.x1);
-    if (am && pm && cx(am) < cx(pm)) {
-      const split = (cx(am) + cx(pm)) / 2;
-      dayColumnIndexes.push([columns.length, columns.length + 1]);
-      columns.push({ x0: band.x0, x1: split }, { x0: split, x1: band.x1 });
-    } else {
-      dayColumnIndexes.push([columns.length]);
-      columns.push(band);
-    }
-  }
+  const dayColumnIndexes = best.perDay.map((idx) => idx.map((i) => i + columns.length));
+  columns.push(...best.dayColumns);
   columns.push(...trailing);
-  return { columns, dayColumnIndexes, ...geo };
+  return { columns, dayColumnIndexes, ...geo, dayBands: bands, rival: rival ? { dayBands: rival.dayBands, step: rival.step } : null };
 }
 
 /** The column a phrase belongs to: the one containing its place (placeOf; else its centre), else the nearest. */
@@ -457,10 +641,12 @@ export interface PdfTable {
   /** Each page's text, row by row with cells separated by " | " — the text layer the AI reader cross-checks. */
   pageTexts: string[];
   /**
-   * Rows (page and row, like rowRefs) holding a day cell longer than its column: which day it
-   * belongs to was inferred from the column alignment, not read from where it sits.
+   * Day cells (page and row like rowRefs, and the grid column) whose day was inferred rather than
+   * read from where the text sits: a cell running on past its column whose edge lines up with no
+   * day's own, a cell straddling two days, or a cell another reading of the columns that fits
+   * the page almost as well would put on another day.
    */
-  runOnRows: { page: number; row: number }[];
+  inferredCells: { page: number; row: number; col: number }[];
 }
 
 /**
@@ -472,7 +658,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
   const grid: string[][] = [];
   const rowRefs: { page: number; row: number }[] = [];
   const pageTexts: string[] = [];
-  const runOnRows: { page: number; row: number }[] = [];
+  const inferredCells: { page: number; row: number; col: number }[] = [];
   let geometry: Geometry | null = null;
   let headerSeen = false;
   pages.forEach((items, pageIndex) => {
@@ -484,15 +670,18 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
     let lastHeaderRow = -1;
     if (headerIdx >= 0) {
       let periodIdx: number | null = null;
+      const dayRowIdxs = [headerIdx];
       lastHeaderRow = headerIdx;
       for (let k = headerIdx + 1; k < Math.min(rows.length, headerIdx + 4); k++) {
-        if (periodIdx === null && headerDays(rows[k]!)) lastHeaderRow = k;
-        else if (periodIdx === null && isPeriodRow(rows[k]!)) {
+        if (periodIdx === null && headerDays(rows[k]!)) {
+          lastHeaderRow = k;
+          dayRowIdxs.push(k);
+        } else if (periodIdx === null && isPeriodRow(rows[k]!)) {
           periodIdx = k;
           lastHeaderRow = k;
         } else break;
       }
-      geometry = deriveGeometry(rows, headerIdx, periodIdx, lastHeaderRow + 1);
+      geometry = deriveGeometry(rows, dayRowIdxs, periodIdx, lastHeaderRow + 1);
     }
     if (!geometry) return;
     const g: Geometry = geometry;
@@ -512,17 +701,31 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
         // A day header names the whole day: every half of a split day carries it.
         const day = isHeader ? g.dayColumnIndexes.find((idx) => idx.includes(col)) : undefined;
         for (const c of day ?? [col]) cells[c]!.push(p);
+        const dayIndex = isHeader ? -1 : g.dayColumnIndexes.findIndex((idx) => idx.includes(col));
+        if (dayIndex >= 0 && dayInferred(p, dayIndex, g)) inferredCells.push({ page: pageIndex + 1, row: r + 1, col });
       }
       pageGrid.push(cells.map((c) => c.reduce((text, item, k) => (k === 0 ? item.text : `${text}${glue(c[k - 1]!, item)}${item.text}`), '').trim()));
       ys.push(row.y);
       refs.push(r + 1);
-      if (!isHeader && row.items.some((p) => p.x1 - p.x0 > g.step * 0.9 && cx(p) >= g.daysFrom)) runOnRows.push({ page: pageIndex + 1, row: r + 1 });
     });
     const merged = mergeContinuationLines(pageGrid, ys, refs);
     grid.push(...merged.grid);
     rowRefs.push(...merged.refs.map((row) => ({ page: pageIndex + 1, row })));
   });
-  return { grid, rowRefs, pageCount: pages.length, pageTexts, runOnRows };
+  return { grid, rowRefs, pageCount: pages.length, pageTexts, inferredCells };
+}
+
+/**
+ * Whether the day an item was given is inferred rather than read: a cell running on past its
+ * column whose edge (or middle) lines up with no day's own, a cell straddling two days, or one a
+ * close rival reading of the columns would put on another day.
+ */
+function dayInferred(p: PositionedItem, day: number, g: Geometry): boolean {
+  if (runsOn(p, g)) return !runOnPlacedForCertain(p, g);
+  const band = g.dayBands[day];
+  if (!band || p.x0 < band.x0 - 1 || p.x1 > band.x1 + 1) return true;
+  if (!g.rival) return false;
+  return g.rival.dayBands.findIndex((b) => cx(p) >= b.x0 && cx(p) < b.x1) !== day;
 }
 
 /**

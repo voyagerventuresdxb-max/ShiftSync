@@ -29,7 +29,7 @@ import { isAllCapsLabel } from './escalation.js';
 import { isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias, isRoleTitle } from './resolveRows.js';
 import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
-import { ambiguousDottedTime, parseShiftText, parseSingleTime, sheetDotStyle, type ShiftTextOptions } from './shiftText.js';
+import { ambiguousDottedTime, parseShiftText, parseSingleTime, sheetDotStyle, withinOneDay, type ShiftTextOptions } from './shiftText.js';
 import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle, UNREADABLE_NAME } from './personKey.js';
 import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
@@ -312,7 +312,7 @@ function detectLegend(
 export type CellParseResult =
   | { kind: 'blank' }
   | { kind: 'leave'; category: LeaveRecord['category']; code: string }
-  | { kind: 'shifts'; intervals: ShiftInterval[] }
+  | { kind: 'shifts'; intervals: ShiftInterval[]; /** am / pm had to be inferred. */ inferred?: boolean }
   | { kind: 'unresolved'; raw: string }
   // Recognized-but-intentionally-not-a-fixed-interval: a real start time
   // with no end ("10IN"), a real start that runs until an unspecified
@@ -369,7 +369,11 @@ function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>
   }
 
   const read = parseShiftText(text, timeOptions);
-  if (read) return { kind: 'shifts', intervals: read.segments.map((s) => ({ start: s.start, end: s.end })) };
+  // Times that overlap or run on past a day are two days' cells run together: never saved on one day.
+  if (read && !withinOneDay(read.segments)) {
+    return { kind: 'flagged', raw: text, reason: 'These times overlap or run on past one day, so two days may have run together here. Check the days on the roster.' };
+  }
+  if (read) return { kind: 'shifts', intervals: read.segments.map((s) => ({ start: s.start, end: s.end })), ...(read.inferred ? { inferred: true } : {}) };
 
   return { kind: 'unresolved', raw: text };
 }
@@ -678,6 +682,11 @@ export interface GridParseOptions {
   clientWeekStart?: string | null;
   /** Page and row of each grid row in the source file (PDF reconstruction); default: the grid row. */
   rowRefs?: { page: number | null; row: number }[];
+  /**
+   * Day cells (page and row as in rowRefs, and the grid column) whose day the PDF reader could
+   * only infer from how the columns line up: their shifts are kept, flagged to check.
+   */
+  inferredCells?: { page: number | null; row: number; col: number }[];
 }
 
 function buildDayColumns(
@@ -820,6 +829,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
   const people: ReadPerson[] = [];
   const unreadRows: UnreadRow[] = [];
   const refOf = (r: number) => options.rowRefs?.[r] ?? { page: null, row: r + 1 };
+  const inferredCells = new Set((options.inferredCells ?? []).map((c) => `${c.page}:${c.row}:${c.col}`));
 
   const header = findHeaderBlock(grid);
   if (!header) {
@@ -1060,6 +1070,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     for (const col of columns) {
       const parsed = cellOf(row, col);
       if (parsed.kind === 'blank') continue;
+      // A day the PDF reader could only infer from the column alignment is never saved silently.
+      const dayInferred = col.colIndexes.some((c) => inferredCells.has(`${ref.page}:${ref.row}:${c}`));
 
       // The date wins (it's the more specific of the two), but a weekday that
       // disagrees with it means the column may be the wrong day: flag every
@@ -1078,7 +1090,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
 
       if (parsed.kind === 'leave') {
         hasShiftOrLeaveThisRow = true;
-        leaveRecords.push({ employeeName, date: col.date, leaveCode: parsed.code, category: parsed.category });
+        leaveRecords.push({ employeeName, date: col.date, leaveCode: parsed.code, category: parsed.category, ...(dayInferred ? { inferredDay: true } : {}) });
         continue;
       }
 
@@ -1138,6 +1150,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
           section: currentSection,
           sourcePage: ref.page,
           readerSource: 'table',
+          ...(dayInferred ? { inferredDay: true, flags: ['low_confidence' as const] } : {}),
+          ...(parsed.inferred ? { inferredTimes: true } : {}),
         });
       }
     }

@@ -17,6 +17,8 @@ export interface PrintedCell {
   color?: string;
   bold?: boolean;
   center?: boolean;
+  /** Right-aligned (a spreadsheet's numbers); overrides `center`. */
+  right?: boolean;
   rotate?: boolean;
   /** Numeric value for spreadsheets (decimal hours are numbers in the source workbook). */
   num?: number;
@@ -38,6 +40,9 @@ export interface PrintedSheet {
   rows: PrintedRow[];
   pages: number;
 }
+
+/** A cell's alignment as the renderer prints it (centred by default). */
+const align = (a: 'left' | 'center' | 'right' | undefined): Pick<PrintedCell, 'center' | 'right'> => (a === 'right' ? { right: true } : a === 'left' ? {} : { center: true });
 
 const BLUE = '#a9c4eb';
 const SALMON = '#fde0d0';
@@ -66,7 +71,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
 
   if (spec.family === 'A') {
     const columns = 1 + 28;
-    const dayCells = (text: (d: number) => string, extra: Partial<PrintedCell> = {}) => roster.dates.map((_, d) => ({ text: text(d), span: 4, center: true, ...extra }));
+    const dayCells = (text: (d: number) => string, extra: Partial<PrintedCell> = {}) => roster.dates.map((_, d) => ({ text: text(d), span: 4, ...align(spec.headerAlign), ...extra }));
     if (roster.title) rows.push({ kind: 'title', page: 1, cells: [{ text: roster.title, span: columns, bold: true, center: true }] });
     for (let l = 0; l < lineCount; l++) {
       const isDateLine = /\d/.test(headerLines[0]![l]!);
@@ -112,7 +117,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
       p.cells.forEach((c, d) => {
         if (c.kind === 'shift') {
           const fill = p.shiftFills[d] ?? undefined;
-          for (const t of subCells(spec.notation, c.segs)) cells.push({ text: t, span: 1, fill, center: true, color: fill === '#ff0000' ? '#ffffff' : undefined, num: t && spec.notation === 'decimal' ? Number(t) : undefined });
+          for (const t of subCells(spec.notation, c.segs)) cells.push({ text: t, span: 1, fill, ...align(spec.dayAlign), color: fill === '#ff0000' ? '#ffffff' : undefined, num: t && spec.notation === 'decimal' ? Number(t) : undefined });
         } else {
           const fill = c.kind === 'colour' ? roster.legend.find((l) => l.label === c.meaning)?.fill : undefined;
           for (let k = 0; k < 4; k++) cells.push({ text: '', span: 1, fill });
@@ -154,12 +159,13 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
   const leadAlign = spec.tightLead ? {} : { center: true };
   rows.push({ kind: 'title', page: 1, cells: [{ text: '', span: nLead, fill: NAVY }, { text: roster.title ?? '', span: 7, fill: NAVY, color: GOLD, bold: true, center: true }] });
   const head = (text: string, span: number): PrintedCell => ({ text, span, fill: '#fbe9b7', bold: true, center: true });
+  const dayHead = (text: string): PrintedCell => ({ ...head(text, 1), center: false, ...align(spec.headerAlign) });
   for (let l = 0; l < lineCount; l++) {
     const line = headerLines.map((h) => h[l]!);
     const label = lineCount === 1 ? '' : /\d/.test(line[0]!) ? 'DATE' : 'DAY OF THE WEEK';
     // Column headings over the leading columns, in their printed order, on the first header row.
     const leadCells = labels && !spec.labelsRow ? order.map((k) => head(l === 0 ? labels[k] ?? '' : '', 1)) : [head(label, nLead)];
-    rows.push({ kind: 'header', page: 1, cells: [...leadCells, ...line.map((t) => head(t, 1))] });
+    rows.push({ kind: 'header', page: 1, cells: [...leadCells, ...line.map((t) => dayHead(t))] });
   }
   if (labels && spec.labelsRow) {
     rows.push({ kind: 'subheader', page: 1, cells: [...order.map((k) => ({ ...head(labels[k] ?? '', 1), center: false })), ...roster.dates.map(() => head('', 1))] });
@@ -184,12 +190,13 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
     const combinedName = spec.combined === 'slash' ? `${p.name} / ${p.title ?? ''}` : `${p.name} (${p.title ?? ''})`;
     const leadText: Record<'no' | 'name' | 'title', string> = { no: String(index), name: spec.combined && p.title ? combinedName : p.name, title: p.title ?? '' };
     const cells: PrintedCell[] = order.map((k) => ({ text: leadText[k], span: 1, bold: k !== 'no', ...leadAlign }));
+    const cellAlign = align(spec.dayAlign ?? (spec.narrowDays ? 'left' : 'center'));
     p.cells.forEach((c) => {
       if (c.kind === 'shift') {
         const idx = Math.floor(r() * B_SHIFT_FILLS.length);
-        cells.push({ text: shiftText(spec.notation, c.segs, r), span: 1, center: !spec.narrowDays, fill: B_SHIFT_FILLS[idx], ...(spec.narrowDays ? { runOn: true } : {}) });
-      } else if (c.kind === 'leave') cells.push({ text: c.code, span: 1, center: !spec.narrowDays, fill: B_FILLS[c.code] });
-      else if (c.kind === 'open') cells.push({ text: c.text, span: 1, center: !spec.narrowDays, fill: /CL|close/i.test(c.text) ? '#e8352b' : '#9bd16b' });
+        cells.push({ text: shiftText(spec.notation, c.segs, r), span: 1, ...cellAlign, fill: B_SHIFT_FILLS[idx], ...(spec.narrowDays ? { runOn: true } : {}) });
+      } else if (c.kind === 'leave') cells.push({ text: c.code, span: 1, ...cellAlign, fill: B_FILLS[c.code] });
+      else if (c.kind === 'open') cells.push({ text: c.text, span: 1, ...cellAlign, fill: /CL|close/i.test(c.text) ? '#e8352b' : '#9bd16b' });
       else if (c.kind === 'unreadable') cells.push({ text: '', span: 1, fill: '#000000' });
       else cells.push({ text: '', span: 1 });
     });
@@ -203,7 +210,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
   if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: 'Notes: UL = unpaid leave, AL = annual leave, CL = until close, IN = start time only', span: columns }] });
   assignPages(rows);
   const width: Record<'no' | 'name' | 'title', number> = spec.tightLead ? { no: 28, name: 128, title: 96 } : { no: 40, name: 150, title: 110 };
-  return { columns, colWidths: [...order.map((k) => (spec.combined && k === 'name' ? 230 : width[k])), ...Array(7).fill(spec.narrowDays ? 54 : 150)], rows, pages: spec.pages };
+  return { columns, colWidths: [...order.map((k) => (spec.combined && k === 'name' ? 230 : width[k])), ...Array(7).fill(spec.dayWidth ?? (spec.narrowDays ? 54 : 150))], rows, pages: spec.pages };
 }
 
 // --- spreadsheets ----------------------------------------------------------------------------
@@ -262,7 +269,7 @@ export function sheetHtml(sheet: PrintedSheet, opts: { shuffle: boolean; repeatH
           c.fill ? `background:${c.fill}` : '',
           c.color ? `color:${c.color}` : '',
           c.bold ? 'font-weight:bold' : '',
-          c.center ? 'justify-content:center' : '',
+          c.right ? 'justify-content:flex-end' : c.center ? 'justify-content:center' : '',
           c.runOn ? 'overflow:visible;z-index:1' : '',
           row.kind === 'person' || row.kind === 'headcount' || row.kind === 'header' || row.kind === 'subheader' ? 'border:1px solid #333' : 'border:1px solid #bbb',
         ].filter(Boolean).join(';');
@@ -373,7 +380,7 @@ export async function renderSplitLigaturePdf(sheet: PrintedSheet): Promise<Buffe
       col += cell.span;
       if (!cell.text) continue;
       const total = font.widthOfTextAtSize(cell.text, size);
-      let x = cell.center ? x0 + (w - total) / 2 : x0 + 3;
+      let x = cell.right ? x0 + w - 3 - total : cell.center ? x0 + (w - total) / 2 : x0 + 3;
       for (const piece of cell.text.split(/(ffi|ffl|ff|fi|fl)/).filter(Boolean)) {
         page.drawText(piece, { x, y, size, font });
         x += font.widthOfTextAtSize(piece, size);

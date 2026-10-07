@@ -117,6 +117,8 @@ export interface ReadingReport {
   peopleFound: number;
   rereadPages: number[];
   disagreements: number;
+  /** Cells the AI cross-check read differently where the file's own text was read for certain (used, not flagged). */
+  aiDifferedCells?: number;
   /** "Read from previous upload": nothing was billed. */
   fromCache: boolean;
   /** How the reading was checked, in plain words. */

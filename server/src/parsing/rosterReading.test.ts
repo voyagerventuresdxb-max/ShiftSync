@@ -120,7 +120,7 @@ test('aiReadRoster: with too little time left no re-read is started, and the sho
   assert.deepEqual(outcome.shortPages, [{ page: 1, expected: 2, read: 1 }]);
 });
 
-test('reconcileReadings: matching shifts are "both"; one-reader people and shifts are kept and flagged; times that differ keep the printed text\'s with both readings', () => {
+test('reconcileReadings: matching shifts are "both"; one-reader people are kept (an AI-only one flagged); times that differ on a cell the table reader had to guess keep the printed text\'s with both readings', () => {
   const ai = mapReadingAnswer(
     answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', '10-18']), person('Test Betta', 2, ['12-20', '']), person('Test Only Ai', 3, ['9-17', ''])] }]),
     { today: TODAY, clientWeekStart: null },
@@ -129,14 +129,15 @@ test('reconcileReadings: matching shifts are "both"; one-reader people and shift
     [
       ['', '24-Aug', '25-Aug'],
       ['', 'MONDAY', 'TUESDAY'],
-      ['Test Alpha', '9-17', '11-18'],
+      // "11-6pm": the table reader has to guess the start's am / pm.
+      ['Test Alpha', '9-17', '11-6pm'],
       ['Test Beta', '12-20', ''],
       ['Test Only Table', '', '9-17'],
     ],
     TODAY,
     { today: TODAY, clientWeekStart: null },
   );
-  const { result, disagreements } = reconcileReadings(ai, table);
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
   const row = (name: string, date: string) => result.rows.find((r) => r.employeeName === name && r.date === date)!;
   assert.equal(row('Test Alpha', '2026-08-24').readerSource, 'both');
   assert.deepEqual(row('Test Alpha', '2026-08-25').flags, ['times_differ']);
@@ -147,10 +148,67 @@ test('reconcileReadings: matching shifts are "both"; one-reader people and shift
   assert.equal(beta.readerSource, 'both');
   assert.deepEqual(beta.nameAlternatives, [{ reader: 'ai', name: 'Test Betta' }]);
   assert.deepEqual(row('Test Only Ai', '2026-08-24').flags, ['ai_only']);
-  assert.deepEqual(row('Test Only Table', '2026-08-25').flags, ['table_only']);
+  // A person only the table reader read, from the file's own text for certain: kept as read (the person is marked table-only).
+  assert.equal(row('Test Only Table', '2026-08-25').flags, undefined);
   assert.equal(result.people!.find((p) => p.name === 'Test Only Table')!.readerSource, 'table');
-  assert.equal(disagreements, 4, 'times differ, a misread name, one AI-only person, one table-only person');
+  assert.equal(disagreements, 4, 'times differ on a guessed cell, a misread name, one AI-only person, one table-only person');
+  assert.equal(aiDiffCells, 0);
   assert.equal(new Set(result.rows.map((r) => r.rowNumber)).size, result.rows.length, 'row numbers stay unique');
+});
+
+test('reconcileReadings: where the table reader read a cell from the file\'s own text for certain, the AI reading it otherwise is counted, never flagged', () => {
+  const ai = mapReadingAnswer(
+    answer([{ p: 1, rows: 2, ppl: [person('Test Alpha', 1, ['9-16', '']), person('Test Beta', 2, ['OFF', '12-20'])] }]),
+    { today: TODAY, clientWeekStart: null },
+  );
+  ai.anomalies.push({ employeeName: 'Test Beta', date: '2026-08-25', rawText: '12-20', reason: 'The AI was unsure.', confidence: 0.4, rowNumber: null });
+  const table = parseExcelGrid(
+    [
+      ['', '24-Aug', '25-Aug'],
+      ['', 'MONDAY', 'TUESDAY'],
+      ['Test Alpha', '9-17', '10-18'],
+      ['Test Beta', 'OFF', '12-20'],
+    ],
+    TODAY,
+    { today: TODAY, clientWeekStart: null },
+  );
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}|${(r.flags ?? []).join(',')}`), [
+    'Test Alpha|2026-08-24|09:00-17:00|',
+    'Test Alpha|2026-08-25|10:00-18:00|',
+    'Test Beta|2026-08-25|12:00-20:00|',
+  ]);
+  assert.equal(disagreements, 0);
+  assert.equal(aiDiffCells, 2, "Monday's other times and Tuesday's shift the AI missed");
+  assert.deepEqual(result.anomalies, [], "the AI's note on a day the file's text settled is not shown");
+});
+
+test('reconcileReadings: a day the PDF reader inferred is confirmed when the AI reads the same; when the AI puts those times on another day, neither is written', () => {
+  const grid = [
+    ['', '24-Aug', '25-Aug'],
+    ['', 'MONDAY', 'TUESDAY'],
+    ['Test Alpha', '9-17', ''],
+    ['Test Beta', '', '10-18'],
+  ];
+  // Both cells' days inferred from the column alignment (grid columns 1 and 2 of rows 3 and 4).
+  const inferredCells = [{ page: null, row: 3, col: 1 }, { page: null, row: 4, col: 2 }];
+  const table = parseExcelGrid(grid, TODAY, { today: TODAY, clientWeekStart: null, inferredCells });
+  assert.deepEqual(table.rows.map((r) => r.flags), [['low_confidence'], ['low_confidence']], 'never saved silently on its own');
+  const ai = mapReadingAnswer(answer([{ p: 1, rows: 2, ppl: [person('Test Alpha', 1, ['9-17', '']), person('Test Beta', 2, ['10-18', ''])] }]), { today: TODAY, clientWeekStart: null });
+  const { result, disagreements } = reconcileReadings(ai, table);
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}|${(r.flags ?? []).join(',')}`), ['Test Alpha|2026-08-24|'], 'the AI confirms Alpha\'s Monday');
+  assert.ok(result.rows.every((r) => r.inferredDay === undefined));
+  assert.deepEqual(result.anomalies.filter((a) => a.employeeName === 'Test Beta').map((a) => a.date).sort(), ['2026-08-24', '2026-08-25']);
+  assert.ok(result.anomalies.every((a) => /same times on different days/.test(a.reason)));
+  assert.equal(disagreements, 2);
+});
+
+test('reconcileReadings: a week the file prints for certain stands over an AI reading of another week (counted, nothing to confirm)', () => {
+  const ai = mapReadingAnswer({ ...answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]), days: ['31-Aug MONDAY', '1-Sep TUESDAY'] }, { today: TODAY, clientWeekStart: null });
+  const table = parseExcelGrid([['', '24-Aug', '25-Aug'], ['', 'MONDAY', 'TUESDAY'], ['Test Alpha', '9-17', '']], TODAY, { today: TODAY, clientWeekStart: null });
+  const { result } = reconcileReadings(ai, table);
+  assert.equal(result.week?.weekStart, '2026-08-24');
+  assert.equal(result.week?.needsConfirmation, false);
 });
 
 // --- the upload path (readUpload.ts) with a mock AI reader ---------------------------------------
@@ -331,13 +389,21 @@ test('reconcileReadings: a segment only the AI saw, on a day the table reader re
     TODAY,
     { today: TODAY, clientWeekStart: null },
   );
-  const { result, disagreements } = reconcileReadings(ai, table);
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
   const day = result.rows.filter((r) => r.employeeName === 'Test Gamma' && r.date === '2026-08-24');
   assert.equal(day.length, 1, 'no extra shift from the AI-only segment');
   assert.equal(day[0]!.startTime, '09:00');
-  assert.deepEqual(day[0]!.flags, ['times_differ']);
-  assert.deepEqual(day[0]!.alternatives?.map((a) => `${a.reader}:${a.startTime}-${a.endTime}`), ['table:09:00-13:00', 'ai:18:00-22:00']);
-  assert.equal(disagreements, 1);
+  assert.equal(day[0]!.flags, undefined, "the file's own text read for certain: the AI's extra segment is counted, not flagged");
+  assert.equal(disagreements, 0);
+  assert.equal(aiDiffCells, 1);
+  // The same cell where the table reader had to guess am / pm ("9-1pm"): the AI's other reading is shown.
+  const guessed = parseExcelGrid([['', '24-Aug', '25-Aug'], ['', 'MONDAY', 'TUESDAY'], ['Test Gamma', '9-1pm', '']], TODAY, { today: TODAY, clientWeekStart: null });
+  const again = reconcileReadings(ai, guessed);
+  const cell = again.result.rows.filter((r) => r.employeeName === 'Test Gamma' && r.date === '2026-08-24');
+  assert.equal(cell.length, 1);
+  assert.deepEqual(cell[0]!.flags, ['times_differ']);
+  assert.deepEqual(cell[0]!.alternatives?.map((a) => `${a.reader}:${a.startTime}-${a.endTime}`), ['table:09:00-13:00', 'ai:18:00-22:00']);
+  assert.equal(again.disagreements, 1);
 });
 
 test('reconcileReadings: the same times on different days on a row whose day the table reader had to infer — neither day is written; both are shown', () => {
@@ -570,12 +636,12 @@ test("reconcileReadings: a name one reader wrote with its title after a slash is
   assert.deepEqual(result.people?.map((p) => p.name), ['Test Alpha']);
 });
 
-test("reconcileReadings: the same times on different days on a row the table reader placed where it sits — the file's days stand, the person is flagged", () => {
+test("reconcileReadings: the same times on different days on a row the table reader placed where it sits — the file's days stand; the AI's slip is counted, not flagged", () => {
   const ai = mapReadingAnswer(answer([{ p: 1, rows: 1, ppl: [person('Test Delta', 1, ['9-17', ''])] }]), { today: TODAY, clientWeekStart: null });
   const table = parseExcelGrid([['', '24-Aug', '25-Aug'], ['', 'MONDAY', 'TUESDAY'], ['Test Delta', '', '9-17']], TODAY, { today: TODAY, clientWeekStart: null });
-  const { result } = reconcileReadings(ai, table);
-  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime}`), ['2026-08-25 09:00']);
-  const flag = result.anomalies.find((a) => a.employeeName === 'Test Delta' && a.date === null)!;
-  assert.match(flag.reason, /put some of these times on other days/);
-  assert.equal(flag.rawText, 'Built-in reader: 08-25 09:00–17:00 · AI reader: 08-24 09:00–17:00');
+  const { result, disagreements, aiDiffCells } = reconcileReadings(ai, table);
+  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime} ${(r.flags ?? []).join(',')}`), ['2026-08-25 09:00 ']);
+  assert.deepEqual(result.anomalies, []);
+  assert.equal(disagreements, 0);
+  assert.equal(aiDiffCells, 2);
 });

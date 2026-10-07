@@ -106,6 +106,7 @@ function complete(result: ParsedVisionResult, reader: 'ai' | 'table', ctx: Uploa
   const people = result.people ?? peopleFromRows(result.rows, result.leaveRecords, reader);
   return {
     ...result,
+    leaveRecords: result.leaveRecords.map(({ inferredDay: _inferred, ...l }) => l),
     rows: withPersonKeys(result.rows, people),
     people,
     unreadRows: result.unreadRows ?? [],
@@ -121,12 +122,16 @@ function report(
     tableResult: ParsedVisionResult | null;
     ai_?: AiReadOutcome | null;
     disagreements?: number;
+    /** Cells the AI cross-check read differently where the file's own text was used (not flagged). */
+    aiDiffCells?: number;
     fromCache?: boolean;
     crossChecked?: CrossChecked;
     cells?: CellsToCheck;
   },
 ): ReadingReport {
-  const note = [hardToReadNote(parts.cells), readingNote(parts.ai, parts.table, parts.crossChecked ?? 'no')].filter(Boolean).join(' ') || null;
+  const differed = parts.aiDiffCells ?? 0;
+  const crossCheckNote = differed > 0 ? `The AI cross-check differed on ${differed} ${differed === 1 ? 'cell' : 'cells'}; the file's own text was used.` : null;
+  const note = [hardToReadNote(parts.cells), readingNote(parts.ai, parts.table, parts.crossChecked ?? 'no'), crossCheckNote].filter(Boolean).join(' ') || null;
   return {
     ai: parts.ai,
     table: parts.table,
@@ -134,6 +139,7 @@ function report(
     peopleFound: result.people?.length ?? 0,
     rereadPages: parts.ai_?.rereadPages ?? [],
     disagreements: parts.disagreements ?? 0,
+    ...(differed > 0 ? { aiDifferedCells: differed } : {}),
     fromCache: !!parts.fromCache,
     ...(note ? { note } : {}),
     ...(parts.crossChecked === 'yes' ? { crossChecked: true } : {}),
@@ -316,7 +322,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     let dataLoss: RosterExtractionAnomalyError | null = null;
     if (table.grid.length) {
       try {
-        const grid = gridParser(table.grid, ctx.clientWeekStart ?? ctx.today, { ...week, rowRefs: table.rowRefs });
+        const grid = gridParser(table.grid, ctx.clientWeekStart ?? ctx.today, { ...week, rowRefs: table.rowRefs, inferredCells: table.inferredCells });
         if (grid.templateLabel === 'Deterministic Grid Parser') {
           tableResult = grid;
           tableState = 'used';
@@ -358,12 +364,9 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       if (dataLoss && read.code === 'vision_unconfigured') return { ok: false, status: 422, body: { error: withManualPath(dataLoss.message), errorCode: 'roster_extraction_anomaly' } };
       return refused(read, reason);
     }
-    // People on a row whose day was inferred for a cell too long for its column (pdfTableExtractor).
-    const runOn = new Set(table.runOnRows.map((r) => `${r.page}:${r.row}`));
-    const placementUncertain = new Set((tableResult?.people ?? []).filter((p) => runOn.has(`${p.sourcePage}:${p.sourceRow}`)).map((p) => p.personKey));
-    const { result: merged, disagreements } = reconcileReadings(read.result, tableResult, { placementUncertain });
+    const { result: merged, disagreements, aiDiffCells } = reconcileReadings(read.result, tableResult);
     const result = complete(merged, 'ai', ctx);
-    return { ok: true, result, reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: tableState, tableResult, ai_: read.outcome, disagreements, fromCache: read.fromCache }) };
+    return { ok: true, result, reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: tableState, tableResult, ai_: read.outcome, disagreements, aiDiffCells, fromCache: read.fromCache }) };
   }
 
   // --- spreadsheets ---------------------------------------------------------------------------------
@@ -449,12 +452,12 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     if (outcome.ok && outcome.escalation?.status === 'unavailable') outcome.escalation.message = `${read.message} The built-in reader's result is shown instead.`;
     return outcome;
   }
-  const { result: merged, disagreements } = reconcileReadings(read.result, local);
+  const { result: merged, disagreements, aiDiffCells } = reconcileReadings(read.result, local);
   const result = complete(withSheetsNote(merged), 'ai', ctx);
   return {
     ok: true,
     result,
-    reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: 'used', tableResult: local, ai_: read.outcome, disagreements, fromCache: read.fromCache }),
+    reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: 'used', tableResult: local, ai_: read.outcome, disagreements, aiDiffCells, fromCache: read.fromCache }),
     escalation: { reason, status: 'used', message: 'Read by the AI reader. Check every row before confirming.' },
   };
 }

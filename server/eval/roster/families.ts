@@ -117,6 +117,14 @@ export interface VariantSpec {
   narrowDays?: boolean;
   /** Dense photo: some cells both AI readings slip on the same way (mock). */
   sharedSlips?: boolean;
+  /** How the day header text sits in its cell (default centred). */
+  headerAlign?: 'left' | 'center' | 'right';
+  /** How the day cells' text sits in its cell (default centred; left with narrowDays). */
+  dayAlign?: 'left' | 'center' | 'right';
+  /** Family B: day column width in px (default 150, 54 with narrowDays). */
+  dayWidth?: number;
+  /** Mostly evening shifts that cross midnight (18:30–01:00, 18.5–26, 21–02). */
+  overnight?: boolean;
   seed: number;
 }
 
@@ -390,6 +398,21 @@ const A_DAYS: [number, number][][] = [
   [[1080, 1560]], // PM only 18-26
   [[600, 960]], // AM only 10-16
 ];
+/** Evening shifts that cross midnight (overnight variants). */
+const A_NIGHTS: [number, number][][] = [
+  [[1110, 1560]], // PM only 18.5-26
+  [[960, 1080], [1110, 1500]], // 16-18, 18.5-25
+  [[1260, 1560]], // PM only 21-26
+  [[1110, 1680]], // PM only 18.5-28
+  [[720, 960], [1080, 1440]], // 12-16, 18-24
+];
+const B_NIGHTS: [number, number][][] = [
+  [[1110, 1500]], // 18:30-01:00
+  [[1080, 1560]], // 18:00-02:00
+  [[1260, 1620]], // 21:00-03:00
+  [[630, 900], [1110, 1500]], // 10:30-15:00, 18:30-01:00
+  [[1200, 1440]], // 20:00-00:00
+];
 const A_LEGEND = [
   { fill: '#ffff00', label: 'Holiday' },
   { fill: '#c0c0c0', label: 'Unpaid' },
@@ -494,7 +517,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
             cells.push(r() < 0.85 ? { kind: 'colour', meaning: pick(r, A_LEAVE_FILLS).label } : { kind: 'blank' });
             shiftFills.push(null);
           } else if (r() < 0.62) {
-            cells.push({ kind: 'shift', segs: pick(r, A_DAYS) });
+            cells.push({ kind: 'shift', segs: pick(r, spec.overnight ? A_NIGHTS : A_DAYS) });
             shiftFills.push(r() < 0.25 ? pick(r, A_SHIFT_FILLS).fill : null);
           } else {
             cells.push(r() < 0.9 ? { kind: 'colour', meaning: pick(r, A_LEAVE_FILLS).label } : { kind: 'blank' });
@@ -533,7 +556,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
       for (let d = 0; d < 7; d++) {
         const x = r();
         if (allLeave) cells.push({ kind: 'leave', code: spec.freeCodes ? 'HOL' : 'UL' });
-        else if (x < 0.45) cells.push({ kind: 'shift', segs: pick(r, B_SHIFTS) });
+        else if (x < 0.45) cells.push({ kind: 'shift', segs: pick(r, spec.overnight ? B_NIGHTS : B_SHIFTS) });
         else if (x < 0.68) cells.push({ kind: 'leave', code: spec.freeCodes ? pick(r, ['O', 'X', '-', 'DO']) : 'OFF' });
         else if (x < 0.84) cells.push({ kind: 'leave', code: pick(r, spec.freeCodes ? B_LEAVE_FREE : ['UL', 'UL', 'AL', 'SL', 'PH']) });
         else if (x < 0.92) cells.push({ kind: 'open', text: pick(r, spec.freeCodes ? B_OPEN_FREE : B_OPEN) });
