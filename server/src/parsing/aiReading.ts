@@ -7,7 +7,7 @@
  */
 import { interpretCell } from './deterministicGridParser.js';
 import { isOvernight } from './normalize.js';
-import { combinedLabelOrder, isLabelLine, isUnreadableName, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle } from './personKey.js';
+import { combinedLabelOrder, isLabelLine, isUnreadableName, looksLikePersonName, lowercaseName, nonPersonReason, personKeyOf, splitNameTitle } from './personKey.js';
 import { parseShiftText, sheetDotStyle } from './shiftText.js';
 import { detectWeek, parseDayLabel } from './weekDetection.js';
 import type { ReadingAnswer } from './vlmPrompt.js';
@@ -95,8 +95,10 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
         const unswapped = swapped ? { ...listed, nm: listed.t!, t: listed.nm } : listed;
         const combined = splitNameTitle(unswapped.nm ?? '', combinedOrder);
         const person = combined ? { ...unswapped, nm: combined.name, t: unswapped.t?.trim() || combined.title } : unswapped;
-        const name = (person.nm ?? '').trim();
         const cells = person.c ?? [];
+        // A name typed in lower case with a shift beside it is a person, its name title-cased.
+        const printed = (person.nm ?? '').trim();
+        const name = (cells.some((c) => !!c && !!parseShiftText(c)) && lowercaseName(printed)) || printed;
         // A row whose name couldn't be read ("", "[?]", "?", "…"): never a person, always shown.
         if (!name || isUnreadableName(name)) {
           unreadRows.push({ page: page.p, row: person.i ?? null, text: cells.filter(Boolean).join(' | '), reason: "A row whose name couldn't be read. Add the person and their shifts by hand if it is one." });

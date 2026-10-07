@@ -215,6 +215,24 @@ function notNameShape(label: string): string | null {
   return null;
 }
 
+/** Words that make a lower-case line a label or a footer, never a name, whatever is beside it. */
+const LOWER_LABEL_WORD = /^(total|totals|approved|signature|signed|sign|note|notes|legend|key|prepared|manager|managers|supervisor|staff|only|copy|check|daily|final|version|official|use|for|by|verified|printed|page|date|remarks?|off|leave|hours|hrs|covers|events?|rota|roster|schedule|week|shifts?|draft|subject|change|changes|please|see|and|the|of|to|in|on|at|is|with|from|per|all|any|no|not|if|or|as|be)$/;
+
+/**
+ * A name typed all in lower case ("maren tollvik"), title-cased ("Maren Tollvik"); null when the
+ * label isn't one: 1–4 words of letters (hyphens and apostrophes allowed), no label or footer word,
+ * and not a title, heading or label once capitalised. Only for a row with a shift beside it — a
+ * lower-case line with nothing in its days stays an unread row.
+ */
+export function lowercaseName(label: string): string | null {
+  const s = label.trim().replace(/\s+/g, ' ');
+  if (!s || s !== s.toLowerCase() || !/^\p{L}[\p{L}'’-]*(?: \p{L}[\p{L}'’-]*){0,3}$/u.test(s)) return null;
+  const words = s.split(' ');
+  if (words.some((w) => LOWER_LABEL_WORD.test(w) || NON_NAME_WORD.test(w))) return null;
+  const titled = words.map((w, i) => (i > 0 && NAME_PARTICLE.test(w) && i < words.length - 1 ? w : w.replace(/(^|[-'’])(\p{L})/gu, (_m, a: string, b: string) => a + b.toUpperCase()))).join(' ');
+  return nonPersonReason(titled) ? null : titled;
+}
+
 export function nonPersonReason(label: string): string | null {
   const s = joinLigatureSplits(label.trim().replace(/\s+/g, ' '));
   if (!s) return 'blank';
