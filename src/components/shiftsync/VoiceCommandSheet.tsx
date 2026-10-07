@@ -50,6 +50,7 @@ export function VoiceCommandSheet({
   hasAdditionalRequest,
   executed,
   onConfirm,
+  onChoose,
   onCancel,
   executing,
 }: {
@@ -61,6 +62,8 @@ export function VoiceCommandSheet({
   /** True once the primary MUTATING intent has actually executed. Always false for QUERY_MY_SCHEDULE, which has no execute step — its "shown" moment is this component's own render. */
   executed: boolean;
   onConfirm: () => void;
+  /** A "which did you mean?" choice was tapped: the sheet shows that reading for its normal Confirm. Never executes anything itself. */
+  onChoose: (option: ParsedIntent) => void;
   onCancel: () => void;
   executing: boolean;
 }) {
@@ -94,7 +97,11 @@ export function VoiceCommandSheet({
   // determine what to do."); `reason` is the model's actual explanation of
   // WHY it couldn't resolve the command, and is the only part that teaches
   // the user how to rephrase.
-  const reason = isUnrecognized && intent.reason.trim() ? intent.reason : null;
+  // Low confidence, but two or three checked readings came back (AppShell already dropped any this
+  // role can't confirm): offer them instead of asking to rephrase. A choice only opens the normal
+  // confirm view for that reading.
+  const choices = isUnrecognized && intent.options && intent.options.length >= 2 ? intent.options : null;
+  const reason = isUnrecognized && !choices && intent.reason.trim() ? intent.reason : null;
   // POST_ANNOUNCEMENT/POST_SHOUTOUT: the model's "content" is the literal
   // text that will be posted verbatim — nothing regenerates or reformats it
   // between here and the DB write (see parseIntent.ts's normalizeParsedIntent
@@ -107,7 +114,9 @@ export function VoiceCommandSheet({
   // possible again.
   const postContent = intent.intent === 'POST_ANNOUNCEMENT' || intent.intent === 'POST_SHOUTOUT' ? intent.content : null;
 
-  const eyebrow = isUnrecognized
+  const eyebrow = choices
+    ? 'Which did you mean?'
+    : isUnrecognized
     ? "Didn't catch that"
     : showFollowUp
       ? 'Got it — one more thing?'
@@ -128,7 +137,20 @@ export function VoiceCommandSheet({
         <div className="p-5">
           <p className="eyebrow">{eyebrow}</p>
           {transcript.trim() && <p className="mt-2 text-xs text-foreground/60">You said: “{transcript.trim()}”</p>}
-          <p className="mt-2 text-sm">{executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary}</p>
+          {choices ? (
+            <>
+              <p className="mt-2 text-sm">Pick one to check it before anything changes.</p>
+              <div className="mt-3 flex flex-col gap-2" role="group" aria-label="Which did you mean?">
+                {choices.map((option, i) => (
+                  <button key={i} className="btn btn-ghost hit-44 w-full justify-start text-left" onClick={() => onChoose(option)}>
+                    {option.summary}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="mt-2 text-sm">{executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary}</p>
+          )}
           {postContent && (
             <div className="mt-3 rounded-lg border border-input bg-background/60 p-3">
               <p className="whitespace-pre-wrap text-sm leading-relaxed">“{postContent}”</p>

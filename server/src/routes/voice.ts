@@ -323,7 +323,9 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
     declineReason?: string,
   ) => {
     if (voiceLogId) {
-      await updateInteractionOutcome(voiceLogId, req.user!.id, outcome, declineReason).catch((err) =>
+      // What the caller confirmed: another reading than the logged one only after a "which did you mean?" choice.
+      const confirmed = typeof intent?.intent === 'string' && intent.intent !== 'UNRECOGNIZED' && ALL_INTENTS.includes(intent.intent) ? intent.intent : undefined;
+      await updateInteractionOutcome(voiceLogId, req.user!.id, outcome, declineReason, confirmed).catch((err) =>
         console.error('[voice.execute] failed to update interaction log', err),
       );
     }

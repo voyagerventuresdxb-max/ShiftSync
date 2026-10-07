@@ -13,6 +13,7 @@ import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type P
 import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
+import { choosableFor } from '@/lib/voiceChoices';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
@@ -215,7 +216,7 @@ export function AppShell() {
           setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
           return;
         }
-        setVoiceResult({ transcript, intent, voiceLogId, hasAdditionalRequest });
+        setVoiceResult({ transcript, intent: choosableFor(session.user.systemRole, intent), voiceLogId, hasAdditionalRequest });
       } catch (err) {
         setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
       } finally {
@@ -315,6 +316,11 @@ export function AppShell() {
 
   const handleVoiceCancel = useCallback(() => {
     setVoiceResult(null);
+  }, []);
+
+  // A "which did you mean?" choice only swaps in that reading; its own Confirm still executes it.
+  const handleVoiceChoose = useCallback((option: ParsedIntent) => {
+    setVoiceResult((prev) => (prev ? { ...prev, intent: option } : prev));
   }, []);
 
   const handleVoiceConfirm = useCallback(async () => {
@@ -423,6 +429,7 @@ export function AppShell() {
             hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
             executed={voiceResult?.executed ?? false}
             onConfirm={handleVoiceConfirm}
+            onChoose={handleVoiceChoose}
             onCancel={handleVoiceCancel}
             executing={voiceExecuting}
           />
