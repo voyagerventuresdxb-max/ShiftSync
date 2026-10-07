@@ -6,6 +6,7 @@ import { createApp } from '../app.js';
 import { createOtpCode } from '../lib/identity.js';
 import { toE164 } from '../lib/phone.js';
 import { DEFAULT_ROLES } from '../../../shared/defaultRoles.js';
+import { VENUE_NAME_MAX_LENGTH } from '../../../shared/venueName.js';
 
 const prisma = new PrismaClient();
 
@@ -222,6 +223,27 @@ test('POST /api/signup/verify-otp: missing fullName or venueName gets a 400, not
     where: { OR: [{ fullName: { in: ['__task-signup-test__ Owner B'] } }, { phone: { in: [toE164(phoneA)!, toE164(phoneB)!] } }] },
   });
   assert.equal(leaked.length, 0, 'no User may be created on a 400');
+});
+
+test('POST /api/signup/verify-otp: a venueName over VENUE_NAME_MAX_LENGTH gets a 400, nothing created', async () => {
+  const phone = testPhone();
+  const { plainCode } = await createOtpCode(phone, 'SIGNUP');
+  const venueName = `__task-signup-test__ ${'x'.repeat(VENUE_NAME_MAX_LENGTH)}`;
+
+  await withServer(async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/signup/verify-otp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code: plainCode, fullName: '__task-signup-test__ Owner Long', venueName }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { error: string };
+    assert.match(body.error, new RegExp(`${VENUE_NAME_MAX_LENGTH} characters or fewer`));
+  });
+
+  assert.equal(await prisma.organization.count({ where: { name: venueName } }), 0, 'no Organization may be created on a 400');
+  assert.equal(await prisma.user.count({ where: { phone: toE164(phone)! } }), 0, 'no User may be created on a 400');
+  await prisma.otpCode.deleteMany({ where: { phone: toE164(phone)!, purpose: 'SIGNUP' } });
 });
 
 test('POST /api/signup/request-otp: returns expiresAt for a bare phone (no locationId needed)', async () => {

@@ -19,6 +19,7 @@ import SectionOverlay from './SectionOverlay';
 import SectionDetail from './SectionDetail';
 import SectionPicker from './SectionPicker';
 import { PlanZoomViewport } from './planZoom';
+import { AddFirstSection, FloorPlanNotSetUp } from './FloorPlanEmptyState';
 
 // Local calendar date, not UTC — `toISOString()` would show yesterday's
 // date for the first ~4 hours of the day in Dubai (UTC+4), which is exactly
@@ -269,29 +270,19 @@ export default function AssignmentBoard({ locationId, onEditSections }: Props) {
     );
   }
 
-  if (!image) {
+  // Nothing to assign against yet. A manager normally lands in setup instead
+  // (FloorPlanTab), so this is mostly what staff see.
+  if (!image || sections.length === 0) {
+    if (!isManager) return <FloorPlanNotSetUp />;
     return (
-      <div className="status-block">
-        <p>No floor plan uploaded for this venue yet.</p>
-        {isManager && (
+      <AddFirstSection
+        planUploaded={Boolean(image)}
+        action={
           <button className="btn btn-primary" onClick={onEditSections}>
-            Upload floor plan
+            Set up sections
           </button>
-        )}
-      </div>
-    );
-  }
-
-  if (sections.length === 0) {
-    return (
-      <div className="status-block">
-        <p>Floor plan uploaded, but no sections added yet.</p>
-        {isManager && (
-          <button className="btn btn-primary" onClick={onEditSections}>
-            Add sections
-          </button>
-        )}
-      </div>
+        }
+      />
     );
   }
 

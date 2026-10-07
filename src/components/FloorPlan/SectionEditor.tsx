@@ -13,6 +13,8 @@ import { useAuthenticatedBlobUrl } from '../../hooks/useAuthenticatedBlobUrl';
 import { useCloseOnBack } from '../../lib/backNavigation';
 import { PlanZoomViewport } from './planZoom';
 import { SectionPin } from './SectionPin';
+import { AddFirstSection } from './FloorPlanEmptyState';
+import { fallbackSectionLabel } from './sectionNaming';
 
 interface Props {
   locationId: string;
@@ -56,14 +58,19 @@ export default function SectionEditor({ locationId, image, sections, onChanged, 
   );
 
   if (!image) {
+    // No plan yet means no section yet either (a section is a pin on the plan).
     return (
-      <div className="fp-upload-card">
-        <p className="hint">
-          Upload the venue's 2D floor plan (PDF, PNG, or JPG). It's stored on the server so every staff member sees
-          the same plan.
-        </p>
+      <AddFirstSection
+        planUploaded={false}
+        action={
+          <button className="btn btn-primary" onClick={() => inputRef.current?.click()} disabled={uploading}>
+            {uploading ? 'Uploading…' : 'Upload floor plan'}
+          </button>
+        }
+      >
+        <p className="mt-2 text-xs text-muted-foreground">PDF, PNG or JPG. Everyone at the venue sees the same plan.</p>
         {error && (
-          <div className="error-block" role="alert">
+          <div className="error-block mt-3" role="alert">
             <p>{error}</p>
           </div>
         )}
@@ -77,10 +84,7 @@ export default function SectionEditor({ locationId, image, sections, onChanged, 
             if (file) void handleUpload(file);
           }}
         />
-        <button className="btn btn-primary" onClick={() => inputRef.current?.click()} disabled={uploading}>
-          {uploading ? 'Uploading…' : 'Upload floor plan'}
-        </button>
-      </div>
+      </AddFirstSection>
     );
   }
 
@@ -225,13 +229,30 @@ function FloorPlanCanvas({
 
   return (
     <div className="fp-editor">
-      <div className="fp-toolbar">
-        <button className="btn btn-ghost" onClick={onDone} disabled={sections.length === 0}>
-          Done — go to daily assignment
-        </button>
-      </div>
+      {sections.length === 0 ? (
+        // First section: "Add first section" drops its pin mid-plan (then drag
+        // it into place); tapping the plan directly works as it always has.
+        <AddFirstSection
+          planUploaded
+          action={
+            <button className="btn btn-primary" onClick={() => setDialog({ mode: 'new', x: 0.5, y: 0.5 })}>
+              Add first section
+            </button>
+          }
+        >
+          <p className="mt-2 text-xs text-muted-foreground">Or tap the plan below where it sits. You can drag a pin to move it.</p>
+        </AddFirstSection>
+      ) : (
+        <>
+          <div className="fp-toolbar">
+            <button className="btn btn-ghost" onClick={onDone}>
+              Done — go to daily assignment
+            </button>
+          </div>
 
-      <p className="hint">Tap the plan to drop a section pin. Drag a pin to move it; tap it to rename or delete.</p>
+          <p className="hint">Tap the plan to drop a section pin. Drag a pin to move it; tap it to rename or delete.</p>
+        </>
+      )}
 
       {error && (
         <div className="error-block" role="alert">
@@ -275,7 +296,7 @@ function FloorPlanCanvas({
         <SectionDialog
           key={dialog.mode === 'edit' ? dialog.section.id : `new-${dialog.x}-${dialog.y}`}
           editing={dialog.mode === 'edit' ? dialog.section : null}
-          suggestedLabel={`Section ${sections.length + 1}`}
+          fallbackLabel={fallbackSectionLabel(sections.map((s) => s.label))}
           onClose={() => setDialog(null)}
           onSubmit={async (values) => {
             const ok =
@@ -288,16 +309,17 @@ function FloorPlanCanvas({
         />
       )}
 
-      <div className="fp-section-list">
-        <h3 className="section-title">Sections ({sections.length})</h3>
-        {sections.length === 0 && <p className="hint">No sections yet — tap the plan to add one.</p>}
-        {sections.map((s) => (
-          <button key={s.id} className="fp-picker-item" onClick={() => setDialog({ mode: 'edit', section: s })}>
-            <span className="min-w-0 flex-1 truncate">{s.label}</span>
-            <span className="cell-num shrink-0">{s.paxCapacity} pax</span>
-          </button>
-        ))}
-      </div>
+      {sections.length > 0 && (
+        <div className="fp-section-list">
+          <h3 className="section-title">Sections ({sections.length})</h3>
+          {sections.map((s) => (
+            <button key={s.id} className="fp-picker-item" onClick={() => setDialog({ mode: 'edit', section: s })}>
+              <span className="min-w-0 flex-1 truncate">{s.label}</span>
+              <span className="cell-num shrink-0">{s.paxCapacity} pax</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -305,22 +327,23 @@ function FloorPlanCanvas({
 /**
  * New / edit form for one section pin: name, pax, note — and, when editing, a
  * two-step Delete (the first tap asks, the second deletes; deleting a section
- * also removes its assignments server-side).
+ * also removes its assignments server-side). A new section's name starts
+ * empty with real examples; left blank, it is saved as `fallbackLabel`.
  */
 function SectionDialog({
   editing,
-  suggestedLabel,
+  fallbackLabel,
   onClose,
   onSubmit,
   onDelete,
 }: {
   editing: FloorSectionDto | null;
-  suggestedLabel: string;
+  fallbackLabel: string;
   onClose: () => void;
   onSubmit: (values: SectionValues) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
-  const [label, setLabel] = useState(editing?.label ?? suggestedLabel);
+  const [label, setLabel] = useState(editing?.label ?? '');
   const [pax, setPax] = useState(editing ? String(editing.paxCapacity) : '');
   const [notes, setNotes] = useState(editing?.notes ?? '');
   const [busy, setBusy] = useState(false);
@@ -333,7 +356,7 @@ function SectionDialog({
   }, []);
 
   const submit = async () => {
-    const trimmed = label.trim();
+    const trimmed = label.trim() || (editing ? '' : fallbackLabel);
     const paxNumber = Number(pax);
     if (!trimmed) return setError('Give the section a name.');
     if (!Number.isFinite(paxNumber) || paxNumber < 0) return setError('Pax capacity must be a non-negative number.');
@@ -356,11 +379,12 @@ function SectionDialog({
           ref={labelRef}
           className="staff-directory-input"
           aria-label="Section name"
-          placeholder="Name (e.g. Section 1, Terrace)"
+          placeholder="Name, e.g. Terrace, Bar, Main floor"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           autoFocus
         />
+        {!editing && !label.trim() && <p className="text-xs text-muted-foreground">Left blank, it's saved as “{fallbackLabel}”.</p>}
         <input
           className="staff-directory-input"
           aria-label="Pax capacity"

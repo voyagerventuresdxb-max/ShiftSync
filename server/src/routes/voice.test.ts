@@ -1989,3 +1989,24 @@ test('GET /api/voice/interactions: cursor pagination returns disjoint pages with
     await prisma.user.delete({ where: { id: manager.id } }).catch(() => {});
   }
 });
+
+test('POST /api/voice/parse-intent: an over-long command (e.g. a pasted wall of text in the edit box) is refused before any model call', async () => {
+  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(location, 'seed data (location) must exist to run this test');
+  const caller = await prisma.user.create({ data: { locationId: location!.id, fullName: '__r13-test__ long-transcript manager', systemRole: 'MANAGER' } });
+  try {
+    const token = await sessionFor(caller.id);
+    await withServer(async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/voice/parse-intent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ transcript: 'Give Sam a shout-out '.repeat(30) }),
+      });
+      assert.equal(res.status, 400);
+      assert.match(((await res.json()) as { error: string }).error, /too long/);
+    });
+    assert.equal(await prisma.voiceInteractionLog.count({ where: { actorId: caller.id } }), 0);
+  } finally {
+    await prisma.user.delete({ where: { id: caller.id } }).catch(() => {});
+  }
+});

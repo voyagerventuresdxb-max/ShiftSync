@@ -12,6 +12,7 @@ import { withAuth } from '../api/identity';
 import { fetchLocation } from '../api/locations';
 import { useIdentity } from './IdentityContext';
 import { isNetworkFailure, loadOffline, saveOffline } from '../lib/offlineCache';
+import { useRefreshOnFocus } from '../hooks/useLiveRefresh';
 
 /**
  * Shared UI vocabulary (role/shift-type labels) plus a compliance ruleset —
@@ -48,6 +49,10 @@ interface AppStateValue {
    * `config`, below).
    */
   venueName: string | null;
+  /** Shows a name the server just saved (the PATCH response of a rename) everywhere at once, without a refetch. */
+  setVenueName: (name: string) => void;
+  /** Refetches `venueName` from the server. Also runs whenever the window regains focus. */
+  refreshVenue: () => void;
   /**
    * The venue every read-effect should scope itself to — a real session's
    * venue when signed in, otherwise the anonymous kiosk venue bound via
@@ -144,24 +149,36 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // anonymous kiosk visit (no session, only a bound venue id) has no way to
   // fetch this and stays `null` — every consumer already has to handle a
   // loading/unknown state, so this is the same shape, not a new one.
-  const [venueName, setVenueName] = useState<string | null>(null);
-  useEffect(() => {
+  //
+  // Location.name is the only source: a rename on this device hands the
+  // saved name straight to `setVenueName`, and a rename on another device
+  // shows up the next time this window regains focus. `venueSeq` makes the
+  // newest write win — a fetch that started before a local rename (or before
+  // a newer fetch) is dropped when it lands. A refetch that fails for lack of
+  // network keeps the name already shown instead of blanking the header.
+  const [venueName, setVenueNameState] = useState<string | null>(null);
+  const venueSeq = useRef(0);
+  const refreshVenue = useCallback(() => {
+    const seq = ++venueSeq.current;
     if (!session) {
-      setVenueName(null);
+      setVenueNameState(null);
       return;
     }
-    let cancelled = false;
     fetchLocation(session.token, session.user.locationId)
       .then((location) => {
-        if (!cancelled) setVenueName(location.name);
+        if (venueSeq.current === seq) setVenueNameState(location.name);
       })
-      .catch(() => {
-        if (!cancelled) setVenueName(null);
+      .catch((err) => {
+        if (venueSeq.current === seq && !isNetworkFailure(err)) setVenueNameState(null);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [session]);
+  // Re-runs on every session change; the new call's `venueSeq` bump drops any fetch still in flight for the old session.
+  useEffect(() => refreshVenue(), [refreshVenue]);
+  useRefreshOnFocus(refreshVenue);
+  const setVenueName = useCallback((name: string) => {
+    venueSeq.current++;
+    setVenueNameState(name);
+  }, []);
 
   const [weekStart, setWeekStart] = useState(currentWeekStart());
   // `currentWeekStart()` was computed once, at mount. A tab left open past
@@ -621,6 +638,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       config,
       locationId,
       venueName,
+      setVenueName,
+      refreshVenue,
       bindAnonymousVenue,
       readHeaders,
       mergedRoster,
@@ -656,6 +675,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [
       locationId,
       venueName,
+      setVenueName,
+      refreshVenue,
       bindAnonymousVenue,
       readHeaders,
       mergedRoster,

@@ -21,6 +21,9 @@ export const PEOPLE = {
   junjun: { name: 'Jun-Jun Ramos', role: 'STAFF' },
   priya: { name: 'Priya Raghunathan', role: 'STAFF' },
   arjun: { name: 'Arjun Menon', role: 'STAFF' },
+  // Two people share a first name: "Karim" alone must never resolve to one of them silently.
+  karim: { name: 'Karim Saleh', role: 'STAFF' },
+  karim2: { name: 'Karim Aziz', role: 'STAFF' },
 } as const satisfies Record<string, { name: string; role: SystemRole }>;
 export type PersonKey = keyof typeof PEOPLE;
 

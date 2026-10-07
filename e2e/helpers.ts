@@ -1,5 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -43,6 +44,43 @@ export function testVenueName(label: string): string {
  * real DB between runs. */
 export async function cleanupTestOrgs(): Promise<void> {
   await prisma.organization.deleteMany({ where: { name: { startsWith: TEST_ORG_PREFIX } } });
+}
+
+type SeedRole = 'OWNER' | 'MANAGER' | 'STAFF';
+
+/**
+ * A test venue (one org, one location) with one signed-in user per role,
+ * written straight to the DB — for specs that need an owner, manager or staff
+ * session without driving signup. Each `stored` is the exact
+ * `shiftsync.session` value the app keeps in localStorage after a sign-in
+ * (see `signInAs`). Removed by `cleanupTestOrgs` like any other test venue.
+ */
+export async function seedVenueWithRoles(label: string): Promise<{
+  venueName: string;
+  locationId: string;
+  sessions: Record<SeedRole, { token: string; stored: string }>;
+}> {
+  const venueName = testVenueName(label);
+  const org = await prisma.organization.create({ data: { name: venueName } });
+  const location = await prisma.location.create({ data: { organizationId: org.id, name: venueName } });
+  const sessions = {} as Record<SeedRole, { token: string; stored: string }>;
+  for (const systemRole of ['OWNER', 'MANAGER', 'STAFF'] as const) {
+    const fullName = `E2E ${systemRole.toLowerCase()} ${label}`;
+    const user = await prisma.user.create({ data: { locationId: location.id, systemRole, fullName } });
+    const token = randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 86_400_000);
+    await prisma.session.create({ data: { userId: user.id, tokenHash: createHash('sha256').update(token).digest('hex'), expiresAt } });
+    const stored = JSON.stringify({ token, expiresAt: expiresAt.toISOString(), user: { id: user.id, fullName, jobTitle: null, locationId: location.id, systemRole } });
+    sessions[systemRole] = { token, stored };
+  }
+  return { venueName, locationId: location.id, sessions };
+}
+
+/** Opens `path` signed in with a `stored` session from `seedVenueWithRoles`. */
+export async function signInAs(page: Page, stored: string, path: string): Promise<void> {
+  await page.goto('/login');
+  await page.evaluate((s) => localStorage.setItem('shiftsync.session', s), stored);
+  await page.goto(path);
 }
 
 /**
