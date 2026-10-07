@@ -637,7 +637,18 @@ function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: nu
   // body column left bare at the other) mean the header is off its columns: never anchored.
   const from = best.dayBands[0]!.x0;
   const to = best.dayBands[best.dayBands.length - 1]!.x1;
-  const unheaded = body.flatMap((r) => r.items).filter((p) => p.x1 - p.x0 <= step * 0.9 && (cx(p) < from || cx(p) >= to) && cx(p) >= from - step && cx(p) < to + step && read(p.text) > 0).length;
+  // Sub-cells count too: two numbers side by side past either end that read as a shift ("9" "13.5").
+  // On the left only those after the row's name, never a No. column before it.
+  let unheaded = 0;
+  for (const r of body) {
+    const outside = r.items.filter((p) => p.x1 - p.x0 <= step * 0.9 && (cx(p) < from || cx(p) >= to) && cx(p) >= from - step && cx(p) < to + step);
+    unheaded += outside.filter((p) => read(p.text) > 0).length;
+    const nameEnd = Math.max(-Infinity, ...r.items.filter((p) => /\p{L}/u.test(p.text) && cx(p) < from).map((p) => p.x1));
+    for (const side of [outside.filter((p) => cx(p) < from && p.x0 >= nameEnd), outside.filter((p) => cx(p) >= to)]) {
+      const nums = side.filter((p) => /^\d{1,2}(?:[.:]\d{1,2})?$/.test(p.text.trim())).sort((a, b) => cx(a) - cx(b));
+      for (let i = 0; i + 1 < nums.length; i += 2) if (read(`${nums[i]!.text.trim()}-${nums[i + 1]!.text.trim()}`) > 0) unheaded++;
+    }
+  }
   const unanchored = best.offset !== 0 || (!!shifted && shifted.score > plain.score + 0.5) || unheaded >= 2;
   const margin = Math.max(2, Math.ceil(cells * 0.02));
   const rival = layouts.filter((l) => l !== best && l.offset === best.offset && l.score >= best.score - margin && differsFrom(l, best)).sort((a, b) => b.score - a.score)[0] ?? null;
