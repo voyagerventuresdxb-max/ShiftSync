@@ -168,6 +168,9 @@ export function parseShiftText(raw: string, opts: ShiftTextOptions = {}): { segm
   if (!text || !/\d/.test(text)) return null;
   const tokens = readTokens(text, opts);
   if (!tokens || tokens === AMBIGUOUS || tokens.length < 2 || tokens.length % 2 !== 0 || tokens.length > 6) return null;
+  // Hours past midnight are an end ("18.5 26"); a start past midnight ("30-15.00", a cell whose
+  // first digits were cut off) is not a time anyone starts at.
+  for (let i = 0; i < tokens.length; i += 2) if (tokens[i]!.minutes > 1440) return null;
   const dotGuessed = !opts.dotMeans && /(?<![\d.])\d{1,2}\.(25|50)(?![\d.])/.test(text);
   const inferred = inferTwelveHour(tokens) || dotGuessed;
   const segments: ShiftSegment[] = [];

@@ -131,6 +131,12 @@ test('two days\' times run together in one cell ("18:30-01:00 18:00-02:00") are 
   assert.match(cell!.reason, /overlap or run on past one day/);
 });
 
+test('a cell whose first digits were cut off ("30-15.00/18.30-01") is never read as a shift: no one starts past midnight', () => {
+  const result = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['Test Alpha', '30-15.00/18.30-01', '18 26']], TODAY, { today: TODAY, clientWeekStart: null });
+  assert.deepEqual(keys(result.rows), ['Test Alpha|2026-04-14|18:00-02:00'], 'hours past midnight still end a shift');
+  assert.ok(result.anomalies.some((a) => a.rawText === '30-15.00/18.30-01'));
+});
+
 function workbook(rows: unknown[][], merges: XLSXNS.Range[] = []): XLSXNS.WorkBook {
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!merges'] = merges;
