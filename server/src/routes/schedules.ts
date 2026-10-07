@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import { UploadRejectedError } from '../lib/errorHandler.js';
 import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
 import { visionWeeklyLimit } from '../lib/aiBudget.js';
@@ -85,7 +86,7 @@ const upload = multer({
     if (allowed.includes(file.mimetype) || allowedExt.test(file.originalname)) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported file type "${file.mimetype || file.originalname}". Upload a .xlsx, .xls, .csv, .pdf, .png, .jpg, or .webp file.`));
+      cb(new UploadRejectedError(`Unsupported file type "${file.mimetype || file.originalname}". Upload a .xlsx, .xls, .csv, .pdf, .png, .jpg, or .webp file.`));
     }
   },
 });

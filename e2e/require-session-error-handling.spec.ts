@@ -49,7 +49,9 @@ test.describe('requireSession — thrown error does not crash the server', () =>
     // connection reset / no response at all).
     expect(badResponse.status()).toBe(400);
     const badBody = (await badResponse.json()) as { error: string };
-    expect(badBody.error).toContain('Deliberate test-injected error');
+    // It answers with the generic message; the thrown error's own text stays in the server log.
+    expect(badBody.error).toBe('Something went wrong with that request. Please try again.');
+    expect(badBody.error).not.toContain('Deliberate test-injected error');
 
     // A concurrent, real, valid request was completely unaffected.
     expect(goodResponse.status()).toBe(200);
