@@ -19,6 +19,7 @@ const ROWS: [string, string[]][] = [
   ['ilsa brennick', ['OFF', '18:00-02:00', 'OFF', '18:30-01:00', '', '21:00-03:00', 'OFF']],
   ['Test Gamma', ['10:00-15:00', '', '10:00-15:00', 'OFF', 'AL', '18:30-01:00', '20:00-00:00']],
   ['jo-anne quarrel', ['09:30-15:00', 'OFF', '', '18:00-02:00', 'OFF', '11:00-19:00', '18:30-01:00']],
+  ['pell marrow', ['OFF', 'OFF', 'AL', 'AL', 'OFF', 'OFF', 'OFF']],
 ];
 const FOOTERS = ['kitchen closes early', 'please return keys to the office'];
 const ctx = (over: Partial<UploadReadContext> = {}): UploadReadContext => ({
@@ -48,7 +49,7 @@ test('lowercaseName: 1–4 words of letters, no label or footer word; title-case
   }
 });
 
-test('table reader: a lower-case name with shifts is a person (title-cased); a lower-case line with nothing in its days is not', async () => {
+test('table reader: a lower-case name with shifts, or only OFF and leave, is a person (title-cased); a lower-case line with nothing in its days is not', async () => {
   const doc = await PDFDocument.create();
   const page = doc.addPage([900, 260]);
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -64,11 +65,12 @@ test('table reader: a lower-case name with shifts is a person (title-cased); a l
   const outcome = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'rota.pdf', size: pdf.length }, ctx());
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
-  assert.deepEqual(outcome.result.people?.map((p) => p.name), ROWS.map(([n]) => title(n)));
+  assert.deepEqual(outcome.result.people?.map((p) => p.name), ROWS.map(([n]) => title(n)), 'the lower-case person with only OFF and leave is listed too');
   assert.deepEqual(keys(outcome.result.rows), truth());
+  assert.ok(!(outcome.result.unreadRows ?? []).some((u) => FOOTERS.some((f) => u.text.includes(f))), 'a footer with empty days is not an unread row');
 });
 
-test('AI reader: a lower-case name with shifts is a person (title-cased); a lower-case line with nothing in its days is not', async () => {
+test('AI reader: a lower-case name with shifts, or only OFF and leave, is a person (title-cased); a lower-case line with nothing in its days is not', async () => {
   const ppl = [...ROWS.map(([nm, c], i) => ({ nm, t: null, i: i + 1, c: [...c] })), ...FOOTERS.map((nm, k) => ({ nm, t: null, i: ROWS.length + k + 1, c: ['', '', '', '', '', '', ''] }))];
   const answer: ReadingAnswer = { title: null, days: HEADERS, key: [], pages: [{ p: 1, rows: ppl.length, sec: [{ h: null, n: ppl.length, ppl }], unread: [] }] };
   const columns = { title: null, days: HEADERS, key: [], pages: [{ p: 1, rows: ppl.length, ppl: ppl.map((x) => ({ i: x.i, nm: x.nm, t: x.t, h: null })), cols: HEADERS.map((_, d) => ({ d, c: ppl.filter((x) => x.c[d]).map((x) => ({ i: x.i, x: x.c[d]! })) })), unread: [] }] };

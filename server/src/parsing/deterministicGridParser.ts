@@ -1363,13 +1363,14 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // beside it ("Waiter 3" with shifts is a position nobody's name is on): its shifts are
       // shown as an unread row, never imported under a title.
       // A name typed in lower case with a shift beside it is a person, its name title-cased.
-      const lowerName = columns.some((col) => interpretCell(dayCellText(row, col)).kind === 'shifts') ? lowercaseName(firstCell) : null;
+      const lowerName = columns.some((col) => ['shifts', 'leave'].includes(interpretCell(dayCellText(row, col)).kind)) ? lowercaseName(firstCell) : null;
       const notPerson = lowerName ? null : nonPersonReason(firstCell);
       if (notPerson) {
         if (notPerson === UNREADABLE_NAME) {
           addUnread(r, [firstCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), UNREADABLE_ROW);
           if (rowHasData) staffRowsWithRealDataProcessed++;
-        } else if (rowHasData) {
+        } else if (rowHasData || !daysBlank(row)) {
+          // Never dropped silently: anything in its days keeps it visible.
           addUnread(r, [firstCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), `"${firstCell}" reads as ${notPerson}; its shifts were not imported. Add them by hand if they belong to someone.`);
           staffRowsWithRealDataProcessed++;
         }
@@ -1525,7 +1526,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     let employeeName = combinedName?.name ?? nameCell;
     let rowTitle = titleCell || combinedName?.title || '';
     // A name typed in lower case with a shift beside it is a person, its name title-cased.
-    const lowerName = columns.some((col) => interpretCell(dayCellText(row, col)).kind === 'shifts') ? lowercaseName(employeeName) : null;
+    const lowerName = columns.some((col) => ['shifts', 'leave'].includes(interpretCell(dayCellText(row, col)).kind)) ? lowercaseName(employeeName) : null;
     if (lowerName) employeeName = lowerName;
     const notPerson = nonPersonReason(employeeName);
     if (notPerson) {
@@ -1536,7 +1537,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
         if (notPerson === UNREADABLE_NAME) {
           addUnread(r, [titleCell, nameCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), UNREADABLE_ROW);
           if (hasData(row)) staffRowsWithRealDataProcessed++;
-        } else if (hasData(row)) {
+        } else if (hasData(row) || !daysBlank(row)) {
+          // Never dropped silently: anything in its days keeps it visible.
           addUnread(r, [titleCell, nameCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), `"${nameCell}" reads as ${notPerson}; its shifts were not imported. Add them by hand if they belong to someone.`);
           staffRowsWithRealDataProcessed++;
         }
