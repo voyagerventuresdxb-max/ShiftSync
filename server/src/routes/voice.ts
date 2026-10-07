@@ -370,6 +370,18 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
     const shapeError = validateIntentShape(intent);
     if (shapeError) return respond(400, { error: shapeError }, 'REJECTED_VALIDATION', shapeError);
 
+    // One command runs once: a Confirm retried after a slow or dropped first try (same voice log)
+    // must not create a second shift. The log row is claimed in one conditional update; a row
+    // already claimed is answered 409 without touching anything (and without `respond`, which
+    // would overwrite the first try's outcome). A refused or failed run records its own outcome,
+    // which releases the claim, so the command can be confirmed again.
+    if (voiceLogId) {
+      const claimed = await prisma.voiceInteractionLog.updateMany({ where: { id: voiceLogId, actorId: req.user!.id, outcome: { not: 'EXECUTED' } }, data: { outcome: 'EXECUTED' } });
+      if (claimed.count === 0 && (await prisma.voiceInteractionLog.count({ where: { id: voiceLogId, actorId: req.user!.id } }))) {
+        return res.status(409).json({ error: 'That command has already been done.', errorCode: 'voice_already_executed' });
+      }
+    }
+
     const note = `[voice] "${transcript}"`;
     const actorId = req.user!.id;
     const locationId = req.user!.locationId;
