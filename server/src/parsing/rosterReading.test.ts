@@ -539,26 +539,37 @@ test('photo cross-check: a page the two readings leave too much of in doubt save
   assert.deepEqual(outcome.result.leaveRecords, []);
   assert.deepEqual(outcome.result.anomalies, [], 'nothing to tick through: the page is shown as not read');
   assert.equal(outcome.reading.withheldPages?.length, 1);
-  assert.match(outcome.reading.withheldPages![0]!.reason, /^Page 1 was hard to read: the two AI readings disagreed on 5 of its 52 days, so nothing from it was imported — no people, no shifts\. Upload the original PDF or spreadsheet/);
+  assert.match(outcome.reading.withheldPages![0]!.reason, /^Page 1 was hard to read: the two AI readings disagreed on, or were unsure of, 5 of its 52 days, so nothing from it was imported — no people, no shifts\. Upload the original PDF or spreadsheet/);
   assert.deepEqual(outcome.result.unreadRows?.map((u) => u.reason), [outcome.reading.withheldPages![0]!.reason]);
-  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on too much of it, so nothing from it was imported: no people, no shifts\. For best results upload the original PDF or spreadsheet/);
+  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so nothing from it was imported: no people, no shifts\. For best results upload the original PDF or spreadsheet/);
 });
 
-test('photo cross-check: a clean scan whose readings agree everywhere imports its agreed, confident days; a day both read but one marked unsure is shown to check, never imported, and never costs the page', async () => {
-  const names = Array.from({ length: 12 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
-  // Every day read the same way; the row reading was unsure of a Tuesday for three people in twelve (3 of 24 days).
-  const ppl = names.map((n, i) => ({ ...person(n, i + 1, ['10 15', '9 17']), ...(i < 3 ? { q: [1] } : {}) }));
-  const first: ReadingAnswer = { ...answer([]), pages: [{ p: 1, rows: 12, sec: [{ h: null, n: 12, ppl }], unread: [] }] };
-  const second = answer([{ p: 1, rows: 12, ppl: names.map((n, i) => person(n, i + 1, ['10 15', '9 17'])) }]);
-  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 9'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
-  assert.ok(outcome.ok);
-  if (!outcome.ok) return;
-  assert.equal(outcome.reading.withheldPages, undefined, 'unsure marks are not disagreements');
-  assert.equal(outcome.result.people?.length, 12);
-  assert.equal(outcome.result.rows.length, 12 + 9, "every Monday, and the Tuesdays neither reading doubted");
-  assert.ok(outcome.result.rows.every((r) => !r.flags?.length));
-  const unsure = outcome.result.anomalies.filter((a) => /one of them was unsure of them, so they were not imported/.test(a.reason));
-  assert.deepEqual(unsure.map((a) => `${a.employeeName}|${a.date}|${a.rawText}`), ['Test Person A|2026-08-25|Both readings: 09:00–17:00', 'Test Person B|2026-08-25|Both readings: 09:00–17:00', 'Test Person C|2026-08-25|Both readings: 09:00–17:00']);
+test('photo cross-check: on a trusted page a day both read the same way but one marked unsure is shown to check, never imported; marked unsure on too many days, the page saves nothing', async () => {
+  const names = Array.from({ length: 26 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
+  const run = async (unsureCount: number, tag: string) => {
+    // Every day read the same way; the row reading was unsure of a Tuesday for `unsureCount` people.
+    const ppl = names.map((n, i) => ({ ...person(n, i + 1, ['10 15', '9 17']), ...(i < unsureCount ? { q: [1] } : {}) }));
+    const first: ReadingAnswer = { ...answer([]), pages: [{ p: 1, rows: 26, sec: [{ h: null, n: 26, ppl }], unread: [] }] };
+    const second = answer([{ p: 1, rows: 26, ppl: names.map((n, i) => person(n, i + 1, ['10 15', '9 17'])) }]);
+    return readUploadedRoster({ buffer: Buffer.from(`png 9 ${tag}`), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  };
+  // 1 of 52 days in doubt: trusted; the unsure Tuesday is shown, not imported.
+  const few = await run(1, 'few');
+  assert.ok(few.ok);
+  if (!few.ok) return;
+  assert.equal(few.reading.withheldPages, undefined);
+  assert.equal(few.result.rows.length, 26 + 25, 'every Monday, and the Tuesdays neither reading doubted');
+  assert.ok(few.result.rows.every((r) => !r.flags?.length));
+  const unsure = few.result.anomalies.filter((a) => /one of them was unsure of them, so they were not imported/.test(a.reason));
+  assert.deepEqual(unsure.map((a) => `${a.employeeName}|${a.date}|${a.rawText}`), ['Test Person A|2026-08-25|Both readings: 09:00–17:00']);
+  // 4 of 52 days (over 6%) in doubt, though both readings agree everywhere: a low-contrast page may
+  // be read the same wrong way twice — it fails loudly, never saves silently.
+  const many = await run(4, 'many');
+  assert.ok(many.ok);
+  if (!many.ok) return;
+  assert.deepEqual(many.result.rows, []);
+  assert.deepEqual(many.result.people, []);
+  assert.match(many.reading.withheldPages![0]!.reason, /disagreed on, or were unsure of, 4 of its 52 days/);
 });
 
 test('photo cross-check: a person only one reading listed is kept on the list, but none of their shifts is imported on that one reading', async () => {
@@ -701,8 +712,8 @@ test('photo cross-check: a page the two readings disagree on too much is not tru
   assert.ok(outcome.ok);
   assert.deepEqual(outcome.result.rows, []);
   assert.deepEqual(outcome.result.people, []);
-  assert.ok(outcome.result.unreadRows?.some((u) => /disagreed on 3 of its 12 days/.test(u.reason)));
-  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on too much of it, so nothing from it was imported/);
+  assert.ok(outcome.result.unreadRows?.some((u) => /disagreed on, or were unsure of, 3 of its 12 days/.test(u.reason)));
+  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so nothing from it was imported/);
 });
 
 test('photo reading: a row whose name could not be read ("[?]") is an unread row, never a person', async () => {

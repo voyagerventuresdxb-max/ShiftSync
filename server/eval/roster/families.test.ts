@@ -117,3 +117,26 @@ test('round-2 variants: one per structural failure the holdout found, each with 
   const first = JSON.parse(transcriptionAnswer(truth, {}));
   assert.ok(first.pages[0].sec.flatMap((s: { ppl: { nm: string }[] }) => s.ppl.map((x) => x.nm)).some((nm: string) => /\d|^[A-Z]{2,4}$/.test(nm)), 'titles read as names');
 });
+
+test('photos and scans never save wrong data silently: every hard page fails loudly (nothing saved, the page named), the rest save only agreed, confident days', async () => {
+  const { variantTruth } = await import('./familyCorpus.js');
+  const { PDFDocument } = await import('pdf-lib');
+  const photos = FAMILY_VARIANTS.filter((v) => v.format === 'png' || v.format === 'pdf-image');
+  assert.ok(photos.length >= 15);
+  let silentlyWrong = 0;
+  const withheld: string[] = [];
+  for (const spec of photos) {
+    const truth = variantTruth(spec);
+    // The mock AI reader answers from the truth; a scan only needs its page count.
+    const doc = await PDFDocument.create();
+    for (let i = 0; i < truth.pageCount; i++) doc.addPage([200, 200]);
+    const data = spec.format === 'png' ? Buffer.from(`png ${spec.id}`) : Buffer.from(await doc.save());
+    const run = await readLikeUploadRoute(data, truth, NOW);
+    const s = scoreFamily(run.reading, truth);
+    silentlyWrong += s.silentTimeErrors + s.wrongDay;
+    assert.equal(s.silentPeople + s.silentShifts, 0, `${spec.id}: nothing missed silently`);
+    if (s.withheldPages) withheld.push(spec.id);
+  }
+  assert.equal(silentlyWrong, 0, 'no wrong time or day saved without a flag on any photo or scan');
+  for (const id of ['A22-dense-photo', 'A23-angled-scan-half-days', 'A25-dense-photo-shared-slips', 'A30-low-contrast-scan', 'B40-low-contrast-photo']) assert.ok(withheld.includes(id), `${id} withheld`);
+});

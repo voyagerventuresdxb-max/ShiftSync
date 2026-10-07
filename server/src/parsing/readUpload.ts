@@ -191,12 +191,12 @@ function hardToReadNote(cells: CellsToCheck | undefined, what: 'photo' | 'file')
     return `The second AI reading of ${of} could not be made, so it could not be checked and nothing was imported — no people, no shifts. Upload it again in a minute, or upload the original PDF or spreadsheet.`;
   }
   if (cells.doubtedPages?.length) {
-    return `This file's day columns don't line up with its header, and the two AI readings disagreed on too much of page ${cells.doubtedPages.join(', ')}, so from it only the days the file's own text and an AI reading agree on were imported; every other day is shown to check. For best results upload the original spreadsheet.`;
+    return `This file's day columns don't line up with its header, and the two AI readings disagreed on, or were unsure of, too much of page ${cells.doubtedPages.join(', ')}, so from it only the days the file's own text and an AI reading agree on were imported; every other day is shown to check. For best results upload the original spreadsheet.`;
   }
   if (cells.withheld.length) {
     const all = cells.withheld.length >= cells.pageCount;
     const which = all ? 'nothing from it' : `nothing from page ${cells.withheld.map((u) => u.page).join(', ')}`;
-    return `This ${what} was hard to read — the two readings disagreed on too much of it, so ${which} was imported: no people, no shifts. For best results upload the original PDF or spreadsheet, or add the people by hand.`;
+    return `This ${what} was hard to read — the two readings disagreed on, or were unsure of, too much of it, so ${which} was imported: no people, no shifts. For best results upload the original PDF or spreadsheet, or add the people by hand.`;
   }
   if (cells.toCheck === 0) return null;
   const many = cells.toCheck >= 5 || cells.toCheck / Math.max(1, cells.compared) >= 0.1;

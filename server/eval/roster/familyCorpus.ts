@@ -87,6 +87,16 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
       data = await imagePdf(await renderPngPages(sheet, opts));
       break;
   }
+  return { file, data, truth: truthOf(spec, roster, sheet, file) };
+}
+
+/** A variant's truth without rendering its file (the mock AI reader answers from the truth alone). */
+export function variantTruth(spec: VariantSpec): FamilyTruth {
+  const roster = buildRoster(spec);
+  return truthOf(spec, roster, printedSheet(roster), `${spec.id}.${FILE_EXT[spec.format]}`);
+}
+
+function truthOf(spec: VariantSpec, roster: ReturnType<typeof buildRoster>, sheet: PrintedSheet, file: string): FamilyTruth {
   const truth = familyTruth(roster, file, personRows(sheet, spec.repeatHeader, roster.legend));
   const totals = totalRows(sheet);
   if (totals.length) truth.printed.totals = totals;
@@ -101,7 +111,7 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
   if (spec.lowContrast) truth.printed.lowContrast = true;
   if (spec.headerShift) truth.printed.headerShift = spec.headerShift;
   if (spec.unsureMarks) truth.printed.unsureMarks = true;
-  return { file, data, truth };
+  return truth;
 }
 
 export async function generateFamilies(dir = FAMILY_DIR, only?: (id: string) => boolean): Promise<string[]> {

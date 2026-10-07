@@ -199,12 +199,14 @@ the wrong day, 0 silent (the rest shown to check). The table reader tries the he
 columns either way and keeps the reading the body fits clearly better; a day read under a shifted
 or uncertain header is never saved on its own — such a file is read twice by the AI reader, like a
 photo, and a day is saved where two independent readers agree on it. Office and label lines (B43,
-B44, B45) precision 95.2% → 100%. The clean scan (A31): withheld whole → 130 / 157 imported, the 27
-days a reading was unsure of or the two read differently shown to check; only days the two
-readings read DIFFERENTLY count against a page now (limit unchanged at 6%). Known limit: a photo
-whose two readings agree, confidently, on a wrong value while disagreeing on under 6% of its days
-saves it (B40 here, a synthetic worst case: 4 such cells); before, its unsure marks withheld the
-page. Private DEV files unchanged: 21 / 21, 160 / 160, 0 extra; 18 / 18, 62 / 62.
+B44, B45) precision 95.2% → 100%. Photos and scans keep the rule that a photo never saves wrong
+data silently: days marked unsure by either reading still count toward a page's days in doubt
+(limit 6%), so a clean scan with many unsure marks (A31, one day in eight) fails loudly — nothing
+saved, the page named — and so does the low-contrast photo whose readings agree on a few wrong
+days (B40); on a trusted page a day both read but one marked unsure is shown to check, not
+saved, and a person only one reading listed keeps their shifts shown, not saved. Across the 76
+rosters: 0 wrong times saved, 0 shifts on the wrong day, 0 silently wrong photo cells, 6 pages
+withheld. Private DEV files unchanged: 21 / 21, 160 / 160, 0 extra; 18 / 18, 62 / 62.
 
 ## Corpus (`spec.ts` → `corpus/`)
 

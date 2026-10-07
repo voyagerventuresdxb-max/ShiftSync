@@ -6,10 +6,10 @@
  * differently is not written at all — it is shown to the manager as a cell to look at, with both
  * readings — so a misread is never saved as a shift. A person only one reading listed is kept,
  * flagged, and their shifts shown, never imported on one reading's word. A day both read the
- * same way but one marked unsure is shown to check, not imported. A page the two readings read
- * differently too often is not trusted at all: nothing from it is imported — no people, no
- * shifts — and the review says so and asks for the original file. Nothing either read saw is
- * dropped silently. Logs carry counts only.
+ * same way but one marked unsure is shown to check, not imported. A page the two readings don't
+ * vouch for (too many days read differently or marked unsure) is not trusted at all: nothing
+ * from it is imported — no people, no shifts — and the review says so and asks for the original
+ * file. Nothing either read saw is dropped silently. Logs carry counts only.
  */
 import { columnsToRows, isColumnAnswer, type ReadingAnswer } from './vlmPrompt.js';
 import { VisionProviderError, type VisionInput, type VisionProvider } from './visionProvider.js';
@@ -89,20 +89,22 @@ function levenshtein(a: string, b: string): number {
 
 /**
  * The share of a page's days (person and day, with anything in either reading) the two readings
- * may READ DIFFERENTLY — other times, other days, a shift or code only one saw — before the page
- * as a whole is not trusted. A day both read the same way but one marked unsure is not counted
- * here: it is shown to check and not imported, whatever the page. Two readings that slip
- * independently disagree on about the sum of their slip rates; on a hard page (dense, angled,
- * faint, low contrast) they also slip the SAME way on some days: agreement that is wrong, which
- * no comparison can catch, and which grows with the slips. On the eval's photos and scans every
- * readable page disagrees on 0.8–4.8% of its days (the recorded live scan of the real bar roster
- * 1.7%), a dense 42-person photo on 15%, an angled scan with half days on 23%, a dense photo whose
- * readings also slip together on 52%. 6% keeps every readable page with a quarter to spare over
- * its worst; at 6% each reading slips on about one day in thirty, and even if one slip in five
- * were shared, under 1% of the agreed days could be wrong. Past it the page saves nothing: a
- * photo may fail loudly, never save wrong data silently.
+ * may leave in doubt — read differently, or marked unsure by either (a cell the model flagged, a
+ * shorthand it had to interpret, a 14-hour-plus reading) — before the page as a whole is not
+ * trusted. Two readings that slip independently disagree on about the sum of their slip rates;
+ * on a hard page (dense, angled, faint, low contrast) they also slip the SAME way on some days:
+ * agreement that is wrong, which no comparison can catch, and which grows with the slips — and
+ * a reading marking many days unsure is the page telling us it is hard. On the eval's photos and
+ * scans every readable page leaves 0.8–4.8% of its days in doubt (the recorded live scan of the
+ * real bar roster 1.7%), a dense 42-person photo 15%, an angled scan with half days 23%, a dense
+ * photo whose readings also slip together 52%. 6% keeps every readable page with a quarter to
+ * spare over its worst; at 6% each reading slips on about one day in thirty, and even if one slip
+ * in five were shared, under 1% of the agreed days could be wrong. Past it the page saves
+ * nothing: a photo may fail loudly (a clean scan with many unsure marks included), never save
+ * wrong data silently. On a trusted page a day both read the same way but one marked unsure is
+ * still shown to check, not imported.
  */
-export const PAGE_DISAGREEMENT_LIMIT = 0.06;
+export const PAGE_DOUBT_LIMIT = 0.06;
 /** Too few days to judge a page by (a page with two people on it). */
 const PAGE_MIN_DAYS = 10;
 
@@ -119,10 +121,10 @@ const ONE_READING = 'Only one of the two AI readings saw this shift, so it was n
  * shifts, flagged. A name the two spelled differently keeps the first spelling and carries the
  * other (the review asks which is right). `cellsToCheck` counts the cells left to the manager.
  */
-/** A page not trusted: how many of its days the two readings read differently, of how many. */
+/** A page not trusted: how many of its days were left in doubt (read differently or marked unsure), of how many. */
 export interface WithheldPage {
   page: number;
-  disagreed: number;
+  doubtful: number;
   compared: number;
 }
 
@@ -134,13 +136,12 @@ export function crossCheckAiReadings(
   let disagreements = 0;
   let cellsToCheck = 0;
   let cellsCompared = 0;
-  /** Per page: days compared, days read differently, and days shown to check (read differently, or agreed but marked unsure). */
-  const pageDays = new Map<number, { compared: number; disagreed: number; toCheck: number }>();
+  /** Per page: days compared, and days left in doubt (read differently, or marked unsure by either reading). */
+  const pageDays = new Map<number, { compared: number; doubtful: number }>();
   const tally = (page: number | null, differs: boolean, unsure: boolean) => {
-    const t = pageDays.get(page ?? 1) ?? { compared: 0, disagreed: 0, toCheck: 0 };
+    const t = pageDays.get(page ?? 1) ?? { compared: 0, doubtful: 0 };
     t.compared++;
-    if (differs) t.disagreed++;
-    if (differs || unsure) t.toCheck++;
+    if (differs || unsure) t.doubtful++;
     pageDays.set(page ?? 1, t);
   };
   const unsureOf = (rows: ParsedShiftRow[]) => rows.some((r) => r.flags?.includes('low_confidence'));
@@ -280,8 +281,8 @@ export function crossCheckAiReadings(
   // A page the two readings don't vouch for is not trusted at all: nothing from it is imported —
   // no people, no shifts, no leave — and the review shows the page as not read.
   const withheldPages = [...pageDays]
-    .filter(([, t]) => t.compared >= PAGE_MIN_DAYS && t.disagreed / t.compared > PAGE_DISAGREEMENT_LIMIT)
-    .map(([page, t]) => ({ page, disagreed: t.disagreed, compared: t.compared }))
+    .filter(([, t]) => t.compared >= PAGE_MIN_DAYS && t.doubtful / t.compared > PAGE_DOUBT_LIMIT)
+    .map(([page, t]) => ({ page, doubtful: t.doubtful, compared: t.compared }))
     .sort((x, y) => x.page - y.page);
   const untrusted = new Set(withheldPages.map((u) => u.page));
   const withheldNames = new Set(people.filter((p) => untrusted.has(p.sourcePage ?? 1)).map((p) => p.name));
@@ -327,8 +328,8 @@ export function crossCheckAiReadings(
     disagreements++;
     week = { ...first.week, needsConfirmation: true, reason: `The two AI readings placed this roster in different weeks (${first.week.weekStart} and ${second.week.weekStart}). Check the week before confirming.` };
   }
-  const differed = [...pageDays].map(([page, t]) => `page ${page}: ${t.disagreed}/${t.compared}`).join(', ');
-  console.log(`[roster-reading] AI cross-check: ${people.length} people, ${disagreements} disagreement(s), ${cellsToCheck}/${cellsCompared} cell(s) left to check, days read differently ${differed || 'none'}, ${withheldPages.length} page(s) not trusted.`);
+  const doubt = [...pageDays].map(([page, t]) => `page ${page}: ${t.doubtful}/${t.compared}`).join(', ');
+  console.log(`[roster-reading] AI cross-check: ${people.length} people, ${disagreements} disagreement(s), ${cellsToCheck}/${cellsCompared} cell(s) left to check, days in doubt ${doubt || 'none'}, ${withheldPages.length} page(s) not trusted.`);
   return {
     result: {
       ...first,
@@ -348,5 +349,5 @@ export function crossCheckAiReadings(
 
 /** What the review says about a page nothing was imported from. */
 export function withheldPageReason(u: WithheldPage): string {
-  return `Page ${u.page} was hard to read: the two AI readings disagreed on ${u.disagreed} of its ${u.compared} days, so nothing from it was imported — no people, no shifts. Upload the original PDF or spreadsheet, or add them by hand.`;
+  return `Page ${u.page} was hard to read: the two AI readings disagreed on, or were unsure of, ${u.doubtful} of its ${u.compared} days, so nothing from it was imported — no people, no shifts. Upload the original PDF or spreadsheet, or add them by hand.`;
 }
