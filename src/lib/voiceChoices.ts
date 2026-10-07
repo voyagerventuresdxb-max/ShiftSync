@@ -1,5 +1,4 @@
-import type { ParsedIntent } from '@/api/voice';
-import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
+import { canConfirmVoiceAction, isReadIntent, type ParsedIntent } from '@/api/voice';
 
 /**
  * A "which did you mean?" answer as this person may see it: only choices their role can confirm
@@ -11,7 +10,7 @@ import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
  */
 export function choosableFor(systemRole: string, intent: ParsedIntent): ParsedIntent {
   if (intent.intent !== 'UNRECOGNIZED') return intent;
-  const allowed = (o: ParsedIntent) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'QUERY_MY_SCHEDULE' && canConfirmVoiceIntent(systemRole, o.intent);
+  const allowed = (o: ParsedIntent) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'DECLINED' && !isReadIntent(o) && canConfirmVoiceAction(systemRole, o.intent);
   // "Pick from your team": the same check, list by list.
   if (intent.team) {
     const copy = { ...intent, team: intent.team.filter(allowed) };

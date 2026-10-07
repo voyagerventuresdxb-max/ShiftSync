@@ -1,11 +1,16 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Pencil, UserPlus } from 'lucide-react';
-import type { ParsedIntent } from '@/api/voice';
+import { ArrowUpRight, ChevronLeft, ChevronRight, Pencil, UserPlus } from 'lucide-react';
+import { readingPerson, voiceAnswer, type ParsedIntent, type VoiceAnswer } from '@/api/voice';
 import { useCloseOnBack } from '@/lib/backNavigation';
 import { initials } from '@/lib/feedFormat';
 import { cn } from '@/lib/utils';
+import type { VoiceProblem } from '@/lib/voiceErrors';
+import type { VoiceOrigin } from '@/lib/voiceSteps';
+import { confirmLabel, isAppPath } from '@/lib/voiceWording';
 import { VoicePreview } from '@/components/shiftsync/VoicePreview';
+import { VoiceProgress } from '@/components/shiftsync/VoiceProgress';
+import { ExamplePhrases } from '@/components/shiftsync/VoiceComposer';
 import { repeatsSentence } from '../../../shared/voiceIntents';
 
 /** Shown once per person on this device, before their first recording: what leaves the phone and what is kept. */
@@ -59,6 +64,17 @@ const KIND: Record<string, string> = {
   APPLY_ROTA_TEMPLATE: 'Rota template',
   POST_ANNOUNCEMENT: 'Announcement',
   POST_SHOUTOUT: 'Shout-out',
+  CANCEL_SHIFT: 'Cancel shift',
+  REQUEST_TIME_OFF: 'Time off',
+};
+
+/** The eyebrow over each kind of answer. */
+const ANSWER_KIND: Record<string, string> = {
+  QUERY_MY_SCHEDULE: 'Your schedule',
+  WHO_IS_WORKING: "Who's working",
+  WHO_IN_SECTION: 'Sections',
+  PENDING_REQUESTS: 'Requests',
+  RECENT_ANNOUNCEMENTS: 'Announcements',
 };
 
 /** The second line of a person choice: what would happen for them, without repeating their name. */
@@ -91,6 +107,9 @@ export function VoiceCommandSheet({
   reparsing,
   viewerName,
   canManageStaff,
+  origin = 'voice',
+  examples = [],
+  problem = null,
 }: {
   intent: ParsedIntent | null;
   /** What was actually heard. The whole point of confirm-before-execute is catching a mishearing, which is invisible if only the model's paraphrase is shown. */
@@ -113,6 +132,12 @@ export function VoiceCommandSheet({
   viewerName: string;
   /** Managers and owners can add someone who isn't on the team yet (People). */
   canManageStaff: boolean;
+  /** Spoken ("I heard") or typed ("You typed"): how the command started. */
+  origin?: VoiceOrigin;
+  /** Phrases this person's role can use, offered when a command wasn't understood. Tapping one fills the box. */
+  examples?: string[];
+  /** Why the last Confirm didn't go through (offline, timeout): shown above the buttons, so Confirm can be tapped again. */
+  problem?: VoiceProblem | null;
 }) {
   const busy = executing || reparsing;
   // Back dismisses the sheet exactly like its Cancel/Got it button — but not
@@ -123,6 +148,7 @@ export function VoiceCommandSheet({
   });
   const headingId = useId();
   const heardId = useId();
+  const heardRef = useRef<HTMLTextAreaElement>(null);
   // The edit box follows the answer on screen: a new one (a choice, a re-read) starts from what was heard.
   const [shown, setShown] = useState(intent);
   const [editing, setEditing] = useState(false);
@@ -135,12 +161,13 @@ export function VoiceCommandSheet({
   if (!intent) return null;
 
   const isUnrecognized = intent.intent === 'UNRECOGNIZED';
-  // QUERY_MY_SCHEDULE is read-only — it never reaches /execute at all (see
-  // parseIntent.ts's normalizeParsedIntent and routes/voice.ts's /execute,
-  // which deliberately has no case for it), so there is nothing to confirm.
-  // `intent.summary` already carries the direct answer for this one intent
-  // (see prompts.ts), not a description of a pending action.
-  const isAnswerOnly = intent.intent === 'QUERY_MY_SCHEDULE';
+  // Reads never reach /execute (the server answers 400 for them), so there is
+  // nothing to confirm: the server's `answer` is the whole result. An older
+  // server's QUERY_MY_SCHEDULE has no `answer` and carries it in `summary`.
+  const answer = voiceAnswer(intent);
+  const isAnswerOnly = intent.intent === 'QUERY_MY_SCHEDULE' || !!answer;
+  // Something never done by voice: the server's message and, when there is one, the screen for it.
+  const declined = intent.intent === 'DECLINED' ? intent : null;
   // The additional-request prompt only ever appears once the primary intent
   // has reached ITS OWN terminal state — after a successful execute for a
   // mutating intent (`executed`, set by AppShell only once /execute has
@@ -163,11 +190,16 @@ export function VoiceCommandSheet({
   const retry = isUnrecognized && !choices ? (intent.retry ?? []) : [];
   const team = isUnrecognized && !choices ? (intent.team ?? []) : [];
   const showEditor = editing || notUnderstood;
-  const confirming = !isUnrecognized && !isAnswerOnly && !showFollowUp && !executed;
+  const confirming = !isUnrecognized && !isAnswerOnly && !declined && !showFollowUp && !executed;
 
   // A recognised command missing a part: nearly there, not "didn't catch that".
   const incomplete = isUnrecognized && !!intent.incomplete;
-  const eyebrow = incomplete
+  // Plainly not understood (not a missing part, not a name question): phrases that do work.
+  const showExamples = notUnderstood && !incomplete && !person && examples.length > 0;
+  const typed = origin === 'typed';
+  const eyebrow = declined
+    ? 'Not by voice'
+    : incomplete
     ? 'Almost there'
     : person?.status === 'missing'
       ? 'Not on your team'
@@ -180,9 +212,10 @@ export function VoiceCommandSheet({
             : showFollowUp
               ? 'Got it — one more thing?'
               : isAnswerOnly
-                ? 'Your schedule'
+                ? (ANSWER_KIND[intent.intent] ?? 'Answer')
                 : (KIND[intent.intent] ?? 'Voice command');
-  const headline = executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary;
+  const headline = declined ? declined.message : answer ? answer.title : executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary;
+  const screen = declined?.screen && isAppPath(declined.screen.path) ? declined.screen : null;
   const reparse = () => {
     const text = draft.trim();
     if (text && !busy) onReparse(text);
@@ -247,6 +280,17 @@ export function VoiceCommandSheet({
             </div>
           )}
 
+          {screen && (
+            <Link
+              to={screen.path}
+              onClick={onCancel}
+              className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 text-sm font-semibold text-accent hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-safe:transition-colors"
+            >
+              Open {screen.label}
+              <ArrowUpRight className="h-4 w-4" aria-hidden />
+            </Link>
+          )}
+
           {person?.status === 'missing' && canManageStaff && (
             <Link
               to="/people"
@@ -263,9 +307,10 @@ export function VoiceCommandSheet({
               {showEditor ? (
                 <>
                   <label htmlFor={heardId} className={caption}>
-                    I heard — fix it and try again
+                    {typed ? 'You typed' : 'I heard'} — fix it and try again
                   </label>
                   <textarea
+                    ref={heardRef}
                     id={heardId}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
@@ -280,15 +325,27 @@ export function VoiceCommandSheet({
                     disabled={busy}
                     className="mt-1.5 block min-h-11 w-full resize-none rounded-lg border border-input bg-background/60 p-3 text-sm text-foreground/87 placeholder:text-foreground/38 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
                   />
+                  {showExamples && (
+                    <ExamplePhrases
+                      examples={examples}
+                      disabled={busy}
+                      onPick={(phrase) => {
+                        setDraft(phrase);
+                        heardRef.current?.focus();
+                      }}
+                    />
+                  )}
                 </>
               ) : (
                 <>
-                  <p className={caption}>I heard</p>
+                  <p className={caption}>{typed ? 'You typed' : 'I heard'}</p>
                   <p className="mt-1 text-sm leading-relaxed text-foreground/60">“{transcript.trim()}”</p>
                 </>
               )}
             </div>
           )}
+
+          {answer && <AnswerList answer={answer} />}
 
           {team.length > 0 && <TeamPicker heard={person?.heard ?? ''} team={team} onChoose={onChoose} busy={busy} />}
 
@@ -297,8 +354,9 @@ export function VoiceCommandSheet({
           {choices && !showEditor && (
             <div className="mt-4 flex flex-col gap-2" role="group" aria-label={person ? 'People to choose from' : 'Readings to choose from'}>
               {choices.map((option, i) => {
-                const name = person && option.intent !== 'UNRECOGNIZED' ? (option.details?.person ?? null) : null;
-                const role = name && option.intent !== 'UNRECOGNIZED' ? option.details?.personRole : null;
+                const who = person ? readingPerson(option) : null;
+                const name = who?.name ?? null;
+                const role = who?.role ?? null;
                 return (
                   <button
                     key={i}
@@ -336,6 +394,22 @@ export function VoiceCommandSheet({
             </p>
           )}
 
+          {(confirming || isAnswerOnly) && !showFollowUp && (
+            <VoiceProgress
+              className="mt-5"
+              origin={origin}
+              kind={isAnswerOnly ? 'read' : 'change'}
+              step={isAnswerOnly ? 'answered' : executing ? 'doing' : 'ready'}
+            />
+          )}
+
+          {problem && confirming && (
+            <div role="alert" className="mt-4 rounded-xl border border-warning/35 bg-warning/10 p-3">
+              <p className="text-sm font-semibold text-foreground/87">{problem.title}</p>
+              <p className="mt-0.5 text-sm leading-relaxed text-foreground/60">{problem.message}</p>
+            </div>
+          )}
+
           <div className="mt-5 space-y-2">
             {showEditor ? (
               <>
@@ -356,15 +430,16 @@ export function VoiceCommandSheet({
             ) : confirming ? (
               <>
                 <button type="button" className="btn btn-primary h-12 w-full text-base font-semibold" onClick={onConfirm} disabled={busy}>
-                  {executing ? 'Confirming…' : 'Confirm'}
+                  {executing ? 'Confirming…' : confirmLabel(intent)}
                 </button>
                 <div className="grid grid-cols-2 gap-2">
                   <button type="button" className="btn btn-ghost inline-flex min-h-11 items-center justify-center gap-1.5" onClick={() => setEditing(true)} disabled={busy}>
                     <Pencil className="h-3.5 w-3.5" aria-hidden />
                     Edit
                   </button>
+                  {/* "Cancel" beside "cancel this shift" would read as the same thing: this one keeps it. */}
                   <button type="button" className="btn btn-ghost min-h-11" onClick={onCancel} disabled={busy}>
-                    Cancel
+                    {intent.intent === 'CANCEL_SHIFT' ? 'Keep shift' : 'Cancel'}
                   </button>
                 </div>
               </>
@@ -380,7 +455,7 @@ export function VoiceCommandSheet({
               </div>
             ) : (
               <button type="button" className="btn btn-ghost min-h-11 w-full" onClick={onCancel} disabled={busy}>
-                Got it
+                {answer ? 'Done' : 'Got it'}
               </button>
             )}
           </div>
@@ -395,10 +470,29 @@ export function VoiceCommandSheet({
  * whole team is listed (name and role), with a search box. Picking someone opens that reading's
  * normal confirm sheet; nothing runs without Confirm, and nobody is ever created from here.
  */
+/** A read's answer: one row per item (primary, then secondary and tertiary lines), or the server's empty text. Text only, never HTML. */
+function AnswerList({ answer }: { answer: VoiceAnswer }) {
+  if (!answer.items.length) return <p className="mt-4 text-sm leading-relaxed text-foreground/60">{answer.emptyText}</p>;
+  return (
+    <ul className="mt-4 flex flex-col gap-2" aria-label={answer.title}>
+      {answer.items.map((item, i) => (
+        <li key={i} className="rounded-xl border border-border bg-background/40 px-3 py-2.5">
+          <p className="text-sm font-semibold text-foreground/87">{item.primary}</p>
+          {item.secondary && <p className="mt-0.5 text-xs text-foreground/60">{item.secondary}</p>}
+          {item.tertiary && <p className="mt-0.5 text-[11px] text-foreground/38">{item.tertiary}</p>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function TeamPicker({ heard, team, onChoose, busy }: { heard: string; team: ParsedIntent[]; onChoose: (option: ParsedIntent) => void; busy: boolean }) {
   const [query, setQuery] = useState('');
   const searchId = useId();
-  const people = team.flatMap((option) => (option.intent !== 'UNRECOGNIZED' && option.details?.person ? [{ option, name: option.details.person, role: option.details.personRole ?? null }] : []));
+  const people = team.flatMap((option) => {
+    const who = readingPerson(option);
+    return who ? [{ option, name: who.name, role: who.role }] : [];
+  });
   const q = query.trim().toLowerCase();
   const shown = q ? people.filter((p) => p.name.toLowerCase().includes(q) || (p.role ?? '').toLowerCase().includes(q)) : people;
   return (
