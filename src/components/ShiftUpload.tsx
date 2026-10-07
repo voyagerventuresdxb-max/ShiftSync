@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from 'react';
-import { motion } from 'motion/react';
 import { Link } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
@@ -17,6 +16,7 @@ import { ImportResult } from '../features/rosterReview/ImportResult';
 import { reviewPeople } from '../features/rosterReview/reviewModel';
 import { btnPrimary } from '../features/rosterReview/styles';
 import { ReadingProgress } from '../features/rosterReview/ReadingProgress';
+import { newUploadId, rosterFileKind, type RosterFileKind } from '../features/rosterReview/uploadProgress';
 
 const ACCEPTED = '.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp';
 
@@ -66,6 +66,8 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
   // The file being read, kept so the manager can say "yes, send it to the AI reader" without picking it again.
   const fileRef = useRef<File | null>(null);
   const [consentMessage, setConsentMessage] = useState<string | null>(null);
+  // The upload being read right now, so its real progress can be followed.
+  const [reading, setReading] = useState<{ uploadId: string; kind: RosterFileKind } | null>(null);
 
   const handleFile = useCallback(
     async (file: File, aiConsent = false) => {
@@ -76,9 +78,11 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       setConfirmResult(null);
       setConfirmError(null);
       setFileName(file.name);
+      const uploadId = newUploadId();
+      setReading({ uploadId, kind: rosterFileKind(file) });
       setPhase('uploading');
       try {
-        const res = await uploadRoster(session!.token, file, { aiConsent });
+        const res = await uploadRoster(session!.token, file, { aiConsent, uploadId });
         setData(res);
         setPhase('preview');
       } catch (err) {
@@ -223,15 +227,9 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       {phase === 'uploading' && (
         <>
           <div className="status-block">
-            <span className="spinner" aria-hidden />
-            <motion.p
-              animate={{ opacity: [1, 0.55, 1] }}
-              transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
-            >
-              {uploadingLabel ? uploadingLabel : <>Parsing <strong>{fileName}</strong>…</>}
-            </motion.p>
+            <p>{uploadingLabel ? uploadingLabel : <>Parsing <strong>{fileName}</strong>…</>}</p>
           </div>
-          <ReadingProgress className="px-6 pb-4" />
+          <ReadingProgress key={reading?.uploadId} className="px-6 pb-4" token={session?.token} uploadId={reading?.uploadId} fileKind={reading?.kind} />
         </>
       )}
 

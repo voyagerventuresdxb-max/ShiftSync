@@ -4,11 +4,12 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { hashOtp, issueSession } from '../lib/identity.js';
 import { uploadCache } from '../store/uploadCache.js';
+import { uploadProgress } from '../store/uploadProgress.js';
 
 /**
  * Cross-venue access matrix: every API route (and the two session-gated
@@ -80,6 +81,7 @@ interface Fx {
   swapA: string;
   linkA: string;
   batchA: string;
+  uploadA: string;
   pushEndpointA: string;
   ownerPhoneA: string;
   monday: string;
@@ -195,6 +197,9 @@ before(async () => {
   const pushEndpointA = `https://push.invalid/${TAG}/${randomUUID()}`;
   await prisma.pushSubscription.create({ data: { userId: staffA.id, endpoint: pushEndpointA, p256dh: 'test-key', auth: 'test-auth' } });
   const batchA = uploadCache.put(locA.id, null, []);
+  // An upload managerA's session is reading right now (schedules.ts tracks it the same way).
+  const uploadA = randomUUID();
+  uploadProgress.start(uploadA, { locationId: locA.id, sessionKey: createHash('sha256').update(tokens.managerA).digest('hex') });
 
   fx = {
     locA: locA.id, locB: locB.id, staffA: staffA.id, staffA2: staffA2.id, managerA: managerA.id, ownerA: ownerA.id, staffB: staffB.id,
@@ -202,7 +207,7 @@ before(async () => {
     annA: annA.id, annDel: annDel.id, shoutDel: shoutDel.id, imgA: imgA.id, imgFile, secA: secA.id, secDel: secDel.id,
     asgA: asgA.id, asgDel: asgDel.id, docA: docA.id, docFile, docDel: docDel.id, itemA: itemA.id, itemOnBehalf: itemOnBehalf.id,
     fbA: fbA.id, markA: markA.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
-    linkA: linkA.id, batchA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday,
+    linkA: linkA.id, batchA, uploadA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday,
   };
 
   server = await new Promise<Server>((resolve) => {
@@ -407,6 +412,8 @@ const CASES: Case[] = [
     refuse: ['anon', 'deactivatedA', 'staffA', 'staffB'],
   },
   { name: 'POST /api/schedules/upload/:batchId/confirm', method: 'POST', path: (f) => `/api/schedules/upload/${f.batchA}/confirm`, body: () => ({}), refuse: NOT_MANAGERS_OF_A },
+  // Another manager of A on another session is refused too (403): only the session that started the upload.
+  { name: 'GET /api/schedules/upload-progress/:uploadId', method: 'GET', path: (f) => `/api/schedules/upload-progress/${f.uploadA}`, refuse: [...NOT_MANAGERS_OF_A, 'ownerA'] },
   // shifts
   { name: 'GET /api/shifts/:locationId', method: 'GET', path: (f) => `/api/shifts/${f.locA}?weekStart=${f.monday}`, refuse: OUTSIDERS },
   { name: 'GET /api/shifts/:locationId/publish-status', method: 'GET', path: (f) => `/api/shifts/${f.locA}/publish-status?weekStart=${f.monday}`, refuse: OUTSIDERS },
@@ -627,6 +634,7 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'POST /api/kiosk/:locationId/regenerate'],
   ['managerA', 'POST /api/kiosk/:locationId/revoke'],
   ['managerA', 'GET /api/join/:locationId/pending'],
+  ['managerA', 'GET /api/schedules/upload-progress/:uploadId'],
   ['managerA', 'PATCH /api/join/:requestId'],
   ['staffA', 'GET /api/locations/:id'],
   ['managerA', 'PATCH /api/locations/:id'],

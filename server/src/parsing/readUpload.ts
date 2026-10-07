@@ -27,6 +27,7 @@ import { aiReadRoster, aiResult, peopleFromRows, reconcileReadings, shortPagesOf
 import { mapReadingAnswer } from './aiReading.js';
 import { aiCrossRead, crossCheckAiReadings, withheldPageReason } from './aiCrossCheck.js';
 import type { ReadingAnswer } from './vlmPrompt.js';
+import { emitReadProgress, type OnReadProgress, type ReadProgressEvent } from './readProgress.js';
 import { fileSha256, type ReadingCache } from './readingCache.js';
 import { addDays, detectWeek, mondayOfIso } from './weekDetection.js';
 import type { ReadingReport, WeekDetection } from './rosterContract.js';
@@ -74,6 +75,8 @@ export interface UploadReadContext {
   deadline: number;
   /** Test seam (see schedules.ts __setGridParserForTests). */
   gridParser?: typeof parseExcelGrid;
+  /** Told which step the read is on (readProgress.ts): stages and page numbers only. */
+  onProgress?: OnReadProgress;
 }
 
 export type UploadReadOutcome =
@@ -191,6 +194,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
   const gridParser = ctx.gridParser ?? parseExcelGrid;
   const week = { today: ctx.today, clientWeekStart: ctx.clientWeekStart };
   const sha = fileSha256(file.buffer);
+  const progress = (event: ReadProgressEvent) => emitReadProgress(ctx.onProgress, event);
 
   /**
    * One AI reading of this file: from the cache, or from the provider once the consent and
@@ -211,6 +215,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       const nothing: ParsedVisionResult = { ...first, rows: [], leaveRecords: [], anomalies: [], people: [], unreadRows: withheld.map((w) => ({ page: w.page, row: null, text: '', reason: w.reason })) };
       return { result: nothing, crossChecked: 'failed', disagreements: 0, cells: { toCheck: 0, compared: 0, withheld, pageCount, secondFailed: true } };
     }
+    progress({ kind: 'cross_check' });
     const checked = crossCheckAiReadings(first, mapReadingAnswer(crossAnswer, week));
     const withheld = checked.withheldPages.map((u) => ({ page: u.page, reason: withheldPageReason(u) }));
     return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements, cells: { toCheck: checked.cellsToCheck, compared: checked.cellsCompared, withheld, pageCount } };
@@ -242,10 +247,18 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     const blocked = await ctx.aiBlockedReason();
     if (blocked) return { ai: 'unavailable', message: blocked, code: 'vision_fallback_blocked', status: 422 };
     const options = { provider: ctx.provider, locationId: ctx.locationId, userId: ctx.userId, deadline: ctx.deadline };
+    const secondRead = async (scan: Extract<AiReadSource, { kind: 'file' }>) => {
+      progress({ kind: 'second_read', state: 'started' });
+      try {
+        return await aiCrossRead(scan, options);
+      } finally {
+        progress({ kind: 'second_read', state: 'finished' });
+      }
+    };
     // Both readings at once: the wall time is the slower of the two.
     const [primary, cross] = await Promise.allSettled([
-      aiReadRoster(source, { ...options, ...(tablePeoplePerPage ? { tablePeoplePerPage } : {}) }),
-      crossCheck && source.kind === 'file' ? aiCrossRead(source, options) : Promise.resolve(null),
+      aiReadRoster(source, { ...options, ...(tablePeoplePerPage ? { tablePeoplePerPage } : {}), onProgress: ctx.onProgress }),
+      crossCheck && source.kind === 'file' ? secondRead(source) : Promise.resolve(null),
     ]);
     if (cross.status === 'rejected') throw cross.reason;
     const crossAnswer = cross.value?.answer ?? null;
@@ -317,6 +330,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       if ('ai' in read) return docling ? tableOnly(docling, read, 'image_or_scan') : refused(read, 'image_or_scan');
       // A page the AI readings don't vouch for saves nothing; the sidecar's reading (no pages of its own) can't fill it in.
       if (read.cells?.withheld.length) docling = null;
+      if (docling) progress({ kind: 'cross_check' });
       const { result: merged, disagreements } = reconcileReadings(read.result, docling);
       const result = complete(merged, 'ai', ctx);
       return {
@@ -336,6 +350,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     }
 
     // A text-layer PDF: the table reader reads it here, the AI reader reads it too.
+    progress({ kind: 'text' });
     const table = await extractPdfTable(file.buffer);
     let tableResult: ParsedVisionResult | null = null;
     let tableState: ReadingReport['table'] = 'failed';
@@ -384,12 +399,14 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       if (dataLoss && read.code === 'vision_unconfigured') return { ok: false, status: 422, body: { error: withManualPath(dataLoss.message), errorCode: 'roster_extraction_anomaly' } };
       return refused(read, reason);
     }
+    if (tableResult) progress({ kind: 'cross_check' });
     const { result: merged, disagreements, aiDiffCells } = reconcileReadings(read.result, tableResult);
     const result = complete(merged, 'ai', ctx);
     return { ok: true, result, reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: tableState, tableResult, ai_: read.outcome, disagreements, aiDiffCells, fromCache: read.fromCache }) };
   }
 
   // --- spreadsheets ---------------------------------------------------------------------------------
+  progress({ kind: 'text' });
   try {
     const workbook = parseWorkbookBuffer(file.buffer, file.originalname);
     const result = complete({ templateLabel: workbook.templateLabel ?? 'template', rows: workbook.rows, issues: workbook.issues, anomalies: [], leaveRecords: [], legend: [] }, 'table', ctx);
@@ -472,6 +489,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     if (outcome.ok && outcome.escalation?.status === 'unavailable') outcome.escalation.message = `${read.message} The built-in reader's result is shown instead.`;
     return outcome;
   }
+  progress({ kind: 'cross_check' });
   const { result: merged, disagreements, aiDiffCells } = reconcileReadings(read.result, local);
   const result = complete(withSheetsNote(merged), 'ai', ctx);
   return {
