@@ -120,7 +120,7 @@ test('aiReadRoster: with too little time left no re-read is started, and the sho
   assert.deepEqual(outcome.shortPages, [{ page: 1, expected: 2, read: 1 }]);
 });
 
-test('reconcileReadings: matching shifts are "both"; one-reader people are kept (an AI-only one flagged); times that differ on a cell the table reader had to guess keep the printed text\'s with both readings', () => {
+test('reconcileReadings: matching shifts are "both"; one-reader people are kept (an AI-only person\'s shifts only when a second AI reading confirms them); times that differ on a cell the table reader had to guess keep the printed text\'s with both readings', () => {
   const ai = mapReadingAnswer(
     answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', '10-18']), person('Test Betta', 2, ['12-20', '']), person('Test Only Ai', 3, ['9-17', ''])] }]),
     { today: TODAY, clientWeekStart: null },
@@ -147,7 +147,12 @@ test('reconcileReadings: matching shifts are "both"; one-reader people are kept 
   const beta = result.people!.find((p) => p.name === 'Test Beta')!;
   assert.equal(beta.readerSource, 'both');
   assert.deepEqual(beta.nameAlternatives, [{ reader: 'ai', name: 'Test Betta' }]);
-  assert.deepEqual(row('Test Only Ai', '2026-08-24').flags, ['ai_only']);
+  // A person only the AI reader saw: listed, but no shift saved on its word alone — each day shown to check.
+  assert.equal(row('Test Only Ai', '2026-08-24'), undefined);
+  assert.equal(result.people!.find((p) => p.name === 'Test Only Ai')!.readerSource, 'ai');
+  assert.ok(result.anomalies.some((x) => x.employeeName === 'Test Only Ai' && x.date === '2026-08-24' && /Only the AI reader saw this person/.test(x.reason)));
+  // Confirmed by a second, independent AI reading (a photo or an unanchored text PDF), the shift is saved, flagged.
+  assert.deepEqual(reconcileReadings(ai, table, { aiConfirmed: true }).result.rows.find((r) => r.employeeName === 'Test Only Ai')?.flags, ['ai_only']);
   // A person only the table reader read, from the file's own text for certain: kept as read (the person is marked table-only).
   assert.equal(row('Test Only Table', '2026-08-25').flags, undefined);
   assert.equal(result.people!.find((p) => p.name === 'Test Only Table')!.readerSource, 'table');
@@ -478,7 +483,8 @@ test('reconcileReadings: a title, heading or totals line only one reader took fo
   ai.people!.push({ personKey: 'y@1:10', name: 'Total staff on rota', roleLabel: null, section: null, sourcePage: 1, sourceRow: 10, readerSource: 'ai' });
   const { result } = reconcileReadings(ai, table);
   assert.deepEqual(result.people?.map((p) => `${p.name}|${p.readerSource}`), ['Saffiya Okonkwo|both', 'Test Beta|both']);
-  assert.deepEqual(result.people?.[0]?.nameAlternatives, [{ reader: 'table', name: 'Sa ffi ya Okonkwo' }]);
+  // The table reader joins the word its text layer split at the ligature: one spelling, nothing to ask.
+  assert.equal(result.people?.[0]?.nameAlternatives, undefined);
   assert.ok(result.rows.every((r) => r.employeeName !== 'Sa ffi ya Okonkwo'));
   assert.deepEqual(result.unreadRows?.map((u) => u.text).sort(), ['Total staff on rota', 'Waiter 3']);
 });
@@ -533,22 +539,38 @@ test('photo cross-check: a page the two readings leave too much of in doubt save
   assert.deepEqual(outcome.result.leaveRecords, []);
   assert.deepEqual(outcome.result.anomalies, [], 'nothing to tick through: the page is shown as not read');
   assert.equal(outcome.reading.withheldPages?.length, 1);
-  assert.match(outcome.reading.withheldPages![0]!.reason, /^Page 1 was hard to read: the two AI readings disagreed on, or were unsure of, 5 of its 52 days, so nothing from it was imported — no people, no shifts\. Upload the original PDF or spreadsheet/);
+  assert.match(outcome.reading.withheldPages![0]!.reason, /^Page 1 was hard to read: the two AI readings disagreed on 5 of its 52 days, so nothing from it was imported — no people, no shifts\. Upload the original PDF or spreadsheet/);
   assert.deepEqual(outcome.result.unreadRows?.map((u) => u.reason), [outcome.reading.withheldPages![0]!.reason]);
-  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so nothing from it was imported: no people, no shifts\. For best results upload the original PDF or spreadsheet/);
+  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on too much of it, so nothing from it was imported: no people, no shifts\. For best results upload the original PDF or spreadsheet/);
 });
 
-test('photo cross-check: cells both readings agree on but either marks unsure count against the page — a low-contrast scan read the same wrong way twice saves nothing', async () => {
+test('photo cross-check: a clean scan whose readings agree everywhere imports its agreed, confident days; a day both read but one marked unsure is shown to check, never imported, and never costs the page', async () => {
   const names = Array.from({ length: 12 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
-  // Every cell agreed; the row reading was unsure of a Tuesday for two people in twelve (2 of 24 days, over 6%).
-  const ppl = names.map((n, i) => ({ ...person(n, i + 1, ['10 15', '9 17']), ...(i < 2 ? { q: [1] } : {}) }));
+  // Every day read the same way; the row reading was unsure of a Tuesday for three people in twelve (3 of 24 days).
+  const ppl = names.map((n, i) => ({ ...person(n, i + 1, ['10 15', '9 17']), ...(i < 3 ? { q: [1] } : {}) }));
   const first: ReadingAnswer = { ...answer([]), pages: [{ p: 1, rows: 12, sec: [{ h: null, n: 12, ppl }], unread: [] }] };
   const second = answer([{ p: 1, rows: 12, ppl: names.map((n, i) => person(n, i + 1, ['10 15', '9 17'])) }]);
   const outcome = await readUploadedRoster({ buffer: Buffer.from('png 9'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
   assert.ok(outcome.ok);
-  assert.deepEqual(outcome.result.rows, []);
-  assert.deepEqual(outcome.result.people, []);
-  assert.match(outcome.reading.withheldPages![0]!.reason, /unsure of, 2 of its 24 days/);
+  if (!outcome.ok) return;
+  assert.equal(outcome.reading.withheldPages, undefined, 'unsure marks are not disagreements');
+  assert.equal(outcome.result.people?.length, 12);
+  assert.equal(outcome.result.rows.length, 12 + 9, "every Monday, and the Tuesdays neither reading doubted");
+  assert.ok(outcome.result.rows.every((r) => !r.flags?.length));
+  const unsure = outcome.result.anomalies.filter((a) => /one of them was unsure of them, so they were not imported/.test(a.reason));
+  assert.deepEqual(unsure.map((a) => `${a.employeeName}|${a.date}|${a.rawText}`), ['Test Person A|2026-08-25|Both readings: 09:00–17:00', 'Test Person B|2026-08-25|Both readings: 09:00–17:00', 'Test Person C|2026-08-25|Both readings: 09:00–17:00']);
+});
+
+test('photo cross-check: a person only one reading listed is kept on the list, but none of their shifts is imported on that one reading', async () => {
+  const names = Array.from({ length: 4 }, (_, i) => `Test Person ${String.fromCharCode(65 + i)}`);
+  const first = answer([{ p: 1, rows: 5, ppl: [...names.map((n, i) => person(n, i + 1, ['10 15', '9 17'])), person('Test Extra', 5, ['18 23', ''])] }]);
+  const second = answer([{ p: 1, rows: 4, ppl: names.map((n, i) => person(n, i + 1, ['10 15', '9 17'])) }]);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 10'), mimetype: 'image/png', originalname: 'r.png', size: 6 }, ctx({ provider: twoFramings(first, second) }));
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  assert.ok(outcome.result.people?.some((p) => p.name === 'Test Extra'));
+  assert.deepEqual(outcome.result.rows.filter((r) => r.employeeName === 'Test Extra'), []);
+  assert.ok(outcome.result.anomalies.some((a) => a.employeeName === 'Test Extra' && a.date === '2026-08-24' && /Only one of the two AI readings saw this shift/.test(a.reason)));
 });
 
 test('photo cross-check: a two-page scan whose second page is hard to read imports page 1 only; a person printed only on page 2 is never created', async () => {
@@ -679,8 +701,8 @@ test('photo cross-check: a page the two readings disagree on too much is not tru
   assert.ok(outcome.ok);
   assert.deepEqual(outcome.result.rows, []);
   assert.deepEqual(outcome.result.people, []);
-  assert.ok(outcome.result.unreadRows?.some((u) => /disagreed on, or were unsure of, 3 of its 12 days/.test(u.reason)));
-  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so nothing from it was imported/);
+  assert.ok(outcome.result.unreadRows?.some((u) => /disagreed on 3 of its 12 days/.test(u.reason)));
+  assert.match(outcome.reading.note!, /^This photo was hard to read — the two readings disagreed on too much of it, so nothing from it was imported/);
 });
 
 test('photo reading: a row whose name could not be read ("[?]") is an unread row, never a person', async () => {

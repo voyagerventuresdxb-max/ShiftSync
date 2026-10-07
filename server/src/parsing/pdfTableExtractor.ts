@@ -229,6 +229,18 @@ interface Geometry {
    * days, its day is inferred, not read. Null when no other reading comes close.
    */
   rival: { dayBands: Band[]; step: number } | null;
+  /**
+   * The header row prints its days this many columns off the body's (a broken export: the
+   * header shifted left of its columns) — the body's cells were read under the day the shift
+   * gives them. 0 when the header sits over its columns.
+   */
+  headerOffset: number;
+  /**
+   * The day columns could not be anchored on the header for certain: the header sat off its
+   * columns (headerOffset), or a reading of the page with the header shifted fits it about as
+   * well. Every day on such a page is inferred, never read.
+   */
+  unanchored: boolean;
 }
 
 /** Mean distance from the median: how tightly a set of positions lines up. */
@@ -493,7 +505,8 @@ function fitOf(body: RowCluster[], dayColumns: Band[], days: { from: number; to:
       if (p.x1 - p.x0 > step * 0.9) continue;
       const c = cx(p);
       const outside = (c >= days.from - step && c < days.from) || (c >= days.to && c < days.to + step);
-      if (outside && /\d/.test(p.text) && !isCount(p.text)) score--;
+      // A time left just outside the days (not a numbered title such as "Waiter 3", nor a count).
+      if (outside && read(p.text) > 0) score--;
       const column = dayColumns.find((b) => c >= b.x0 && c < b.x1);
       if (column && (p.x0 < column.x0 - 1 || p.x1 > column.x1 + 1)) straddling++;
     }
@@ -509,6 +522,23 @@ interface DayLayout {
   perDay: number[][];
   step: number;
   score: number;
+  /** Day k read under the header's band k + offset (0: under its own header). */
+  offset: number;
+}
+
+/** A header printed off its columns by this many columns either way is tried on the body. */
+const HEADER_OFFSETS = [1, -1, 2, -2];
+
+/** The day bands moved `offset` columns (one step each) along the page, past either end as needed. */
+function shiftedBands(bands: Band[], step: number, offset: number): Band[] {
+  const at = (i: number): Band => {
+    if (i >= 0 && i < bands.length) return bands[i]!;
+    if (i < 0) return { x0: bands[0]!.x0 + i * step, x1: bands[0]!.x0 + (i + 1) * step };
+    const past = i - bands.length;
+    const end = bands[bands.length - 1]!.x1;
+    return { x0: end + past * step, x1: end + (past + 1) * step };
+  };
+  return bands.map((_, k) => at(k + offset));
 }
 
 /**
@@ -520,7 +550,7 @@ interface DayLayout {
  * cells read best wins; the plain middles win a tie. The runner-up is kept when it fits almost
  * as well and gives some cell another day: there, the cell's day is inferred, not read.
  */
-function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: number | null, body: RowCluster[]): { best: DayLayout; rival: DayLayout | null } {
+function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: number | null, body: RowCluster[]): { best: DayLayout; rival: DayLayout | null; unanchored: boolean } {
   const period = periodIdx !== null ? rows[periodIdx]! : null;
   const timeOptions = { dotMeans: sheetDotStyle(body.flatMap((r) => r.items.map((p) => p.text))) };
   const memo = new Map<string, number>();
@@ -548,39 +578,51 @@ function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: nu
   // Every reading is judged on the same cells: one too long for the narrowest reading's day runs on in all of them.
   const step = Math.min(...options.map((o) => o.from.step));
   for (const { from } of options) {
-    for (const rule of rules) {
-      const splits = periodSplits(from.bands, period, rule);
-      const dayColumns: Band[] = [];
-      const perDay: number[][] = [];
-      from.bands.forEach((band, i) => {
-        const at = splits[i];
-        if (at === null || at === undefined) {
-          perDay.push([dayColumns.length]);
-          dayColumns.push(band);
-        } else {
-          perDay.push([dayColumns.length, dayColumns.length + 1]);
-          dayColumns.push({ x0: band.x0, x1: at }, { x0: at, x1: band.x1 });
-        }
-      });
-      const days = { from: from.bands[0]!.x0, to: from.bands[from.bands.length - 1]!.x1 };
-      layouts.push({ dayBands: from.bands, dayColumns, perDay, step: from.step, score: fitOf(body, dayColumns, days, step, read) });
+    for (const offset of [0, ...HEADER_OFFSETS]) {
+      const bands = offset ? shiftedBands(from.bands, from.step, offset) : from.bands;
+      for (const rule of offset ? (['labels'] as SplitRule[]) : rules) {
+        const splits = periodSplits(bands, period, rule);
+        const dayColumns: Band[] = [];
+        const perDay: number[][] = [];
+        bands.forEach((band, i) => {
+          const at = splits[i];
+          if (at === null || at === undefined) {
+            perDay.push([dayColumns.length]);
+            dayColumns.push(band);
+          } else {
+            perDay.push([dayColumns.length, dayColumns.length + 1]);
+            dayColumns.push({ x0: band.x0, x1: at }, { x0: at, x1: band.x1 });
+          }
+        });
+        const days = { from: bands[0]!.x0, to: bands[bands.length - 1]!.x1 };
+        layouts.push({ dayBands: bands, dayColumns, perDay, step: from.step, score: fitOf(body, dayColumns, days, step, read), offset });
+      }
     }
   }
   // The first is the plain reading (centred header, AM | PM between its labels): it wins ties.
-  const best = layouts.reduce((a, b) => (b.score > a.score ? b : a));
+  const pick = (ls: DayLayout[]) => ls.reduce<DayLayout | null>((a, b) => (!a || b.score > a.score ? b : a), null);
+  const plain = pick(layouts.filter((l) => l.offset === 0))!;
   const dayOf = (l: DayLayout, x: number) => l.dayBands.findIndex((b) => x >= b.x0 && x < b.x1);
   const items = body.flatMap((r) => r.items).filter((p) => p.x1 - p.x0 <= step * 0.9 && dayLike(p.text));
-  const differs = (l: DayLayout) => items.some((p) => dayOf(l, cx(p)) !== dayOf(best, cx(p)));
-  const cells = body.reduce((n, r) => n + cellsByColumn(r, best.dayColumns, step).filter((c) => c.length).length, 0);
+  const differsFrom = (l: DayLayout, m: DayLayout) => items.some((p) => dayOf(l, cx(p)) !== dayOf(m, cx(p)));
+  // Readings with the header shifted that put some cell on another day than the plain reading does.
+  const shifted = pick(layouts.filter((l) => l.offset !== 0 && differsFrom(l, plain)));
+  const cells = body.reduce((n, r) => n + cellsByColumn(r, plain.dayColumns, step).filter((c) => c.length).length, 0);
+  // A header sits over its own columns unless the body says otherwise. Read off its columns only
+  // when that fits the body clearly better; when it fits better but not clearly, the page can't
+  // be anchored and nothing on it is read as placed. A tie (nothing to tell them apart) stays put.
+  const clear = Math.max(3, Math.ceil(cells * 0.05));
+  const best = shifted && shifted.score > plain.score + clear ? shifted : plain;
+  const unanchored = best.offset !== 0 || (!!shifted && shifted.score > plain.score + 0.5);
   const margin = Math.max(2, Math.ceil(cells * 0.02));
-  const rival = layouts.filter((l) => l !== best && l.score >= best.score - margin && differs(l)).sort((a, b) => b.score - a.score)[0] ?? null;
-  return { best, rival };
+  const rival = layouts.filter((l) => l !== best && l.offset === best.offset && l.score >= best.score - margin && differsFrom(l, best)).sort((a, b) => b.score - a.score)[0] ?? null;
+  return { best, rival, unanchored };
 }
 
 /** Column geometry from a page's header rows and body rows. */
 function deriveGeometry(rows: RowCluster[], dayRowIdxs: number[], periodIdx: number | null, bodyStart: number): Geometry {
   const body = rows.slice(bodyStart);
-  const { best, rival } = chooseDayLayout(rows, dayRowIdxs, periodIdx, body);
+  const { best, rival, unanchored } = chooseDayLayout(rows, dayRowIdxs, periodIdx, body);
   const bands = best.dayBands;
   const step = best.step;
   const left = bands[0]!.x0;
@@ -602,7 +644,7 @@ function deriveGeometry(rows: RowCluster[], dayRowIdxs: number[], periodIdx: num
   const dayColumnIndexes = best.perDay.map((idx) => idx.map((i) => i + columns.length));
   columns.push(...best.dayColumns);
   columns.push(...trailing);
-  return { columns, dayColumnIndexes, ...geo, dayBands: bands, rival: rival ? { dayBands: rival.dayBands, step: rival.step } : null };
+  return { columns, dayColumnIndexes, ...geo, dayBands: bands, rival: rival ? { dayBands: rival.dayBands, step: rival.step } : null, headerOffset: best.offset, unanchored };
 }
 
 /** The column a phrase belongs to: the one containing its place (placeOf; else its centre), else the nearest. */
@@ -669,6 +711,8 @@ export interface PdfTable {
    * the page almost as well would put on another day.
    */
   inferredCells: { page: number; row: number; col: number }[];
+  /** Pages whose day columns could not be anchored on their header (Geometry.unanchored): every day on them is inferred. */
+  unanchoredPages: number[];
 }
 
 /**
@@ -681,6 +725,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
   const rowRefs: { page: number; row: number }[] = [];
   const pageTexts: string[] = [];
   const inferredCells: { page: number; row: number; col: number }[] = [];
+  const unanchoredPages: number[] = [];
   let geometry: Geometry | null = null;
   let headerSeen = false;
   pages.forEach((items, pageIndex) => {
@@ -707,6 +752,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
     }
     if (!geometry) return;
     const g: Geometry = geometry;
+    if (g.unanchored) unanchoredPages.push(pageIndex + 1);
     // A header repeated on a later page (and any title above it) is printed again, not new data.
     const skipThrough = headerSeen ? lastHeaderRow : -1;
     if (headerIdx >= 0) headerSeen = true;
@@ -717,9 +763,15 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
       if (r <= skipThrough) return;
       const cells: PositionedItem[][] = g.columns.map(() => []);
       const isHeader = headerIdx >= 0 && r >= headerIdx && r <= lastHeaderRow && headerDays(row) !== null;
+      // A header printed off its columns: its k-th day names the body's k-th day column.
+      const heads = isHeader && g.headerOffset ? dayHeads(row) : null;
+      const headCol = (p: PositionedItem) => {
+        const k = heads?.findIndex((h) => p.x0 >= h.x0 - 0.5 && p.x1 <= h.x1 + 0.5) ?? -1;
+        return k >= 0 && heads!.length === g.dayColumnIndexes.length ? g.dayColumnIndexes[k]![0]! : null;
+      };
       // Whole items, not phrases: neighbouring cells can sit closer than a space apart.
       for (const p of [...row.items].sort((a, b) => a.x0 - b.x0)) {
-        const col = isHeader ? columnOf(p, g.columns) : columnOf(p, g.columns, placeOf(p, g));
+        const col = isHeader ? (headCol(p) ?? columnOf(p, g.columns)) : columnOf(p, g.columns, placeOf(p, g));
         // A day header names the whole day: every half of a split day carries it.
         const day = isHeader ? g.dayColumnIndexes.find((idx) => idx.includes(col)) : undefined;
         for (const c of day ?? [col]) cells[c]!.push(p);
@@ -734,7 +786,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
     grid.push(...merged.grid);
     rowRefs.push(...merged.refs.map((row) => ({ page: pageIndex + 1, row })));
   });
-  return { grid, rowRefs, pageCount: pages.length, pageTexts, inferredCells };
+  return { grid, rowRefs, pageCount: pages.length, pageTexts, inferredCells, unanchoredPages };
 }
 
 /**
@@ -743,6 +795,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
  * close rival reading of the columns would put on another day.
  */
 function dayInferred(p: PositionedItem, day: number, g: Geometry): boolean {
+  if (g.unanchored) return true;
   if (runsOn(p, g)) return !runOnPlacedForCertain(p, g);
   const band = g.dayBands[day];
   if (!band || p.x0 < band.x0 - 1 || p.x1 > band.x1 + 1) return true;

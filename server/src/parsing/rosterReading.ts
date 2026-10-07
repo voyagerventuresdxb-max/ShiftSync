@@ -383,6 +383,18 @@ export function reconcileReadings(
   opts: {
     /** Table people (personKey) on a row whose day placement was inferred: a cell longer than its column. */
     placementUncertain?: Set<string>;
+    /**
+     * The AI reading was itself confirmed cell by cell by a second, independent AI reading (a
+     * photo, a scan, an unanchored text PDF): a shift only it saw may be saved. Otherwise a shift
+     * no second source confirms is shown to check, never saved.
+     */
+    aiConfirmed?: boolean;
+    /**
+     * Each AI reading on its own (a file read twice): a day the table reader inferred is confirmed
+     * when either reading puts exactly the same times on the same day for that person — two
+     * independent readers agreeing — even where the two AI readings disagree with each other.
+     */
+    confirmWith?: ParsedVisionResult[];
   } = {},
 ): Reconciled {
   if (!ai || !table) return { result: (ai ?? table)!, disagreements: 0, aiDiffCells: 0 };
@@ -438,6 +450,16 @@ export function reconcileReadings(
   const leaveRecords: LeaveRecord[] = [];
   const anomalies: AnomalyRecord[] = [];
   const nameMap = new Map<string, string>(); // any reader's name -> final name
+  /** Whether one of the AI readings on its own read exactly these times on this day for this person (names: the table's and the AI's). */
+  const confirmedBySome = (names: string[], date: string, day: ParsedShiftRow[]) => {
+    if (!opts.confirmWith?.length || !day.length) return false;
+    const want = day.map(segKey).sort().join(',');
+    const keys = new Set(names.map(joinedKey));
+    return opts.confirmWith.some((reading) => {
+      const theirs = reading.rows.filter((r) => keys.has(joinedKey(r.employeeName)) && r.date === date);
+      return theirs.length > 0 && theirs.map(segKey).sort().join(',') === want;
+    });
+  };
   const rowsOf = (result: ParsedVisionResult, p: ReadPerson) =>
     result.rows.filter((r) => (r.personKey ? r.personKey === p.personKey : normName(r.employeeName) === normName(p.name)));
   const leaveOf = (result: ParsedVisionResult, p: ReadPerson) => result.leaveRecords.filter((l) => normName(l.employeeName) === normName(p.name));
@@ -489,8 +511,23 @@ export function reconcileReadings(
     const aiRows = rowsOf(ai, a).map(fix);
     if (!t) {
       disagreements++;
-      rows.push(...aiRows.map((r) => withFlag({ ...r, readerSource: 'ai' }, 'ai_only')));
       leaveRecords.push(...leaveOf(ai, a).map((l) => ({ ...l, employeeName: name })));
+      if (opts.aiConfirmed) {
+        rows.push(...aiRows.map((r) => withFlag({ ...r, readerSource: 'ai' }, 'ai_only')));
+        continue;
+      }
+      // Only the AI reader saw this person and no second reading confirmed their days: listed, but
+      // none of their shifts is saved on the AI's word — each is shown, with its day, to check.
+      for (const date of [...new Set(aiRows.map((r) => r.date))].sort()) {
+        anomalies.push({
+          employeeName: name,
+          date,
+          rawText: `AI reader: ${aiRows.filter((r) => r.date === date).map((r) => `${r.startTime}–${r.endTime}`).join(' · ')}`,
+          reason: "Only the AI reader saw this person, and nothing else confirmed this day, so the shift was not imported. Check the roster and add it on the rota if it's right.",
+          confidence: 0.4,
+          rowNumber: null,
+        });
+      }
       continue;
     }
     const tableRows = rowsOf(table, t).map(fix);
@@ -522,6 +559,12 @@ export function reconcileReadings(
         // Both readers read this day the same way: a day the table reader inferred is confirmed.
         settledDates.add(date);
         rows.push(...tDay.map((r) => confirmed({ ...r, readerSource: 'both', roleName: r.roleName || aDay[0]?.roleName || '' })));
+        continue;
+      }
+      if (tDay.length && !certain(tDay) && confirmedBySome([t.name, a.name], date, tDay)) {
+        // A day the table reader inferred, read the same way by one of the AI readings on its own: confirmed.
+        settledDates.add(date);
+        rows.push(...tDay.map((r) => confirmed({ ...r, readerSource: 'both' })));
         continue;
       }
       const leave = leaveRead.get(date);
@@ -596,8 +639,14 @@ export function reconcileReadings(
     disagreements++;
     people.push({ ...t, readerSource: 'table' });
     nameMap.set(t.name, t.name);
-    // The person is marked as found by the table reader only; a row it read for certain is the file's own text.
-    rows.push(...rowsOf(table, t).map((r) => ({ ...r, personKey: t.personKey, readerSource: 'table' as const })).map((r) => (r.inferredDay || r.inferredTimes ? withFlag(r, 'table_only') : r)));
+    // The person is marked as found by the table reader only; a row it read for certain is the file's
+    // own text, and a day it inferred stands only where one of the AI readings on its own read it so.
+    const own = rowsOf(table, t).map((r) => ({ ...r, personKey: t.personKey, readerSource: 'table' as const }));
+    for (const date of [...new Set(own.map((r) => r.date))]) {
+      const day = own.filter((r) => r.date === date);
+      if (day.some((r) => r.inferredDay) && confirmedBySome([t.name], date, day)) rows.push(...day.map((r) => confirmed({ ...r, readerSource: 'both' })));
+      else rows.push(...day.map((r) => (r.inferredDay || r.inferredTimes ? withFlag(r, 'table_only') : r)));
+    }
     leaveRecords.push(...leaveOf(table, t));
   }
 

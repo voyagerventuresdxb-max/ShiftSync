@@ -104,13 +104,24 @@ function weekOfRows(result: ParsedVisionResult, ctx: Pick<UploadReadContext, 'to
   return { weekStart, weekEnd: addDays(weekStart, 6), source: 'printed_dates', printedLabel: `${dates[0]} … ${dates[dates.length - 1]}`, needsConfirmation: false, reason: null };
 }
 
-/** Fills the fields every outcome carries: people, unread rows, week. */
+/** What the review says about a shift whose day was inferred and that nothing confirmed. */
+const INFERRED_DAY =
+  "This shift's day could only be inferred from how the file's columns line up, and nothing confirmed it, so it was not imported. Check the day on the roster and add the shift on the rota.";
+
+/**
+ * Fills the fields every outcome carries: people, unread rows, week. A shift whose day the
+ * table reader inferred and no second reading confirmed is never saved: it is shown, with the
+ * day it would have had, as a day to check.
+ */
 function complete(result: ParsedVisionResult, reader: 'ai' | 'table', ctx: UploadReadContext): ParsedVisionResult & { week: WeekDetection } {
   const people = result.people ?? peopleFromRows(result.rows, result.leaveRecords, reader);
+  const guessed = result.rows.filter((r) => r.inferredDay);
+  const unconfirmed = guessed.map((r) => ({ employeeName: r.employeeName, date: r.date, rawText: `${r.startTime}–${r.endTime}`, reason: INFERRED_DAY, confidence: 0.3, rowNumber: null }));
   return {
     ...result,
+    anomalies: [...result.anomalies, ...unconfirmed],
     leaveRecords: result.leaveRecords.map(({ inferredDay: _inferred, ...l }) => l),
-    rows: withPersonKeys(result.rows, people),
+    rows: withPersonKeys(guessed.length ? result.rows.filter((r) => !r.inferredDay) : result.rows, people),
     people,
     unreadRows: result.unreadRows ?? [],
     week: result.week ?? weekOfRows(result, ctx),
@@ -134,7 +145,8 @@ function report(
 ): ReadingReport {
   const differed = parts.aiDiffCells ?? 0;
   const crossCheckNote = differed > 0 ? `The AI cross-check differed on ${differed} ${differed === 1 ? 'cell' : 'cells'}; the file's own text was used.` : null;
-  const note = [hardToReadNote(parts.cells), readingNote(parts.ai, parts.table, parts.crossChecked ?? 'no'), crossCheckNote].filter(Boolean).join(' ') || null;
+  const what = parts.table === 'not_applicable' ? 'photo' : 'file';
+  const note = [hardToReadNote(parts.cells, what), readingNote(parts.ai, parts.table, parts.crossChecked ?? 'no'), crossCheckNote].filter(Boolean).join(' ') || null;
   return {
     ai: parts.ai,
     table: parts.table,
@@ -157,23 +169,39 @@ type CrossChecked = 'yes' | 'failed' | 'no';
  * Cells (person and day) the two readings of a photo or scan compared, those they read
  * differently, and the pages nothing was imported from (with why, for the review screen).
  */
-type CellsToCheck = { toCheck: number; compared: number; withheld: { page: number; reason: string }[]; pageCount: number; secondFailed?: boolean };
+type CellsToCheck = {
+  toCheck: number;
+  compared: number;
+  withheld: { page: number; reason: string }[];
+  pageCount: number;
+  secondFailed?: boolean;
+  /** A text PDF whose day columns couldn't be anchored: pages the two AI readings disagreed on too much (only days the file's text and an AI reading agree on were kept). */
+  doubtedPages?: number[];
+};
 
-/** Said first when a photo or scan was hard to read: pages nothing was imported from, or many cells read two ways. */
-function hardToReadNote(cells: CellsToCheck | undefined): string | null {
+/**
+ * Said first when a file read twice by the AI reader (a photo or scan; a text PDF or a
+ * spreadsheet the built-in reader couldn't anchor) was hard to read: pages nothing was imported
+ * from, or many cells read two ways.
+ */
+function hardToReadNote(cells: CellsToCheck | undefined, what: 'photo' | 'file'): string | null {
   if (!cells) return null;
   if (cells.secondFailed) {
-    return 'The second AI reading of this photo or scan could not be made, so it could not be checked and nothing was imported — no people, no shifts. Upload it again in a minute, or upload the original PDF or spreadsheet.';
+    const of = what === 'photo' ? 'this photo or scan' : 'this file';
+    return `The second AI reading of ${of} could not be made, so it could not be checked and nothing was imported — no people, no shifts. Upload it again in a minute, or upload the original PDF or spreadsheet.`;
+  }
+  if (cells.doubtedPages?.length) {
+    return `This file's day columns don't line up with its header, and the two AI readings disagreed on too much of page ${cells.doubtedPages.join(', ')}, so from it only the days the file's own text and an AI reading agree on were imported; every other day is shown to check. For best results upload the original spreadsheet.`;
   }
   if (cells.withheld.length) {
     const all = cells.withheld.length >= cells.pageCount;
     const which = all ? 'nothing from it' : `nothing from page ${cells.withheld.map((u) => u.page).join(', ')}`;
-    return `This photo was hard to read — the two readings disagreed on, or were unsure of, too much of it, so ${which} was imported: no people, no shifts. For best results upload the original PDF or spreadsheet, or add the people by hand.`;
+    return `This ${what} was hard to read — the two readings disagreed on too much of it, so ${which} was imported: no people, no shifts. For best results upload the original PDF or spreadsheet, or add the people by hand.`;
   }
   if (cells.toCheck === 0) return null;
   const many = cells.toCheck >= 5 || cells.toCheck / Math.max(1, cells.compared) >= 0.1;
   if (!many) return null;
-  return `This photo was hard to read — ${cells.toCheck} ${cells.toCheck === 1 ? 'cell needs' : 'cells need'} checking; for best results upload the original PDF or spreadsheet.`;
+  return `This ${what} was hard to read — ${cells.toCheck} ${cells.toCheck === 1 ? 'cell needs' : 'cells need'} checking; for best results upload the original PDF or spreadsheet.`;
 }
 
 /** How the reading was checked, in plain words for the review screen. */
@@ -201,13 +229,22 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
    * allowance gates pass. Returns the reading, or why there is none (never throws for a
    * provider failure).
    */
-  type AiRead = { outcome: AiReadOutcome; result: ParsedVisionResult; fromCache: boolean; crossChecked: CrossChecked; disagreements: number; cells?: CellsToCheck };
+  type AiRead = {
+    outcome: AiReadOutcome;
+    result: ParsedVisionResult;
+    fromCache: boolean;
+    crossChecked: CrossChecked;
+    disagreements: number;
+    cells?: CellsToCheck;
+    /** The two AI readings on their own (read twice), each able to confirm a day the table reader inferred. */
+    readings?: ParsedVisionResult[];
+  };
   /**
    * The second reading of a photo or scan compared with the first (aiCrossCheck.ts). With no
    * second reading nothing can be checked, so nothing is imported: a photo may fail loudly, it
    * never saves an unchecked reading.
    */
-  const withCrossCheck = (first: ParsedVisionResult, crossAnswer: ReadingAnswer | null | undefined, wanted: boolean, pageCount: number): Pick<AiRead, 'result' | 'crossChecked' | 'disagreements' | 'cells'> => {
+  const withCrossCheck = (first: ParsedVisionResult, crossAnswer: ReadingAnswer | null | undefined, wanted: boolean, pageCount: number): Pick<AiRead, 'result' | 'crossChecked' | 'disagreements' | 'cells' | 'readings'> => {
     if (!wanted) return { result: first, crossChecked: 'no', disagreements: 0 };
     if (!crossAnswer) {
       const reason = 'The second AI reading of this page could not be made, so it could not be checked and nothing from it was imported. Upload it again in a minute, or upload the original PDF or spreadsheet.';
@@ -216,9 +253,10 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       return { result: nothing, crossChecked: 'failed', disagreements: 0, cells: { toCheck: 0, compared: 0, withheld, pageCount, secondFailed: true } };
     }
     progress({ kind: 'cross_check' });
-    const checked = crossCheckAiReadings(first, mapReadingAnswer(crossAnswer, week));
+    const second = mapReadingAnswer(crossAnswer, week);
+    const checked = crossCheckAiReadings(first, second);
     const withheld = checked.withheldPages.map((u) => ({ page: u.page, reason: withheldPageReason(u) }));
-    return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements, cells: { toCheck: checked.cellsToCheck, compared: checked.cellsCompared, withheld, pageCount } };
+    return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements, cells: { toCheck: checked.cellsToCheck, compared: checked.cellsCompared, withheld, pageCount }, readings: [first, second] };
   };
 
   /**
@@ -233,7 +271,9 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     tablePeoplePerPage?: Map<number, number>,
     crossCheck = false,
   ): Promise<AiRead | AiSkip> => {
-    const cached = ctx.cache ? await ctx.cache.get(ctx.locationId ?? 'local', sha).catch(() => null) : null;
+    const stored = ctx.cache ? await ctx.cache.get(ctx.locationId ?? 'local', sha).catch(() => null) : null;
+    // A reading kept without its second reading can't stand in for one that needs it.
+    const cached = stored && (!crossCheck || stored.cross) ? stored : null;
     if (cached) {
       const { cross, ...answer } = cached;
       // A page the reading still came up short on stays reported as rows to check.
@@ -247,7 +287,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     const blocked = await ctx.aiBlockedReason();
     if (blocked) return { ai: 'unavailable', message: blocked, code: 'vision_fallback_blocked', status: 422 };
     const options = { provider: ctx.provider, locationId: ctx.locationId, userId: ctx.userId, deadline: ctx.deadline };
-    const secondRead = async (scan: Extract<AiReadSource, { kind: 'file' }>) => {
+    const secondRead = async (scan: AiReadSource) => {
       progress({ kind: 'second_read', state: 'started' });
       try {
         return await aiCrossRead(scan, options);
@@ -258,7 +298,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     // Both readings at once: the wall time is the slower of the two.
     const [primary, cross] = await Promise.allSettled([
       aiReadRoster(source, { ...options, ...(tablePeoplePerPage ? { tablePeoplePerPage } : {}), onProgress: ctx.onProgress }),
-      crossCheck && source.kind === 'file' ? secondRead(source) : Promise.resolve(null),
+      crossCheck ? secondRead(source) : Promise.resolve(null),
     ]);
     if (cross.status === 'rejected') throw cross.reason;
     const crossAnswer = cross.value?.answer ?? null;
@@ -389,10 +429,15 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
         : (deterministicEscalationReason(tableResult) ?? ((tableResult.unreadRows?.length ?? 0) > 0 ? 'rows_not_read' : 'ai_cross_check'));
     const perPage = new Map<number, number>();
     for (const p of tableResult?.people ?? []) if (p.sourcePage) perPage.set(p.sourcePage, (perPage.get(p.sourcePage) ?? 0) + 1);
+    // Day columns the table reader couldn't anchor on the header (or no table reading at all):
+    // nothing the AI reads is confirmed by the file's text, so it is read twice like a photo and
+    // only what both readings agree on can be saved.
+    const anchored = !!tableResult && !dataLoss && (tableResult.rows.length > 0 || (tableResult.people?.length ?? 0) > 0) && table.unanchoredPages.length === 0;
     const read = await readWithAi(
       { kind: 'file', data: file.buffer, mimeType: 'application/pdf', name: file.originalname, pageCount: table.pageCount, pageTexts: table.pageTexts },
       reason,
       perPage,
+      !anchored,
     );
     if ('ai' in read) {
       if (tableResult) return tableOnly(tableResult, read, reason, { tableState });
@@ -400,9 +445,50 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       return refused(read, reason);
     }
     if (tableResult) progress({ kind: 'cross_check' });
-    const { result: merged, disagreements, aiDiffCells } = reconcileReadings(read.result, tableResult);
+    // A page the two AI readings disagreed on too much still has the file's own text: its days the
+    // text and an AI reading agree on are kept, every other one is shown — said in the note, not as
+    // a page with nothing on it.
+    let aiReading = read.result;
+    let cells = read.cells;
+    if (tableResult && cells?.withheld.length) {
+      const doubted = new Set(cells.withheld.map((w) => w.page));
+      aiReading = { ...aiReading, unreadRows: (aiReading.unreadRows ?? []).filter((u) => !(u.row === null && !u.text && doubted.has(u.page ?? 1))) };
+      cells = { ...cells, withheld: [], doubtedPages: [...doubted] };
+    }
+    const { result: merged, disagreements, aiDiffCells } = reconcileReadings(aiReading, tableResult, { aiConfirmed: read.crossChecked === 'yes', ...(read.readings ? { confirmWith: read.readings } : {}) });
+    if (cells?.doubtedPages?.length && read.readings) {
+      // On a page the AI readings disagreed on too much, a person only an AI reading listed is
+      // never imported — but stays visible, as a row to check.
+      const key = (s: string) => s.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+      const known = new Set((merged.people ?? []).map((p) => key(p.name)));
+      const doubted = new Set(cells.doubtedPages);
+      const unread = [...(merged.unreadRows ?? [])];
+      for (const reading of read.readings) {
+        for (const p of reading.people ?? []) {
+          if (!doubted.has(p.sourcePage ?? 1) || known.has(key(p.name))) continue;
+          known.add(key(p.name));
+          const days = reading.rows.filter((r) => key(r.employeeName) === key(p.name)).map((r) => `${r.date.slice(5)} ${r.startTime}–${r.endTime}`);
+          unread.push({ page: p.sourcePage, row: p.sourceRow, text: [p.name, ...days].join(' | '), reason: "Only an AI reading listed this row, and the file's own text and the other reading don't show it, so it was not imported. Add them by hand if they're on the roster." });
+        }
+      }
+      merged.unreadRows = unread;
+    }
     const result = complete(merged, 'ai', ctx);
-    return { ok: true, result, reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: tableState, tableResult, ai_: read.outcome, disagreements, aiDiffCells, fromCache: read.fromCache }) };
+    return {
+      ok: true,
+      result,
+      reading: report(result, {
+        ai: read.fromCache ? 'cached' : 'used',
+        table: tableState,
+        tableResult,
+        ai_: read.outcome,
+        disagreements: disagreements + read.disagreements,
+        aiDiffCells,
+        fromCache: read.fromCache,
+        crossChecked: read.crossChecked,
+        cells,
+      }),
+    };
   }
 
   // --- spreadsheets ---------------------------------------------------------------------------------
@@ -449,7 +535,8 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
   }
   if (dataLoss) {
     // The grid parser proved it dropped real data: the AI reader (with consent), else a clear 422.
-    const read = await readWithAi(gridSource, 'extraction_anomaly');
+    // No table reading to confirm the AI's: it reads the grid twice and only what both agree on is saved.
+    const read = await readWithAi(gridSource, 'extraction_anomaly', undefined, true);
     if ('ai' in read) {
       if (read.code === 'vision_unconfigured') return { ok: false, status: 422, body: { error: withManualPath(dataLoss.message), errorCode: 'roster_extraction_anomaly' } };
       return refused(read, 'extraction_anomaly');
@@ -464,7 +551,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
   }
   if (gridResult!.templateLabel !== 'Deterministic Grid Parser') {
     // A layout the grid parser genuinely doesn't recognise (e.g. days-as-rows).
-    const read = await readWithAi(gridSource, 'unrecognized_layout');
+    const read = await readWithAi(gridSource, 'unrecognized_layout', undefined, true);
     if ('ai' in read) {
       if (read.code === 'vision_unconfigured') {
         const local = processRowsIntoRoster(grid, ctx.clientWeekStart ?? undefined);

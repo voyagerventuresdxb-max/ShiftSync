@@ -30,7 +30,7 @@ import { isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias, isRoleTitle } from './resolveRows.js';
 import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
 import { ambiguousDottedTime, parseShiftText, parseSingleTime, sheetDotStyle, withinOneDay, type ShiftTextOptions } from './shiftText.js';
-import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isLabelLine, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle, UNREADABLE_NAME } from './personKey.js';
+import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isLabelLine, isSectionLabel, joinLigatureSplits, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle, UNREADABLE_NAME } from './personKey.js';
 import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -113,7 +113,8 @@ function hasOwnKey<T extends object>(obj: T, key: string): key is Extract<keyof 
 function normalizeCell(value: unknown): string {
   // A Date here is a typed date/time cell (see parseWorkbook.ts `readWorkbook`);
   // its text must not depend on the host's zone, so never `String(date)`.
-  return cellToText(value).trim();
+  // A word a text layer split at a ligature ("O ffi ce", "Sa ffi ya") is read whole.
+  return joinLigatureSplits(cellToText(value).trim());
 }
 
 /** True when every cell in a row (besides the given column range) is blank. */
@@ -765,8 +766,8 @@ const roleishCell = (v: string) =>
   isRecognizedRoleAlias(v) || isRecognizedRoleAlias(v.replace(/\s*\d+$/, '')) || /[A-Za-z].*\d/.test(v) || /^[A-Z]{2,4}$/.test(v) || canonicalRoleName(v) !== v || isRoleTitle(v);
 /** A name cell: words of letters that are not a title. */
 const nameishCell = (v: string) => looksLikePersonName(v) && !roleishCell(v);
-/** An index or row-number cell ("1", "12.", "#7"). */
-const indexCell = (v: string) => /^#?\d{1,4}[.)]?$/.test(v);
+/** An index, row-number or ID cell ("1", "12.", "#7", "104233", "E-1042", "PR0042"): never a name. */
+const indexCell = (v: string) => /^#?\d{1,4}[.)]?$/.test(v) || /^[A-Za-z]{0,4}[-_#/ ]?\d{3,10}$/.test(v);
 
 /**
  * Two leading columns before the days: which is the per-row title ("RM", "Head waiter 1",
@@ -790,10 +791,20 @@ function titleColumnByContent(pairs: { col0: string; col1: string }[]): 0 | 1 | 
  * column reads as names.
  */
 function leadColumnsByHeadingAndContent(headings: (ReturnType<typeof columnHeading>)[], values: string[][]): { name: number; title: number } | null {
-  const cols = values.map((vals, c) => {
+  const read = values.map((vals, c) => {
     const filled = vals.filter(Boolean);
     const share = (f: (v: string) => boolean) => (filled.length ? filled.filter(f).length / filled.length : 0);
-    return { c, heading: headings[c] ?? null, index: headings[c] === 'index' || share(indexCell) >= 0.6, names: share(nameishCell), roles: share(roleishCell) };
+    return { c, said: headings[c] ?? null, ids: share(indexCell), names: share(nameishCell), roles: share(roleishCell) };
+  });
+  // A heading row printed off its columns (a broken export) puts "NAME" over the row numbers and
+  // "POSITION" over the names: when any heading is plainly contradicted by its column's own cells,
+  // no heading of that row is believed, and the cells alone decide.
+  const contradicted = read.some((k) =>
+    k.said === 'name' ? k.ids >= 0.6 || k.roles > k.names : k.said === 'index' ? k.names >= 0.6 : k.said === 'title' ? k.ids >= 0.6 || (k.names >= 0.6 && k.roles < 0.2) : false,
+  );
+  const cols = read.map((k) => {
+    const heading = contradicted ? null : k.said;
+    return { c: k.c, heading, index: heading === 'index' || k.ids >= 0.6, names: k.names, roles: k.roles };
   });
   const candidates = cols.filter((k) => !k.index && k.heading !== 'title' && k.heading !== 'other');
   const name = candidates.find((k) => k.heading === 'name') ?? [...candidates].filter((k) => k.names > 0).sort((a, b) => b.names - b.roles - (a.names - a.roles))[0];
@@ -914,10 +925,21 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       const v1 = normalizeCell(grid[r]?.[1]);
       if (v0 && v1 && v0 !== v1 && !CAPTION_WORDS.test(v0) && !CAPTION_WORDS.test(v1)) pairs.push({ col0: v0, col1: v1 });
     }
-    // Headings printed over the two columns ("NAME" | "TITLE", in either order) say it outright.
+    // Headings printed over the two columns ("NAME" | "TITLE", in either order) say it outright —
+    // unless a heading is plainly contradicted by its column's cells (a header row printed off its
+    // columns puts "NAME" over the row numbers). An ID or row-number column is never the names.
     const [h0, h1] = [headingOf(0), headingOf(1)];
-    const byHeading = h0 === 'title' || h1 === 'name' ? 0 : h0 === 'name' || h1 === 'title' ? 1 : null;
-    const titleCol = byHeading ?? titleColumnByContent(pairs);
+    const shareOf = (c: 0 | 1, f: (v: string) => boolean) => (pairs.length ? pairs.filter((p) => f(c === 0 ? p.col0 : p.col1)).length / pairs.length : 0);
+    const ids = [shareOf(0, indexCell), shareOf(1, indexCell)];
+    const names = [shareOf(0, nameishCell), shareOf(1, nameishCell)];
+    const roles = [shareOf(0, roleishCell), shareOf(1, roleishCell)];
+    const contradicted = [h0, h1].some((h, c) =>
+      h === 'name' ? ids[c]! >= 0.6 || roles[c]! > names[c]! : h === 'index' ? names[c]! >= 0.6 : h === 'title' ? ids[c]! >= 0.6 || (names[c]! >= 0.6 && roles[c]! < 0.2) : false,
+    );
+    const byHeading = contradicted ? null : h0 === 'title' || h1 === 'name' ? 0 : h0 === 'name' || h1 === 'title' ? 1 : null;
+    let titleCol = byHeading ?? titleColumnByContent(pairs);
+    if (ids[0]! >= 0.6 && ids[1]! < 0.6) titleCol = 0;
+    else if (ids[1]! >= 0.6 && ids[0]! < 0.6) titleCol = 1;
     if (titleCol === 1) {
       titleColIndex = 1;
       nameColIndex = 0;
@@ -1210,9 +1232,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     const row = grid[r] ?? [];
 
     // A line with no shift, time or leave in any day that reads, anywhere along it, as a label, a
-    // form line or a footer ("Checked by: ____", "Date:", "Page 2 of 3", "Printed on …"): never a
-    // person, wherever it sits — even when what is left in the name column looks like a name.
-    if (!hasData(row) && row.some((c) => isLabelLine(normalizeCell(c)))) continue;
+    // form line, a footer or a row of column headings ("Checked by: ____", "Date:", "Page 2 of 3",
+    // "Office use only", "Payroll ID | Name | Pos"): never a person, wherever it sits and in
+    // whatever column order — even when what is left in the name column looks like a name.
+    if (!hasData(row) && (row.some((c) => isLabelLine(normalizeCell(c))) || row.filter((c) => columnHeading(normalizeCell(c))).length >= 2)) continue;
     if (lastDataRow >= 0 && r > lastDataRow && !hasData(row) && !daysBlank(row)) {
       const label = withoutLeadingIndex(normalizeCell(row[hasTitleColumn ? nameColIndex : 0]));
       if (looksLikePersonName(label) && !nonPersonReason(label)) addUnread(r, row.map(normalizeCell).filter(Boolean).join(' | '), BELOW_ROSTER);
