@@ -53,3 +53,14 @@ test('a person question whose choices this role cannot confirm keeps the questio
   assert.equal(shown.options, undefined);
   assert.equal(shown.reason, 'Say their full name and try again.');
 });
+
+test('the pick-from-your-team list keeps only what this role can confirm, and survives a filtered-out suggestion list', () => {
+  const missing: ParsedIntent = {
+    intent: 'UNRECOGNIZED', reason: 'Check the name.', summary: "I couldn't find Rana on your team.",
+    person: { heard: 'Rana', status: 'missing' }, team: [{ ...swap, targetUserId: 'a1' }, approve, { ...swap, targetUserId: 'b2' }],
+  };
+  const shown = choosableFor('STAFF', missing);
+  assert.deepEqual(shown.intent === 'UNRECOGNIZED' && shown.team?.map((o) => o.intent === 'REQUEST_SWAP' && o.targetUserId), ['a1', 'b2']);
+  const none = choosableFor('STAFF', { ...missing, team: [approve] });
+  assert.equal(none.intent === 'UNRECOGNIZED' && 'team' in none, false);
+});

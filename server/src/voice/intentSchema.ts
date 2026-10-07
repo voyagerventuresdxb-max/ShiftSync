@@ -18,6 +18,8 @@ export type IntentType = ManagerIntentType;
 export interface ReadingDetails {
   /** The person this is about: shout-out recipient, cover, assignee, applicant, or swap requester. */
   person?: string | null;
+  /** That person's own role at the venue ("Bartender"), so a wrong match is visible at a glance. */
+  personRole?: string | null;
   /** APPROVE_SWAP/DECLINE_SWAP: who was asked to cover. */
   cover?: string | null;
   /** CREATE_SHIFT/EDIT_SHIFT: the role name (EDIT_SHIFT: only when it changes). */
@@ -68,6 +70,8 @@ export type ParsedIntent =
       incomplete?: { intent: string; missing: string[] };
       /** Nobody by the name said, but close names and no complete reading to offer: the same words with each name, to read again. */
       retry?: { person: string; text: string }[];
+      /** Nobody at the venue sounds like the name said: one complete reading per teammate, to pick from. */
+      team?: ChoosableIntent[];
     };
 
 /** An intent the caller can pick from a "which did you mean?" list: an action, never a question or a non-answer. */

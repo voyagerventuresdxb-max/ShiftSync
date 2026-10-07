@@ -7,7 +7,7 @@ export interface PromptContext {
   /** The caller's own upcoming shifts — only relevant/populated for REQUEST_SWAP. */
   callerShifts: { id: string; date: string; startTime: string; endTime: string }[];
   /** Every active staff member at this location, for name resolution. */
-  staffDirectory: { id: string; fullName: string }[];
+  staffDirectory: { id: string; fullName: string; role?: string | null }[];
   /** Only populated for manager-tier callers — the pending decisions they could be asked to act on. */
   pendingSwapRequests?: { id: string; requesterName: string; coverName?: string | null; shiftLabel: string; shift?: { date: string; start: string; end: string } }[];
   pendingJoinRequests?: { id: string; fullName: string; phone: string }[];

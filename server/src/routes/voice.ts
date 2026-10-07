@@ -4,7 +4,7 @@ import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager } from '../middleware/requireSession.js';
 import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
-import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
+import { buildVocabularyHint, transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import type { AiBudgetExceededError } from '../lib/aiBudget.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
@@ -195,16 +195,13 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
         prisma.floorSection.findMany({ where: { locationId: req.user!.locationId }, select: { label: true } }),
         prisma.role.findMany({ where: { locationId: req.user!.locationId }, select: { name: true } }),
       ]);
-      const vocabularyTerms = [
-        ...staff.map((s) => s.fullName),
-        ...sections.map((s) => s.label),
-        ...roles.map((r) => r.name),
-        'rota', 'floor', 'section', 'swap', 'cover', 'shift',
-      ];
-      // Cap (and, as a side effect, de-dupe via Set) so a venue with hundreds
-      // of staff/sections/roles doesn't blow up the prompt appended to every
-      // transcription — this is a hint, not a directory.
-      vocabulary = [...new Set(vocabularyTerms)].slice(0, 150).join(', ');
+      // Capped, de-duplicated, contact-looking text dropped (buildVocabularyHint): a venue with
+      // hundreds of staff/sections/roles doesn't blow up the prompt — this is a hint, not a directory.
+      vocabulary = buildVocabularyHint(
+        staff.map((s) => s.fullName),
+        sections.map((s) => s.label),
+        roles.map((r) => r.name),
+      );
     } catch (vocabErr) {
       console.error('[voice.transcribe] failed to build vocabulary hint, transcribing without it', vocabErr);
       vocabulary = undefined;

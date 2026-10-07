@@ -3,6 +3,7 @@ import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type PersonQuestion, type ReadingDetails } from './intentSchema.js';
 import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
+import { mentionedIn, periodSaid, type Term } from './vocabulary.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
 import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
@@ -65,14 +66,15 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
   const today = venueToday(timezone);
   const staff = await prisma.user.findMany({
     where: { locationId: user.locationId, isActive: true },
-    select: { id: true, fullName: true },
+    select: { id: true, fullName: true, role: { select: { name: true } } },
   });
 
   const ctx: PromptContext = {
     today,
     callerName: user.fullName,
     callerShifts: [],
-    staffDirectory: staff,
+    // The role is for the confirm sheet ("Omar Haddad · Bartender"); the prompt lists name → id only.
+    staffDirectory: staff.map((s) => ({ id: s.id, fullName: s.fullName, role: s.role?.name ?? null })),
   };
 
   const startOfToday = new Date(`${today}T00:00:00.000Z`);
@@ -498,8 +500,57 @@ export async function checkAgainstContext(
     else if (found.kind !== 'unknown') return askWhichPerson(response, found, ctx, caller, timezone, transcript);
     // 'unknown' (no name, and an id from nowhere) is refused by the checks below.
   }
+  const term = await askWhichTerm(response, ctx, caller, timezone, transcript);
+  if (term) return term;
   const checked = await checkIds(response, ctx, caller, timezone);
   return checked.intent === 'UNRECOGNIZED' ? checked : withDetails(checked, ctx);
+}
+
+/**
+ * The section, role or service period the caller said, against the one the model picked: the
+ * venue's own sections/roles named in the transcript ("the bar" → Main Bar and Pool Bar) must
+ * include the model's pick and be only that one, and "closing"/"dinner" must not be a morning
+ * (or "opening"/"lunch" an evening). Otherwise one checked reading per candidate is put to the
+ * caller. Null when the words agree with the pick, or name none of the venue's items.
+ */
+async function askWhichTerm(
+  r: Reading,
+  ctx: PromptContext,
+  caller: { id: string; locationId: string },
+  timezone: string,
+  transcript: string,
+): Promise<ParsedIntent | null> {
+  if (!transcript.trim()) return null;
+  const readings: Reading[] = [];
+  let summary = WHICH_DID_YOU_MEAN;
+  if (r.intent === 'ASSIGN_SECTION' || r.intent === 'CREATE_SHIFT' || (r.intent === 'EDIT_SHIFT' && r.roleId)) {
+    const isSection = r.intent === 'ASSIGN_SECTION';
+    const items: Term[] = isSection ? (ctx.floorSections ?? []) : (ctx.roles ?? []).map((x) => ({ id: x.id, label: x.name }));
+    const current = isSection ? r.sectionId : (r as { roleId: string }).roleId;
+    const named = mentionedIn(transcript, items);
+    if (named.length && !(named.length === 1 && named[0]!.id === current)) {
+      const ids = [...new Set([...named.map((i) => i.id), ...(items.some((i) => i.id === current) ? [current] : [])])].slice(0, MAX_VOICE_OPTIONS + 1);
+      for (const id of ids) readings.push((isSection ? { ...r, sectionId: id } : { ...r, roleId: id }) as Reading);
+      summary = isSection ? 'Which section did you mean?' : 'Which role did you mean?';
+    }
+  }
+  if (!readings.length && r.intent === 'ASSIGN_SECTION') {
+    const said = periodSaid(transcript);
+    if (said && said !== r.period) {
+      readings.push({ ...r, period: said }, r);
+      summary = said === 'PM' ? 'You said an evening service — morning or evening?' : 'You said a daytime service — morning or evening?';
+    }
+  }
+  if (!readings.length) return null;
+  const options: ChoosableIntent[] = [];
+  for (const reading of readings) {
+    const checked = await checkIds(reading, ctx, caller, timezone);
+    if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+    const described = withDetails(checked, ctx);
+    options.push({ ...described, summary: personSummary(described) } as ChoosableIntent);
+  }
+  if (options.length < 2) return options.length ? null : NOT_FOUND(r.intent === 'ASSIGN_SECTION' ? 'section' : 'role');
+  return { intent: 'UNRECOGNIZED', summary, reason: PICK_ONE, options };
 }
 
 /** The id, date and overlap checks behind `checkAgainstContext`, for a reading whose person is settled. */
@@ -607,13 +658,18 @@ export function dayLabel(iso: string): string {
 /** Names for the confirm sheet's preview, from the caller's own venue lists only (never a phone number). */
 function describeReading(r: Reading, ctx: PromptContext): ReadingDetails | undefined {
   const nameOf = (id: string) => ctx.staffDirectory.find((s) => s.id === id)?.fullName ?? null;
+  // The person's own role, next to their name, when the venue has one for them.
+  const personRole = (id: string | null | undefined) => {
+    const role = id ? ctx.staffDirectory.find((s) => s.id === id)?.role : null;
+    return role ? { personRole: role } : {};
+  };
   const roleOf = (id: string) => (ctx.roles ?? []).find((x) => x.id === id)?.name;
   switch (r.intent) {
     case 'POST_SHOUTOUT':
-      return { person: nameOf(r.targetUserId) };
+      return { person: nameOf(r.targetUserId), ...personRole(r.targetUserId) };
     case 'REQUEST_SWAP': {
       const s = ctx.callerShifts.find((x) => x.id === r.shiftId);
-      return { person: nameOf(r.targetUserId), ...(s ? { shift: { date: s.date, start: s.startTime, end: s.endTime } } : {}) };
+      return { person: nameOf(r.targetUserId), ...personRole(r.targetUserId), ...(s ? { shift: { date: s.date, start: s.startTime, end: s.endTime } } : {}) };
     }
     case 'APPROVE_SWAP':
     case 'DECLINE_SWAP': {
@@ -626,17 +682,17 @@ function describeReading(r: Reading, ctx: PromptContext): ReadingDetails | undef
       return j ? { person: j.fullName } : undefined;
     }
     case 'CREATE_SHIFT':
-      return { person: r.userId ? nameOf(r.userId) : null, role: roleOf(r.roleId) };
+      return { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId), role: roleOf(r.roleId) };
     case 'EDIT_SHIFT': {
       const s = (ctx.weekShifts ?? []).find((x) => x.id === r.shiftId);
       return {
-        ...(r.userId !== undefined ? { person: r.userId ? nameOf(r.userId) : null } : {}),
+        ...(r.userId !== undefined ? { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId) } : {}),
         ...(r.roleId ? { role: roleOf(r.roleId) } : {}),
         ...(s ? { shift: { date: s.date, start: s.start, end: s.end, role: s.roleName, person: s.assigneeName } } : {}),
       };
     }
     case 'ASSIGN_SECTION':
-      return { person: nameOf(r.staffId), section: (ctx.floorSections ?? []).find((x) => x.id === r.sectionId)?.label };
+      return { person: nameOf(r.staffId), ...personRole(r.staffId), section: (ctx.floorSections ?? []).find((x) => x.id === r.sectionId)?.label };
     default:
       return undefined;
   }
@@ -712,8 +768,22 @@ async function askWhichPerson(
     return { intent: 'UNRECOGNIZED', summary, reason, person: { heard, status: 'ambiguous' }, ...choices };
   }
 
-  return missingPerson(found, caller, transcript, options);
+  // Nobody sounds like the name said: the whole team, each as a complete checked reading, to pick from.
+  const team: ChoosableIntent[] = [];
+  if (!candidates.length) {
+    for (const person of [...ctx.staffDirectory].sort((a, b) => a.fullName.localeCompare(b.fullName)).slice(0, MAX_TEAM_PICKS)) {
+      const checked = await checkIds(withPerson(reading, person), ctx, caller, timezone);
+      if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+      const described = withDetails(checked, ctx);
+      team.push({ ...described, summary: personSummary(described) } as ChoosableIntent);
+    }
+  }
+  const result = missingPerson(found, caller, transcript, options);
+  return team.length && result.intent === 'UNRECOGNIZED' ? { ...result, team } : result;
 }
+
+/** At most this many teammates in the "pick from your team" list. */
+export const MAX_TEAM_PICKS = 80;
 
 /** "I couldn't find Rana on your team.", with any close names as choices and, for managers, where to add them. */
 function missingPerson(

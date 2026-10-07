@@ -345,16 +345,43 @@ test('"Move Alex\'s shift to 7pm", every key sent: the name is whose shift it is
   assert.ok(!('person' in (intent.details ?? {})), 'no change of person in the preview');
 });
 
-test('"Give Alix a shout-out." with no note: Alex Morgan is still named, and offered as the same words with his name to read again', async () => {
-  const said = 'Give Alix a shout-out.';
-  const q = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alix', content: null, confidence: 0.9, summary: 'Give Alix a shout-out.' })).intent);
-  assert.equal(q.summary, "I couldn't find Alix on your team.");
-  assert.ok(q.reason.startsWith(`Did you mean ${PEOPLE.alex.name}? If Alix is new`), q.reason);
+test('"Give Alek a shout-out." with no note: Alex Morgan is still named, and offered as the same words with his name to read again', async () => {
+  const said = 'Give Alek a shout-out.';
+  const q = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alek', content: null, confidence: 0.9, summary: 'Give Alek a shout-out.' })).intent);
+  assert.equal(q.summary, "I couldn't find Alek on your team.");
+  assert.ok(q.reason.startsWith(`Did you mean ${PEOPLE.alex.name}? If Alek is new`), q.reason);
   assert.equal(q.options, undefined, 'no complete reading to confirm: the note is missing');
   assert.deepEqual(q.retry, [{ person: PEOPLE.alex.name, text: `Give ${PEOPLE.alex.name} a shout-out.` }]);
   // Reading those words again: the person is settled, and only the note is asked for.
   const again = question((await parse('MANAGER', q.retry![0]!.text, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: PEOPLE.alex.name, content: null, confidence: 0.9, summary: 'x' })).intent);
   assert.equal(again.summary, `I've got a shout-out for ${PEOPLE.alex.name} — what should it say?`);
+});
+
+test('"Alix": a short sound-alike is asked about, even when the model picked Alex — another name (Aziz) is within two letters', async () => {
+  const said = 'Give Alix a shout-out.';
+  const asked = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alix', content: null, confidence: 0.9, summary: said })).intent);
+  assert.equal(asked.summary, "I couldn't find Alix on your team.");
+  assert.deepEqual(asked.retry, [{ person: PEOPLE.alex.name, text: `Give ${PEOPLE.alex.name} a shout-out.` }]);
+  const picked = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: fx.users.alex, targetUserName: 'Alix', content: null, confidence: 0.9, summary: said })).intent);
+  assert.equal(picked.summary, "I couldn't find Alix on your team.");
+});
+
+test('nobody close to the name said: the whole team is offered to pick from, each as a checked reading with their role', async () => {
+  const before = await snapshot(prisma, locations());
+  const { intent } = await parse('MANAGER', 'Give Bartholomew a shout-out saying great job', shoutout('Bartholomew', null));
+  const q = question(intent);
+  assert.equal(q.summary, "I couldn't find Bartholomew on your team.");
+  assert.equal(q.options, undefined);
+  const team = q.team ?? [];
+  assert.ok(team.length >= Object.keys(PEOPLE).length, `team of ${team.length}`);
+  for (const o of team) {
+    assert.equal(o.intent, 'POST_SHOUTOUT');
+    assert.ok(o.intent === 'POST_SHOUTOUT' && Object.values(fx.users).includes(o.targetUserId), 'only this venue');
+  }
+  // The other venue has a Bartholomew Quill: never offered, never named.
+  for (const s of LEAK_STRINGS) assert.ok(!JSON.stringify(team).includes(s) || s === 'Bartholomew', `must not show ${s}`);
+  assert.ok(!JSON.stringify(team).includes('Quill'));
+  assert.equal(await snapshot(prisma, locations()), before);
 });
 
 test('the same sentence from the model as summary and reason reaches the app once', async () => {

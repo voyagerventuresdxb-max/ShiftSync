@@ -10,15 +10,22 @@ import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
  * suggestion, since the question itself stands without it.
  */
 export function choosableFor(systemRole: string, intent: ParsedIntent): ParsedIntent {
-  if (intent.intent !== 'UNRECOGNIZED' || !intent.options) return intent;
-  const options = intent.options.filter(
-    (o) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'QUERY_MY_SCHEDULE' && canConfirmVoiceIntent(systemRole, o.intent),
-  );
+  if (intent.intent !== 'UNRECOGNIZED') return intent;
+  const allowed = (o: ParsedIntent) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'QUERY_MY_SCHEDULE' && canConfirmVoiceIntent(systemRole, o.intent);
+  // "Pick from your team": the same check, list by list.
+  if (intent.team) {
+    const copy = { ...intent, team: intent.team.filter(allowed) };
+    if (!copy.team.length) delete (copy as { team?: unknown }).team;
+    intent = copy;
+  }
+  const team = intent.team ? { team: intent.team } : {};
+  if (!intent.options) return intent;
+  const options = intent.options.filter(allowed);
   if (options.length >= (intent.person ? 1 : 2)) return { ...intent, options };
   if (intent.person) {
     // Its reason pointed at choices that are gone now.
     const reason = intent.person.status === 'missing' ? 'Check the name and try again.' : 'Say their full name and try again.';
-    return { intent: 'UNRECOGNIZED', reason, summary: intent.summary, person: intent.person };
+    return { intent: 'UNRECOGNIZED', reason, summary: intent.summary, person: intent.person, ...team };
   }
   return { intent: 'UNRECOGNIZED', reason: 'Say it again, or fix what I heard and try again.', summary: "I'm not sure I got that right." };
 }

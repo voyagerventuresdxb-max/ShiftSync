@@ -4,6 +4,7 @@ import type { ParsedIntent, ReadingDetails } from '@/api/voice';
 import { AnnouncementCard, ShoutoutCard } from '@/components/shiftsync/FeedCards';
 import { formatStamp, initials } from '@/lib/feedFormat';
 import { cn } from '@/lib/utils';
+import { fullDay, shiftWhen } from '@/lib/voiceWhen';
 
 /**
  * What a voice command will do, drawn the way the app shows the result: a shout-out or an
@@ -12,13 +13,8 @@ import { cn } from '@/lib/utils';
  * venue), never from the model's wording.
  */
 
-/** "Sat 10 Oct" for a YYYY-MM-DD venue day. */
-function day(iso: string): string {
-  const d = new Date(`${iso}T00:00:00.000Z`);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-}
-
-const span = (start: string, end: string) => `${start}–${end}`;
+/** Days and times are spelled out in full ("Friday 9 October 2026, 18:30 – 01:00 (ends Saturday)") so a wrong one shows. */
+const day = fullDay;
 
 function Avatar({ name }: { name: string | null | undefined }) {
   return (
@@ -49,8 +45,8 @@ function Tag({ children, tone = 'muted' }: { children: ReactNode; tone?: 'muted'
   );
 }
 
-/** One rota-style line: who, then what/when, with an optional tag and a "was" line for edits. */
-function Line({ lead, title, detail, was, tag }: { lead: ReactNode; title: string; detail: string; was?: string; tag?: ReactNode }) {
+/** One rota-style line: who (and their role), then what/when, with an optional tag and a "was" line for edits. */
+function Line({ lead, title, role, detail, was, tag }: { lead: ReactNode; title: string; role?: string | null; detail: string; was?: string; tag?: ReactNode }) {
   return (
     <div className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-background/40 p-3">
       {lead}
@@ -59,6 +55,7 @@ function Line({ lead, title, detail, was, tag }: { lead: ReactNode; title: strin
           <p className="truncate text-sm font-semibold text-foreground/87">{title}</p>
           {tag}
         </div>
+        {role && <p className="text-[11px] font-medium text-foreground/60">{role}</p>}
         <p className="mt-0.5 text-xs text-foreground/60">{detail}</p>
         {was && <p className="mt-0.5 text-[11px] text-foreground/38">Was: {was}</p>}
       </div>
@@ -93,7 +90,16 @@ export function VoicePreview({ intent, viewerName }: { intent: ParsedIntent; vie
 function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewerName: string): ReactNode {
   switch (intent.intent) {
     case 'POST_SHOUTOUT':
-      return <ShoutoutCard as="div" name={d?.person ?? intent.targetUserName} note={intent.content} meta={`${viewerName} · just now`} />;
+      return (
+        <>
+          <ShoutoutCard as="div" name={d?.person ?? intent.targetUserName} note={intent.content} meta={`${viewerName} · just now`} />
+          {d?.person && d.personRole && (
+            <p className="mt-1.5 text-[11px] text-foreground/60">
+              For {d.person} · {d.personRole}
+            </p>
+          )}
+        </>
+      );
     case 'POST_ANNOUNCEMENT':
       return <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />;
     case 'CREATE_SHIFT': {
@@ -102,7 +108,8 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         <Line
           lead={<Avatar name={person} />}
           title={person ?? 'Open shift'}
-          detail={[d?.role, day(intent.date), span(intent.start, intent.end)].filter(Boolean).join(' · ')}
+          role={person ? d?.personRole : null}
+          detail={[d?.role, shiftWhen(intent.date, intent.start, intent.end)].filter(Boolean).join(' · ')}
           tag={<Tag>Draft</Tag>}
         />
       );
@@ -120,8 +127,9 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         <Line
           lead={<Avatar name={person} />}
           title={person ?? 'Open shift'}
-          detail={[after.role, after.date && day(after.date), after.start && after.end && span(after.start, after.end)].filter(Boolean).join(' · ')}
-          was={before ? [before.person ?? 'Open', day(before.date), span(before.start, before.end)].join(' · ') : undefined}
+          role={person && d && 'person' in d ? d.personRole : null}
+          detail={[after.role, after.date && (after.start && after.end ? shiftWhen(after.date, after.start, after.end) : day(after.date))].filter(Boolean).join(' · ')}
+          was={before ? [before.person ?? 'Open', shiftWhen(before.date, before.start, before.end)].join(' · ') : undefined}
           tag={<Tag tone="gold">Change</Tag>}
         />
       );
@@ -131,7 +139,8 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         <Line
           lead={<Avatar name={d?.person ?? intent.targetUserName} />}
           title={d?.person ?? intent.targetUserName ?? ''}
-          detail={[day(intent.shiftDate), intent.period, intent.dutyLabel].filter(Boolean).join(' · ')}
+          role={d?.personRole}
+          detail={[day(intent.shiftDate), intent.period === 'PM' ? 'Evening (PM)' : 'Morning (AM)', intent.dutyLabel].filter(Boolean).join(' · ')}
           tag={
             <Tag tone="gold">
               <MapPin className="-mt-px mr-1 inline h-3 w-3" aria-hidden />
@@ -145,7 +154,8 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         <Line
           lead={iconLead(<ArrowLeftRight className="h-4 w-4" />)}
           title={`Ask ${d?.person ?? intent.targetUserName} to cover`}
-          detail={d?.shift ? `Your shift · ${day(d.shift.date)} · ${span(d.shift.start, d.shift.end)}` : 'Your shift'}
+          role={d?.personRole}
+          detail={d?.shift ? `Your shift · ${shiftWhen(d.shift.date, d.shift.start, d.shift.end)}` : 'Your shift'}
           tag={<Tag>Request</Tag>}
         />
       );
@@ -155,7 +165,7 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         <Line
           lead={<Avatar name={d?.person} />}
           title={d?.person ? `${d.person}'s swap request` : 'Swap request'}
-          detail={[d?.cover ? `${d.cover} to cover` : null, d?.shift && day(d.shift.date), d?.shift && span(d.shift.start, d.shift.end)].filter(Boolean).join(' · ')}
+          detail={[d?.cover ? `${d.cover} to cover` : null, d?.shift && shiftWhen(d.shift.date, d.shift.start, d.shift.end)].filter(Boolean).join(' · ')}
           tag={intent.intent === 'APPROVE_SWAP' ? <Tag tone="gold">Approve</Tag> : <Tag tone="danger">Decline</Tag>}
         />
       );

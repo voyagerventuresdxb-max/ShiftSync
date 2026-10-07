@@ -161,6 +161,7 @@ export function VoiceCommandSheet({
   // Never the same sentence twice (the server already avoids it; this is the second check).
   const reason = isUnrecognized && intent.reason.trim() && !repeatsSentence(intent.reason, intent.summary) ? intent.reason : null;
   const retry = isUnrecognized && !choices ? (intent.retry ?? []) : [];
+  const team = isUnrecognized && !choices ? (intent.team ?? []) : [];
   const showEditor = editing || notUnderstood;
   const confirming = !isUnrecognized && !isAnswerOnly && !showFollowUp && !executed;
 
@@ -289,12 +290,15 @@ export function VoiceCommandSheet({
             </div>
           )}
 
+          {team.length > 0 && <TeamPicker heard={person?.heard ?? ''} team={team} onChoose={onChoose} busy={busy} />}
+
           {confirming && !showEditor && <VoicePreview intent={intent} viewerName={viewerName} />}
 
           {choices && !showEditor && (
             <div className="mt-4 flex flex-col gap-2" role="group" aria-label={person ? 'People to choose from' : 'Readings to choose from'}>
               {choices.map((option, i) => {
                 const name = person && option.intent !== 'UNRECOGNIZED' ? (option.details?.person ?? null) : null;
+                const role = name && option.intent !== 'UNRECOGNIZED' ? option.details?.personRole : null;
                 return (
                   <button
                     key={i}
@@ -309,7 +313,10 @@ export function VoiceCommandSheet({
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-foreground/87">{name ?? option.summary}</span>
+                      <span className="block truncate text-sm font-semibold text-foreground/87">
+                        {name ?? option.summary}
+                        {role && <span className="font-normal text-foreground/60"> · {role}</span>}
+                      </span>
                       {name && <span className="mt-0.5 block truncate text-xs text-foreground/60">{choiceDetail(option)}</span>}
                     </span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
@@ -378,6 +385,57 @@ export function VoiceCommandSheet({
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "I heard Rana — pick from your team": nobody at the venue sounds like the name said, so the
+ * whole team is listed (name and role), with a search box. Picking someone opens that reading's
+ * normal confirm sheet; nothing runs without Confirm, and nobody is ever created from here.
+ */
+function TeamPicker({ heard, team, onChoose, busy }: { heard: string; team: ParsedIntent[]; onChoose: (option: ParsedIntent) => void; busy: boolean }) {
+  const [query, setQuery] = useState('');
+  const searchId = useId();
+  const people = team.flatMap((option) => (option.intent !== 'UNRECOGNIZED' && option.details?.person ? [{ option, name: option.details.person, role: option.details.personRole ?? null }] : []));
+  const q = query.trim().toLowerCase();
+  const shown = q ? people.filter((p) => p.name.toLowerCase().includes(q) || (p.role ?? '').toLowerCase().includes(q)) : people;
+  return (
+    <div className="mt-4">
+      <p id={searchId} className={caption}>
+        {heard ? `I heard “${heard}” — pick from your team` : 'Pick from your team'}
+      </p>
+      <input
+        aria-label="Search your team"
+        aria-describedby={searchId}
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search your team"
+        disabled={busy}
+        className="mt-1.5 block min-h-11 w-full rounded-lg border border-input bg-background/60 px-3 text-sm text-foreground/87 placeholder:text-foreground/38 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+      />
+      <div className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto overscroll-contain" role="group" aria-label="Your team">
+        {shown.map(({ option, name, role }) => (
+          <button
+            key={name + (role ?? '')}
+            type="button"
+            onClick={() => onChoose(option)}
+            disabled={busy}
+            className="flex min-h-14 w-full shrink-0 items-center gap-3 rounded-xl border border-border bg-background/40 px-3 py-2.5 text-left hover:border-accent/50 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors"
+          >
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent" aria-hidden>
+              {initials(name)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-foreground/87">{name}</span>
+              {role && <span className="mt-0.5 block truncate text-xs text-foreground/60">{role}</span>}
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
+          </button>
+        ))}
+        {!shown.length && <p className="py-2 text-sm text-foreground/60">Nobody on your team matches “{query.trim()}”.</p>}
       </div>
     </div>
   );

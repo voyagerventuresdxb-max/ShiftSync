@@ -191,7 +191,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await expect(sheet.getByText(FOLLOW_UP)).toHaveCount(0);
     // The rota line: person, role, day and time, as a draft.
     await expect(sheet.getByText('Layla Haddad', { exact: true })).toBeVisible();
-    await expect(sheet.getByText(/^Bartender · \w{3} \d{1,2} \w{3} · 18:00–02:00$/)).toBeVisible();
+    await expect(sheet.getByText(/^Bartender · Saturday \d{1,2} \w+ \d{4}, 18:00 – 02:00 \(ends Sunday\)$/)).toBeVisible();
     await expectPhoneFriendly(sheet);
     await screenshot(page, '06-new-shift-preview');
     expect(await prisma.shift.count({ where: { locationId } })).toBe(0);
@@ -755,11 +755,11 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const alex = await createUser(locationId, 'STAFF', 'Alex Morgan');
 
     await logIn(page, managerPhone, '/');
-    const said = 'Give Alix a shout-out.';
-    await speak(page, said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alix', content: null, confidence: 0.9, summary: 'Give Alix a shout-out.' });
+    const said = 'Give Alek a shout-out.';
+    await speak(page, said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alek', content: null, confidence: 0.9, summary: 'Give Alek a shout-out.' });
     const sheet = voiceSheet(page);
-    await expect(sheet.getByRole('heading', { name: "I couldn't find Alix on your team." })).toBeVisible();
-    await expect(sheet.getByText(/^Did you mean Alex Morgan\? If Alix is new/)).toBeVisible();
+    await expect(sheet.getByRole('heading', { name: "I couldn't find Alek on your team." })).toBeVisible();
+    await expect(sheet.getByText(/^Did you mean Alex Morgan\? If Alek is new/)).toBeVisible();
     const names = sheet.getByRole('group', { name: 'Names to try instead' }).getByRole('button');
     await expect(names).toHaveText([/Alex Morgan/]);
     await expectPhoneFriendly(sheet);

@@ -24,6 +24,8 @@ export { ApiError };
 /** Names for the confirm sheet's preview, written by the server from the caller's own venue (never by the model). */
 export interface ReadingDetails {
   person?: string | null;
+  /** That person's own role at the venue, shown next to their name. */
+  personRole?: string | null;
   cover?: string | null;
   role?: string;
   section?: string;
@@ -63,6 +65,8 @@ export type ParsedIntent =
       incomplete?: { intent: string; missing: string[] };
       /** Nobody by the name said, but close names: the same words with each name, to read again. */
       retry?: { person: string; text: string }[];
+      /** Nobody at the venue sounds like the name said: one complete reading per teammate, to pick from. */
+      team?: ParsedIntent[];
     };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
