@@ -19,6 +19,7 @@ import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
+import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
 export { ApiError };
 
 /** Names for the confirm sheet's preview, written by the server from the caller's own venue (never by the model). */
@@ -39,17 +40,76 @@ type Action =
   | { intent: 'DECLINE_SWAP'; swapRequestId: string; confidence: number; summary: string }
   | { intent: 'APPROVE_JOIN'; joinRequestId: string; confidence: number; summary: string }
   | { intent: 'DECLINE_JOIN'; joinRequestId: string; confidence: number; summary: string }
-  | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; targetUserName?: string; confidence: number; summary: string }
+  | {
+      intent: 'CREATE_SHIFT';
+      roleId: string;
+      date: string;
+      start: string;
+      end: string;
+      userId: string | null;
+      targetUserName?: string;
+      /** A split shift: a second segment on the same day, created by the same Confirm. */
+      second?: { start: string; end: string };
+      confidence: number;
+      summary: string;
+    }
   | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; targetUserName?: string; confidence: number; summary: string }
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; targetUserName?: string; confidence: number; summary: string }
-  | { intent: 'PUBLISH_ROTA'; weekStart: string; confidence: number; summary: string }
+  | {
+      intent: 'PUBLISH_ROTA';
+      weekStart: string;
+      /** Only the shifts this publish actually changes, and only the people who will be notified (absent from older servers). */
+      counts?: { shiftsChanging: number; peopleNotified: number };
+      confidence: number;
+      summary: string;
+    }
   | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
   | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
   | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
-  | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string };
+  | { intent: 'REQUEST_TIME_OFF'; startDate: string; endDate: string; reason: string | null; confidence: number; summary: string };
+
+/** A read the server answered from its own lookups: shown as a list, never confirmed or executed. Every string is untrusted text. */
+export interface VoiceAnswer {
+  /** e.g. "Working tonight — Thursday 8 October 2026". */
+  title: string;
+  items: Array<{ primary: string; secondary?: string; tertiary?: string }>;
+  /** Shown when `items` is empty. */
+  emptyText: string;
+}
+
+export const READ_VOICE_INTENTS = ['WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS', 'QUERY_MY_SCHEDULE'] as const;
+export type ReadVoiceIntent = (typeof READ_VOICE_INTENTS)[number];
+
+type Read =
+  /** Older servers answer QUERY_MY_SCHEDULE in `summary` alone, without `answer`. */
+  | { intent: 'QUERY_MY_SCHEDULE'; answer?: VoiceAnswer; confidence: number; summary: string }
+  | { intent: Exclude<ReadVoiceIntent, 'QUERY_MY_SCHEDULE'>; answer: VoiceAnswer; confidence: number; summary: string };
+
+/** Something never done by voice: the server's own message, and the screen where it is done. */
+export interface DeclinedIntent {
+  intent: 'DECLINED';
+  category: string;
+  message: string;
+  /** `label` is a bare screen name ("People"); `path` an in-app route. */
+  screen: { label: string; path: string } | null;
+  summary: string;
+  confidence: number;
+}
+
+/** Cancelling a shift: the preview needs the shift itself, so `details` always comes with it. */
+export interface CancelShiftIntent {
+  intent: 'CANCEL_SHIFT';
+  shiftId: string;
+  confidence: number;
+  summary: string;
+  details: { person: string | null; personRole: string | null; date: string; start: string; end: string; role: string | null };
+}
 
 export type ParsedIntent =
   | (Action & { details?: ReadingDetails })
+  | CancelShiftIntent
+  | Read
+  | DeclinedIntent
   /**
    * `options`: complete, checked readings to choose from — below the confidence threshold ("which
    * did you mean?"), or one per person when the name said fits nobody or more than one person at
@@ -69,19 +129,98 @@ export type ParsedIntent =
       team?: ParsedIntent[];
     };
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(apiUrl(url), init);
-  if (!res.ok) {
-    let message = `Request failed (${res.status})`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body?.error) message = body.error;
-    } catch {
-      // non-JSON error body; keep the generic message
-    }
-    throw new ApiError(message, res.status);
+/** The server's answer for a read, or null for anything else (including an older QUERY_MY_SCHEDULE). */
+export function voiceAnswer(intent: ParsedIntent): VoiceAnswer | null {
+  return 'answer' in intent && intent.answer ? intent.answer : null;
+}
+
+/** Reads are answered, never confirmed or executed. */
+export function isReadIntent(intent: ParsedIntent): boolean {
+  return (READ_VOICE_INTENTS as readonly string[]).includes(intent.intent);
+}
+
+/** The person (and their role) a reading is about, from the server's names; null when it names nobody. */
+export function readingPerson(intent: ParsedIntent): { name: string; role: string | null } | null {
+  const d = 'details' in intent ? intent.details : undefined;
+  return d?.person ? { name: d.person, role: d.personRole ?? null } : null;
+}
+
+/**
+ * Mirror of the v2 additions to shared/voiceIntents.ts, which the server branch (feat/voice-tools)
+ * adds to STAFF_INTENTS / MANAGER_INTENTS. Until that lands, the shared check alone would refuse
+ * these on the phone before the confirm sheet. Remove this once shared/voiceIntents.ts has them.
+ */
+const V2_CONFIRMABLE: Record<string, readonly string[]> = {
+  STAFF: ['REQUEST_TIME_OFF'],
+  MANAGER: ['REQUEST_TIME_OFF', 'CANCEL_SHIFT'],
+  OWNER: ['REQUEST_TIME_OFF', 'CANCEL_SHIFT'],
+};
+
+/** May this role confirm this change? The shared role lists, plus the v2 mirror above. The server's 403 stays the real guard. */
+export function canConfirmVoiceAction(systemRole: string, intent: string): boolean {
+  return canConfirmVoiceIntent(systemRole, intent) || (V2_CONFIRMABLE[systemRole]?.includes(intent) ?? false);
+}
+
+/** How long a voice call may take before the app stops waiting (the model can hang; the person shouldn't). */
+export const VOICE_TIMEOUT_MS = 25_000;
+
+/**
+ * The client timeout for voice calls: 25 s, unless a test set `window.__shiftsyncVoiceTimeoutMs`
+ * before the app loaded (e2e/voice-ui.spec.ts does, so its timeout case runs in about a second).
+ */
+export function voiceTimeoutMs(): number {
+  const override = (globalThis as { __shiftsyncVoiceTimeoutMs?: unknown }).__shiftsyncVoiceTimeoutMs;
+  return typeof override === 'number' && override > 0 ? override : VOICE_TIMEOUT_MS;
+}
+
+/** The app stopped waiting for a voice call (see `voiceTimeoutMs`). The server may still have finished it. */
+export class VoiceTimeoutError extends Error {
+  constructor(public readonly seconds: number) {
+    super(`No answer after ${seconds} seconds.`);
+    this.name = 'VoiceTimeoutError';
   }
-  return (await res.json()) as T;
+}
+
+/** No connection: the phone says it is offline (`sent` false: nothing left the phone), or the request never got an answer. */
+export class VoiceOfflineError extends Error {
+  constructor(public readonly sent: boolean) {
+    super(sent ? 'Could not reach ShiftSync.' : 'Offline: nothing was sent.');
+    this.name = 'VoiceOfflineError';
+  }
+}
+
+/**
+ * Every voice call: never sent while the phone is offline, aborted after `voiceTimeoutMs()`, and a
+ * network failure told apart from a server answer (VoiceOfflineError / VoiceTimeoutError / ApiError).
+ */
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new VoiceOfflineError(false);
+  const timeoutMs = voiceTimeoutMs();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await apiFetch(apiUrl(url), { ...init, signal: controller.signal });
+    if (!res.ok) {
+      let message = `Request failed (${res.status})`;
+      let errorCode: string | undefined;
+      try {
+        const body = (await res.json()) as { error?: string; errorCode?: string };
+        if (body?.error) message = body.error;
+        errorCode = body?.errorCode;
+      } catch {
+        // non-JSON error body; keep the generic message
+      }
+      throw new ApiError(message, res.status, undefined, errorCode);
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    if (controller.signal.aborted) throw new VoiceTimeoutError(Math.round(timeoutMs / 1000));
+    // fetch rejects with a TypeError when the request got no answer at all (no network, DNS, a dropped connection).
+    if (err instanceof TypeError) throw new VoiceOfflineError(true);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Cosmetic filename only — the server reads the real mimetype off the upload's own Content-Type (i.e. the recorded Blob's `.type`), not this extension. */
@@ -108,15 +247,20 @@ export async function transcribeAudio(token: string, audioBlob: Blob): Promise<{
   });
 }
 
-/** POST /api/voice/parse-intent — body: { transcript }. Never mutates anything — the "propose" half of confirm-before-execute. */
+/**
+ * POST /api/voice/parse-intent — body: { transcript, source }. Never mutates anything — the
+ * "propose" half of confirm-before-execute. `source` is 'typed' for words the person typed or
+ * edited (nothing recorded), 'voice' for a transcript.
+ */
 export async function parseVoiceIntent(
   token: string,
   transcript: string,
+  source: 'voice' | 'typed' = 'voice',
 ): Promise<{ transcript: string; intent: ParsedIntent; voiceLogId: string | null; hasAdditionalRequest: boolean }> {
   return request('/api/voice/parse-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
-    body: JSON.stringify({ transcript }),
+    body: JSON.stringify({ transcript, source }),
   });
 }
 

@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, Home, LoaderCircle, Map, Mic, Sparkles, Users } from 'lucide-react';
+import { CalendarDays, Home, Keyboard, LoaderCircle, Map, Mic, Sparkles, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -84,6 +84,8 @@ export function RadialDock({
   onToggleListening,
   processing = false,
   starting = false,
+  onType,
+  typeDisabled = false,
 }: {
   listening: boolean;
   onToggleListening: () => void;
@@ -91,6 +93,10 @@ export function RadialDock({
   processing?: boolean;
   /** True between the first tap and the mic actually going live (the browser's permission prompt) — the button must not be re-tappable. */
   starting?: boolean;
+  /** Opens the typed command box: the same command, typed instead of said. */
+  onType?: () => void;
+  /** While a spoken command is being recorded or read. */
+  typeDisabled?: boolean;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation().pathname;
@@ -286,29 +292,46 @@ export function RadialDock({
             'glass-bar absolute left-1/2 top-[-26px] grid h-10 w-10 -translate-x-1/2 place-items-center rounded-full transition-all duration-300',
             listening || processing || starting ? 'text-accent-foreground' : 'text-accent hover:brightness-125',
             (processing || starting) && 'cursor-wait',
+            // processing gets a quicker pulse than plain "still listening" — a
+            // distinct-but-related visual state, not a static icon swap.
+            // `starting` (awaiting the mic permission prompt) borrows the same
+            // quick pulse: both mean "busy, don't tap again". Never under reduced
+            // motion: the progress card above the dock says the step in words.
+            processing || starting
+              ? 'motion-safe:animate-[breathe_0.9s_ease-in-out_infinite]'
+              : listening && 'motion-safe:animate-[breathe_2.4s_ease-in-out_infinite]',
           )}
           style={{
             backgroundImage:
               listening || processing || starting
                 ? 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, var(--accent) 92%, transparent), color-mix(in oklab, var(--accent) 62%, transparent))'
                 : 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, oklch(1 0 0) 16%, transparent), color-mix(in oklab, var(--accent) 12%, transparent))',
-            // processing gets a quicker pulse than plain "still listening" — a
-            // distinct-but-related visual state, not a static icon swap.
-            // `starting` (awaiting the mic permission prompt) borrows the same
-            // quick pulse: both mean "busy, don't tap again".
-            animation:
-              processing || starting ? 'breathe 0.9s ease-in-out infinite' : listening ? 'breathe 2.4s ease-in-out infinite' : undefined,
             transitionTimingFunction: 'cubic-bezier(0.34,1.56,0.64,1)',
           }}
         >
           {processing || starting ? (
-            <LoaderCircle className="h-[18px] w-[18px] animate-spin" />
+            <LoaderCircle className="h-[18px] w-[18px] motion-safe:animate-spin" />
           ) : listening ? (
             <Mic className="h-[18px] w-[18px]" />
           ) : (
             <Sparkles className="h-4 w-4" />
           )}
         </button>
+
+        {/* Type instead of talking: beside the mic, always visible, same pipeline (AppShell's typed command box). */}
+        {onType && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={onType}
+            disabled={typeDisabled}
+            aria-label="Type a command"
+            title="Type a command"
+            className="glass-bar hit-44 absolute left-[calc(50%+44px)] top-[-20px] grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full text-foreground/60 transition-colors duration-200 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+          >
+            <Keyboard className="h-4 w-4" aria-hidden />
+          </button>
+        )}
       </div>
     </nav>
   );

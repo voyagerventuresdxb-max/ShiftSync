@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
-import { ArrowLeftRight, CalendarCheck, CalendarX, LayoutTemplate, MapPin, UserPlus } from 'lucide-react';
-import type { ParsedIntent, ReadingDetails } from '@/api/voice';
+import { ArrowLeftRight, CalendarCheck, CalendarX, LayoutTemplate, MapPin, Plane, UserPlus } from 'lucide-react';
+import type { CancelShiftIntent, ParsedIntent, ReadingDetails } from '@/api/voice';
 import { AnnouncementCard, ShoutoutCard } from '@/components/shiftsync/FeedCards';
 import { formatStamp, initials } from '@/lib/feedFormat';
 import { cn } from '@/lib/utils';
 import { fullDay, shiftWhen } from '@/lib/voiceWhen';
+import { daysInclusive, publishSentence } from '@/lib/voiceWording';
 
 /**
  * What a voice command will do, drawn the way the app shows the result: a shout-out or an
@@ -45,10 +46,29 @@ function Tag({ children, tone = 'muted' }: { children: ReactNode; tone?: 'muted'
   );
 }
 
-/** One rota-style line: who (and their role), then what/when, with an optional tag and a "was" line for edits. */
-function Line({ lead, title, role, detail, was, tag }: { lead: ReactNode; title: string; role?: string | null; detail: string; was?: string; tag?: ReactNode }) {
+/**
+ * One rota-style line: who (and their role), then what/when (one or more lines), with an optional
+ * tag and a "was" line for edits. `danger` marks something being taken away (a cancellation).
+ */
+function Line({
+  lead,
+  title,
+  role,
+  detail,
+  was,
+  tag,
+  danger = false,
+}: {
+  lead: ReactNode;
+  title: string;
+  role?: string | null;
+  detail: string | string[];
+  was?: string;
+  tag?: ReactNode;
+  danger?: boolean;
+}) {
   return (
-    <div className="flex min-w-0 items-center gap-3 rounded-xl border border-border bg-background/40 p-3">
+    <div className={cn('flex min-w-0 items-center gap-3 rounded-xl border p-3', danger ? 'border-destructive/45 bg-destructive/[0.06]' : 'border-border bg-background/40')}>
       {lead}
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -56,7 +76,11 @@ function Line({ lead, title, role, detail, was, tag }: { lead: ReactNode; title:
           {tag}
         </div>
         {role && <p className="text-[11px] font-medium text-foreground/60">{role}</p>}
-        <p className="mt-0.5 text-xs text-foreground/60">{detail}</p>
+        {(Array.isArray(detail) ? detail : [detail]).map((line) => (
+          <p key={line} className="mt-0.5 text-xs text-foreground/60">
+            {line}
+          </p>
+        ))}
         {was && <p className="mt-0.5 text-[11px] text-foreground/38">Was: {was}</p>}
       </div>
     </div>
@@ -70,19 +94,72 @@ const iconLead = (icon: ReactNode) => (
 );
 
 /** These need the server's names to be drawn truthfully; without them the sheet shows its sentence only. */
-const NEEDS_DETAILS = new Set(['CREATE_SHIFT', 'EDIT_SHIFT', 'ASSIGN_SECTION', 'REQUEST_SWAP', 'APPROVE_SWAP', 'DECLINE_SWAP', 'APPROVE_JOIN', 'DECLINE_JOIN']);
+const NEEDS_DETAILS = new Set(['CREATE_SHIFT', 'EDIT_SHIFT', 'ASSIGN_SECTION', 'REQUEST_SWAP', 'APPROVE_SWAP', 'DECLINE_SWAP', 'APPROVE_JOIN', 'DECLINE_JOIN', 'CANCEL_SHIFT']);
 
 /** The preview, with its caption; nothing at all when there is nothing truthful to draw. */
 export function VoicePreview({ intent, viewerName }: { intent: ParsedIntent; viewerName: string }) {
-  const d = intent.intent === 'UNRECOGNIZED' ? undefined : intent.details;
-  if (!d && NEEDS_DETAILS.has(intent.intent)) return null;
+  const hasDetails = 'details' in intent && !!intent.details;
+  if (!hasDetails && NEEDS_DETAILS.has(intent.intent)) return null;
+  const d = 'details' in intent && intent.intent !== 'CANCEL_SHIFT' ? intent.details : undefined;
   const card = previewCard(intent, d, viewerName);
   if (!card) return null;
   const isPost = intent.intent === 'POST_SHOUTOUT' || intent.intent === 'POST_ANNOUNCEMENT';
+  const caption = isPost
+    ? 'How it will look'
+    : intent.intent === 'CANCEL_SHIFT'
+      ? 'Shift to cancel'
+      : intent.intent === 'PUBLISH_ROTA' && intent.counts
+        ? 'Before you publish'
+        : 'What will change';
   return (
     <div className="mt-4">
-      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/38">{isPost ? 'How it will look' : 'What will change'}</p>
+      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/38">{caption}</p>
       {card}
+    </div>
+  );
+}
+
+/** The cancellation card: whose shift comes off the rota, with its day and times in full. */
+function CancelCard({ details }: { details: CancelShiftIntent['details'] }) {
+  const person = details.person;
+  return (
+    <>
+      <Line
+        lead={<Avatar name={person} />}
+        title={person ?? 'Open shift'}
+        role={person ? details.personRole : null}
+        detail={[details.role, shiftWhen(details.date, details.start, details.end)].filter(Boolean).join(' · ')}
+        tag={<Tag tone="danger">Cancel</Tag>}
+        danger
+      />
+      <p className="mt-1.5 text-[11px] text-foreground/60">
+        {person ? `This shift comes off the rota, and ${person} is no longer working it.` : 'This open shift comes off the rota.'}
+      </p>
+    </>
+  );
+}
+
+/** The publish card when the server sent its counts: the two numbers that matter, large, and one plain sentence. */
+function PublishCard({ weekStart, counts }: { weekStart: string; counts: { shiftsChanging: number; peopleNotified: number } }) {
+  return (
+    <div className="rounded-xl border border-accent/50 bg-accent/[0.06] p-3">
+      <div className="flex min-w-0 items-center gap-3">
+        {iconLead(<CalendarCheck className="h-4 w-4" />)}
+        <p className="min-w-0 flex-1 text-sm font-semibold text-foreground/87">Week of {day(weekStart)}</p>
+        <Tag tone="gold">Publish</Tag>
+      </div>
+      <dl className="mt-3 grid grid-cols-2 gap-2">
+        <div className="rounded-lg border border-border bg-background/50 px-3 py-2">
+          <dt className="text-[11px] font-medium text-foreground/60">Shifts changing</dt>
+          <dd className="text-2xl font-semibold tabular-nums text-accent">{counts.shiftsChanging}</dd>
+        </div>
+        <div className="rounded-lg border border-border bg-background/50 px-3 py-2">
+          <dt className="text-[11px] font-medium text-foreground/60">People notified</dt>
+          <dd className="text-2xl font-semibold tabular-nums text-accent">{counts.peopleNotified}</dd>
+        </div>
+      </dl>
+      <p className="mt-2.5 text-sm text-foreground/87">{publishSentence(counts)}</p>
+      <p className="mt-0.5 text-xs text-foreground/60">Staff see the published week as soon as you confirm.</p>
     </div>
   );
 }
@@ -104,13 +181,27 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
       return <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />;
     case 'CREATE_SHIFT': {
       const person = d?.person ?? null;
+      // A split shift: both parts spelled out in full, each on its own line.
+      const detail = intent.second
+        ? [
+            [d?.role, 'Split shift, two parts'].filter(Boolean).join(' · '),
+            `1st: ${shiftWhen(intent.date, intent.start, intent.end)}`,
+            `2nd: ${shiftWhen(intent.date, intent.second.start, intent.second.end)}`,
+          ]
+        : [d?.role, shiftWhen(intent.date, intent.start, intent.end)].filter(Boolean).join(' · ');
+      return <Line lead={<Avatar name={person} />} title={person ?? 'Open shift'} role={person ? d?.personRole : null} detail={detail} tag={<Tag>Draft</Tag>} />;
+    }
+    case 'CANCEL_SHIFT':
+      return <CancelCard details={intent.details} />;
+    case 'REQUEST_TIME_OFF': {
+      const days = daysInclusive(intent.startDate, intent.endDate) ?? 1;
+      const when = intent.startDate === intent.endDate ? fullDay(intent.startDate) : `From ${fullDay(intent.startDate)} to ${fullDay(intent.endDate)}`;
       return (
         <Line
-          lead={<Avatar name={person} />}
-          title={person ?? 'Open shift'}
-          role={person ? d?.personRole : null}
-          detail={[d?.role, shiftWhen(intent.date, intent.start, intent.end)].filter(Boolean).join(' · ')}
-          tag={<Tag>Draft</Tag>}
+          lead={iconLead(<Plane className="h-4 w-4" />)}
+          title={`Time off · ${days === 1 ? '1 day' : `${days} days`}`}
+          detail={[when, ...(intent.reason ? [`Reason: ${intent.reason}`] : [])]}
+          tag={<Tag>Request</Tag>}
         />
       );
     }
@@ -189,6 +280,7 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         />
       );
     case 'PUBLISH_ROTA':
+      if (intent.counts) return <PublishCard weekStart={intent.weekStart} counts={intent.counts} />;
       return <Line lead={iconLead(<CalendarCheck className="h-4 w-4" />)} title={`Week of ${day(intent.weekStart)}`} detail="Rota goes live; staff are notified" tag={<Tag tone="gold">Publish</Tag>} />;
     case 'APPLY_ROTA_TEMPLATE':
       return (
