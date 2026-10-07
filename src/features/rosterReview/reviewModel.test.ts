@@ -95,6 +95,20 @@ test('a close name is never preselected: it stays unanswered and blocks Confirm 
   assert.deepEqual(buildConfirmRequest([p], [], state).people, [{ personKey: 'p1', action: 'link', userId: 'u1' }]);
 });
 
+test('a person only the AI reader found, with no shifts, is never imported without an answer', () => {
+  const ghost = person({ status: 'new', suggestedAction: 'create', suggestedUserId: null, shiftCount: 0, flags: [{ kind: 'ai_only' }] });
+  const real = person({ personKey: 'p2', name: 'Lena Ortiz', status: 'new', suggestedAction: 'create', suggestedUserId: null });
+  assert.equal(initialChoice(ghost).undecided, true);
+  const state = initialReviewState([ghost, real], null);
+  assert.deepEqual(reviewBlockers([ghost, real], null, state), ['Decide whether to import 1 person only the AI reader found']);
+  state.choices.p1 = { ...state.choices.p1!, action: 'skip', undecided: false };
+  assert.deepEqual(reviewBlockers([ghost, real], null, state), []);
+  assert.deepEqual(buildConfirmRequest([ghost, real], [], state).people?.find((p) => p.personKey === 'p1'), { personKey: 'p1', action: 'skip' });
+  // With shifts, or found by the table reader too, nothing is asked.
+  assert.equal(initialChoice(person({ status: 'new', suggestedAction: 'create', suggestedUserId: null, shiftCount: 3, flags: [{ kind: 'ai_only' }] })).undecided, undefined);
+  assert.equal(initialChoice(person({ status: 'new', suggestedAction: 'create', suggestedUserId: null, shiftCount: 0, flags: [] })).undecided, undefined);
+});
+
 test('preselection follows the server suggestion; a close match is "same person" only when suggested', () => {
   assert.deepEqual(initialChoice(person({ status: 'matched', matchedUserId: 'u1', suggestedAction: 'link', suggestedUserId: 'u1' })).action, 'link');
   assert.deepEqual(initialChoice(person({ status: 'needs_decision', suggestedAction: 'create', suggestedUserId: null })).action, 'create');
