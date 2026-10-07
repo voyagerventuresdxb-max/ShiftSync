@@ -1,9 +1,22 @@
 /**
  * Mock AI-reader answers for the layout-family corpus, derived from the truth with realistic
- * perturbations: one person row dropped, one shift's start and end swapped, one name misread
- * by a letter, and — on multi-page files — the last page missing. A page-focused re-read
- * answers that page cleanly (the "stricter prompt" working). Never a model score: it checks
- * that the pipeline catches, flags or recovers each perturbation. No network, nothing billed.
+ * perturbations — never a model score: they check that the pipeline catches, flags or recovers
+ * each one. No network, nothing billed.
+ *
+ * The person-by-person (rows) read, first pass:
+ *  - every file: one person row dropped (still counted, so the page reads short), one shift's
+ *    start and end swapped, one name misread by a letter, and on 2-page files the last page left
+ *    out;
+ *  - name column printed before the title column: the title column read as the names;
+ *  - a totals line under the grid: listed as a person;
+ *  - photos and scans of the decimal-hour layout: coloured cells that hold times read as colour
+ *    only, a PM-only day's values slipped into the next (empty) day, an "18" read as "18.5", and a
+ *    person with no times all week left out (and not counted);
+ *  - photos and scans of the free-text layout: the last row reported as cut off.
+ * A strict page re-read lists every row but keeps the reader's consistent misreadings.
+ *
+ * The day-column-by-day-column (columns) read of a photo or scan is independent: it has none of
+ * the above, but misreads a different name and misses one cell of its own.
  */
 import { rng, type FamilyTruth } from './families.js';
 
@@ -16,6 +29,22 @@ export interface Perturbations {
   misread: { name: string; as: string } | null;
   /** A page the first reading leaves out entirely. */
   missingPage: number | null;
+  /** The row read takes the title column as the names (name column printed first). */
+  swapNameTitle: boolean;
+  /** A totals line the row read lists as a person. */
+  footerAsPerson: { label: string; cells: string[] } | null;
+  /** Coloured cells holding times that the row read transcribes as colour only. */
+  colourOverText: { name: string; day: number; meaning: string }[];
+  /** A PM-only day whose values the row read puts under the next (empty) day. */
+  slid: { name: string; day: number } | null;
+  /** A cell where the row read takes an "18" for "18.5". */
+  misread18: { name: string; day: number } | null;
+  /** A person with no times all week the row read leaves out and doesn't count. */
+  droppedZeroShift: string | null;
+  /** The row read reports the page's last row as cut off instead of listing it. */
+  cutOffLast: boolean;
+  /** The column read's own mistakes: a different misread name, and one cell it misses. */
+  columns: { misread: { name: string; as: string } | null; missedCell: { name: string; day: number } | null };
 }
 
 function hashSeed(id: string): number {
@@ -34,6 +63,9 @@ export function misreadName(name: string, r: () => number): string {
   return chars.join('');
 }
 
+const isImage = (truth: FamilyTruth) => truth.format === 'png' || truth.format === 'pdf-image';
+const hasTimes = (cell: string | undefined) => !!cell && /\d/.test(cell) && !cell.startsWith('[');
+
 export function perturbationsFor(truth: FamilyTruth): Perturbations {
   const r = rng(hashSeed(truth.id));
   const withShifts = truth.people.filter((p) => truth.shifts.some((s) => s.name === p.name));
@@ -43,11 +75,59 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
   const swapPerson = others[Math.floor(r() * others.length)];
   const swapShift = swapPerson ? truth.shifts.find((s) => s.name === swapPerson.name) : undefined;
   const misreadPerson = others.filter((p) => p.name !== swapPerson?.name && p.name.length >= 5)[0];
+
+  // Layout- and format-specific failures (their own random stream, so the ones above stay put).
+  const r2 = rng(hashSeed(`${truth.id}#2`));
+  const used = new Set([dropped, swapPerson?.name, misreadPerson?.name].filter(Boolean) as string[]);
+  const free = truth.people.filter((p) => !used.has(p.name));
+  const decimalImage = isImage(truth) && truth.family === 'A';
+  const colourOverText: Perturbations['colourOverText'] = [];
+  let slid: Perturbations['slid'] = null;
+  let misread18: Perturbations['misread18'] = null;
+  let droppedZeroShift: string | null = null;
+  if (decimalImage) {
+    for (const p of free) {
+      p.fills?.forEach((meaning, day) => {
+        if (meaning && colourOverText.length < 2 && !colourOverText.some((c) => c.name === p.name)) colourOverText.push({ name: p.name, day, meaning });
+      });
+    }
+    const taken = new Set(colourOverText.map((c) => c.name));
+    for (const p of free.filter((x) => !taken.has(x.name))) {
+      const cells = p.cells ?? [];
+      const day = cells.findIndex((c, d) => hasTimes(c) && c.split(' ').length === 2 && Number(c.split(' ')[0]) >= 14 && d < 6 && !hasTimes(cells[d + 1]));
+      if (day >= 0 && !slid) {
+        slid = { name: p.name, day };
+        taken.add(p.name);
+      }
+    }
+    for (const p of free.filter((x) => !taken.has(x.name))) {
+      const day = (p.cells ?? []).findIndex((c) => hasTimes(c) && c.split(' ').includes('18'));
+      if (day >= 0 && !misread18) {
+        misread18 = { name: p.name, day };
+        taken.add(p.name);
+      }
+    }
+    droppedZeroShift = truth.people.find((p) => !used.has(p.name) && !(p.cells ?? []).some(hasTimes))?.name ?? null;
+  }
+  const colPool = free.filter((p) => p.name.length >= 5 && p.name !== droppedZeroShift && !colourOverText.some((c) => c.name === p.name) && p.name !== slid?.name && p.name !== misread18?.name);
+  const colMisread = colPool[Math.floor(r2() * colPool.length)];
+  const colMissed = colPool.filter((p) => p !== colMisread && (p.cells ?? []).some(hasTimes))[0];
   return {
     dropped,
     swapped: swapShift ? { name: swapShift.name, date: swapShift.date, start: swapShift.start } : null,
     misread: misreadPerson ? { name: misreadPerson.name, as: misreadName(misreadPerson.name, r) } : null,
     missingPage: truth.pageCount > 1 ? truth.pageCount : null,
+    swapNameTitle: !!truth.printed.nameFirst && truth.family === 'B',
+    footerAsPerson: truth.printed.totals?.[0] ?? null,
+    colourOverText,
+    slid,
+    misread18,
+    droppedZeroShift,
+    cutOffLast: isImage(truth) && truth.family === 'B',
+    columns: {
+      misread: colMisread ? { name: colMisread.name, as: misreadName(colMisread.name, r2) } : null,
+      missedCell: colMissed ? { name: colMissed.name, day: (colMissed.cells ?? []).findIndex(hasTimes) } : null,
+    },
   };
 }
 
@@ -84,41 +164,81 @@ export function legacyAnswer(truth: FamilyTruth, p: Perturbations = perturbation
 export interface MockRequest {
   focus?: { page: number; rows?: { from: number; to: number | null } };
   strict?: boolean;
+  framing?: 'rows' | 'columns';
 }
 
+/** One person's cells as the row read gets them (consistent misreadings included). */
+function rowReadCells(truth: FamilyTruth, name: string, cells: string[], p: Perturbations): string[] {
+  const out = [...cells];
+  const swapDay = p.swapped && p.swapped.name === name ? truth.week.dates.indexOf(p.swapped.date) : -1;
+  if (swapDay >= 0) {
+    const segs = truth.shifts.filter((s) => s.name === name && s.date === truth.week.dates[swapDay]);
+    out[swapDay] = segs.map((s, k) => (k === 0 ? `${s.end}-${s.start}` : `${s.start}-${s.end}`)).join(' / ');
+  }
+  for (const c of p.colourOverText) if (c.name === name) out[c.day] = `[${c.meaning}]`;
+  if (p.slid?.name === name) {
+    out[p.slid.day + 1] = out[p.slid.day]!;
+    out[p.slid.day] = '';
+  }
+  if (p.misread18?.name === name) out[p.misread18.day] = out[p.misread18.day]!.split(' ').map((t, k, all) => (t === '18' && all.indexOf('18') === k ? '18.5' : t)).join(' ');
+  return out;
+}
+
+const inRows = (i: number, rows?: { from: number; to: number | null }) => !rows || (i >= rows.from && (rows.to === null || i <= rows.to));
+
 /**
- * The answer in the CURRENT transcription schema (vlmPrompt.ts), for one request. The first
- * (non-strict) read of each page carries the perturbations; a strict re-read of a page lists
- * every row (the stricter prompt working) but keeps the reader's consistent misreadings (the
- * swapped cell, the misread name), which only the table reader can catch.
+ * The answer in the CURRENT transcription schemas (vlmPrompt.ts), for one request: the row
+ * framing (first read, or a strict page re-read) or the column framing (the independent second
+ * read of a photo or scan).
  */
 export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p: Perturbations = perturbationsFor(truth)): string {
   const pages = request.focus ? [request.focus.page] : Array.from({ length: truth.pageCount }, (_, i) => i + 1);
+  const lastPage = truth.pageCount;
+  if (request.framing === 'columns') {
+    const out = pages.map((page) => {
+      const onPage = truth.people.filter((x) => x.page === page).map((person, idx) => ({ person, i: idx + 1 }));
+      const ppl = onPage.map(({ person, i }) => ({ i, nm: p.columns.misread?.name === person.name ? p.columns.misread.as : person.name, t: truth.family === 'B' ? person.role || null : null, h: person.section }));
+      const cols = truth.week.dates.map((_, d) => ({
+        d,
+        c: onPage
+          .map(({ person, i }) => ({ i, x: p.columns.missedCell?.name === person.name && p.columns.missedCell.day === d ? '' : (person.cells ?? [])[d] ?? '' }))
+          .filter((cell) => cell.x),
+      }));
+      return { p: page, rows: onPage.length, ppl, cols, unread: [] };
+    });
+    return JSON.stringify({ title: truth.printed.title, days: truth.printed.dayLabels, key: [], pages: out });
+  }
   const outPages = pages
     .filter((page) => request.strict || page !== p.missingPage)
     .map((page) => {
       const onPage = truth.people.filter((x) => x.page === page);
-      const people = onPage
-        .map((person, idx) => ({ person, i: idx + 1 }))
-        .filter(({ i }) => !request.focus?.rows || (i >= request.focus.rows.from && (request.focus.rows.to === null || i <= request.focus.rows.to)));
+      const people = onPage.map((person, idx) => ({ person, i: idx + 1 })).filter(({ i }) => inRows(i, request.focus?.rows));
       const sections: { h: string | null; n: number; ppl: unknown[] }[] = [];
+      const unread: { r: number; x: string; w: string }[] = [];
       for (const { person, i } of people) {
         let sec = sections[sections.length - 1];
         if (!sec || sec.h !== person.section) {
           sec = { h: person.section, n: 0, ppl: [] };
           sections.push(sec);
         }
+        if (!request.strict && person.name === p.droppedZeroShift) continue; // left out and not counted
         sec.n++;
         if (!request.strict && person.name === p.dropped) continue;
-        const cells = (person.cells ?? truth.week.dates.map(() => '')).map((text, d) => {
-          const swap = p.swapped && p.swapped.name === person.name && p.swapped.date === truth.week.dates[d];
-          if (!swap) return text;
-          const segs = truth.shifts.filter((s) => s.name === person.name && s.date === truth.week.dates[d]);
-          return segs.map((s, k) => (k === 0 ? `${s.end}-${s.start}` : `${s.start}-${s.end}`)).join(' / ');
-        });
-        sec.ppl.push({ nm: p.misread?.name === person.name ? p.misread.as : person.name, t: truth.family === 'B' ? person.role || null : null, i, c: cells });
+        const cells = rowReadCells(truth, person.name, person.cells ?? truth.week.dates.map(() => ''), p);
+        if (!request.strict && p.cutOffLast && page === lastPage && i === onPage.length) {
+          unread.push({ r: i, x: [person.name, ...cells].join(' | '), w: 'cut off at the bottom of the page' });
+          continue;
+        }
+        const name = p.misread?.name === person.name ? p.misread.as : person.name;
+        const title = truth.family === 'B' ? person.role || null : null;
+        sec.ppl.push(p.swapNameTitle && title ? { nm: title, t: name, i, c: cells } : { nm: name, t: title, i, c: cells });
       }
-      return { p: page, rows: onPage.length, sec: sections, unread: [] };
+      if (p.footerAsPerson && page === lastPage && !request.focus?.rows?.to) {
+        const sec = sections[sections.length - 1] ?? (sections[0] = { h: null, n: 0, ppl: [] });
+        sec.ppl.push({ nm: p.footerAsPerson.label, t: null, i: onPage.length + 1, c: p.footerAsPerson.cells });
+      }
+      const rows = onPage.length - (!request.strict && onPage.some((x) => x.name === p.droppedZeroShift) ? 1 : 0);
+      return { p: page, rows, sec: sections, unread };
     });
   return JSON.stringify({ title: truth.printed.title, days: truth.printed.dayLabels, key: [], pages: outPages });
 }

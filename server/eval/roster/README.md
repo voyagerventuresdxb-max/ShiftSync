@@ -63,6 +63,34 @@ and 17), 100% of shifts (before: 100% and 94%), the right week, 0 silent drops (
 With no AI configured, every spreadsheet and text-layer PDF variant still reads 100% (people,
 shifts, week); photos and scans are refused with `vision_unconfigured` (nothing to read locally).
 
+### Round 2 (after the holdout grade): 43 rosters
+
+Seven variants added, one per failure the independent holdout found: A19 (a "Total staff on rota"
+line with per-day counts), A20 / A21 (photo and scan with coloured cells that hold times, PM-only
+days), B19 / B21 (name column before the title column, NAME / TITLE headings), B20 (ff / fi / fl
+split into separate text items, plus a totals line), B22 (a photo whose last row sits at the page
+edge). The mock AI reader gained the matching failures: the title column read as the names, the
+totals line listed as a person, coloured cells with times read as colour only, a PM-only day's
+values slipped into the next day, an "18" read as "18.5", a person with no times left out and not
+counted, the last row reported as cut off. Photos and scans are now read twice (person by person
+and day column by day column) and the readings compared; the column read has its own independent
+mistakes (a different misread name, a missed cell).
+
+| | staff recall | precision | shift recall | exact time | week | silent drops | silent wrong times |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A before (21 rosters) | 100.0% | 99.8% | 99.3% | 99.0% | 21/21 | 0 people, 21 shifts | 5 |
+| A after | 100.0% | 100.0% | 100.0% | 99.7% | 21/21 | 0 | 0 |
+| B before (22 rosters) | 99.5% | 91.4% | 99.0% | 98.7% | 22/22 | 2 people, 17 shifts | 0 |
+| B after | 100.0% | 100.0% | 100.0% | 99.6% | 22/22 | 0 | 0 |
+
+Per feature, before → after: name-first layouts (B06, B19) precision 50% → 100% (20 titles had
+become people); totals line (A19) precision 95.6% → 100%; ligature splits (B20) 18 → 20 people,
+17 → 0 silent shifts, precision 78% → 100%; photos and scans of the decimal-hour layout (A10, A11,
+A18, A20, A21) 4–5 silent shifts and one silently wrong time each → 0 (what only one reading saw is
+kept and flagged; the 18 / 18.5 cell keeps the first reading's value with both attached). The
+largest mock answer is now ≈ 1,600 output tokens (a column read; it writes about 1.6× the row
+read), far under the 16,384 cap.
+
 ## Corpus (`spec.ts` → `corpus/`)
 
 18 rosters, week of Monday 2026-08-17: day grid, per-row title column, long-format template,

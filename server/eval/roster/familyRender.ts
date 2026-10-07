@@ -5,7 +5,7 @@
  * (@playwright/test, pdf-lib), never imported by server code.
  */
 import * as XLSXNS from 'xlsx';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { dayHeaderLines, rng, shiftText, subCells, type SemanticRoster } from './families.js';
 
 const XLSX: typeof XLSXNS = ((XLSXNS as unknown as { default?: typeof XLSXNS }).default ?? XLSXNS) as typeof XLSXNS;
@@ -21,7 +21,7 @@ export interface PrintedCell {
   /** Numeric value for spreadsheets (decimal hours are numbers in the source workbook). */
   num?: number;
 }
-export type RowKind = 'title' | 'header' | 'subheader' | 'caption' | 'spacer' | 'banner' | 'person' | 'headcount' | 'footer';
+export type RowKind = 'title' | 'header' | 'subheader' | 'caption' | 'spacer' | 'banner' | 'person' | 'headcount' | 'total' | 'footer';
 export interface PrintedRow {
   kind: RowKind;
   page: number;
@@ -120,6 +120,18 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
       group.push(p);
     }
     flushHeadcount();
+    if (spec.totalsFooter) {
+      // Everyone on the rota, and how many work each half-day: a totals line, never a person.
+      const count = (d: number, am: boolean) => roster.people.filter((p) => { const c = p.cells[d]!; return c.kind === 'shift' && c.segs.some(([s]) => (s < 14 * 60) === am); }).length;
+      rows.push({
+        kind: 'total',
+        page: spec.pages,
+        cells: [
+          { text: `Total staff on rota ${roster.people.length}`, span: 1, bold: true },
+          ...roster.dates.flatMap((_, d) => [{ text: String(count(d, true)), span: 2, bold: true, center: true, num: count(d, true) }, { text: String(count(d, false)), span: 2, bold: true, center: true, num: count(d, false) }]),
+        ],
+      });
+    }
     if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: `Prepared by: Duty Manager    Printed ${roster.dates[0]}    Page ${spec.pages} of ${spec.pages}`, span: columns }] });
     // The colour key sits to the right of the grid, one entry per row from the COVERS row on.
     const firstSide = rows.findIndex((x) => x.kind === 'caption') + 1;
@@ -138,7 +150,10 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
   for (let l = 0; l < lineCount; l++) {
     const line = headerLines.map((h) => h[l]!);
     const label = lineCount === 1 ? '' : /\d/.test(line[0]!) ? 'DATE' : 'DAY OF THE WEEK';
-    rows.push({ kind: 'header', page: 1, cells: [{ text: label, span: 2, fill: '#fbe9b7', bold: true, center: true }, ...line.map((t) => ({ text: t, span: 1, fill: '#fbe9b7', bold: true, center: true }))] });
+    const head = (text: string, span: number): PrintedCell => ({ text, span, fill: '#fbe9b7', bold: true, center: true });
+    // NAME / TITLE labels over the two leading columns, in their printed order, on the first header row.
+    const leadCells = spec.leadHeaders ? (l === 0 ? (spec.nameFirst ? [head('NAME', 1), head('TITLE', 1)] : [head('TITLE', 1), head('NAME', 1)]) : [head('', 1), head('', 1)]) : [head(label, 2)];
+    rows.push({ kind: 'header', page: 1, cells: [...leadCells, ...line.map((t) => head(t, 1))] });
   }
   rows.push({ kind: 'caption', page: 1, tall: true, cells: [{ text: 'Events', span: 2, center: true }, ...roster.dates.map((_, d) => ({ text: roster.events[d] ?? '', span: 1, center: true, bold: true }))] });
   rows.push({ kind: 'spacer', page: 1, cells: [{ text: '', span: columns }] });
@@ -159,6 +174,10 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
       else cells.push({ text: '', span: 1 });
     });
     rows.push({ kind: 'person', page: p.page, cells });
+  }
+  if (spec.totalsFooter) {
+    const count = (d: number) => roster.people.filter((p) => p.cells[d]!.kind === 'shift').length;
+    rows.push({ kind: 'total', page: spec.pages, cells: [{ text: `Total staff on rota: ${roster.people.length}`, span: 2, bold: true }, ...roster.dates.map((_, d) => ({ text: String(count(d)), span: 1, bold: true, center: true, num: count(d) }))] });
   }
   if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: 'Notes: UL = unpaid leave, AL = annual leave, CL = until close, IN = start time only', span: columns }] });
   assignPages(rows);
@@ -304,5 +323,39 @@ export async function imagePdf(pngs: Buffer[]): Promise<Buffer> {
     const page = doc.addPage([img.width / 1.5, img.height / 1.5]);
     page.drawImage(img, { x: 0, y: 0, width: img.width / 1.5, height: img.height / 1.5 });
   }
+  return Buffer.from(await doc.save());
+}
+
+/**
+ * A text-layer PDF as some spreadsheet exports write it: every cell is its own text run, and
+ * the ff / fi / fl ligatures of a name come out as separate text items placed edge to edge
+ * ("Sa" + "ffi" + "ya"), the way glyph-by-glyph exporters emit them. One page.
+ */
+export async function renderSplitLigaturePdf(sheet: PrintedSheet): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const size = 8;
+  const pt = 0.75; // CSS px -> PDF points
+  const rowH = 19 * pt;
+  const widths = sheet.colWidths.map((w) => w * pt);
+  const width = widths.reduce((a, b) => a + b, 0) + 36;
+  const height = sheet.rows.length * rowH + 36;
+  const page = doc.addPage([width, height]);
+  sheet.rows.forEach((row, ri) => {
+    const y = height - 18 - (ri + 1) * rowH + 4;
+    let col = 0;
+    for (const cell of row.cells) {
+      const x0 = 18 + widths.slice(0, col).reduce((a, b) => a + b, 0);
+      const w = widths.slice(col, col + cell.span).reduce((a, b) => a + b, 0);
+      col += cell.span;
+      if (!cell.text) continue;
+      const total = font.widthOfTextAtSize(cell.text, size);
+      let x = cell.center ? x0 + (w - total) / 2 : x0 + 3;
+      for (const piece of cell.text.split(/(ffi|ffl|ff|fi|fl)/).filter(Boolean)) {
+        page.drawText(piece, { x, y, size, font });
+        x += font.widthOfTextAtSize(piece, size);
+      }
+    }
+  });
   return Buffer.from(await doc.save());
 }

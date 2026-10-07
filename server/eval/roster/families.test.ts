@@ -105,3 +105,15 @@ test('spreadsheet variants read through the upload path: every person, every shi
     assert.equal(s.silentPeople + s.silentShifts, 0, `${id}: silent drops`);
   }
 });
+
+test('round-2 variants: one per structural failure the holdout found, each with its mock failure', () => {
+  const ids = FAMILY_VARIANTS.map((v) => v.id);
+  for (const id of ['A19-totals-footer-pdf', 'A20-scan-coloured-shifts', 'A21-png-coloured-shifts', 'B19-name-first-headed', 'B20-ligatures-totals', 'B21-name-first-headed-xlsx', 'B22-png-last-row']) assert.ok(ids.includes(id), id);
+  assert.ok(FAMILY_VARIANTS.find((v) => v.id === 'B20-ligatures-totals')!.ligatures);
+  const { truth } = spreadsheet('B21-name-first-headed-xlsx');
+  truth.printed.nameFirst = true;
+  const p = perturbationsFor(truth);
+  assert.equal(p.swapNameTitle, true);
+  const first = JSON.parse(transcriptionAnswer(truth, {}));
+  assert.ok(first.pages[0].sec.flatMap((s: { ppl: { nm: string }[] }) => s.ppl.map((x) => x.nm)).some((nm: string) => /\d|^[A-Z]{2,4}$/.test(nm)), 'titles read as names');
+});

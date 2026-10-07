@@ -33,12 +33,13 @@ export interface PipelineRun {
 
 const MIME: Record<string, string> = { pdf: 'application/pdf', png: 'image/png', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', csv: 'text/csv' };
 
-const requestKey = (input: VisionInput) => (input.focus ? `p${input.focus.page}${input.focus.rows ? `r${input.focus.rows.from}-${input.focus.rows.to ?? 'end'}` : ''}${input.strict ? 's' : ''}` : `all${input.strict ? 's' : ''}`);
+const requestKey = (input: VisionInput) =>
+  `${input.framing === 'columns' ? 'cols-' : ''}${input.focus ? `p${input.focus.page}${input.focus.rows ? `r${input.focus.rows.from}-${input.focus.rows.to ?? 'end'}` : ''}${input.strict ? 's' : ''}` : `all${input.strict ? 's' : ''}`}`;
 
 function providerFor(mode: FamilyVisionMode, truth: FamilyTruth, live: VisionProvider | null, record: boolean, recordDir: string): VisionProvider | null {
   if (mode === 'none') return null;
   if (mode === 'mock') {
-    return new MockVisionProvider((input) => ({ raw: transcriptionAnswer(truth, { ...(input.focus ? { focus: input.focus } : {}), ...(input.strict ? { strict: true } : {}) }), model: 'mock', usage: { promptTokens: null, outputTokens: null } }));
+    return new MockVisionProvider((input) => ({ raw: transcriptionAnswer(truth, { ...(input.focus ? { focus: input.focus } : {}), ...(input.strict ? { strict: true } : {}), ...(input.framing ? { framing: input.framing } : {}) }), model: 'mock', usage: { promptTokens: null, outputTokens: null } }));
   }
   const dir = join(recordDir, truth.id);
   if (mode === 'recorded') {

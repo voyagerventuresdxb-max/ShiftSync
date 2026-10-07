@@ -77,6 +77,12 @@ export interface VariantSpec {
   upperNames: boolean;
   /** Family B: short title abbreviations (Sup, HW 1, Wtr 2, Rnr 3). */
   abbreviations: boolean;
+  /** Family B: the header row prints NAME / TITLE over the two leading columns. */
+  leadHeaders?: boolean;
+  /** A "Total staff on rota" line with per-day counts under the grid. */
+  totalsFooter?: boolean;
+  /** Text-layer PDF whose ff / fi / fl ligatures come out as separate text items (names chosen to contain them). */
+  ligatures?: boolean;
   seed: number;
 }
 
@@ -132,6 +138,8 @@ export interface TruthPerson {
   row: number;
   /** Each day cell as a careful reader would transcribe it (sub-cells joined; "[Label]" colour only; "[?]" illegible). */
   cells?: string[];
+  /** Per day: the colour key's meaning of a coloured cell that holds times (a duty colour), else null. */
+  fills?: (string | null)[];
 }
 export interface FamilyTruthShift { name: string; role: string; date: string; start: string; end: string }
 export interface FamilyTruth {
@@ -142,7 +150,14 @@ export interface FamilyTruth {
   tags: string[];
   week: { weekStart: string; dates: string[] };
   /** What the sheet prints above the grid: for mock AI answers, which read dates as printed. */
-  printed: { title: string | null; dayLabels: string[] };
+  printed: {
+    title: string | null;
+    dayLabels: string[];
+    /** Totals lines under the grid (never people), label and per-day cells as printed. */
+    totals?: { label: string; cells: string[] }[];
+    /** The name column is printed before the title column. */
+    nameFirst?: boolean;
+  };
   pageCount: number;
   people: TruthPerson[];
   shifts: FamilyTruthShift[];
@@ -350,6 +365,9 @@ const B_GROUPS: { banner: string | null; titles: string[]; abbr: string[] }[] = 
   { banner: 'HOST', titles: ['Hostess'], abbr: ['Hst'] },
 ];
 
+/** Made-up names with ff / fi / fl / ffi (ligature glyphs in many fonts). */
+const LIGATURE_NAMES = ['Saffiya Okonkwo', 'Griffin Oduya', 'Fiifi Asante', 'Tiffany Moffat', 'Wilfrid Kofler', 'Flavia Duffy', 'Effie Laflamme', 'Joffrey Fielding'];
+
 const VENUES = ['Le Petit Comptoir', 'Casa Lumiere', 'The Copper Fig', 'Saffron Terrace', 'Maison Verte'];
 
 /** Splits `n` people into group sizes, first group small (management). */
@@ -370,6 +388,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
   const dates = weekDates(spec.weekStart);
   const venue = pick(r, VENUES);
   const names = makeNames(r, spec.people, spec.upperNames);
+  if (spec.ligatures) LIGATURE_NAMES.forEach((n, i) => i * 2 < names.length && (names[i * 2] = spec.upperNames ? n.toUpperCase() : n));
   const people: RosterPerson[] = [];
   const pageBreakAt = spec.pages > 1 ? Math.ceil(spec.people * 0.55) : Infinity;
 
@@ -451,7 +470,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
 }
 
 /** The truth for scoring, straight from the semantic roster. */
-export function familyTruth(roster: SemanticRoster, file: string, printedRows: { row: number; cells: string[] }[]): FamilyTruth {
+export function familyTruth(roster: SemanticRoster, file: string, printedRows: { row: number; cells: string[]; fills?: (string | null)[] }[]): FamilyTruth {
   const { spec, dates } = roster;
   const truth: FamilyTruth = {
     id: spec.id,
@@ -469,7 +488,7 @@ export function familyTruth(roster: SemanticRoster, file: string, printedRows: {
   };
   roster.people.forEach((p, i) => {
     const role = p.title ?? p.section ?? '';
-    truth.people.push({ name: p.name, role, section: p.section, page: truth.pageCount === 1 ? 1 : p.page, row: printedRows[i]!.row, cells: printedRows[i]!.cells });
+    truth.people.push({ name: p.name, role, section: p.section, page: truth.pageCount === 1 ? 1 : p.page, row: printedRows[i]!.row, cells: printedRows[i]!.cells, ...(printedRows[i]!.fills?.some(Boolean) ? { fills: printedRows[i]!.fills } : {}) });
     p.cells.forEach((cell, d) => {
       const date = dates[d]!;
       if (cell.kind === 'shift') for (const [s, e] of cell.segs) truth.shifts.push({ name: p.name, role, date, start: hhmm(s), end: hhmm(e) });
@@ -546,6 +565,15 @@ export const FAMILY_VARIANTS: VariantSpec[] = [
   B({ id: 'B16-abbreviations', format: 'pdf-text', abbreviations: true, header: 'weekday-long-date', tags: ['title abbreviations', '"MONDAY 13 APRIL" header'] }, 216),
   B({ id: 'B17-second-week-scan', format: 'pdf-image', weekStart: APR20, tags: ['second roster, next week', 'image-only PDF'] }, 217),
   B({ id: 'B18-weekday-above-date-caps', format: 'pdf-text', header: 'weekday-above-date', upperNames: true, notation: 'mixed12', tags: ['weekday row above date row', 'names in capitals', 'mixed 12h'] }, 218),
+
+  // Round 2: one variant per structural failure found by the holdout grade.
+  A({ id: 'A19-totals-footer-pdf', format: 'pdf-text', totalsFooter: true, footer: true, tags: ['"Total staff on rota" line with per-day counts', 'printed-by footer'] }, 119),
+  A({ id: 'A20-scan-coloured-shifts', format: 'pdf-image', tags: ['image-only PDF', 'coloured cells that hold times', 'PM-only days'] }, 120),
+  A({ id: 'A21-png-coloured-shifts', format: 'png', weekStart: AUG24, tags: ['photo', 'coloured cells that hold times', 'PM-only days', 'second week'] }, 121),
+  B({ id: 'B19-name-first-headed', format: 'pdf-text', nameFirst: true, leadHeaders: true, tags: ['name column before title column', 'NAME / TITLE header labels'] }, 219),
+  B({ id: 'B20-ligatures-totals', format: 'pdf-text', ligatures: true, totalsFooter: true, tags: ['ff / fi / fl split in the text layer', '"Total staff on rota" line'] }, 220),
+  B({ id: 'B21-name-first-headed-xlsx', format: 'xlsx', nameFirst: true, leadHeaders: true, tags: ['name column before title column', 'NAME / TITLE header labels', 'xlsx'] }, 221),
+  B({ id: 'B22-png-last-row', format: 'png', people: 16, tags: ['photo', 'last row at the page edge'] }, 222),
 ];
 
 export const FILE_EXT: Record<OutputFormat, string> = { 'pdf-text': 'pdf', 'pdf-image': 'pdf', png: 'png', xlsx: 'xlsx', csv: 'csv' };
