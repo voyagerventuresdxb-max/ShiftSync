@@ -173,6 +173,50 @@ until **Confirm**.
 | P13 | Manager | "Put Alex on the bar tomorrow evening." | The section sheet (Bar, tomorrow, PM). If a part is ever dropped: **Almost there** naming Alex Morgan and asking only for the missing part(s). |
 | P14 | Manager | "Put Karim on the terrace tomorrow evening." | **Which Karim did you mean?** with both Karims (each previewing *Terrace · <date> · PM*); if section/day/period were dropped, **Almost there** asking "which Karim (…)" plus the missing parts. |
 
+## 12-minute demo flow (made-up names)
+
+Same structure as the owner's private demo script, with made-up names. Example venue: a roster
+PDF with 21 staff including **Alex Morgan** (Waiter), two people called **Karim** (Karim Saleh,
+Bartender; Karim Aziz, Runner), and an **Edwin** and an **Edwina**. Sections to create on the
+floor plan: **Terrace**, **Bar**, **Main floor**.
+
+| Min | Step | Say / do | Expected on screen |
+|---|---|---|---|
+| 0–1 | Sign in, fresh venue | Owner sign-in; check the venue name in the header | The name you typed; a rename shows everywhere at once |
+| 1–3 | Import the roster | Schedule → Upload → the roster PDF, AI reading allowed | Progress: "Uploading", "Reading your roster with the AI reader", "Cross-checking the two readings", "Matched people to your staff"; then the review screen |
+| 3–4 | Check names and week | Scroll the review list | Every person listed as new, the printed week (not this week); any cell marked to check opens with the readings to pick from |
+| 4 | Confirm | Tap Confirm | People lists everyone; the week is filled. Uploading the same file again adds 0 people and 0 shifts |
+| 4–5 | Floor plan | Floor Plan tab | Empty state with "Add your first section"; add Terrace, Bar, Main floor |
+| 5–6 | Section by voice | "Put Alex on the terrace tomorrow evening" | Alex Morgan (Waiter), Terrace, tomorrow's full date, PM. Confirm |
+| 6–7 | Shift by voice | "Create a waiter shift for Alex on Friday from 6 to 2" | Alex Morgan, Waiter, Friday's full date, 18:00–02:00 (ends next day). Confirm |
+| 7–8 | Shout-out | "Give Alex a shout-out for great service tonight" | Shout-out preview for Alex Morgan. Confirm |
+| 8–9 | Shared first name | "Give Karim a shout-out saying well done" | "Which Karim did you mean?" with both Karims and their roles; tap one, then Confirm |
+| 9–10 | Announcement | Announcements screen (typed) | The announcement on the board |
+| 10–11 | Swap approval | Swaps list → Approve | The swap approved; the rota updates |
+| 11–12 | Publish | Rota → Publish | Staff see the published week |
+
+**Phrases verified live (local stack, live model):** the section, shift and three shout-out
+phrases above, a shout-out naming someone not on the team, a full-name shout-out, a mangled
+long name (resolved to the right person), "Who is working tonight?" (polite decline: staff can
+ask about their own schedule only) and "Order more limes" (polite decline).
+
+**Three recovery moves**
+1. Wrong or unclear person: "Which one?" or "Pick from your team" — tap the right person;
+   nothing changes before Confirm.
+2. Misheard words: in "I heard — fix it and try again", correct the words and press Enter; no
+   new recording.
+3. Import says "Hard to read — not imported", or many cells to check: upload the original PDF
+   export instead of a photo; a repeat import adds no duplicates.
+
+**Names that will ask "Which one?"** Shared first names (Karim) always; a one-word name with a
+close alternative at the same venue ("Edwin" when there is also an Edwina) asks, the exact
+match listed first; saying the full name settles it.
+
+**Not for a demo:** "Who is working tonight?"; anything outside rota and people; announcement
+and swap approval *by voice* (not verified live this round — use the screens); phone photos of
+dense or angled printed rosters; rosters whose day headings are shifted against the columns
+(everyone is imported, every day is shown to check).
+
 ## Results log
 
 Copy this table per session. Fill **Heard** from the **You said** line, **Intent** from the sheet
