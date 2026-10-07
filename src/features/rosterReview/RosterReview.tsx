@@ -11,6 +11,7 @@ import {
   duplicateGroups,
   formatDay,
   formatWeekLabel,
+  hardToReadNotice,
   headerLine,
   initialChoice,
   initialReviewState,
@@ -207,6 +208,14 @@ export function RosterReview({ upload, onConfirm, confirming, error, createdById
           )}
         </div>
       </header>
+
+      {/* A photo or scan page nothing was imported from: said plainly, with what to do */}
+      {hardToReadNotice(upload.reading) && (
+        <section className="rounded-2xl border border-warning/50 bg-surface p-4" role="alert" data-testid="rr-hard-to-read">
+          <p className="text-sm font-semibold text-foreground">Hard to read — not imported</p>
+          <p className="mt-1 text-sm text-foreground/75">{hardToReadNotice(upload.reading)!.text}</p>
+        </section>
+      )}
 
       {/* Week */}
       {week && state.weekStart && (

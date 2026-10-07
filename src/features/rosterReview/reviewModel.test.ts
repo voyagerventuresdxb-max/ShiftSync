@@ -6,6 +6,7 @@ import {
   formatWeekLabel,
   headerLine,
   readerLabel,
+  hardToReadNotice,
   importResultLines,
   initialChoice,
   initialReviewState,
@@ -222,4 +223,13 @@ test('the reader chip says who read the roster in plain words, never the parser\
   assert.equal(readerLabel({ ...base, ai: 'used', table: 'not_applicable', crossChecked: true }), 'Read twice by the AI reader');
   assert.equal(readerLabel({ ...base, ai: 'cached', table: 'not_applicable' }), 'Read by the AI reader');
   assert.equal(readerLabel(undefined), null);
+});
+
+test('a photo page nothing was imported from is announced, with the reading\'s own words and the pages; otherwise no notice', () => {
+  const base = { ai: 'used' as const, table: 'not_applicable' as const, rowsDetected: null, peopleFound: 0, rereadPages: [], disagreements: 0, fromCache: false, crossChecked: true };
+  assert.equal(hardToReadNotice({ ...base, note: 'Read twice.' }), null);
+  assert.equal(hardToReadNotice(undefined), null);
+  const notice = hardToReadNotice({ ...base, note: 'This photo was hard to read — so nothing from it was imported. Upload the original PDF.', withheldPages: [{ page: 1, reason: 'Page 1 was hard to read.' }] });
+  assert.deepEqual(notice, { text: 'This photo was hard to read — so nothing from it was imported. Upload the original PDF.', pages: [1] });
+  assert.match(hardToReadNotice({ ...base, withheldPages: [{ page: 2, reason: 'x' }] })!.text, /upload the original PDF or spreadsheet/);
 });

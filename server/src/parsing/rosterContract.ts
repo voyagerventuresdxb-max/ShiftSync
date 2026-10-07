@@ -109,6 +109,12 @@ export interface ReadingReport {
   note?: string;
   /** A photo or scan read twice by the AI reader (person by person, day by day) and the readings compared. */
   crossChecked?: boolean;
+  /**
+   * Pages of a photo or scan nothing was imported from — no people, no shifts — because the two
+   * AI readings didn't vouch for them (or the second could not be made), with why. The review
+   * screen says so and asks for the original file.
+   */
+  withheldPages?: { page: number; reason: string }[];
 }
 
 export type PersonStatus = 'matched' | 'new' | 'needs_decision';

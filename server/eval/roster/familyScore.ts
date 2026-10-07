@@ -29,6 +29,8 @@ export interface ReadingUnderTest {
   unreadRows: { text: string }[];
   /** The week the reader dated the roster in (Monday), or null to derive it from the rows. */
   weekStart: string | null;
+  /** Pages of a photo or scan nothing was imported from, the review saying so (the reading report's withheldPages). */
+  withheldPages?: number[];
 }
 
 export interface FamilyScore {
@@ -54,6 +56,10 @@ export interface FamilyScore {
   wrongDay: number;
   /** Saved shifts the review screen asks about (a row flag, or a note on that person and day, or on the whole person). */
   flaggedRows: Tally;
+  /** Truth shifts on a page nothing was imported from (the review says the page was hard to read and asks for the original). */
+  withheldShifts: number;
+  /** Pages nothing was imported from. */
+  withheldPages: number;
 }
 
 export const normName = (s: string) =>
@@ -108,9 +114,13 @@ export function scoreFamily(reading: ReadingUnderTest | null, truth: FamilyTruth
     }
   }
   const truthOfPred = new Map([...match].map(([t, m]) => [m.pred, t]));
+  const withheld = new Set(reading?.withheldPages ?? []);
+  const pageOf = new Map(truth.people.map((p) => [p.name, p.page]));
+  /** On a page nothing was imported from, the review saying so: shown, not silent. */
+  const onWithheldPage = (name: string) => withheld.has(pageOf.get(name) ?? 1);
   const mentioned = (name: string) => {
     const n = normName(name);
-    return unread.some((u) => u.includes(n)) || anomalies.some((a) => (a.employeeName && normName(a.employeeName) === n) || normName(a.rawText).includes(n));
+    return onWithheldPage(name) || unread.some((u) => u.includes(n)) || anomalies.some((a) => (a.employeeName && normName(a.employeeName) === n) || normName(a.rawText).includes(n));
   };
 
   const s: FamilyScore = {
@@ -131,6 +141,8 @@ export function scoreFamily(reading: ReadingUnderTest | null, truth: FamilyTruth
     extraShifts: 0,
     wrongDay: 0,
     flaggedRows: { ok: 0, of: rows.length },
+    withheldShifts: 0,
+    withheldPages: withheld.size,
   };
 
   const rowTruthName = rows.map((r) => truthOfPred.get(normName(r.employeeName)) ?? null);
@@ -156,6 +168,10 @@ export function scoreFamily(reading: ReadingUnderTest | null, truth: FamilyTruth
   for (const [k, t] of truth.shifts.entries()) {
     const hit = assigned.get(k);
     if (!hit) {
+      if (onWithheldPage(t.name)) {
+        s.withheldShifts++;
+        continue;
+      }
       const covered =
         anomalies.some((a) => a.employeeName && truthOfPred.get(normName(a.employeeName)) === t.name && (a.date === t.date || a.date === null)) ||
         (!match.has(t.name) && mentioned(t.name)) ||
@@ -217,8 +233,10 @@ export function familyTotals(scores: FamilyScore[]): FamilyScore {
       extraShifts: a.extraShifts + s.extraShifts,
       wrongDay: a.wrongDay + s.wrongDay,
       flaggedRows: add(a.flaggedRows, s.flaggedRows),
+      withheldShifts: a.withheldShifts + s.withheldShifts,
+      withheldPages: a.withheldPages + s.withheldPages,
     }),
-    { staffRecall: zero(), staffExact: zero(), staffPrecision: zero(), shiftRecall: zero(), exactTime: zero(), role: zero(), week: zero(), flagged: zero(), silentPeople: 0, silentShifts: 0, surfacedShifts: 0, silentTimeErrors: 0, silentNameErrors: 0, wrongSaved: 0, extraShifts: 0, wrongDay: 0, flaggedRows: zero() },
+    { staffRecall: zero(), staffExact: zero(), staffPrecision: zero(), shiftRecall: zero(), exactTime: zero(), role: zero(), week: zero(), flagged: zero(), silentPeople: 0, silentShifts: 0, surfacedShifts: 0, silentTimeErrors: 0, silentNameErrors: 0, wrongSaved: 0, extraShifts: 0, wrongDay: 0, flaggedRows: zero(), withheldShifts: 0, withheldPages: 0 },
   );
 }
 

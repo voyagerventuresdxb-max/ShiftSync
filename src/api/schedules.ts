@@ -125,6 +125,8 @@ export interface ReadingReport {
   note?: string;
   /** A photo or scan read twice by the AI reader and the readings compared. */
   crossChecked?: boolean;
+  /** Pages of a photo or scan nothing was imported from (hard to read), with why. */
+  withheldPages?: { page: number; reason: string }[];
 }
 
 export type PersonStatus = 'matched' | 'new' | 'needs_decision';
