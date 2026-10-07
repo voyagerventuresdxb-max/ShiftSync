@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { readUploadedRoster, type UploadReadContext } from './readUpload.js';
 import { memoryReadingCache } from './readingCache.js';
 import { MockVisionProvider, type VisionInput } from './visionProvider.js';
@@ -124,4 +124,72 @@ test('AM | PM sub-columns, a legend and section banners: a lower-case person who
   assert.ok(!outcome.result.rows.some((r) => r.employeeName === 'Wren Calloway' || r.employeeName === 'Tobin Ashgrove'), 'no shifts');
   assert.ok(!names.some((n) => /kitchen/i.test(n)));
   assert.ok(!(outcome.result.unreadRows ?? []).some((u) => /kitchen/.test(u.text)));
+});
+
+test('AM | PM sub-columns with colour-only leave (Holiday, OFF: a fill, no text), a colour key and a footer: a lower-case person with no shifts is listed like a title-case one', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([1400, 360]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const draw = (text: string, x: number, y: number) => page.drawText(text, { x, y, size: 8, font });
+  const sub = 30;
+  const dayLeft = (d: number) => 170 + d * 4 * sub;
+  const HOLIDAY = rgb(0.6, 0.8, 0.4);
+  const OFF = rgb(1, 1, 0.3);
+  const fill = (d: number, y: number, colour: ReturnType<typeof rgb>) => page.drawRectangle({ x: dayLeft(d), y: y - 3, width: 4 * sub, height: 12, color: colour });
+  ['13-Apr', '14-Apr', '15-Apr', '16-Apr', '17-Apr', '18-Apr', '19-Apr'].forEach((t, d) => draw(t, dayLeft(d) + 45, 340));
+  ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'].forEach((t, d) => draw(t, dayLeft(d) + 40, 328));
+  WEEK.forEach((_, d) => {
+    draw('AM', dayLeft(d) + 22, 316);
+    draw('PM', dayLeft(d) + 82, 316);
+  });
+  draw('COVERS', 60, 304);
+  type Row = [string, (string[] | 'H' | 'O')[]];
+  const groups: [string, Row[]][] = [
+    ['SERVERS', [
+      ['Test Orrin', [['9', '13.5', '17', '23'], 'O', ['11', '15', '', ''], 'O', ['', '', '18', '24'], 'H', ['10', '14', '', '']]],
+      ['wren calloway', ['H', 'H', 'O', 'H', 'H', 'O', 'O']],
+      ['Test Pallas', ['O', ['10', '14', '17', '23'], 'O', ['9', '13.5', '', ''], 'O', ['', '', '18', '24'], 'O']],
+      ['Test Sable', ['H', 'H', 'H', 'O', 'O', 'H', 'H']],
+    ]],
+    ['BAR', [
+      ['Test Quill', [['', '', '18', '26'], 'O', ['', '', '18', '26'], 'O', 'O', ['', '', '18', '26'], ['', '', '17', '25']]],
+      ['Test Tamsin', ['O', 'H', 'H', 'H', 'H', 'O', 'O']],
+      ['tobin ashgrove', ['O', 'O', 'H', 'H', 'H', 'H', 'O']],
+    ]],
+  ];
+  let y = 290;
+  for (const [banner, rows] of groups) {
+    page.drawRectangle({ x: 170, y: y - 3, width: 28 * sub, height: 12, color: rgb(0.66, 0.77, 0.92) });
+    draw(banner, 170 + 14 * sub - 15, y);
+    y -= 14;
+    for (const [name, days] of rows) {
+      draw(name, 30, y);
+      days.forEach((c, d) => (c === 'H' ? fill(d, y, HOLIDAY) : c === 'O' ? fill(d, y, OFF) : c.forEach((t, k) => t && draw(t, dayLeft(d) + k * sub + 8, y))));
+      y -= 14;
+    }
+    // The group's headcount: how many in it, and how many work each half-day.
+    draw(String(rows.length), 75, y);
+    WEEK.forEach((_, d) => {
+      const am = rows.filter(([, days]) => Array.isArray(days[d]) && (days[d] as string[])[0]).length;
+      const pm = rows.filter(([, days]) => Array.isArray(days[d]) && (days[d] as string[])[2]).length;
+      draw(String(am), dayLeft(d) + 25, y);
+      draw(String(pm), dayLeft(d) + 85, y);
+    });
+    y -= 14;
+  }
+  // The colour key, to the right of the grid.
+  page.drawRectangle({ x: 1050, y: 301, width: 20, height: 10, color: HOLIDAY });
+  draw('Holiday', 1075, 304);
+  page.drawRectangle({ x: 1050, y: 287, width: 20, height: 10, color: OFF });
+  draw('OFF', 1075, 290);
+  draw('Prepared by: Duty Manager    Printed 13-Apr    Page 1 of 1', 30, y - 10);
+  draw('kitchen closes early', 30, y - 24);
+  const pdf = Buffer.from(await doc.save());
+  const outcome = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'rota.pdf', size: pdf.length }, ctx());
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const names = outcome.result.people?.map((p) => p.name) ?? [];
+  assert.deepEqual(names, ['Test Orrin', 'Wren Calloway', 'Test Pallas', 'Test Sable', 'Test Quill', 'Test Tamsin', 'Tobin Ashgrove']);
+  assert.ok(!outcome.result.rows.some((r) => r.employeeName === 'Wren Calloway' || r.employeeName === 'Tobin Ashgrove'), 'no shifts');
+  assert.ok(!(outcome.result.unreadRows ?? []).some((u) => /kitchen/.test(u.text)), 'the footer is not an unread row');
 });

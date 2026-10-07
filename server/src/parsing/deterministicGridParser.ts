@@ -1227,6 +1227,17 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
   // a person.
   let lastDataRow = -1;
   for (let r = header.dataStartIdx; r < dataEndIdx; r++) if (hasData(grid[r] ?? [])) lastDataRow = r;
+  // A row inside the listing: rows with data below it, or its group's headcount right after it.
+  // There a lower-case name with a blank week (leave shown only as a cell colour, which a text
+  // layer doesn't carry) is a person like any other; below the listing it is a footer line.
+  const insideListing = (r: number) => {
+    if (r < lastDataRow) return true;
+    for (let n = r + 1; n < dataEndIdx; n++) {
+      const cells = (grid[n] ?? []).map(normalizeCell).filter(Boolean);
+      if (cells.length) return /^\d+$/.test(cells[0]!);
+    }
+    return false;
+  };
 
   for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
@@ -1363,7 +1374,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // beside it ("Waiter 3" with shifts is a position nobody's name is on): its shifts are
       // shown as an unread row, never imported under a title.
       // A name typed in lower case with a shift beside it is a person, its name title-cased.
-      const lowerName = !daysBlank(row) ? lowercaseName(firstCell) : null;
+      const lowerName = !daysBlank(row) || insideListing(r) ? lowercaseName(firstCell) : null;
       const notPerson = lowerName ? null : nonPersonReason(firstCell);
       if (notPerson) {
         if (notPerson === UNREADABLE_NAME) {
@@ -1526,7 +1537,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     let employeeName = combinedName?.name ?? nameCell;
     let rowTitle = titleCell || combinedName?.title || '';
     // A name typed in lower case with a shift beside it is a person, its name title-cased.
-    const lowerName = !daysBlank(row) ? lowercaseName(employeeName) : null;
+    const lowerName = !daysBlank(row) || insideListing(r) ? lowercaseName(employeeName) : null;
     if (lowerName) employeeName = lowerName;
     const notPerson = nonPersonReason(employeeName);
     if (notPerson) {
