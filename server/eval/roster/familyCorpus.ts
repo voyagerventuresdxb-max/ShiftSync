@@ -94,6 +94,8 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
   if (spec.footerLines?.length) truth.printed.footers = spec.footerLines;
   if (spec.hardToRead) truth.printed.hardToRead = true;
   if (spec.faintNames) truth.printed.faintNames = true;
+  if (spec.combined) truth.printed.combined = spec.combined;
+  if (spec.sharedSlips) truth.printed.sharedSlips = true;
   return { file, data, truth };
 }
 

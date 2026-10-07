@@ -44,7 +44,16 @@ export interface Perturbations {
   /** The row read reports the page's last row as cut off instead of listing it. */
   cutOffLast: boolean;
   /** Dense photo: cells the row read slides into the next (empty) day, and cells the column read reads ".5" as a whole hour. */
-  hard: { slidRows: { name: string; day: number }[]; halfDropped: { name: string; day: number }[] };
+  hard: {
+    slidRows: { name: string; day: number }[];
+    halfDropped: { name: string; day: number }[];
+    /** Cells the column read slides into the next (empty) day. */
+    colSlid: { name: string; day: number }[];
+    /** Cells BOTH readings slide into the next (empty) day the same way: agreement that is wrong. */
+    shared: { name: string; day: number }[];
+  };
+  /** Name and title in one cell: people whose whole cell the row read copies as the name. */
+  combinedCopied: string[];
   /** Faint scan: a name the row read spells differently (a doubled or dropped letter). */
   faint: { name: string; as: string } | null;
   /** The column read's own mistakes: a different misread name, and one cell it misses. */
@@ -130,6 +139,7 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
     cutOffLast: isImage(truth) && truth.family === 'B',
     hard: hardCells(truth),
     faint: faintName(truth, used),
+    combinedCopied: truth.printed.combined ? free.filter((x) => x.role).slice(1, 4).map((x) => x.name) : [],
     columns: {
       misread: colMisread ? { name: colMisread.name, as: misreadName(colMisread.name, r2) } : null,
       missedCell: colMissed ? { name: colMissed.name, day: (colMissed.cells ?? []).findIndex(hasTimes) } : null,
@@ -139,13 +149,24 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
 
 /** Dense photo: about two cells in five of the half-day kind read differently by one of the two readings. */
 function hardCells(truth: FamilyTruth): Perturbations['hard'] {
-  const out: Perturbations['hard'] = { slidRows: [], halfDropped: [] };
+  const out: Perturbations['hard'] = { slidRows: [], halfDropped: [], colSlid: [], shared: [] };
   if (!truth.printed.hardToRead) return out;
   const r = rng(hashSeed(`${truth.id}#hard`));
   for (const p of truth.people) {
     const cells = p.cells ?? [];
     cells.forEach((c, d) => {
       if (!hasTimes(c)) return;
+      // A slip lands on the next day when that day holds no times (a coloured cell on a dense photo too).
+      const nextFree = d < 6 && !hasTimes(cells[d + 1]) && (!!truth.printed.sharedSlips || !(cells[d + 1] ?? '').startsWith('[')) && !out.shared.concat(out.slidRows, out.colSlid).some((x) => x.name === p.name && (x.day === d + 1 || x.day + 1 === d));
+      if (truth.printed.sharedSlips) {
+        // Most cells read two ways; some slipped the same way by both readings.
+        const x = r();
+        if (x < 0.15 && nextFree) out.shared.push({ name: p.name, day: d });
+        else if (x < 0.45 && nextFree) out.slidRows.push({ name: p.name, day: d });
+        else if (x < 0.65 && nextFree) out.colSlid.push({ name: p.name, day: d });
+        else if (x < 0.85) out.halfDropped.push({ name: p.name, day: d });
+        return;
+      }
       if (c.split(' ').length === 2 && d < 6 && !hasTimes(cells[d + 1]) && !(cells[d + 1] ?? '').startsWith('[') && r() < 0.4) out.slidRows.push({ name: p.name, day: d });
       else if (/\.5\b/.test(c) && r() < 0.4) out.halfDropped.push({ name: p.name, day: d });
     });
@@ -212,7 +233,7 @@ function rowReadCells(truth: FamilyTruth, name: string, cells: string[], p: Pert
     out[p.slid.day + 1] = out[p.slid.day]!;
     out[p.slid.day] = '';
   }
-  for (const s of p.hard.slidRows) {
+  for (const s of [...p.hard.slidRows, ...p.hard.shared]) {
     if (s.name !== name) continue;
     out[s.day + 1] = out[s.day]!;
     out[s.day] = '';
@@ -235,11 +256,22 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
     const out = pages.map((page) => {
       const onPage = truth.people.filter((x) => x.page === page).map((person, idx) => ({ person, i: idx + 1 }));
       const ppl = onPage.map(({ person, i }) => ({ i, nm: p.columns.misread?.name === person.name ? p.columns.misread.as : person.name, t: truth.family === 'B' ? person.role || null : null, h: person.section }));
-      const halfDropped = (name: string, d: number, x: string) => (p.hard.halfDropped.some((h) => h.name === name && h.day === d) ? x.replace(/(\d+)\.5\b/, '$1') : x);
+      const halfDropped = (name: string, d: number, x: string) =>
+        p.hard.halfDropped.some((h) => h.name === name && h.day === d) ? (/\.5\b/.test(x) ? x.replace(/(\d+)\.5\b/, '$1') : x.replace(/^(\d+)/, (m) => String(Number(m) + 1))) : x;
+      // The column read's own slips: a value slid into the next day (alone, or the same way as the row read).
+      const colCells = (person: (typeof onPage)[number]['person']) => {
+        const out = [...(person.cells ?? truth.week.dates.map(() => ''))];
+        for (const s of [...p.hard.colSlid, ...p.hard.shared]) {
+          if (s.name !== person.name) continue;
+          out[s.day + 1] = out[s.day]!;
+          out[s.day] = '';
+        }
+        return out;
+      };
       const cols = truth.week.dates.map((_, d) => ({
         d,
         c: onPage
-          .map(({ person, i }) => ({ i, x: p.columns.missedCell?.name === person.name && p.columns.missedCell.day === d ? '' : halfDropped(person.name, d, (person.cells ?? [])[d] ?? '') }))
+          .map(({ person, i }) => ({ i, x: p.columns.missedCell?.name === person.name && p.columns.missedCell.day === d ? '' : halfDropped(person.name, d, colCells(person)[d] ?? '') }))
           .filter((cell) => cell.x),
       }));
       return { p: page, rows: onPage.length, ppl, cols, unread: [] };
@@ -267,8 +299,9 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
           unread.push({ r: i, x: [person.name, ...cells].join(' | '), w: 'cut off at the bottom of the page' });
           continue;
         }
-        const name = p.misread?.name === person.name ? p.misread.as : p.faint?.name === person.name ? p.faint.as : person.name;
-        const title = truth.family === 'B' ? person.role || null : null;
+        const copied = p.combinedCopied.includes(person.name) ? (truth.printed.combined === 'slash' ? `${person.name} / ${person.role}` : `${person.name} (${person.role})`) : null;
+        const name = copied ?? (p.misread?.name === person.name ? p.misread.as : p.faint?.name === person.name ? p.faint.as : person.name);
+        const title = copied ? null : truth.family === 'B' ? person.role || null : null;
         sec.ppl.push(p.swapNameTitle && title ? { nm: title, t: name, i, c: cells } : { nm: name, t: title, i, c: cells });
       }
       if (p.footerAsPerson && page === lastPage && !request.focus?.rows?.to) {

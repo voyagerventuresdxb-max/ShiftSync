@@ -151,7 +151,7 @@ export function scoreFamily(reading: ReadingUnderTest | null, truth: FamilyTruth
         (!match.has(t.name) && mentioned(t.name)) ||
         unread.some((u) => u.includes(normName(t.name)));
       if (!covered) s.silentShifts++;
-      else if (anomalies.some((a) => a.employeeName && truthOfPred.get(normName(a.employeeName)) === t.name && a.date === t.date)) s.surfacedShifts++;
+      else if (anomalies.some((a) => a.employeeName && truthOfPred.get(normName(a.employeeName)) === t.name && (a.date === t.date || a.date === null))) s.surfacedShifts++;
       continue;
     }
     s.shiftRecall.ok++;

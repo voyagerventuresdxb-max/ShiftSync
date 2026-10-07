@@ -118,6 +118,36 @@ with both readings instead); a name spelled two ways (B27 and the mock's misread
 silently → 0 (both spellings kept, "check the spelling"). The lower shift recall on photos is by
 design: a cell the two readings read differently is never imported, it is shown.
 
+### Round 4 (after a third holdout): 60 rosters
+
+Eight variants added, new forms of the classes the third holdout found: B30 / B31 / B32 (times as
+people type them — "7a-3p", "12n-8p", "4pm-12m", "1830-0200", "1000-1500/1900-2400" — leave and
+day-off codes "O", "X", "-", "REQ", "S/L", "A/L", "HOL", "R/O", and open-ended "4pm-close",
+"5 till close", "to close", "open-3pm", "IN 10"; as XLSX, text PDF and photo), B33 / B34 ("Name /
+Title" and "Name (Title)" in one cell, titles no vocabulary knows), B35 (clock times "18.30-01.00"
+in narrow left-aligned day columns: a split shift runs on into the next days in the text layer),
+A24 (sub-cells on a clock with dots: 10.30, 18.30, 01.00) and A25 (a dense photo whose readings
+disagree on most days and slip the same way on some). The mock gained the matching failures (the
+row read copies "Name / Title" for three people; on A25 both readings slide some cells into the
+next day the same way).
+
+| | staff recall | precision | shift recall | saved exact | exact or shown | week | silent drops | wrong-day / wrong-time saves |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A before (25 rosters) | 100.0% | 100.0% | 94.4% | 100.0% | 99.7% | 25/25 | 11 shifts | 11 extra (wrong day) |
+| A after | 100.0% | 100.0% | 89.2% | 100.0% | 100.0% | 25/25 | 0 | 0 |
+| B before (35 rosters) | 99.1% | 96.9% | 91.0% | 99.9% | 99.3% | 35/35 | 6 people, 18 shifts | 98 extra, 1 wrong time |
+| B after | 100.0% | 100.0% | 99.3% | 100.0% | 100.0% | 35/35 | 0 | 0 |
+
+Per class, before → after: free-text times and codes (B30, B31, B32) 12 / 23 / 15 shifts imported
+→ 63 / 87 / 75 of 63 / 87 / 77; "Name / Title" in one cell (B33, B34) 17 of 20 people, precision
+47% and 81% → 20 / 20, 100%; long cells running on in a narrow column (B35) 35 of 73 shifts and
+4 on the wrong day → 73 / 73, 0; a page the two readings disagree on too much (A25: 52% of its
+days; A23: 23%) — 11 shifts saved on the wrong day, 11 missed silently → nothing imported from the
+page, every week shown with both readings (A22, at 15%, keeps the agree-only rule). Readable photos
+and scans disagree on 0.8–4.8% of their days. The lower shift recall on A is the two untrusted
+pages, by design. On the private DEV files: 21 / 21 people, 160 / 160 exact, 0 extra; 18 / 18,
+62 / 62.
+
 ## Corpus (`spec.ts` → `corpus/`)
 
 18 rosters, week of Monday 2026-08-17: day grid, per-row title column, long-format template,

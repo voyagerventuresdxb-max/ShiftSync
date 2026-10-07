@@ -47,7 +47,11 @@ export type TimeNotation =
   /** Family B: "16.00-02.00", "18.30-01.00". */
   | 'dot24'
   /** Family B: "4 PM - 2 AM", "10AM-3PM / 7PM-12AM", "6.30pm-1am". */
-  | 'mixed12';
+  | 'mixed12'
+  /** Family B, free text as people type it: "7a-3p", "12n-8p", "4pm-12m", "1830-0200", "1000-1500/1900-2400". */
+  | 'free'
+  /** Family A sub-cells on a clock with dots: 10.30, 15.00, 18.30, 01.00. */
+  | 'dot-cells';
 
 export interface VariantSpec {
   id: string;
@@ -103,6 +107,16 @@ export interface VariantSpec {
   hardToRead?: boolean;
   /** A faint scan: the two AI readings spell one name differently (mock). */
   faintNames?: boolean;
+  /** Family B: free-text leave and open-ended codes ("O", "REQ", "S/L", "-", "4pm-close", "open-3pm", "IN 10"). */
+  freeCodes?: boolean;
+  /** Family B: name and title written in one cell ("Ana Silva / Waiter", "Ana Silva (Waiter)"). */
+  combined?: 'slash' | 'paren';
+  /** Family B: titles no vocabulary knows ("Sommelier", "Commis", "Cashier"). */
+  oddTitles?: boolean;
+  /** Family B: narrow, left-aligned day columns; a long cell runs on past its own column in the text layer. */
+  narrowDays?: boolean;
+  /** Dense photo: some cells both AI readings slip on the same way (mock). */
+  sharedSlips?: boolean;
   seed: number;
 }
 
@@ -183,6 +197,10 @@ export interface FamilyTruth {
     hardToRead?: boolean;
     /** A faint scan (the mock's two readings spell one name differently). */
     faintNames?: boolean;
+    /** Name and title written in one cell. */
+    combined?: 'slash' | 'paren';
+    /** A dense photo where both readings slip the same way on some cells (mock). */
+    sharedSlips?: boolean;
   };
   pageCount: number;
   people: TruthPerson[];
@@ -325,6 +343,21 @@ export function shiftText(notation: TimeNotation, segs: [number, number][], r: (
     case 'mixed12':
       if (!b) return r() < 0.5 ? `${twelve(a![0], 'upper-space')} - ${twelve(a![1], 'upper-space')}` : `${twelve(a![0], 'compact-lower')}-${twelve(a![1], 'compact-lower')}`;
       return segs.map(([s, e]) => `${twelve(s, 'lower').toUpperCase()}-${twelve(e, 'lower').toUpperCase()}`).join(' / ');
+    case 'free': {
+      // As people type it: a/p suffixes, 12n / 12m / noon / midnight, four-digit 24h without a colon.
+      const style = Math.floor(r() * 4);
+      const ap = (min: number) => {
+        const h24 = Math.floor(min / 60) % 24;
+        const mm = min % 60;
+        const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+        return `${h12}${mm ? `:${String(mm).padStart(2, '0')}` : ''}${h24 < 12 ? 'a' : 'p'}`;
+      };
+      const word = (min: number) => (min % 1440 === 720 ? (r() < 0.5 ? '12n' : 'noon') : min % 1440 === 0 ? (r() < 0.5 ? '12m' : 'midnight') : twelve(min, 'lower'));
+      const four = (min: number, end: boolean) => (end && min % 1440 === 0 && r() < 0.5 ? '2400' : hhmm(min).replace(':', ''));
+      if (style === 0) return segs.map(([s, e]) => `${ap(s)}-${ap(e)}`).join(' / ');
+      if (style === 1) return segs.map(([s, e]) => `${word(s)}-${word(e)}`).join(', ');
+      return segs.map(([s, e]) => `${four(s, false)}-${four(e, true)}`).join(style === 2 ? '/' : ' & ');
+    }
     default:
       throw new Error(`notation ${notation} is not a Family B notation`);
   }
@@ -332,7 +365,7 @@ export function shiftText(notation: TimeNotation, segs: [number, number][], r: (
 
 /** Family A: the four sub-cells (AM start, AM end, PM start, PM end) of one day. */
 export function subCells(notation: TimeNotation, segs: [number, number][]): string[] {
-  const fmt = notation === 'colon-cells' ? hhmm : decimalHours;
+  const fmt = notation === 'colon-cells' ? hhmm : notation === 'dot-cells' ? (min: number) => hhmm(min).replace(':', '.') : decimalHours;
   const cells = ['', '', '', ''];
   // Two segments fill AM then PM; a single one goes under AM when it starts before 14:00.
   segs.forEach(([s, e], i) => {
@@ -380,6 +413,16 @@ const B_SHIFTS: [number, number][][] = [
   [[660, 1140]], // 11am-7pm
 ];
 const B_OPEN = ['4CL', '12CL', '2CL', '10IN', 'IN'];
+/** Open-ended cells as people type them (start or end known, never both). */
+const B_OPEN_FREE = ['4pm-close', '5 till close', '6p-close', 'to close', 'open-3pm', 'IN 10', '10 IN'];
+/** Leave and day-off codes as people type them. */
+const B_LEAVE_FREE = ['O', 'REQ', 'S/L', 'A/L', 'HOL', 'DO', 'X', 'R/O', '-'];
+/** Titles no vocabulary knows, for rosters that write them in the name cell. */
+const B_ODD: { banner: string | null; titles: string[]; abbr: string[] }[] = [
+  { banner: null, titles: ['Restaurant Manager', 'Sommelier'], abbr: ['RM', 'Somm'] },
+  { banner: 'FLOOR', titles: ['Commis', 'Barista', 'Cashier'], abbr: ['Commis', 'Barista', 'Cashier'] },
+  { banner: 'DOOR', titles: ['Valet', 'Greeter'], abbr: ['Valet', 'Greeter'] },
+];
 
 const A_SECTIONS = ['SUPERVISORS', 'HEAD WAITERS', 'WAITERS', 'RUNNERS', 'BARTENDERS', 'HOSTS'];
 const B_GROUPS: { banner: string | null; titles: string[]; abbr: string[] }[] = [
@@ -473,7 +516,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
     };
   }
 
-  const groups = spec.areas ? B_AREAS : spec.departments ? B_DEPARTMENTS : spec.people >= 35 ? B_GROUPS : B_GROUPS.slice(0, 4);
+  const groups = spec.oddTitles ? B_ODD : spec.areas ? B_AREAS : spec.departments ? B_DEPARTMENTS : spec.people >= 35 ? B_GROUPS : B_GROUPS.slice(0, 4);
   const ordered = spec.reverseSections ? [groups[0]!, ...groups.slice(1).reverse()] : groups;
   const sizes = groupSizes(r, spec.people, ordered.length);
   let i = 0;
@@ -482,18 +525,18 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
     const titles = spec.abbreviations ? group.abbr : group.titles;
     for (let k = 0; k < size; k++, i++) {
       let title: string;
-      if (g === 0 || spec.departments || spec.areas) title = titles[Math.min(k, titles.length - 1)]!;
+      if (g === 0 || spec.departments || spec.areas || spec.oddTitles) title = titles[Math.min(k, titles.length - 1)]!;
       else if (titles.length > 1 && k === 0) title = titles[0]!;
       else title = `${titles[titles.length - 1]} ${titles.length > 1 ? k : k + 1}`;
       const allLeave = r() < 0.12;
       const cells: CellTruth[] = [];
       for (let d = 0; d < 7; d++) {
         const x = r();
-        if (allLeave) cells.push({ kind: 'leave', code: 'UL' });
+        if (allLeave) cells.push({ kind: 'leave', code: spec.freeCodes ? 'HOL' : 'UL' });
         else if (x < 0.45) cells.push({ kind: 'shift', segs: pick(r, B_SHIFTS) });
-        else if (x < 0.68) cells.push({ kind: 'leave', code: 'OFF' });
-        else if (x < 0.84) cells.push({ kind: 'leave', code: pick(r, ['UL', 'UL', 'AL', 'SL', 'PH']) });
-        else if (x < 0.92) cells.push({ kind: 'open', text: pick(r, B_OPEN) });
+        else if (x < 0.68) cells.push({ kind: 'leave', code: spec.freeCodes ? pick(r, ['O', 'X', '-', 'DO']) : 'OFF' });
+        else if (x < 0.84) cells.push({ kind: 'leave', code: pick(r, spec.freeCodes ? B_LEAVE_FREE : ['UL', 'UL', 'AL', 'SL', 'PH']) });
+        else if (x < 0.92) cells.push({ kind: 'open', text: pick(r, spec.freeCodes ? B_OPEN_FREE : B_OPEN) });
         else if (x < 0.97) cells.push({ kind: 'blank' });
         else cells.push({ kind: 'unreadable' });
       }
@@ -626,6 +669,15 @@ export const FAMILY_VARIANTS: VariantSpec[] = [
   B({ id: 'B27-faint-scan', format: 'pdf-image', faintNames: true, weekStart: APR20, tags: ['image-only PDF', 'a name the two readings spell differently'] }, 227),
   B({ id: 'B28-area-banners-name-id-designation-xlsx', format: 'xlsx', lead: ['name', 'no', 'title'], leadLabels: { name: 'Employee Full Name', no: 'Emp ID', title: 'Designation' }, areas: true, bannerInName: true, footerLines: ['Approved: Outlet Manager'], tags: ['Employee Full Name / Emp ID / Designation', 'area banners, one no vocabulary knows (POOL DECK)', 'xlsx'] }, 228),
   B({ id: 'B29-title-first-tight-unlabelled-pdf', format: 'pdf-text', lead: ['title', 'name'], tightLead: true, footerLines: ['Any changes must be agreed with the duty manager'], tags: ['title column right before the name, tight, no headings', 'free-text footer'] }, 229),
+  // Round 4: new forms of the classes a third holdout found.
+  B({ id: 'B30-free-text-times-xlsx', format: 'xlsx', notation: 'free', freeCodes: true, tags: ['"7a-3p", "12n-8p", "4pm-12m", "1830-0200" times', 'O / REQ / S/L / X / - codes', '"4pm-close", "open-3pm", "IN 10"', 'xlsx'] }, 230),
+  B({ id: 'B31-free-text-times-pdf', format: 'pdf-text', notation: 'free', freeCodes: true, weekStart: APR20, tags: ['free-text times and codes', 'text PDF'] }, 231),
+  B({ id: 'B32-free-text-times-png', format: 'png', notation: 'free', freeCodes: true, tags: ['free-text times and codes', 'photo'] }, 232),
+  B({ id: 'B33-name-slash-title-pdf', format: 'pdf-text', combined: 'slash', oddTitles: true, tags: ['"Name / Title" in one cell', 'titles no vocabulary knows', 'text PDF'] }, 233),
+  B({ id: 'B34-name-paren-title-xlsx', format: 'xlsx', combined: 'paren', tags: ['"Name (Title)" in one cell', 'xlsx'] }, 234),
+  B({ id: 'B35-dot-clock-overflow-pdf', format: 'pdf-text', notation: 'dot24', narrowDays: true, tags: ['"18.30-01.00" clock times', 'narrow left-aligned day columns: long cells run on into the next day', 'text PDF'] }, 235),
+  A({ id: 'A24-dot-clock-subcells-pdf', format: 'pdf-text', notation: 'dot-cells', weekStart: AUG24, tags: ['sub-cells on a clock with dots: 10.30, 18.30, 01.00', 'text PDF'] }, 124),
+  A({ id: 'A25-dense-photo-shared-slips', format: 'png', people: 30, hardToRead: true, sharedSlips: true, tags: ['dense photo', 'the two readings disagree on most cells, and slip the same way on some'] }, 125),
   A({ id: 'A22-dense-photo', format: 'png', people: 42, hardToRead: true, tags: ['42-person photo', 'many PM-only and half days', 'the two readings disagree on many cells'] }, 122),
   A({ id: 'A23-angled-scan-half-days', format: 'pdf-image', hardToRead: true, weekStart: AUG24, tags: ['scan', 'half days', 'the two readings disagree on many cells'] }, 123),
 ];
