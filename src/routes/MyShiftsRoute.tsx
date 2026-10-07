@@ -65,7 +65,7 @@ export default function MyShiftsContent() {
             {shifts.map((s) => (
               <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
                 <span className="font-medium">{formatShiftDate(s.date)}</span> · {s.roleName} ·{' '}
-                <span data-testid="my-shift-time">{s.startLabel}–{s.endLabel}</span>
+                <span data-testid="my-shift-time">{s.start}–{s.end}</span>
               </li>
             ))}
           </ul>

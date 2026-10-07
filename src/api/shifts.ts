@@ -56,7 +56,6 @@ export async function createShift(
     breakMinutes?: number;
     briefingNote?: string;
     sidework?: string[];
-    createdById?: string;
   },
 ): Promise<ShiftDto> {
   const data = await request<{ shift: ShiftDto }>('/api/shifts', {
@@ -79,7 +78,6 @@ export async function updateShift(
     breakMinutes: number;
     briefingNote: string | null;
     sidework: string[];
-    actorId: string;
   }>,
 ): Promise<ShiftDto> {
   const data = await request<{ shift: ShiftDto }>(`/api/shifts/${id}`, {
@@ -90,11 +88,10 @@ export async function updateShift(
   return data.shift;
 }
 
-export async function deleteShift(token: string, id: string, actorId?: string): Promise<void> {
+export async function deleteShift(token: string, id: string): Promise<void> {
   await request(`/api/shifts/${id}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json', ...withAuth(token) },
-    body: JSON.stringify({ actorId: actorId ?? null }),
+    headers: withAuth(token),
   });
 }
 
@@ -102,7 +99,6 @@ export async function bulkCreateShifts(
   token: string,
   input: {
     locationId: string;
-    createdById?: string;
     shifts: { roleId: string; userId?: string | null; date: string; start: string; end: string; breakMinutes?: number }[];
   },
 ): Promise<{ shifts: ShiftDto[]; createdCount: number }> {
@@ -117,12 +113,12 @@ export async function publishWeek(
   token: string,
   locationId: string,
   weekStart: string,
-  publishedById?: string,
 ): Promise<{ publishedAt: string; notifiedCount: number }> {
+  // The publisher is always the session user (server-side); no id is sent.
   return request(`/api/shifts/${locationId}/publish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
-    body: JSON.stringify({ weekStart, publishedById: publishedById ?? null }),
+    body: JSON.stringify({ weekStart }),
   });
 }
 

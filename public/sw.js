@@ -37,6 +37,10 @@ self.addEventListener('notificationclick', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
         if ('focus' in client) {
+          // Tells an already-open app to refetch its schedule views
+          // (src/lib/scheduleRefresh.ts) — `navigate` alone is a no-op for an
+          // uncontrolled client, and the target route may already be showing.
+          client.postMessage({ type: 'shiftsync:notification-open', url });
           if ('navigate' in client) client.navigate(url);
           return client.focus();
         }

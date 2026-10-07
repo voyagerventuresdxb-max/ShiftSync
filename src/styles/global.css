@@ -120,6 +120,7 @@ body {
   display: grid;
   grid-template-columns: 1.4fr repeat(7, 1fr) 0.8fr;
   gap: 2px;
+  min-width: 36rem;
 }
 
 .cell {

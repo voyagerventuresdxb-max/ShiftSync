@@ -113,8 +113,6 @@ Not configurable by environment:
 | `GEMINI_API_KEY` | `test:server` live voice cases skip without it. **(from #69)** `e2e/golden-path.live.spec.ts` needs it on the API, where a `503` means it is missing or the quota is spent. | — | unset (live cases skipped) | `server/src/routes/voice.test.ts:1231` (and five more gates) |
 | `DOCLING_SIDECAR_HOST` | The live Docling test skips when the sidecar is unreachable. | — | `http://127.0.0.1:8901` | `server/src/parsing/doclingClient.test.ts:17` |
 | `FRONTEND_ORIGIN`, `LOGIN_LINK_TTL_HOURS`, `LOGIN_METHODS`, `ALLOW_DEV_OTP_ECHO`, `ECHO_ALLOWED_PHONES` | Server tests set these in-process and restore them afterwards. Nothing needs setting. | — | — | `server/src/routes/onboarding.test.ts`, `loginLinks.test.ts`, `devOtpEcho.test.ts` |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` **(from #69)** | The rota golden-path push e2e needs a real pair in `.env` to deliver a push to its local receiver. | see §1 | unset (that spec fails its precondition) | `e2e/golden-path.spec.ts` on `rebase/rota-v0-on-master` |
-| `NODE_EXTRA_CA_CERTS` **(from #69)** | Node built-in. Makes the API trust the e2e push-sink's self-signed certificate. Set it **only** in the test command's environment, never in `.env`. | **must be absent** | unset | `scripts/e2e-push-sink-cert.mjs` prints the command on `rebase/rota-v0-on-master` |
 | `NOTIFY_USER_ID` **(from #63)** | Internal to `server/src/lib/push.test.ts`, which passes it to the child process the test spawns. | **must be absent** | — | `server/src/lib/push.test.ts` on `chore/railway-config-as-code-vapid` |
 
 ## 4b. Health and request ids (no variables)

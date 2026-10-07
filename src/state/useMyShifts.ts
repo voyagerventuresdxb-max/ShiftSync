@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useIdentity } from './IdentityContext';
+import { useRefetchOnReturn } from '../lib/scheduleRefresh';
 import { fetchMyShifts, ApiError, type MyShiftEntry } from '../api/myShifts';
 import { isNetworkFailure, loadOffline, saveOffline } from '../lib/offlineCache';
 
@@ -34,6 +35,9 @@ export function useMyShifts(): MyShiftsData & { loading: boolean; error: string 
     window.addEventListener('online', onOnline);
     return () => window.removeEventListener('online', onOnline);
   }, []);
+  // Also when the person returns to the app or opens a notification, so a manager's edit
+  // shows up without a reload (lib/scheduleRefresh.ts).
+  useRefetchOnReturn(useCallback(() => setReloadTick((n) => n + 1), []));
 
   useEffect(() => {
     if (!session) {

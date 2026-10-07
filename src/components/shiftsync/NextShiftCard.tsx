@@ -29,7 +29,7 @@ export function NextShiftCard() {
             <p className="mt-1 text-sm">
               <span className="font-medium">{formatShiftDate(next.date)}</span> · {next.roleName} ·{' '}
               <span data-testid="next-shift-time">
-                {next.startLabel}–{next.endLabel}
+                {next.start}–{next.end}
               </span>
             </p>
           ) : (

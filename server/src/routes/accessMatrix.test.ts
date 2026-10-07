@@ -41,7 +41,7 @@ const TAG = '__access-matrix__';
 const UPLOADS = join(import.meta.dirname, '..', '..', 'uploads');
 
 type Actor = 'anon' | 'deactivatedA' | 'staffA' | 'managerA' | 'ownerA' | 'staffB' | 'managerB' | 'ownerB';
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 interface Fx {
   locA: string;
@@ -73,6 +73,8 @@ interface Fx {
   itemOnBehalf: string;
   fbA: string;
   markA: string;
+  leaveA: string;
+  leaveDel: string;
   notifA: string;
   jrA: string;
   tplA: string;
@@ -181,6 +183,8 @@ before(async () => {
   const itemA = await prisma.eightySixItem.create({ data: { locationId: locA.id, itemName: `${TAG} lime`, station: 'Bar' } });
   const itemOnBehalf = await prisma.eightySixItem.create({ data: { locationId: locA.id, itemName: `${TAG} mint`, station: 'Bar' } });
   const fbA = await prisma.floorFeedback.create({ data: { locationId: locA.id, userId: staffA.id, content: `${TAG} feedback` } });
+  const leaveA = await prisma.rotaLeave.create({ data: { locationId: locA.id, userId: staffA2.id, date: new Date(`${addDays(monday, 3)}T00:00:00.000Z`), type: 'ANNUAL_LEAVE', status: 'PUBLISHED' } });
+  const leaveDel = await prisma.rotaLeave.create({ data: { locationId: locA.id, userId: staffA2.id, date: new Date(`${addDays(monday, 4)}T00:00:00.000Z`), type: 'DAY_OFF' } });
   const markA = await prisma.availabilityMark.create({ data: { userId: staffA.id, date: new Date(`${tuesday}T00:00:00.000Z`), type: 'UNAVAILABLE' } });
   const notifA = await prisma.notification.create({ data: { userId: staffA.id, title: `${TAG} title`, body: `${TAG} body` } });
   const jrA = await prisma.joinRequest.create({ data: { locationId: locA.id, phone: randomPhone(), fullName: `${TAG} applicant` } });
@@ -201,7 +205,7 @@ before(async () => {
     roleA: roleA.id, roleA2: roleA2.id, roleDel: roleDel.id, shiftA: shiftA.id, shiftA2: shiftA2.id, shiftDel: shiftDel.id,
     annA: annA.id, annDel: annDel.id, shoutDel: shoutDel.id, imgA: imgA.id, imgFile, secA: secA.id, secDel: secDel.id,
     asgA: asgA.id, asgDel: asgDel.id, docA: docA.id, docFile, docDel: docDel.id, itemA: itemA.id, itemOnBehalf: itemOnBehalf.id,
-    fbA: fbA.id, markA: markA.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
+    fbA: fbA.id, markA: markA.id, leaveA: leaveA.id, leaveDel: leaveDel.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
     linkA: linkA.id, batchA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday,
   };
 
@@ -382,6 +386,10 @@ const CASES: Case[] = [
   // push
   { name: 'POST /api/push/subscribe', method: 'POST', path: () => '/api/push/subscribe', body: () => ({ endpoint: `https://push.invalid/${TAG}/${randomUUID()}`, keys: { p256dh: 'k', auth: 'a' } }), refuse: ['anon', 'deactivatedA'] },
   { name: 'DELETE /api/push/subscribe', method: 'DELETE', path: () => '/api/push/subscribe', body: (f) => ({ endpoint: f.pushEndpointA }), refuse: ['anon', 'deactivatedA'] },
+  // rota leave
+  { name: 'GET /api/rota-leaves/:locationId', method: 'GET', path: (f) => `/api/rota-leaves/${f.locA}?weekStart=${f.monday}`, refuse: OUTSIDERS },
+  { name: 'PUT /api/rota-leaves', method: 'PUT', path: () => '/api/rota-leaves', body: (f) => ({ userId: f.staffA2, date: addDays(f.monday, 2), type: 'DAY_OFF' }), refuse: NOT_MANAGERS_OF_A },
+  { name: 'DELETE /api/rota-leaves/:id', method: 'DELETE', path: (f) => `/api/rota-leaves/${f.leaveDel}`, refuse: NOT_MANAGERS_OF_A },
   // roles
   { name: 'GET /api/roles', method: 'GET', path: () => '/api/roles', refuse: ['anon', 'deactivatedA'] },
   { name: 'POST /api/roles', method: 'POST', path: () => '/api/roles', body: () => ({ name: `${TAG} Barback` }), refuse: ['anon', 'deactivatedA', 'staffA', 'staffB'] },
@@ -417,15 +425,7 @@ const CASES: Case[] = [
     body: (f) => ({ roleId: f.roleA, userId: f.staffA, date: addDays(f.monday, 5), start: '09:00', end: '12:00' }),
     refuse: NOT_MANAGERS_OF_A,
   },
-  {
-    name: 'POST /api/shifts (attributed to another venue\'s person)',
-    method: 'POST',
-    path: () => '/api/shifts',
-    body: (f) => ({ roleId: f.roleA, userId: f.staffA, date: addDays(f.monday, 5), start: '13:00', end: '14:00', createdById: f.staffB }),
-    refuse: ['managerA'],
-  },
   { name: 'PATCH /api/shifts/:id', method: 'PATCH', path: (f) => `/api/shifts/${f.shiftA}`, body: () => ({ start: '10:00' }), refuse: NOT_MANAGERS_OF_A },
-  { name: 'PATCH /api/shifts/:id (attributed to another venue\'s person)', method: 'PATCH', path: (f) => `/api/shifts/${f.shiftA2}`, body: (f) => ({ breakMinutes: 15, actorId: f.staffB }), refuse: ['managerA'] },
   { name: 'DELETE /api/shifts/:id', method: 'DELETE', path: (f) => `/api/shifts/${f.shiftDel}`, refuse: NOT_MANAGERS_OF_A },
   {
     name: 'POST /api/shifts/bulk',
@@ -434,21 +434,7 @@ const CASES: Case[] = [
     body: (f) => ({ shifts: [{ roleId: f.roleA, userId: f.staffA, date: addDays(f.monday, 6), start: '09:00', end: '11:00' }] }),
     refuse: NOT_MANAGERS_OF_A,
   },
-  {
-    name: 'POST /api/shifts/bulk (attributed to another venue\'s person)',
-    method: 'POST',
-    path: () => '/api/shifts/bulk',
-    body: (f) => ({ shifts: [{ roleId: f.roleA, userId: f.staffA, date: addDays(f.monday, 6), start: '15:00', end: '16:00' }], createdById: f.staffB }),
-    refuse: ['managerA'],
-  },
   { name: 'POST /api/shifts/:locationId/publish', method: 'POST', path: (f) => `/api/shifts/${f.locA}/publish`, body: (f) => ({ weekStart: f.monday }), refuse: NOT_MANAGERS_OF_A },
-  {
-    name: 'POST /api/shifts/:locationId/publish (attributed to another venue\'s person)',
-    method: 'POST',
-    path: (f) => `/api/shifts/${f.locA}/publish`,
-    body: (f) => ({ weekStart: f.monday, publishedById: f.staffB }),
-    refuse: ['managerA'],
-  },
   // shoutouts
   { name: 'GET /api/shoutouts/:locationId', method: 'GET', path: (f) => `/api/shoutouts/${f.locA}`, refuse: OUTSIDERS },
   { name: 'POST /api/shoutouts', method: 'POST', path: () => '/api/shoutouts', body: (f) => ({ employeeId: f.staffA2, note: `${TAG} nice` }), refuse: ['anon', 'deactivatedA', 'staffB', 'managerB'] },
@@ -646,6 +632,9 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'POST /api/roles'],
   ['managerA', 'PATCH /api/roles/:id'],
   ['managerA', 'DELETE /api/roles/:id'],
+  ['staffA', 'GET /api/rota-leaves/:locationId'],
+  ['managerA', 'PUT /api/rota-leaves'],
+  ['managerA', 'DELETE /api/rota-leaves/:id'],
   ['staffA', 'GET /api/rota-templates/:locationId'],
   ['managerA', 'POST /api/rota-templates'],
   ['managerA', 'POST /api/rota-templates/:id/apply'],
@@ -682,6 +671,24 @@ test('positive controls: the right person gets through with the same request', a
   // Signing out ends only that session.
   const signOut = await fetch(`${baseUrl}/api/identity/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${throwawayToken}` } });
   assert.equal(signOut.status, 204);
+});
+
+/**
+ * The shift routes take the actor from the session, never from the body (#69): a body naming
+ * another venue's person is accepted, and the audit trail still names the signed-in manager.
+ */
+test("shift routes ignore a body-supplied actor: the audit trail never names another venue's person", async () => {
+  const onBehalf: Call[] = [
+    { method: 'POST', path: () => '/api/shifts', body: (f) => ({ roleId: f.roleA, userId: f.staffA, date: addDays(f.monday, 5), start: '13:00', end: '14:00', createdById: f.staffB }) },
+    { method: 'PATCH', path: (f) => `/api/shifts/${f.shiftA2}`, body: (f) => ({ breakMinutes: 15, actorId: f.staffB }) },
+    { method: 'POST', path: () => '/api/shifts/bulk', body: (f) => ({ shifts: [{ roleId: f.roleA, userId: f.staffA, date: addDays(f.monday, 6), start: '15:00', end: '16:00' }], createdById: f.staffB }) },
+    { method: 'POST', path: (f) => `/api/shifts/${f.locA}/publish`, body: (f) => ({ weekStart: f.monday, publishedById: f.staffB }) },
+  ];
+  for (const c of onBehalf) {
+    const { status, text } = await call('managerA', c);
+    assert.ok(status >= 200 && status < 300, `${c.method} ${c.path(fx)}: got ${status} ${text.slice(0, 160)}`);
+  }
+  assert.equal(await prisma.auditLog.count({ where: { locationId: fx.locA, actorId: fx.staffB } }), 0);
 });
 
 test('every route the API mounts is covered by this matrix (or listed as public / token-capability)', async () => {

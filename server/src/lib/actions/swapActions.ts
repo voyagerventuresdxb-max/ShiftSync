@@ -6,6 +6,7 @@ import { isRequestLocked, isRequestWindowOpen, requestWindowCloseForShift, SwapW
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
+import { findBlockingLeave, blockedByLeaveMessage } from './leaveActions.js';
 import { formatVenueTime } from '../venueTime.js';
 import { DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
 
@@ -119,6 +120,7 @@ export async function decideSwapRequest(input: {
   | { result: 'ok'; request: SwapRequestWithRelations }
   | { result: 'not_found' }
   | { result: 'conflict' }
+  | { result: 'target_on_leave'; message: string }
   | { result: 'already_decided'; status: string }
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
@@ -136,13 +138,20 @@ export async function decideSwapRequest(input: {
     include: {
       requestedBy: SWAP_REQUEST_INCLUDE.requestedBy,
       targetUser: SWAP_REQUEST_INCLUDE.targetUser,
-      shift: { select: { userId: true, locationId: true } },
+      shift: { select: { userId: true, locationId: true, date: true } },
     },
   });
   if (!existing) return { result: 'not_found' };
   // A decided request stays decided: re-deciding would reassign (or strand) a
   // shift after both people were already told the outcome.
   if (existing.status !== 'PENDING') return { result: 'already_decided', status: existing.status };
+
+  // The cover can't be handed a shift on a day they're on blocking leave
+  // (RotaLeave) — same rule as every other shift write.
+  if (input.decision === 'approved' && existing.targetUserId) {
+    const leave = await findBlockingLeave(existing.targetUserId, existing.shift.date);
+    if (leave) return { result: 'target_on_leave', message: blockedByLeaveMessage(leave, existing.targetUser?.fullName) };
+  }
 
   if (isRequestLocked({ status: existing.status }, { userId: existing.shift.userId }, existing.requestedById)) {
     return { result: 'conflict' };
