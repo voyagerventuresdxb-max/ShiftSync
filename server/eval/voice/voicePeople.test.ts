@@ -344,3 +344,22 @@ test('"Move Alex\'s shift to 7pm", every key sent: the name is whose shift it is
   assert.equal(intent.start, '19:00');
   assert.ok(!('person' in (intent.details ?? {})), 'no change of person in the preview');
 });
+
+test('"Give Alix a shout-out." with no note: Alex Morgan is still named, and offered as the same words with his name to read again', async () => {
+  const said = 'Give Alix a shout-out.';
+  const q = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alix', content: null, confidence: 0.9, summary: 'Give Alix a shout-out.' })).intent);
+  assert.equal(q.summary, "I couldn't find Alix on your team.");
+  assert.ok(q.reason.startsWith(`Did you mean ${PEOPLE.alex.name}? If Alix is new`), q.reason);
+  assert.equal(q.options, undefined, 'no complete reading to confirm: the note is missing');
+  assert.deepEqual(q.retry, [{ person: PEOPLE.alex.name, text: `Give ${PEOPLE.alex.name} a shout-out.` }]);
+  // Reading those words again: the person is settled, and only the note is asked for.
+  const again = question((await parse('MANAGER', q.retry![0]!.text, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: PEOPLE.alex.name, content: null, confidence: 0.9, summary: 'x' })).intent);
+  assert.equal(again.summary, `I've got a shout-out for ${PEOPLE.alex.name} — what should it say?`);
+});
+
+test('the same sentence from the model as summary and reason reaches the app once', async () => {
+  const limes = 'I can only help with scheduling, shifts, rotas, and staff announcements.';
+  const q = question((await parse('MANAGER', 'Order more limes.', { intent: 'UNRECOGNIZED', summary: limes, unrecognizedReason: limes, confidence: null })).intent);
+  assert.equal(q.summary, limes);
+  assert.notEqual(q.reason, limes);
+});

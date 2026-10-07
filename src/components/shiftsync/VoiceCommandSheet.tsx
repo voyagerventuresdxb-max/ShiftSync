@@ -6,6 +6,7 @@ import { useCloseOnBack } from '@/lib/backNavigation';
 import { initials } from '@/lib/feedFormat';
 import { cn } from '@/lib/utils';
 import { VoicePreview } from '@/components/shiftsync/VoicePreview';
+import { repeatsSentence } from '../../../shared/voiceIntents';
 
 /** Shown once per person on this device, before their first recording: what leaves the phone and what is kept. */
 export function VoiceConsentSheet({ open, onAccept, onCancel }: { open: boolean; onAccept: () => void; onCancel: () => void }) {
@@ -157,7 +158,9 @@ export function VoiceCommandSheet({
   const person = isUnrecognized ? (intent.person ?? null) : null;
   const choices = isUnrecognized && intent.options?.length ? intent.options : null;
   const notUnderstood = isUnrecognized && !choices;
-  const reason = isUnrecognized && intent.reason.trim() && intent.reason.trim() !== intent.summary.trim() ? intent.reason : null;
+  // Never the same sentence twice (the server already avoids it; this is the second check).
+  const reason = isUnrecognized && intent.reason.trim() && !repeatsSentence(intent.reason, intent.summary) ? intent.reason : null;
+  const retry = isUnrecognized && !choices ? (intent.retry ?? []) : [];
   const showEditor = editing || notUnderstood;
   const confirming = !isUnrecognized && !isAnswerOnly && !showFollowUp && !executed;
 
@@ -219,6 +222,29 @@ export function VoiceCommandSheet({
             {headline}
           </h2>
           {reason && <p className="mt-1.5 text-sm leading-relaxed text-foreground/60">{reason}</p>}
+
+          {retry.length > 0 && (
+            <div className="mt-4 flex flex-col gap-2" role="group" aria-label="Names to try instead">
+              {retry.map((r) => (
+                <button
+                  key={r.person}
+                  type="button"
+                  onClick={() => onReparse(r.text)}
+                  disabled={busy}
+                  className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-border bg-background/40 px-3 py-2.5 text-left hover:border-accent/50 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent" aria-hidden>
+                    {initials(r.person)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-foreground/87">{r.person}</span>
+                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Try again with this name</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
+                </button>
+              ))}
+            </div>
+          )}
 
           {person?.status === 'missing' && canManageStaff && (
             <Link

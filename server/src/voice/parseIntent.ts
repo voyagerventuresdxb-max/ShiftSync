@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type PersonQuestion, type ReadingDetails } from './intentSchema.js';
 import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
-import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
+import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
@@ -726,8 +726,24 @@ function missingPerson(
   const who = heard || 'that person';
   const canAddStaff = caller.systemRole !== 'STAFF';
   const addHint = canAddStaff ? `If ${heard || 'they'} ${heard ? 'is' : 'are'} new, add them in People first, then try again.` : 'Check the name and try again.';
-  const reason = options.length ? `Did you mean ${options.length === 1 ? 'this person' : 'one of these'}? ${addHint}` : addHint;
-  return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...(options.length ? { options } : {}) };
+  if (options.length) {
+    const reason = `Did you mean ${options.length === 1 ? 'this person' : 'one of these'}? ${addHint}`;
+    return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, options };
+  }
+  // Close names, but no complete reading to offer (the command still lacks a part, e.g. the note):
+  // name them, and offer the same words with the right name to read again.
+  const near = found.near.map((p) => p.fullName);
+  const reason = near.length ? `Did you mean ${near.join(' or ')}? ${addHint}` : addHint;
+  const retry = heard
+    ? near.map((person) => ({ person, text: withName(transcript, heard, person) })).filter((r) => r.text !== transcript)
+    : [];
+  return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...(retry.length ? { retry } : {}) };
+}
+
+/** The transcript with the name as said swapped for a staff member's full name ("Give Alix…" → "Give Alex Morgan…"). */
+function withName(transcript: string, heard: string, fullName: string): string {
+  const escaped = heard.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return transcript.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu'), fullName);
 }
 
 /**
@@ -844,11 +860,12 @@ export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedInten
   // Not understood, or an answer missing what it needs (parseVoiceIntent turns the latter into a
   // question about exactly what's missing): the caller is told so in plain words. The model's own
   // sentences are kept only when they read like one (see forCaller).
-  return {
-    intent: 'UNRECOGNIZED',
-    reason: forCaller(raw.unrecognizedReason) ?? VOICE_TRY_AGAIN,
-    summary: (intent === 'UNRECOGNIZED' ? forCaller(raw.summary) : null) ?? VOICE_DIDNT_CATCH,
-  };
+  const said = (intent === 'UNRECOGNIZED' ? forCaller(raw.summary) : null) ?? VOICE_DIDNT_CATCH;
+  const why = forCaller(raw.unrecognizedReason);
+  // Seen live: the model often writes the same sentence in both. Say it once (the fuller of the
+  // two), and the standard hint underneath.
+  if (why && repeatsSentence(said, why)) return { intent: 'UNRECOGNIZED', summary: why.length > said.length ? why : said, reason: VOICE_TRY_AGAIN };
+  return { intent: 'UNRECOGNIZED', reason: why ?? VOICE_TRY_AGAIN, summary: said };
 }
 
 /** A non-empty string, or undefined: null, "", whitespace and anything else count as not given. */

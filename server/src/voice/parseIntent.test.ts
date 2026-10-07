@@ -10,6 +10,7 @@ import {
   refineApplyRotaTemplateResponse,
 } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
+import { repeatsSentence } from '../../../shared/voiceIntents.js';
 import { venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 
 const prisma = new PrismaClient();
@@ -512,4 +513,17 @@ test('normalizeParsedIntent: EDIT_SHIFT with every key sent — a bare null pers
   assert.ok(off.intent === 'EDIT_SHIFT' && off.userId === null);
   const someone = normalizeParsedIntent({ ...base, userId: null, targetUserName: 'Layla', clearAssignee: null });
   assert.ok(someone.intent === 'EDIT_SHIFT' && someone.userId === null && someone.targetUserName === 'Layla');
+});
+
+test('normalizeParsedIntent: the model writing the same sentence as summary and reason (seen live) shows it once, with the standard hint under it', () => {
+  const limes = "I can only help with scheduling, shifts, rotas, and staff announcements.";
+  const same = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: limes, unrecognizedReason: limes });
+  assert.deepEqual(same.intent === 'UNRECOGNIZED' && [same.summary, same.reason], [limes, "Try again with who, what and when — for example \"Mark me unavailable on Friday\"."]);
+  // Near-identical (punctuation, case) or one inside the other counts too; the fuller one is kept.
+  const which = 'Please specify whether you want to request a shift swap or approve a pending request.';
+  const near = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: 'please specify whether you want to request a shift swap or approve a pending request', unrecognizedReason: which });
+  assert.ok(near.intent === 'UNRECOGNIZED' && near.summary === which && near.reason.startsWith('Try again with who, what and when'));
+  const inside = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: "I can't do that.", unrecognizedReason: "I can't do that. I only help with shifts." });
+  assert.ok(inside.intent === 'UNRECOGNIZED' && inside.summary === "I can't do that. I only help with shifts." && !repeatsSentence(inside.summary, inside.reason));
+  assert.equal(repeatsSentence('Which day?', 'Say the day, for example "next Friday".'), false);
 });

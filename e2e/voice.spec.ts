@@ -746,4 +746,34 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await again.getByRole('button', { name: 'Cancel' }).click();
     expect(await prisma.shift.count({ where: { locationId } })).toBe(0);
   });
+
+  test('a close misspelling with a part missing: the near name is offered, and tapping it reads the words again with that name', async ({ page }) => {
+    await phone(page);
+    const { locationId } = await createVenue('alix');
+    const managerPhone = freshPhone();
+    await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    const alex = await createUser(locationId, 'STAFF', 'Alex Morgan');
+
+    await logIn(page, managerPhone, '/');
+    const said = 'Give Alix a shout-out.';
+    await speak(page, said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alix', content: null, confidence: 0.9, summary: 'Give Alix a shout-out.' });
+    const sheet = voiceSheet(page);
+    await expect(sheet.getByRole('heading', { name: "I couldn't find Alix on your team." })).toBeVisible();
+    await expect(sheet.getByText(/^Did you mean Alex Morgan\? If Alix is new/)).toBeVisible();
+    const names = sheet.getByRole('group', { name: 'Names to try instead' }).getByRole('button');
+    await expect(names).toHaveText([/Alex Morgan/]);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '10-did-you-mean-name');
+
+    await scriptIntent({ intent: 'POST_SHOUTOUT', targetUserId: alex.id, targetUserName: 'Alex Morgan', content: null, confidence: 0.9, summary: 'Give Alex Morgan a shout-out.' });
+    await names.first().click();
+    await expect(sheet.locator('.eyebrow')).toHaveText('Almost there');
+    await expect(sheet.getByRole('heading', { name: "I've got a shout-out for Alex Morgan — what should it say?" })).toBeVisible();
+    await expect(sheet.getByLabel(/I heard/)).toHaveValue('Give Alex Morgan a shout-out.');
+    const calls = await geminiCalls();
+    expect(calls.map((c) => c.kind)).toEqual(['transcribe', 'parse', 'parse']);
+    expect(calls[2]!.body.contents?.[0]?.parts?.[0]?.text).toBe('Give Alex Morgan a shout-out.');
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+    expect(await prisma.shoutout.count({ where: { locationId } })).toBe(0);
+  });
 });

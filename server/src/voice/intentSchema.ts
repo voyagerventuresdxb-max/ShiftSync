@@ -59,7 +59,16 @@ export type PersonQuestion = { heard: string; status: 'missing' | 'ambiguous' };
 export type ParsedIntent =
   | (Action & { details?: ReadingDetails })
   /** `incomplete`: a recognised command missing what it needs (`missing`: field names, "person" for who); the sentence asks for exactly that. */
-  | { intent: 'UNRECOGNIZED'; reason: string; summary: string; options?: ChoosableIntent[]; person?: PersonQuestion; incomplete?: { intent: string; missing: string[] } };
+  | {
+      intent: 'UNRECOGNIZED';
+      reason: string;
+      summary: string;
+      options?: ChoosableIntent[];
+      person?: PersonQuestion;
+      incomplete?: { intent: string; missing: string[] };
+      /** Nobody by the name said, but close names and no complete reading to offer: the same words with each name, to read again. */
+      retry?: { person: string; text: string }[];
+    };
 
 /** An intent the caller can pick from a "which did you mean?" list: an action, never a question or a non-answer. */
 export type ChoosableIntent = Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' | 'QUERY_MY_SCHEDULE' }>;

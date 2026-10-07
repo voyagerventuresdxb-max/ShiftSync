@@ -61,6 +61,8 @@ export type ParsedIntent =
       options?: ParsedIntent[];
       person?: { heard: string; status: 'missing' | 'ambiguous' };
       incomplete?: { intent: string; missing: string[] };
+      /** Nobody by the name said, but close names: the same words with each name, to read again. */
+      retry?: { person: string; text: string }[];
     };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
