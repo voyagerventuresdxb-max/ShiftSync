@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ArrowLeftRight, CalendarCheck, CalendarX, LayoutTemplate, MapPin, UserPlus } from 'lucide-react';
-import type { ParsedIntent } from '@/api/voice';
+import type { ParsedIntent, ReadingDetails } from '@/api/voice';
 import { AnnouncementCard, ShoutoutCard } from '@/components/shiftsync/FeedCards';
 import { formatStamp, initials } from '@/lib/feedFormat';
 import { cn } from '@/lib/utils';
@@ -72,8 +72,25 @@ const iconLead = (icon: ReactNode) => (
   </span>
 );
 
+/** These need the server's names to be drawn truthfully; without them the sheet shows its sentence only. */
+const NEEDS_DETAILS = new Set(['CREATE_SHIFT', 'EDIT_SHIFT', 'ASSIGN_SECTION', 'REQUEST_SWAP', 'APPROVE_SWAP', 'DECLINE_SWAP', 'APPROVE_JOIN', 'DECLINE_JOIN']);
+
+/** The preview, with its caption; nothing at all when there is nothing truthful to draw. */
 export function VoicePreview({ intent, viewerName }: { intent: ParsedIntent; viewerName: string }) {
   const d = intent.intent === 'UNRECOGNIZED' ? undefined : intent.details;
+  if (!d && NEEDS_DETAILS.has(intent.intent)) return null;
+  const card = previewCard(intent, d, viewerName);
+  if (!card) return null;
+  const isPost = intent.intent === 'POST_SHOUTOUT' || intent.intent === 'POST_ANNOUNCEMENT';
+  return (
+    <div className="mt-4">
+      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/38">{isPost ? 'How it will look' : 'What will change'}</p>
+      {card}
+    </div>
+  );
+}
+
+function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewerName: string): ReactNode {
   switch (intent.intent) {
     case 'POST_SHOUTOUT':
       return <ShoutoutCard as="div" name={d?.person ?? intent.targetUserName} note={intent.content} meta={`${viewerName} · just now`} />;

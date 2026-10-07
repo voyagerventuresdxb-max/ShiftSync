@@ -175,7 +175,6 @@ export function VoiceCommandSheet({
             ? 'Your schedule'
             : (KIND[intent.intent] ?? 'Voice command');
   const headline = executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary;
-  const isPost = intent.intent === 'POST_SHOUTOUT' || intent.intent === 'POST_ANNOUNCEMENT';
   const reparse = () => {
     const text = draft.trim();
     if (text && !busy) onReparse(text);
@@ -260,12 +259,7 @@ export function VoiceCommandSheet({
             </div>
           )}
 
-          {confirming && !showEditor && (
-            <div className="mt-4">
-              <p className={cn(caption, 'mb-1.5')}>{isPost ? 'How it will look' : 'What will change'}</p>
-              <VoicePreview intent={intent} viewerName={viewerName} />
-            </div>
-          )}
+          {confirming && !showEditor && <VoicePreview intent={intent} viewerName={viewerName} />}
 
           {choices && !showEditor && (
             <div className="mt-4 flex flex-col gap-2" role="group" aria-label={person ? 'People to choose from' : 'Readings to choose from'}>
