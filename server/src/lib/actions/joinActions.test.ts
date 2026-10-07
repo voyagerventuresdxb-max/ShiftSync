@@ -186,7 +186,7 @@ test('two imported records with the requester\'s exact full name: no auto-link, 
 
 test('two imported people share the requester\'s first name: no auto-link; choosing one links exactly that record, the other untouched', async () => {
   const { location, manager, joinRequest, records } = await linkFixture('shared first name', 'Tarek', ['Tarek Halloumi', 'Tarek Benali']);
-  const [halloumi, benali] = records as [{ id: string }, { id: string }];
+  const [halloumi, benali] = [records[0]!, records[1]!];
   try {
     const refused = await approve(joinRequest.id, manager.id);
     assert.equal(refused.result, 'link_choice_required');
