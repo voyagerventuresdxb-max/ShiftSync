@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { voiceStepLabel, voiceStepPosition, voiceSteps } from './voiceSteps';
 import { voiceExamples } from './voiceExamples';
-import { canConfirmVoiceAction } from '@/api/voice';
+import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
 
 test('a spoken change shows every step, in order, with real words', () => {
   assert.deepEqual(voiceSteps('voice').map(voiceStepLabel), [
@@ -37,5 +37,5 @@ test('example phrases fit the role: staff never see manager-only commands', () =
   // An unknown role gets the narrower list.
   assert.deepEqual(voiceExamples('ADMIN'), staff);
   // Staff's time-off example is a command staff may confirm.
-  assert.equal(canConfirmVoiceAction('STAFF', 'REQUEST_TIME_OFF'), true);
+  assert.equal(canConfirmVoiceIntent('STAFF', 'REQUEST_TIME_OFF'), true);
 });

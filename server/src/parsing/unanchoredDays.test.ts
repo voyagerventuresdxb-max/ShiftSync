@@ -107,7 +107,8 @@ test('the same file with the AI reader: read twice like a photo, but no day save
   assert.ok(outcome.ok);
   if (!outcome.ok) return;
   assert.equal(outcome.reading.crossChecked, true, 'read twice');
-  assert.deepEqual(outcome.result.rows, [], 'agreeing readings are not enough on a page whose day columns could not be lined up');
+  // `.length`, not deepEqual: deepEqual narrows `rows` to never[] and the Ghost check below stops compiling.
+  assert.equal(outcome.result.rows.length, 0, 'agreeing readings are not enough on a page whose day columns could not be lined up');
   assert.deepEqual(outcome.result.people?.map((p) => p.name), PEOPLE.map(([n]) => n), 'everyone listed');
   assert.match(outcome.reading.note ?? '', /couldn't be lined up/);
   assert.ok(!outcome.result.rows.some((r) => r.employeeName === 'Test Ghost'), 'a shift only one reading saw is never saved');

@@ -19,7 +19,6 @@ import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
-import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
 export { ApiError };
 
 /** Names for the confirm sheet's preview, written by the server from the caller's own venue (never by the model). */
@@ -143,22 +142,6 @@ export function isReadIntent(intent: ParsedIntent): boolean {
 export function readingPerson(intent: ParsedIntent): { name: string; role: string | null } | null {
   const d = 'details' in intent ? intent.details : undefined;
   return d?.person ? { name: d.person, role: d.personRole ?? null } : null;
-}
-
-/**
- * Mirror of the v2 additions to shared/voiceIntents.ts, which the server branch (feat/voice-tools)
- * adds to STAFF_INTENTS / MANAGER_INTENTS. Until that lands, the shared check alone would refuse
- * these on the phone before the confirm sheet. Remove this once shared/voiceIntents.ts has them.
- */
-const V2_CONFIRMABLE: Record<string, readonly string[]> = {
-  STAFF: ['REQUEST_TIME_OFF'],
-  MANAGER: ['REQUEST_TIME_OFF', 'CANCEL_SHIFT'],
-  OWNER: ['REQUEST_TIME_OFF', 'CANCEL_SHIFT'],
-};
-
-/** May this role confirm this change? The shared role lists, plus the v2 mirror above. The server's 403 stays the real guard. */
-export function canConfirmVoiceAction(systemRole: string, intent: string): boolean {
-  return canConfirmVoiceIntent(systemRole, intent) || (V2_CONFIRMABLE[systemRole]?.includes(intent) ?? false);
 }
 
 /** How long a voice call may take before the app stops waiting (the model can hang; the person shouldn't). */

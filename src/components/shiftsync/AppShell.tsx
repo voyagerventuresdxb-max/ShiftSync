@@ -9,8 +9,8 @@ import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
-import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, canConfirmVoiceAction, isReadIntent, type ParsedIntent } from '@/api/voice';
-import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
+import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, isReadIntent, type ParsedIntent } from '@/api/voice';
+import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 import { choosableFor } from '@/lib/voiceChoices';
@@ -234,7 +234,7 @@ export function AppShell() {
       // Answers and "not by voice" are never confirmed or executed, so there is no action to check.
       const nothingToConfirm = intent.intent === 'UNRECOGNIZED' || intent.intent === 'DECLINED' || isReadIntent(intent);
       setVoiceExecProblem(null);
-      if (refusedForRole || (!nothingToConfirm && !canConfirmVoiceAction(systemRole, intent.intent))) {
+      if (refusedForRole || (!nothingToConfirm && !canConfirmVoiceIntent(systemRole, intent.intent))) {
         setVoiceResult(null);
         setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
         return;

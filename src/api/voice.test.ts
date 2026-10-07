@@ -1,10 +1,10 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
 import {
   VOICE_TIMEOUT_MS,
   VoiceOfflineError,
   VoiceTimeoutError,
-  canConfirmVoiceAction,
   isReadIntent,
   parseVoiceIntent,
   voiceAnswer,
@@ -92,13 +92,12 @@ test('reads carry an answer and are never confirmable actions; DECLINED is neith
   assert.equal(voiceAnswer(declined), null);
 });
 
-test('v2 changes: staff may request time off; only managers and owners may cancel a shift', () => {
-  assert.equal(canConfirmVoiceAction('STAFF', 'REQUEST_TIME_OFF'), true);
-  assert.equal(canConfirmVoiceAction('STAFF', 'CANCEL_SHIFT'), false);
-  assert.equal(canConfirmVoiceAction('MANAGER', 'CANCEL_SHIFT'), true);
-  assert.equal(canConfirmVoiceAction('OWNER', 'REQUEST_TIME_OFF'), true);
-  // The shared lists still apply.
-  assert.equal(canConfirmVoiceAction('STAFF', 'PUBLISH_ROTA'), false);
-  assert.equal(canConfirmVoiceAction('MANAGER', 'PUBLISH_ROTA'), true);
-  assert.equal(canConfirmVoiceAction('ADMIN', 'REQUEST_TIME_OFF'), false);
+test('v2 changes (shared role lists): staff may request time off; only managers and owners may cancel a shift', () => {
+  assert.equal(canConfirmVoiceIntent('STAFF', 'REQUEST_TIME_OFF'), true);
+  assert.equal(canConfirmVoiceIntent('STAFF', 'CANCEL_SHIFT'), false);
+  assert.equal(canConfirmVoiceIntent('MANAGER', 'CANCEL_SHIFT'), true);
+  assert.equal(canConfirmVoiceIntent('OWNER', 'REQUEST_TIME_OFF'), true);
+  assert.equal(canConfirmVoiceIntent('STAFF', 'PUBLISH_ROTA'), false);
+  assert.equal(canConfirmVoiceIntent('MANAGER', 'PUBLISH_ROTA'), true);
+  assert.equal(canConfirmVoiceIntent('ADMIN', 'REQUEST_TIME_OFF'), false);
 });
