@@ -30,7 +30,7 @@ import { isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias, isRoleTitle } from './resolveRows.js';
 import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
 import { ambiguousDottedTime, parseShiftText, parseSingleTime, sheetDotStyle, withinOneDay, type ShiftTextOptions } from './shiftText.js';
-import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle, UNREADABLE_NAME } from './personKey.js';
+import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isLabelLine, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle, UNREADABLE_NAME } from './personKey.js';
 import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -87,6 +87,12 @@ const isFooterOrNote = isFooterTotalOrNote;
 
 /** What the review says about a row whose name couldn't be read ("[?]", "?", "…"). */
 const UNREADABLE_ROW = "A row whose name couldn't be read. Add the person and their shifts by hand if it is one.";
+
+/** A line of text rather than a heading: five words or more, or a sentence's end ("Any changes must be agreed with the duty manager"). */
+const isSentence = (text: string) => text.trim().split(/\s+/).length >= 5 || /[.!?]$/.test(text.trim());
+
+/** What the review says about a line below the roster that has text but no shift, time or leave in its days. */
+const BELOW_ROSTER = 'A line below the roster with no shift, time or leave in its days: not read as a person. Add them by hand if it is one.';
 
 /** Words that name a group of staff, not a person ("Bar Team", "Night Crew"). */
 const GROUP_WORDS = /\b(team|staff|crew|squad|section|department|dept|group|shift|service|foh|boh|management)\b/i;
@@ -1194,8 +1200,24 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
   const unrecognizedHeaderTexts = new Set<string>();
   const HEADING_NOTE = 'Read as a section heading. If this is a person with no shifts this week, add them on the review screen.';
 
+  // The last row of the listing that holds a shift, a time or a leave code. Below it, a line with
+  // text in its days but no data there is a footer or a sign-off (spread across the page), never
+  // a person.
+  let lastDataRow = -1;
+  for (let r = header.dataStartIdx; r < dataEndIdx; r++) if (hasData(grid[r] ?? [])) lastDataRow = r;
+
   for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
+
+    // A line with no shift, time or leave in any day that reads, anywhere along it, as a label, a
+    // form line or a footer ("Checked by: ____", "Date:", "Page 2 of 3", "Printed on …"): never a
+    // person, wherever it sits — even when what is left in the name column looks like a name.
+    if (!hasData(row) && row.some((c) => isLabelLine(normalizeCell(c)))) continue;
+    if (lastDataRow >= 0 && r > lastDataRow && !hasData(row) && !daysBlank(row)) {
+      const label = withoutLeadingIndex(normalizeCell(row[hasTitleColumn ? nameColIndex : 0]));
+      if (looksLikePersonName(label) && !nonPersonReason(label)) addUnread(r, row.map(normalizeCell).filter(Boolean).join(' | '), BELOW_ROSTER);
+      continue;
+    }
 
     if (!hasTitleColumn) {
       // Single-label-column shape: the name column IS where a role/section
@@ -1225,7 +1247,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
 
       const rowHasData = hasData(row);
       // A label merged across the whole row heads a section (provisionally when the vocabulary doesn't know it).
-      if (isMergedBanner(row) && !CAPTION_WORDS.test(nonBlankValues[0]!) && !isRoleHeaderLabel(nonBlankValues[0]!, hasSeenAnyStaffRow)) {
+      if (isMergedBanner(row) && !CAPTION_WORDS.test(nonBlankValues[0]!) && !isRoleHeaderLabel(nonBlankValues[0]!, hasSeenAnyStaffRow) && !isSentence(nonBlankValues[0]!)) {
         setSection(nonBlankValues[0]!, true);
         unrecognizedHeaderTexts.add(nonBlankValues[0]!);
         continue;
@@ -1302,7 +1324,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
         // banner the role vocabulary doesn't know. It can't be a person — names sit in the name
         // column — so it groups the rows below, provisionally and flagged.
         const texts = [...new Set(nonBlankValues)];
-        if (texts.length === 1 && !/^\d+(\.\d+)?$/.test(texts[0]!) && !isFooterOrNote(texts[0]!) && !CAPTION_WORDS.test(texts[0]!)) {
+        if (texts.length === 1 && !/^\d+(\.\d+)?$/.test(texts[0]!) && !isFooterOrNote(texts[0]!) && !CAPTION_WORDS.test(texts[0]!) && !isSentence(texts[0]!)) {
           setSection(texts[0]!, true);
           unrecognizedHeaderTexts.add(texts[0]!);
         }
@@ -1460,6 +1482,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
         currentRoleIsProvisional &&
         !/^\d+(\.\d+)?$/.test(label) &&
         !SUMMARY_ROW_LABELS.has(label.toLowerCase()) &&
+        !isSentence(label) &&
         daysBlank(row)
       ) {
         setSection(label, true);

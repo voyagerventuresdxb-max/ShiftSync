@@ -7,7 +7,7 @@
  */
 import { interpretCell } from './deterministicGridParser.js';
 import { isOvernight } from './normalize.js';
-import { combinedLabelOrder, isUnreadableName, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle } from './personKey.js';
+import { combinedLabelOrder, isLabelLine, isUnreadableName, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle } from './personKey.js';
 import { parseShiftText, sheetDotStyle } from './shiftText.js';
 import { detectWeek, parseDayLabel } from './weekDetection.js';
 import type { ReadingAnswer } from './vlmPrompt.js';
@@ -71,8 +71,20 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
   let rowNumber = 1;
   let sourceRowIndex = 0;
   const seen = new Set<string>();
+  /** Whether a transcribed cell holds a shift, a time, a leave code or a colour: data, not text. */
+  const isData = (raw: string | null | undefined) => {
+    const text = textOverColour((raw ?? '').trim());
+    if (!text || text === '[?]') return false;
+    if (/^\[.+\]$/.test(text)) return true;
+    const kind = interpretCell(text, timeOptions).kind;
+    return kind === 'shifts' || kind === 'leave' || kind === 'flagged';
+  };
   for (const page of [...(answer.pages ?? [])].sort((a, b) => a.p - b.p)) {
     const pageNames: string[] = [];
+    // The last row of the page listed with a shift, a time or a leave code: below it, a row whose
+    // days hold only text is a footer or a sign-off, never a person.
+    const listedRows = (page.sec ?? []).flatMap((s) => s.ppl ?? []);
+    const lastDataRow = Math.max(-1, ...listedRows.filter((x) => (x.c ?? []).some(isData)).map((x) => x.i ?? -1));
     // Name and title copied from one cell ("Ana Silva / Waiter"): the page's own order, from all its names.
     const combinedOrder = combinedLabelOrder((page.sec ?? []).flatMap((s) => (s.ppl ?? []).map((x) => x.nm ?? '')));
     for (const section of page.sec ?? []) {
@@ -100,6 +112,16 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
         if (notPerson) {
           unreadRows.push({ page: page.p, row: person.i ?? null, text: name, reason: `Listed by the AI reader, but "${name}" reads as ${notPerson}. Not imported; add the person by hand if it is one.` });
           continue;
+        }
+        // No shift, time or leave in any day, and a label, form line or footer along the row
+        // ("Verified by" | "Date: ____"), or only text in its days below the last row with data.
+        if (!cells.some(isData)) {
+          const labelled = [name, ...cells].some((c) => isLabelLine(c ?? ''));
+          const belowRoster = (person.i ?? -1) > lastDataRow && lastDataRow >= 0 && cells.some((c) => (c ?? '').trim() && c !== '[?]');
+          if (labelled || belowRoster) {
+            unreadRows.push({ page: page.p, row: person.i ?? null, text: [name, ...cells].filter(Boolean).join(' | '), reason: `Listed by the AI reader, but this row reads as a label, a footer or a sign-off line, with no shift in its days. Not imported; add the person by hand if it is one.` });
+            continue;
+          }
         }
         pageNames.push(name);
 

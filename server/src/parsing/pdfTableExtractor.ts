@@ -129,6 +129,25 @@ function glue(prev: PositionedItem, next: PositionedItem): string {
   return next.x0 - prev.x1 < Math.max(prev.height, next.height) * 0.12 ? '' : ' ';
 }
 
+/**
+ * The pieces of one word a text layer split at a ligature ("Veri" + "fi" + "ed", "Sa" + "ffi" +
+ * "ya"), placed edge to edge — letter against letter, closer than a hair — joined into one item
+ * before anything is placed in a column. A word cut that way could otherwise land partly in one
+ * column and partly in the next: "Verifi" in the name column, "ed by: ____" in the days.
+ */
+function joinWordPieces(items: PositionedItem[]): PositionedItem[] {
+  const out: PositionedItem[] = [];
+  for (const item of [...items].sort((a, b) => a.x0 - b.x0)) {
+    const prev = out[out.length - 1];
+    const h = prev ? Math.max(prev.height, item.height) : 0;
+    const touching = !!prev && Math.abs(item.x0 - prev.x1) <= h * 0.12 && Math.abs(cy(prev) - cy(item)) <= h * 0.3;
+    if (prev && touching && /\p{L}$/u.test(prev.text) && /^\p{L}/u.test(item.text)) {
+      out[out.length - 1] = { text: `${prev.text}${item.text}`, x0: prev.x0, x1: Math.max(prev.x1, item.x1), y0: Math.min(prev.y0, item.y0), y1: Math.max(prev.y1, item.y1), height: h };
+    } else out.push({ ...item });
+  }
+  return out;
+}
+
 type Phrase = PositionedItem;
 interface RowCluster {
   y: number;
@@ -150,7 +169,8 @@ function clusterRows(items: PositionedItem[]): RowCluster[] {
     if (current && Math.abs(current.y - cy(item)) <= tolerance) current.items.push(item);
     else rows.push({ y: cy(item), items: [item] });
   }
-  return rows.map((row) => {
+  return rows.map((raw) => {
+    const row = { y: raw.y, items: joinWordPieces(raw.items) };
     const phrases: Phrase[] = [];
     for (const item of [...row.items].sort((a, b) => a.x0 - b.x0)) {
       const prev = phrases[phrases.length - 1];
@@ -565,9 +585,11 @@ function deriveGeometry(rows: RowCluster[], dayRowIdxs: number[], periodIdx: num
   const step = best.step;
   const left = bands[0]!.x0;
   const right = bands[bands.length - 1]!.x1;
-  // The leading columns come from text left of the days — not from a right-aligned day cell
-  // running on to the left into them.
-  const lead = body.map((row) => ({ ...row, items: row.items.filter((p) => !(cx(p) < left && p.x1 > left + step * 0.25)) }));
+  // The leading columns come from the rows of the listing — those with a time or a code in their
+  // days, not a footer or sign-off line under the grid — and from text left of the days, not a
+  // right-aligned day cell running on to the left into them.
+  const listing = body.filter((row) => row.items.some((p) => cx(p) >= left && dayLike(p.text)));
+  const lead = (listing.length >= 2 ? listing : body).map((row) => ({ ...row, items: row.items.filter((p) => !(cx(p) < left && p.x1 > left + step * 0.25)) }));
   // Column labels near the day header ("NAME" | "POSITION", "#" | "EMPLOYEE") part columns printed too close for a gap.
   const leading = splitByLabels(textChannels(lead, -Infinity, left), leadingLabels(rows, dayRowIdxs[0]! - 3, bodyStart + 3, left), lead, left);
   // Day cells' alignment, from the cells that fit their column (decided before the notes columns,
