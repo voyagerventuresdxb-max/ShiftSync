@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { columnHeading, isFooterTotalOrNote, isSectionLabel, nonPersonReason } from './personKey.js';
+import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isSectionLabel, isUnreadableName, nonPersonReason, splitNameTitle } from './personKey.js';
 
 test('nonPersonReason: titles, headings, totals, footers, captions and counts are never people', () => {
   for (const label of ['Waiter 3', 'Head waiter 1', 'RM', 'JAM', 'Supervisor', 'Ops Manager', 'Events Manager', 'Runner 2nd', 'NAME', 'TITLE', 'Staff', 'Day of the week', 'Total staff on rota', 'Total staff on rota: 22', 'Headcount', 'Number of staff', 'Prepared by: Duty Manager', 'Printed 2026-08-17', 'Page 1 of 2', 'Signature ________', 'COVERS', 'Notes', '22']) {
@@ -35,7 +35,7 @@ test('nonPersonReason: heading lines in any order, footers anywhere in the line,
     assert.equal(isSectionLabel(label), true, label);
   }
   for (const label of ['AGM', 'HOD', 'CDP', 'Senior Server', 'Jr Bartender']) assert.match(nonPersonReason(label)!, /title or role/, label);
-  for (const name of ['James Barr', 'Barbara Floor', 'James', 'Test Cooks', 'T. Valdez', 'Valdez T.', 'A. Obi']) assert.equal(nonPersonReason(name), null, name);
+  for (const name of ['James Barr', 'Barbara Floor', 'James', 'Test Cooks', 'I. Fairweather', 'Fairweather I.', 'A. Obi']) assert.equal(nonPersonReason(name), null, name);
 });
 
 test('columnHeading: index, name, title and other columns', () => {
@@ -44,4 +44,24 @@ test('columnHeading: index, name, title and other columns', () => {
   for (const label of ['POSITION', 'Role', 'Job title', 'Role / Position', 'Designation']) assert.equal(columnHeading(label), 'title', label);
   for (const label of ['DATE', 'Day of the week', 'Team', 'Ana Silva', 'Name / Position']) assert.equal(columnHeading(label), null, label);
   for (const label of ['TOTAL', 'Signature', 'Dept']) assert.equal(columnHeading(label), 'other', label);
+});
+
+test('a name that could not be read is never a person', () => {
+  for (const label of ['[?]', '?', '…', '...', '-', '[illegible]', 'XXX', 'unknown', 'TBC']) {
+    assert.equal(isUnreadableName(label), true, label);
+    assert.ok(nonPersonReason(label), label);
+  }
+  for (const label of ['Test Alpha', 'Jo', '22']) assert.equal(isUnreadableName(label), false, label);
+});
+
+test('name and title in one cell: split when one side is a title, or by the column\'s own order', () => {
+  assert.deepEqual(splitNameTitle('Test Alpha / Waiter 2'), { name: 'Test Alpha', title: 'Waiter 2' });
+  assert.deepEqual(splitNameTitle('RM - Test Alpha'), { name: 'Test Alpha', title: 'RM' });
+  assert.deepEqual(splitNameTitle('Test Alpha (Supervisor)'), { name: 'Test Alpha', title: 'Supervisor' });
+  assert.equal(splitNameTitle('Test Alpha / Sommelier x'), null);
+  assert.equal(splitNameTitle('Ana-Maria Popescu'), null);
+  const column = ['Test Alpha / Commis', 'Test Beta / Commis', 'Test Gamma / Cashier', 'Test Delta / Valet'];
+  assert.equal(combinedLabelOrder(column), 'name-first');
+  assert.deepEqual(splitNameTitle('Test Delta / Valet', 'name-first'), { name: 'Test Delta', title: 'Valet' });
+  assert.equal(combinedLabelOrder(['Test Alpha', 'Test Beta', 'Test Gamma / Valet']), null);
 });

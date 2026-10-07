@@ -96,19 +96,31 @@ export function isSectionLabel(label: string): boolean {
   if (/\s(team|staff|crew|squad|section|department|dept|group)$/i.test(s)) return true;
   // "HOSTS" -> "Host"; a short word is left alone ("James" is not "JAM" in the plural).
   const singular = s.replace(/(?<=\p{L}{4})s$/iu, '');
-  return singular !== s && isRoleTitle(singular);
+  const singularEs = s.replace(/(?<=\p{L}{4}(?:ss|sh|ch))es$/iu, '');
+  return (singular !== s && isRoleTitle(singular)) || (singularEs !== s && isRoleTitle(singularEs));
+}
+
+/** The reason nonPersonReason gives for a name that couldn't be read ("[?]", "?", "…", "xxx"). */
+export const UNREADABLE_NAME = 'an unreadable name';
+
+/** A name placeholder rather than a name: no letters at all ("[?]", "?", "…", "-"; a number is a count), or "xxx", "unknown", "illegible", "TBC". */
+export function isUnreadableName(label: string): boolean {
+  const s = label.trim();
+  if (/^\d+([.,]\d+)?$/.test(s)) return false;
+  return !/\p{L}/u.test(s) ||/^\[?\s*(x{2,}|unknown|illegible|unreadable|unclear|n\/?a|tbc|tba|tbd|name)\s*\]?$/i.test(s) || /^\[.*\?.*\]$/.test(s);
 }
 
 /**
  * Why a row label is not a person, or null when it may be one. Every reader asks this before
  * listing someone: a role or title ("Waiter 3", "RM", "Ops Manager"), a column or section
  * heading ("NAME TITLE", "BAR"), a total or count line, a footer, signature or note, a
- * caption, or a bare number is never imported as a person.
+ * caption, a bare number, or a name that couldn't be read ("[?]") is never imported as a person.
  */
 export function nonPersonReason(label: string): string | null {
   const s = label.trim().replace(/\s+/g, ' ');
   if (!s) return 'blank';
   if (/^\d+([.,]\d+)?$/.test(s)) return 'a count, not a name';
+  if (isUnreadableName(s)) return UNREADABLE_NAME;
   if (HEADER_WORD.test(s) || isHeadingLine(s) || columnHeading(s)) return 'a heading, not a name';
   if (SUMMARY_LINE.test(s)) return 'a total or count line, not a person';
   if (NOTE_LINE.test(s) || /\bpage \d+ of \d+\b/i.test(s) || /:\s*\S/.test(s) || /_{3,}/.test(s)) return 'a footer or note, not a person';
@@ -116,5 +128,59 @@ export function nonPersonReason(label: string): string | null {
   if (CAPTION_LINE.test(s)) return 'a caption, not a person';
   if (isSectionLabel(s)) return 'a section heading, not a name';
   if (isRoleTitle(s)) return 'a title or role, not a name';
+  return null;
+}
+
+/** A title in a combined cell: a known role or banner word, an abbreviation ("RM"), or a numbered title ("Waiter 3"). */
+const titleish = (t: string) => isRoleTitle(t) || isSectionLabel(t) || /^[A-Z]{2,5}$/.test(t) || /[A-Za-z].*\d/.test(t);
+/** A name in a combined cell: words of letters that are not a title. */
+const nameish = (t: string) => looksLikePersonName(t) && !titleish(t);
+
+/** The two sides of a cell that holds a name and a title: "A / B", "A - B", "A | B", "A (B)", "A/B". */
+function combinedParts(label: string): [string, string] | null {
+  const s = label.trim().replace(/\s+/g, ' ');
+  const m = s.match(/^(.+?)\s+[/|–—-]\s+(.+)$/) ?? s.match(/^(.+?)\s*\(([^()]+)\)$/) ?? s.match(/^([^/\d]+?)\/([^/\d]+)$/);
+  if (!m) return null;
+  const a = m[1]!.trim();
+  const b = m[2]!.trim();
+  return a && b ? [a, b] : null;
+}
+
+/**
+ * How a column (or a page of names) writes name and title in one cell, decided from all of its
+ * cells: 'name-first' ("Ana Silva / Waiter"), 'title-first' ("Waiter / Ana Silva"), or null when
+ * fewer than three cells, or under half of them, are written that way. The title side is the one
+ * whose values read as titles or repeat from row to row; then even a title no vocabulary knows
+ * ("Sommelier") is split off.
+ */
+export function combinedLabelOrder(labels: string[]): 'name-first' | 'title-first' | null {
+  const filled = labels.map((l) => l.trim()).filter(Boolean);
+  const parts = filled.map(combinedParts).filter((p): p is [string, string] => p !== null);
+  if (parts.length < 3 || parts.length < filled.length * 0.5) return null;
+  const side = (k: 0 | 1) => {
+    const values = parts.map((p) => p[k]);
+    const counts = new Map<string, number>();
+    for (const v of values) counts.set(v.toLowerCase(), (counts.get(v.toLowerCase()) ?? 0) + 1);
+    const repeats = values.filter((v) => counts.get(v.toLowerCase())! > 1).length;
+    return values.filter(titleish).length + repeats - values.filter(nameish).length;
+  };
+  const [a, b] = [side(0), side(1)];
+  if (a === b) return null;
+  return b > a ? 'name-first' : 'title-first';
+}
+
+/**
+ * The name and the title of a cell that holds both ("Ana Silva / Waiter", "Ana Silva (RM)",
+ * "Waiter 3 - Ana Silva"), or null. With the column's own order (combinedLabelOrder) any title
+ * splits off; without it, one side must read as a name and the other as a title.
+ */
+export function splitNameTitle(label: string, order: 'name-first' | 'title-first' | null = null): { name: string; title: string } | null {
+  const parts = combinedParts(label);
+  if (!parts) return null;
+  const [a, b] = parts;
+  if (order === 'name-first') return looksLikePersonName(a) && !titleish(a) ? { name: a, title: b } : null;
+  if (order === 'title-first') return looksLikePersonName(b) && !titleish(b) ? { name: b, title: a } : null;
+  if (nameish(a) && titleish(b)) return { name: a, title: b };
+  if (nameish(b) && titleish(a)) return { name: b, title: a };
   return null;
 }

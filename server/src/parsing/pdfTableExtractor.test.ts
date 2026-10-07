@@ -602,3 +602,35 @@ test('labels on their own row under the days ("#" | "EMPLOYEE" | "ROLE") split a
   assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|AGM', 'Test Gamma|Head waiter 1', 'Test Delta|Supervisor']);
   assert.equal(result.rows.length, 4);
 });
+
+test('a long cell in a narrow left-aligned day column, running on into the next days, stays on its own day', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([700, 400]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const draw = (text: string, x: number, y: number) => page.drawText(text, { x, y, size: 9, font });
+  // Day columns 40 wide from x = 200; every cell starts 3 in from its column's left edge.
+  const days = ['Mon 13/04', 'Tue 14/04', 'Wed 15/04', 'Thu 16/04'];
+  days.forEach((d, i) => draw(d, 200 + i * 40 + 3, 380));
+  const rows: [string, string[]][] = [
+    ['Test Alpha', ['10.00-15.00/19.00-00.00', 'OFF', 'AL', 'OFF']],
+    ['Test Beta', ['OFF', '18.30-01.00', 'OFF', 'UL']],
+    ['Test Gamma', ['UL', 'OFF', '10.30-16.00/20.00-00.00', 'AL']],
+    ['Test Delta', ['AL', 'UL', 'OFF', '11.00-19.00']],
+  ];
+  rows.forEach(([name, cells], r) => {
+    const y = 360 - r * 15;
+    draw(name, 20, y);
+    cells.forEach((c, i) => draw(c, 200 + i * 40 + 3, y));
+  });
+  const result = parseExcelGrid(await extractPdfGrid(Buffer.from(await doc.save())), '2026-04-13');
+  const keys = result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}`).sort();
+  assert.deepEqual(keys, [
+    'Test Alpha|2026-04-13|10:00-15:00',
+    'Test Alpha|2026-04-13|19:00-00:00',
+    'Test Beta|2026-04-14|18:30-01:00',
+    'Test Delta|2026-04-16|11:00-19:00',
+    'Test Gamma|2026-04-15|10:30-16:00',
+    'Test Gamma|2026-04-15|20:00-00:00',
+  ]);
+  assert.equal(result.leaveRecords.filter((l) => l.employeeName === 'Test Alpha').length, 3, "the next days' own codes stay on their days");
+});

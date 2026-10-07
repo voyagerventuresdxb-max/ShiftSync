@@ -136,6 +136,7 @@ function report(
     disagreements: parts.disagreements ?? 0,
     fromCache: !!parts.fromCache,
     ...(note ? { note } : {}),
+    ...(parts.crossChecked === 'yes' ? { crossChecked: true } : {}),
   };
 }
 
@@ -143,11 +144,16 @@ function report(
 type CrossChecked = 'yes' | 'failed' | 'no';
 
 /** Cells (person and day) the two readings of a photo or scan compared, and those they read differently. */
-type CellsToCheck = { toCheck: number; compared: number };
+type CellsToCheck = { toCheck: number; compared: number; unreliablePages?: { page: number; toCheck: number; compared: number }[] };
 
 /** Said first when many cells of a photo or scan were read two ways (none of them was imported). */
 function hardToReadNote(cells: CellsToCheck | undefined): string | null {
   if (!cells || cells.toCheck === 0) return null;
+  const untrusted = cells.unreliablePages ?? [];
+  if (untrusted.length) {
+    const which = untrusted.length === 1 && untrusted[0]!.page === 1 && cells.compared === untrusted[0]!.compared ? 'none of its shifts were' : `nothing from page ${untrusted.map((u) => u.page).join(', ')} was`;
+    return `This photo was hard to read — the two readings disagreed on too much of it, so ${which} imported and ${cells.toCheck} ${cells.toCheck === 1 ? 'day needs' : 'days need'} checking; for best results upload the original PDF or spreadsheet.`;
+  }
   const many = cells.toCheck >= 5 || cells.toCheck / Math.max(1, cells.compared) >= 0.1;
   if (!many) return null;
   return `This photo was hard to read — ${cells.toCheck} ${cells.toCheck === 1 ? 'cell needs' : 'cells need'} checking; for best results upload the original PDF or spreadsheet.`;
@@ -183,7 +189,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     if (!wanted) return { result: first, crossChecked: 'no', disagreements: 0 };
     if (!crossAnswer) return { result: first, crossChecked: 'failed', disagreements: 0 };
     const checked = crossCheckAiReadings(first, mapReadingAnswer(crossAnswer, week));
-    return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements, cells: { toCheck: checked.cellsToCheck, compared: checked.cellsCompared } };
+    return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements, cells: { toCheck: checked.cellsToCheck, compared: checked.cellsCompared, unreliablePages: checked.unreliablePages } };
   };
 
   /**
@@ -352,7 +358,10 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       if (dataLoss && read.code === 'vision_unconfigured') return { ok: false, status: 422, body: { error: withManualPath(dataLoss.message), errorCode: 'roster_extraction_anomaly' } };
       return refused(read, reason);
     }
-    const { result: merged, disagreements } = reconcileReadings(read.result, tableResult);
+    // People on a row whose day was inferred for a cell too long for its column (pdfTableExtractor).
+    const runOn = new Set(table.runOnRows.map((r) => `${r.page}:${r.row}`));
+    const placementUncertain = new Set((tableResult?.people ?? []).filter((p) => runOn.has(`${p.sourcePage}:${p.sourceRow}`)).map((p) => p.personKey));
+    const { result: merged, disagreements } = reconcileReadings(read.result, tableResult, { placementUncertain });
     const result = complete(merged, 'ai', ctx);
     return { ok: true, result, reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: tableState, tableResult, ai_: read.outcome, disagreements, fromCache: read.fromCache }) };
   }

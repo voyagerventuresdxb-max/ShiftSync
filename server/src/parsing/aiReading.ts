@@ -7,7 +7,7 @@
  */
 import { interpretCell } from './deterministicGridParser.js';
 import { isOvernight } from './normalize.js';
-import { looksLikePersonName, nonPersonReason, personKeyOf } from './personKey.js';
+import { combinedLabelOrder, isUnreadableName, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle } from './personKey.js';
 import { parseShiftText, sheetDotStyle } from './shiftText.js';
 import { detectWeek, parseDayLabel } from './weekDetection.js';
 import type { ReadingAnswer } from './vlmPrompt.js';
@@ -73,16 +73,21 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
   const seen = new Set<string>();
   for (const page of [...(answer.pages ?? [])].sort((a, b) => a.p - b.p)) {
     const pageNames: string[] = [];
+    // Name and title copied from one cell ("Ana Silva / Waiter"): the page's own order, from all its names.
+    const combinedOrder = combinedLabelOrder((page.sec ?? []).flatMap((s) => (s.ppl ?? []).map((x) => x.nm ?? '')));
     for (const section of page.sec ?? []) {
       for (const listed of section.ppl ?? []) {
         // The title column taken for the names (name column printed first): a title such as
         // "Waiter 3" in the name and a person's name in the title. Read the other way round.
         const swapped = !!listed.t && !!nonPersonReason(listed.nm ?? '') && looksLikePersonName(listed.t) && !nonPersonReason(listed.t);
-        const person = swapped ? { ...listed, nm: listed.t!, t: listed.nm } : listed;
+        const unswapped = swapped ? { ...listed, nm: listed.t!, t: listed.nm } : listed;
+        const combined = splitNameTitle(unswapped.nm ?? '', combinedOrder);
+        const person = combined ? { ...unswapped, nm: combined.name, t: unswapped.t?.trim() || combined.title } : unswapped;
         const name = (person.nm ?? '').trim();
         const cells = person.c ?? [];
-        if (!name) {
-          unreadRows.push({ page: page.p, row: person.i ?? null, text: cells.filter(Boolean).join(' | '), reason: 'A row with shifts but no readable name.' });
+        // A row whose name couldn't be read ("", "[?]", "?", "…"): never a person, always shown.
+        if (!name || isUnreadableName(name)) {
+          unreadRows.push({ page: page.p, row: person.i ?? null, text: cells.filter(Boolean).join(' | '), reason: "A row whose name couldn't be read. Add the person and their shifts by hand if it is one." });
           continue;
         }
         // A stitched answer (a page read twice) may list the same printed row twice.

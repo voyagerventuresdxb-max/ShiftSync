@@ -4,13 +4,16 @@
  * means the same thing whichever reader saw it.
  *
  * Every pure-time cell is a list of times read left to right; consecutive pairs are segments:
- *   "9-17", "17:00-01:00", "4pm to 2am", "4 PM - 2 AM", "6.30pm-1am"       → one segment
+ *   "9-17", "17:00-01:00", "4pm to 2am", "4 PM - 2 AM", "6.30pm-1am", "7a-3p", "12n-8p",
+ *   "4pm-12m", "noon till midnight", "1830-0200"                         → one segment
  *   "11 17 18 25" (AM start, AM end, PM start, PM end), "10-14/18-23",
- *   "10am/3pm-7pm/12am" (bridged split), "10:30-4:00-8:00-12" (chained)  → two segments
- * Times: 24h ("18:30"), dot separators ("18.30"), decimal hours ("18.5" = 18:30, "9.75" =
- * 09:45), hours past midnight ("25" = 01:00 next day), 12h with am/pm. A cell written on a
- * 12-hour clock without am/pm reads forward in time ("10:30-4:00-8:00-12" = 10:30-16:00 and
- * 20:00-00:00), the way such rotas are meant. Anything with other words in it is not a time cell.
+ *   "10am/3pm-7pm/12am" (bridged split), "10:30-4:00-8:00-12" (chained),
+ *   "1000-1500 & 1900-2400"                                              → two segments
+ * Times: 24h ("18:30", "1830"), dot separators ("18.30"), decimal hours ("18.5" = 18:30, "9.75" =
+ * 09:45), hours past midnight ("25" = 01:00 next day), 12h with am/pm or a / p, noon ("12n") and
+ * midnight ("12m"). A cell written on a 12-hour clock without am/pm reads forward in time
+ * ("10:30-4:00-8:00-12" = 10:30-16:00 and 20:00-00:00), the way such rotas are meant. Anything
+ * with other words in it is not a time cell.
  */
 
 export interface ShiftSegment {
@@ -24,10 +27,12 @@ export interface ShiftSegment {
 
 export interface ShiftTextOptions {
   /**
-   * How "18.30" is meant when the cell alone can't tell: minutes (18:30) or decimal hours
-   * (18.30 h). Unset: two-digit fractions other than .25/.50/.75/.00 are minutes, the rest decimal.
+   * How this roster writes dotted times (sheetDotStyle): on a clock ("18.30" = 18:30, and "18.3"
+   * a clock time whose 0 a spreadsheet dropped), as decimal hours ("18.5" = 18:30, "18.25" =
+   * 18:15), or both ("mixed": a ".5" / ".25" / ".50" could be either and is never guessed).
+   * Unset: two-digit fractions other than .25/.50/.75/.00 are minutes, the rest decimal.
    */
-  dotMeans?: 'minutes' | 'decimal';
+  dotMeans?: 'minutes' | 'decimal' | 'mixed';
 }
 
 interface Token {
@@ -40,22 +45,45 @@ interface Token {
   twentyFour: boolean;
 }
 
-const TOKEN_RE = /(\d{1,2})(?:([:.])(\d{1,2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?)?(?![\d])/gi;
-/** What may sit between times: dashes, slashes, commas, '&', and the words to / and / till / until. */
-const isSeparatorText = (s: string) => /^[\s\-–—/;,&+]*$/.test(s.replace(/\b(?:to|and|till|until)\b/gi, ' '));
+const TOKEN_RE = /(\d{1,2})(?:([:.])(\d{1,2}))?\s*(a\.?\s?m\.?|p\.?\s?m\.?|a(?![a-z])|p(?![a-z]))?(?![\d])/gi;
+/** What may sit between times: dashes, slashes, commas, '&', '~', and the words to / and / till / until / thru. */
+const isSeparatorText = (s: string) => /^[\s\-–—/;,&+~]*$/.test(s.replace(/(?:\b|')(?:to|and|till|til|until|thru|through)\b/gi, ' '));
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const hhmm = (min: number) => `${pad(Math.floor(min / 60) % 24)}:${pad(min % 60)}`;
 
 /** True when a dotted fraction is a typical decimal-hour fraction (.25, .5, .75). */
 const decimalFraction = (frac: string) => ['25', '5', '50', '75', '0', '00'].includes(frac);
+/** A dotted fraction that is a decimal hour on a decimal roster and a clock time on a clock roster. */
+const eitherWay = (frac: string) => ['5', '25', '50'].includes(frac);
 
-function readTokens(text: string, opts: ShiftTextOptions): Token[] | null {
+/**
+ * The words and shapes people type for times, rewritten so one tokenizer reads them all:
+ * noon / "12n" → 12pm, midnight / "12m" / "12mn" → 12am, four-digit 24h without a colon
+ * ("1830", "0200", "2400") → "18:30", and a three-digit one beside it ("830-1700").
+ */
+function normalizeTimeText(raw: string): string {
+  let text = raw
+    .trim()
+    .replace(/\bnoon\b|\b12\s*n\b/gi, '12pm')
+    .replace(/\bmid-?night\b|\b12\s*m(?:n|id)?\b/gi, '12am');
+  const four = /(?<![\d.:])([01]\d|2[0-4])([0-5]\d)(?![\d.:])/g;
+  if (four.test(text)) {
+    text = text.replace(four, '$1:$2').replace(/(?<![\d.:])([1-9])([0-5]\d)(?![\d.:])/g, '$1:$2');
+  }
+  return text;
+}
+
+/** Marks a cell whose dotted time can't be told apart on a roster that writes both ways. */
+const AMBIGUOUS = Symbol('ambiguous');
+
+function readTokens(text: string, opts: ShiftTextOptions): Token[] | null | typeof AMBIGUOUS {
   const tokens: Token[] = [];
   let rest = '';
   let last = 0;
   const dotted = [...text.matchAll(/\d{1,2}\.(\d{1,2})/g)].map((m) => m[1]!);
   const cellSaysMinutes = dotted.some((f) => f.length === 2 && !decimalFraction(f));
+  let ambiguous = false;
   for (const m of text.matchAll(TOKEN_RE)) {
     rest += text.slice(last, m.index);
     last = m.index! + m[0].length;
@@ -64,17 +92,25 @@ function readTokens(text: string, opts: ShiftTextOptions): Token[] | null {
     const frac = m[3];
     const mer = m[4] ? (m[4].toLowerCase().startsWith('a') ? 'am' : 'pm') : null;
     let minutes: number;
-    let twentyFour = hour > 12 || m[1]!.length === 2 && m[1]!.startsWith('0');
+    let twentyFour = hour > 12 || (m[1]!.length === 2 && m[1]!.startsWith('0'));
     if (!sep) minutes = hour * 60;
     else if (sep === ':') {
       if (frac!.length !== 2 || Number(frac) > 59) return null;
       minutes = hour * 60 + Number(frac);
     } else {
-      // "18.5" / "9.75" are decimal hours; "18.30" is 18:30 unless told otherwise.
-      const asMinutes = frac!.length === 2 && (opts.dotMeans === 'minutes' || (opts.dotMeans !== 'decimal' && (cellSaysMinutes || !decimalFraction(frac!))));
+      // Clock, decimal, or either: as the roster writes its dotted times (sheetDotStyle).
+      let asMinutes: boolean;
+      if (opts.dotMeans === 'mixed') {
+        if (eitherWay(frac!)) ambiguous = true;
+        asMinutes = frac !== '75' && !decimalFraction(frac!);
+      } else if (opts.dotMeans === 'minutes') asMinutes = true;
+      else if (opts.dotMeans === 'decimal') asMinutes = false;
+      else asMinutes = frac!.length === 2 && (cellSaysMinutes || !decimalFraction(frac!));
       if (asMinutes) {
-        if (Number(frac) > 59) return null;
-        minutes = hour * 60 + Number(frac);
+        // "18.3" on a clock roster is 18:30 with its 0 dropped (a spreadsheet number).
+        const mm = frac!.length === 1 ? Number(frac) * 10 : Number(frac);
+        if (mm > 59) return null;
+        minutes = hour * 60 + mm;
       } else {
         minutes = Math.round((hour + Number(`0.${frac}`)) * 60);
         twentyFour = true;
@@ -89,7 +125,7 @@ function readTokens(text: string, opts: ShiftTextOptions): Token[] | null {
   }
   rest += text.slice(last);
   if (!isSeparatorText(rest)) return null;
-  return tokens;
+  return ambiguous ? AMBIGUOUS : tokens;
 }
 
 /** Fills in am/pm a cell leaves out: a bare hour beside an am/pm one, or a whole 12-hour chain. */
@@ -127,10 +163,10 @@ function inferTwelveHour(tokens: Token[]): boolean {
  * note, a name) or its times don't pair up. `inferred` is true when am/pm had to be inferred.
  */
 export function parseShiftText(raw: string, opts: ShiftTextOptions = {}): { segments: ShiftSegment[]; inferred: boolean } | null {
-  const text = raw.trim().replace(/\bnoon\b/gi, '12pm').replace(/\bmidnight\b/gi, '12am');
+  const text = normalizeTimeText(raw);
   if (!text || !/\d/.test(text)) return null;
   const tokens = readTokens(text, opts);
-  if (!tokens || tokens.length < 2 || tokens.length % 2 !== 0 || tokens.length > 6) return null;
+  if (!tokens || tokens === AMBIGUOUS || tokens.length < 2 || tokens.length % 2 !== 0 || tokens.length > 6) return null;
   const inferred = inferTwelveHour(tokens);
   const segments: ShiftSegment[] = [];
   for (let i = 0; i < tokens.length; i += 2) {
@@ -142,20 +178,43 @@ export function parseShiftText(raw: string, opts: ShiftTextOptions = {}): { segm
   return { segments, inferred };
 }
 
-/** One time on its own ("10", "4pm", "18.5") as HH:mm, or null. For open-ended cells ("10IN", "4CL"). */
+/**
+ * True when a time cell holds a dotted time this roster writes both ways (".5", ".25", ".50" on
+ * a roster with both "18.30" and "9.5"): it is shown to check, never read on a guess.
+ */
+export function ambiguousDottedTime(raw: string, opts: ShiftTextOptions = {}): boolean {
+  if (opts.dotMeans !== 'mixed') return false;
+  return readTokens(normalizeTimeText(raw), opts) === AMBIGUOUS;
+}
+
+/** One time on its own ("10", "4pm", "7a", "noon", "1830", "18.5") as HH:mm, or null. For open-ended cells ("10IN", "4CL"). */
 export function parseSingleTime(raw: string, opts: ShiftTextOptions = {}): string | null {
-  const tokens = readTokens(raw.trim(), opts);
-  if (!tokens || tokens.length !== 1) return null;
+  const tokens = readTokens(normalizeTimeText(raw), opts);
+  if (!tokens || tokens === AMBIGUOUS || tokens.length !== 1) return null;
   return hhmm(tokens[0]!.minutes % 1440);
 }
 
 /**
- * How a whole sheet writes dotted times: when any cell has a two-digit fraction that can't be a
- * decimal hour (".30", ".15", ".45"), every dotted time in the sheet is hours.minutes.
+ * How a whole roster writes dotted times, from the evidence in all its cells: on a clock when
+ * some fraction can't be a decimal hour (".30", ".15", ".45", or ".3" — a clock time whose 0 a
+ * spreadsheet dropped) and none is decimal (".5", ".75"); decimal hours in the reverse case;
+ * "mixed" when it has both (the fractions that read either way — ".5", ".25", ".50" — are then
+ * shown to check); unset when it has neither (".25" and ".50" alone fit either way).
  */
 export function sheetDotStyle(cells: string[]): ShiftTextOptions['dotMeans'] {
+  let clock = false;
+  let decimal = false;
   for (const c of cells) {
-    for (const m of c.matchAll(/\b\d{1,2}\.(\d{2})\b/g)) if (!decimalFraction(m[1]!)) return 'minutes';
+    for (const m of c.matchAll(/(?<![\d.])\d{1,2}\.(\d{1,2})(?![\d.])/g)) {
+      const f = m[1]!;
+      // ".25" and ".50" fit either way and follow the rest of the roster.
+      if (['0', '00', '25', '50'].includes(f)) continue;
+      if (f === '5' || f === '75') decimal = true;
+      else clock = true;
+    }
   }
+  if (clock && decimal) return 'mixed';
+  if (clock) return 'minutes';
+  if (decimal) return 'decimal';
   return undefined;
 }

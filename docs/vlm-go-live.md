@@ -147,7 +147,9 @@ It never shows a key, project id or provider message. Owners only; 3 runs per 5 
 - **Text PDFs** are read by the AI reader (the PDF goes as a file, at high media resolution, with
   its own text layer page by page) and cross-checked row by row by the table reader, which reads
   the same text layer. Without consent, or with the AI off, paused or out of allowance, the table
-  reader's result stands on its own.
+  reader's result stands on its own. When the two put the same times on different days, the
+  file's own days stand and the person is flagged — unless the table reader had to infer the day
+  (a cell longer than its column); then neither day is imported and both readings are shown.
 - **Photos and image-only (scanned) PDFs** have no text layer, so the AI reader reads them
   **twice at the same time**: person by person, and day column by day column (a differently framed
   prompt and schema in `vlmPrompt.ts`). The two readings are compared cell by cell
@@ -155,12 +157,18 @@ It never shows a key, project id or provider message. Owners only; 3 runs per 5 
   imported at all — it is shown to the manager as a cell to look at, with both readings — so a
   misread is never saved as a shift. A name the two spelled differently is kept with both
   spellings and marked "check the spelling". When many cells differ, the review says the photo was
-  hard to read and suggests uploading the original PDF or spreadsheet. That makes a photo or scan
+  hard to read and suggests uploading the original PDF or spreadsheet. A page the two readings
+  disagree on for more than 20% of its days (`PAGE_DISAGREEMENT_LIMIT`) is not trusted at all:
+  nothing from it is imported, and each person's week is shown with both readings (agreement on
+  such a page can be the same slip twice). That makes a photo or scan
   two model calls per page (plus at most one re-read of a page that came back short), all in
   parallel, so the wait is that of the slowest call.
 - The model only **transcribes** what is printed. Dates come from the printed day headers, times
-  from the cell text, by the same rules as the table reader; titles, headings, totals and footer
-  lines are never imported as people. Each call has `GEMINI_VISION_TIMEOUT_MS` (75 s), and the
+  from the cell text, by the same rules as the table reader ("7a-3p", "12n", "1830-0200", leave
+  codes such as "O", "X", "REQ", "S/L"); an open-ended cell ("4CL", "4pm-close", "open-3pm",
+  "IN 10") is flagged with a plain explanation written by the server, and its missing end is never
+  invented. Titles, headings, totals, footer lines and names that couldn't be read ("[?]") are
+  never imported as people. Each call has `GEMINI_VISION_TIMEOUT_MS` (75 s), and the
   whole upload `ROSTER_AI_BUDGET_MS` (95 s, inside the ~120 s the web proxy waits); whatever isn't
   read in time is listed as unread rows.
 - **Cache:** a complete AI reading (for a photo or scan, both readings) — or one still short after

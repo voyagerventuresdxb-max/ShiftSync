@@ -89,6 +89,25 @@ function levenshtein(a: string, b: string): number {
   return dp[b.length]!;
 }
 
+/**
+ * The share of a page's days (person and day, with anything in either reading) the two readings
+ * may disagree on before the page as a whole is not trusted. Two readings that slip
+ * independently disagree on about the sum of their slip rates, and on a hard page they also
+ * slip the SAME way on some cells — agreement that is wrong, which no comparison can catch. On
+ * the eval's photos and scans (server/eval/roster) every readable page disagrees on under 5% of
+ * its days (0.8–4.8%), a dense 42-person photo on 15%, an angled scan with many half days on
+ * 23%, and a dense photo whose readings also slip the same way on 52%. 20% leaves four times
+ * the readable pages' worst; past it, each reading is off on at least one day in ten, and if
+ * even one slip in five is repeated by the other reading, over 2% of the AGREED days are wrong
+ * — more than the whole budget for wrong times. So nothing from such a page is imported and
+ * every person's week is shown with both readings.
+ */
+export const PAGE_DISAGREEMENT_LIMIT = 0.2;
+/** Too few days to judge a page by (a page with two people on it). */
+const PAGE_MIN_DAYS = 10;
+
+const weekdayOf = (date: string) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(`${date}T00:00:00Z`).getUTCDay()]!;
+
 const CELL_DIFFERS = "The two AI readings of this photo or scan disagree on this day, so neither was imported. Check the roster and add the shift on the rota if there is one.";
 
 /**
@@ -103,11 +122,26 @@ const CELL_DIFFERS = "The two AI readings of this photo or scan disagree on this
 export function crossCheckAiReadings(
   first: ParsedVisionResult,
   second: ParsedVisionResult | null,
-): { result: ParsedVisionResult; disagreements: number; cellsToCheck: number; cellsCompared: number } {
-  if (!second) return { result: first, disagreements: 0, cellsToCheck: 0, cellsCompared: 0 };
+): { result: ParsedVisionResult; disagreements: number; cellsToCheck: number; cellsCompared: number; unreliablePages: { page: number; toCheck: number; compared: number }[] } {
+  if (!second) return { result: first, disagreements: 0, cellsToCheck: 0, cellsCompared: 0, unreliablePages: [] };
   let disagreements = 0;
   let cellsToCheck = 0;
   let cellsCompared = 0;
+  /** Per page: days compared and days read differently. */
+  const pageDays = new Map<number, { compared: number; toCheck: number }>();
+  const tally = (page: number | null, differs: boolean) => {
+    const t = pageDays.get(page ?? 1) ?? { compared: 0, toCheck: 0 };
+    t.compared++;
+    if (differs) t.toCheck++;
+    pageDays.set(page ?? 1, t);
+  };
+  /** Each person's week as each reading has it, for a page that turns out not to be trusted. */
+  const weeks = new Map<string, { name: string; page: number; first: Map<string, string>; second: Map<string, string> }>();
+  const noteWeek = (p: ReadPerson, which: 'first' | 'second', date: string, text: string) => {
+    const w = weeks.get(p.personKey) ?? { name: p.name, page: p.sourcePage ?? 1, first: new Map(), second: new Map() };
+    w[which].set(date, text);
+    weeks.set(p.personKey, w);
+  };
   const aPeople = first.people ?? [];
   const bPeople = second.people ?? [];
   const samePage = (a: ReadPerson, b: ReadPerson) => a.sourcePage === null || b.sourcePage === null || a.sourcePage === b.sourcePage;
@@ -153,6 +187,11 @@ export function crossCheckAiReadings(
     nameMap.set(p.name, p.name);
     for (const r of rowsOf(result, p)) rows.push({ row: withFlag({ ...r, personKey: p.personKey, readerSource: 'ai' }, 'low_confidence'), from });
     leaveRecords.push(...leaveOf(result, p));
+    const pRows = rowsOf(result, p);
+    const pLeave = leaveOf(result, p);
+    for (const date of new Set([...pRows.map((r) => r.date), ...pLeave.map((l) => l.date)])) {
+      noteWeek(p, from === 'a' ? 'first' : 'second', date, cellText(pRows.filter((r) => r.date === date), pLeave.filter((l) => l.date === date).map((l) => l.leaveCode)));
+    }
     anomalies.push({ employeeName: p.name, date: null, rawText: p.name, reason: `Only one of the two AI readings listed ${p.name}. Check the roster before importing them.`, confidence: 0.5, rowNumber: null });
   };
 
@@ -185,6 +224,8 @@ export function crossCheckAiReadings(
       const aCodes = [...new Set(aLeave.filter((l) => l.date === date).map((l) => l.leaveCode))].sort();
       const bCodes = [...new Set(bLeave.filter((l) => l.date === date).map((l) => l.leaveCode))].sort();
       cellsCompared++;
+      noteWeek(person, 'first', date, cellText(aDay, aCodes));
+      noteWeek(person, 'second', date, cellText(bDay, bCodes));
       // What both readings saw is written; anything else in this cell is not.
       const bLeft = [...bDay];
       const aLeft: ParsedShiftRow[] = [];
@@ -197,6 +238,7 @@ export function crossCheckAiReadings(
       }
       const timesAgree = aLeft.length === 0 && bLeft.length === 0;
       const codesAgree = aCodes.join('/') === bCodes.join('/');
+      tally(a.sourcePage, !(timesAgree && codesAgree));
       if (timesAgree && codesAgree) {
         // Leave: a code both readings saw on a day with no times.
         if (aCodes.length && !aDay.length) leaveRecords.push({ ...aLeave.find((l) => l.date === date)!, employeeName: a.name });
@@ -222,6 +264,35 @@ export function crossCheckAiReadings(
   }
   for (const b of bPeople) if (!usedB.has(b)) addAlone(b, second, 'b');
 
+  // A page the two readings disagree on too much is not trusted at all: nothing from it is
+  // imported, and every person on it is shown with both readings of their week.
+  const unreliablePages = [...pageDays]
+    .filter(([, t]) => t.compared >= PAGE_MIN_DAYS && t.toCheck / t.compared > PAGE_DISAGREEMENT_LIMIT)
+    .map(([page, t]) => ({ page, ...t }))
+    .sort((x, y) => x.page - y.page);
+  const untrusted = new Set(unreliablePages.map((u) => u.page));
+  const pageOfName = new Map(people.map((p) => [p.name, p.sourcePage ?? 1]));
+  const onUntrustedPage = (name: string | null) => !!name && untrusted.has(pageOfName.get(name) ?? 1);
+  if (untrusted.size) {
+    for (let i = rows.length - 1; i >= 0; i--) if (untrusted.has(rows[i]!.row.sourcePage ?? 1) || onUntrustedPage(rows[i]!.row.employeeName)) rows.splice(i, 1);
+    for (let i = leaveRecords.length - 1; i >= 0; i--) if (onUntrustedPage(leaveRecords[i]!.employeeName)) leaveRecords.splice(i, 1);
+    for (let i = anomalies.length - 1; i >= 0; i--) if (anomalies[i]!.date && onUntrustedPage(anomalies[i]!.employeeName)) anomalies.splice(i, 1);
+    const said = (days: Map<string, string>) =>
+      [...days].sort(([x], [y]) => x.localeCompare(y)).map(([d, text]) => `${weekdayOf(d)} ${Number(d.slice(8))} ${text}`).join('; ') || 'nothing';
+    for (const w of weeks.values()) {
+      if (!untrusted.has(w.page)) continue;
+      anomalies.push({
+        employeeName: w.name,
+        date: null,
+        rawText: `First reading: ${said(w.first)} · second reading: ${said(w.second)}`,
+        reason: `This page of the photo could not be read reliably, so none of ${w.name}'s shifts were imported. Both readings are shown; check the roster and add the shifts on the rota.`,
+        confidence: 0.2,
+        rowNumber: null,
+      });
+    }
+    cellsToCheck = [...pageDays].reduce((n, [page, t]) => n + (untrusted.has(page) ? t.compared : 0), cellsToCheck - unreliablePages.reduce((n, u) => n + u.toCheck, 0));
+  }
+
   // Renumber; anomalies of either reading keep pointing at their shifts.
   const renumber = new Map<string, number>();
   const finalRows = rows.map(({ row, from }, i) => {
@@ -243,6 +314,14 @@ export function crossCheckAiReadings(
 
   const listed = people.map((p) => normName(p.name));
   const unread = new Map<string, UnreadRow>();
+  for (const u of unreliablePages) {
+    unread.set(`page-${u.page}`, {
+      page: u.page,
+      row: null,
+      text: '',
+      reason: `This page could not be read reliably: the two AI readings disagreed on ${u.toCheck} of its ${u.compared} days. None of its shifts were imported; upload the original PDF or spreadsheet, or add them by hand.`,
+    });
+  }
   for (const u of [...(first.unreadRows ?? []), ...(second.unreadRows ?? [])]) {
     if (u.text && listed.some((n) => normName(u.text).includes(n))) continue;
     unread.set(`${u.page}|${u.row}|${normName(u.text)}`, u);
@@ -253,7 +332,7 @@ export function crossCheckAiReadings(
     disagreements++;
     week = { ...first.week, needsConfirmation: true, reason: `The two AI readings placed this roster in different weeks (${first.week.weekStart} and ${second.week.weekStart}). Check the week before confirming.` };
   }
-  console.log(`[roster-reading] AI cross-check: ${people.length} people, ${disagreements} disagreement(s), ${cellsToCheck}/${cellsCompared} cell(s) left to check.`);
+  console.log(`[roster-reading] AI cross-check: ${people.length} people, ${disagreements} disagreement(s), ${cellsToCheck}/${cellsCompared} cell(s) left to check, ${unreliablePages.length} page(s) not trusted${unreliablePages.length ? ` (${unreliablePages.map((u) => `page ${u.page}: ${u.toCheck}/${u.compared} days read differently`).join(', ')})` : ''}.`);
   return {
     result: {
       ...first,
@@ -267,5 +346,6 @@ export function crossCheckAiReadings(
     disagreements,
     cellsToCheck,
     cellsCompared,
+    unreliablePages,
   };
 }

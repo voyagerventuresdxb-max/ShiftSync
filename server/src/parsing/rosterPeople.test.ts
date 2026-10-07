@@ -267,15 +267,15 @@ test('the resolve-only abbreviations leave the readers alias table alone ("AM" i
 
 test('an initial with the surname, in either order, or initials alone, is a possible match — never linked', async () => {
   const users = [
-    { id: 'u-1', fullName: 'Tomas Valdez', roleId: null },
+    { id: 'u-1', fullName: 'Ignatius Fairweather', roleId: null },
     { id: 'u-2', fullName: 'Amara Obi', roleId: null },
   ];
   const { people } = await resolveRowsAgainstDatabase(fakePrisma([], users), 'loc-1', [
-    row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'T. Valdez' }),
-    row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Valdez T.' }),
+    row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'I. Fairweather' }),
+    row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Fairweather I.' }),
     row({ rowNumber: 3, sourceRowIndex: 3, employeeName: 'A. Obi' }),
     row({ rowNumber: 4, sourceRowIndex: 4, employeeName: 'OBI, Amara' }),
-    row({ rowNumber: 5, sourceRowIndex: 5, employeeName: 'T.V.' }),
+    row({ rowNumber: 5, sourceRowIndex: 5, employeeName: 'I.F.' }),
   ]);
   const expected = ['u-1', 'u-1', 'u-2', 'u-2', 'u-1'];
   people.forEach((person, i) => {
@@ -288,15 +288,15 @@ test('an initial with the surname, in either order, or initials alone, is a poss
 });
 
 test('nameCloseness: initials and reordered names', () => {
-  assert.equal(nameCloseness('T. Valdez', 'Tomas Valdez'), 'strong');
-  assert.equal(nameCloseness('Valdez T.', 'Tomas Valdez'), 'strong');
-  assert.equal(nameCloseness('Valdez Tomas', 'Tomas Valdez'), 'strong');
-  assert.equal(nameCloseness('T. Valdezz', 'Tomas Valdez'), 'weak');
-  assert.equal(nameCloseness('TV', 'Tomas Valdez'), 'weak');
-  assert.equal(nameCloseness('Tomas Valdez', 'T. Valdez'), 'strong', 'either side may be the short one');
-  assert.equal(nameCloseness('K. Valdez', 'Tomas Valdez'), null);
-  assert.equal(nameCloseness('T. Lopez', 'Tomas Valdez'), null);
-  assert.equal(nameCloseness('To', 'Tomas Valdez'), null);
+  assert.equal(nameCloseness('I. Fairweather', 'Ignatius Fairweather'), 'strong');
+  assert.equal(nameCloseness('Fairweather I.', 'Ignatius Fairweather'), 'strong');
+  assert.equal(nameCloseness('Fairweather Ignatius', 'Ignatius Fairweather'), 'strong');
+  assert.equal(nameCloseness('I. Fairweatherr', 'Ignatius Fairweather'), 'weak');
+  assert.equal(nameCloseness('IF', 'Ignatius Fairweather'), 'weak');
+  assert.equal(nameCloseness('Ignatius Fairweather', 'I. Fairweather'), 'strong', 'either side may be the short one');
+  assert.equal(nameCloseness('K. Fairweather', 'Ignatius Fairweather'), null);
+  assert.equal(nameCloseness('I. Lopez', 'Ignatius Fairweather'), null);
+  assert.equal(nameCloseness('Ig', 'Ignatius Fairweather'), null);
 });
 
 test('two AI readings that spelled a name differently: "check the spelling", never settled silently; a spelling that is someone on staff is offered', async () => {
@@ -315,4 +315,53 @@ test('two AI readings that spelled a name differently: "check the spelling", nev
   assert.equal(saffaiya!.suggestedAction, 'create', 'never linked without the manager');
   assert.equal(alpha!.flags.some((f) => f.kind === 'name_differs'), false, 'case and spacing are not a different spelling');
   assert.equal(okonkwo!.flags.some((f) => f.kind === 'name_differs'), false, "with the file's own text read, its spelling stands");
+});
+
+test('a common nickname ("Bill" for William, "Mo" for Mohammed) is a possible match — never linked', async () => {
+  const users = [
+    { id: 'u-1', fullName: 'William Okoro', roleId: null },
+    { id: 'u-2', fullName: 'Mohammed Haddad', roleId: null },
+    { id: 'u-3', fullName: 'Elizabeth Mwale', roleId: null },
+  ];
+  const { people } = await resolveRowsAgainstDatabase(fakePrisma([], users), 'loc-1', [
+    row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'Bill' }),
+    row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Mo Haddad' }),
+    row({ rowNumber: 3, sourceRowIndex: 3, employeeName: 'Liz Mwale' }),
+    row({ rowNumber: 4, sourceRowIndex: 4, employeeName: 'Bill Smith' }),
+  ]);
+  const expected = ['u-1', 'u-2', 'u-3'];
+  people.slice(0, 3).forEach((person, i) => {
+    assert.equal(person.status, 'needs_decision', person.name);
+    assert.equal(person.suggestedAction, 'create', person.name);
+    const flag = person.flags.find((f) => f.kind === 'possible_match');
+    assert.ok(flag && flag.kind === 'possible_match' && flag.candidates[0]!.userId === expected[i], person.name);
+  });
+  assert.equal(people[3]!.status, 'new', 'a nickname with another surname is somebody else');
+});
+
+test('plural banners and title abbreviations resolve to the venue\'s roles', async () => {
+  const roles = ['Waiter', 'Head Waiter', 'Runner', 'Bartender', 'Host', 'Supervisor', 'Management', 'Sommelier'].map((name) => ({ id: `role-${name}`, name }));
+  const labels: [string, string][] = [
+    ['FOOD RUNNERS', 'Runner'],
+    ['WAIT STAFF', 'Waiter'],
+    ['HOSTESSES', 'Host'],
+    ['BARTENDERS', 'Bartender'],
+    ['SECTION LEADERS', 'Supervisor'],
+    ['SUP', 'Supervisor'],
+    ['RNR', 'Runner'],
+    ['BTD', 'Bartender'],
+    ['SVR', 'Waiter'],
+    ['HST', 'Host'],
+    ['SOMM', 'Sommelier'],
+    ['BAR BK', 'Bartender'],
+    ['LEAD SVR', 'Waiter'],
+    ['ASST MGR', 'Management'],
+    ['MGR', 'Management'],
+  ];
+  const { people } = await resolveRowsAgainstDatabase(
+    fakePrisma(roles, []),
+    'loc-1',
+    labels.map(([label], i) => row({ rowNumber: i + 1, sourceRowIndex: i + 1, employeeName: `Person ${String.fromCharCode(65 + i)}`, roleName: label })),
+  );
+  labels.forEach(([label, expected], i) => assert.equal(people[i]!.resolvedRoleId, `role-${expected}`, label));
 });

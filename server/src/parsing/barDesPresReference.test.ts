@@ -126,10 +126,11 @@ test('Bar des Pres reference: shorthand codes (IN/CL) are flagged with a clear r
   const robertAnomalies = result.anomalies.filter((a) => a.employeeName === 'Nedak Mizon');
   // Nedak's week: OFF, 12CL, 10IN, OFF, IN, 4CL, UL -> 4 shorthand cells (12CL, 10IN, IN, 4CL).
   assert.equal(robertAnomalies.length, 4);
-  assert.ok(robertAnomalies.some((a) => /open-ended/i.test(a.reason) && /10:00/.test(a.reason))); // 10IN
-  assert.ok(robertAnomalies.some((a) => /closing/i.test(a.reason) && /12:00/.test(a.reason))); // 12CL
-  assert.ok(robertAnomalies.some((a) => /closing/i.test(a.reason) && /16:00/.test(a.reason) === false && /04:00/.test(a.reason))); // 4CL -> 04:00 (literal, see caveats)
-  assert.ok(robertAnomalies.some((a) => /flexible|on-call/i.test(a.reason))); // bare IN
+  assert.ok(robertAnomalies.some((a) => a.reason === 'Starts 10 am — no end time printed; set the end time.')); // 10IN
+  assert.ok(robertAnomalies.some((a) => a.reason === 'Starts 12 pm, until close — no end time printed; set the end time.')); // 12CL
+  // A closing shift at a bare hour starts in the afternoon: 4CL is 4 pm until close.
+  assert.ok(robertAnomalies.some((a) => a.reason === 'Starts 4 pm, until close — no end time printed; set the end time.')); // 4CL
+  assert.ok(robertAnomalies.some((a) => /on call/i.test(a.reason))); // bare IN
 });
 
 test('Bar des Pres reference: hyphen-chained split shifts (JAM, Supervisor) produce two shifts per day, not an anomaly', () => {

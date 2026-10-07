@@ -191,6 +191,64 @@ interface Geometry {
   columns: Band[];
   /** For each day, the indexes of its columns in `columns` (two when split into AM | PM). */
   dayColumnIndexes: number[][];
+  /** Left edge of the first day band: text from here on is day cells (or notes right of them). */
+  daysFrom: number;
+  /** Width of one day band. */
+  step: number;
+  /** How day cells sit in their columns: the edge (or centre) a cell's text keeps however long it is. */
+  anchor: 'left' | 'centre' | 'right';
+  /** Per day: where its cells' aligned edge sits (null when too few cells fit to tell). */
+  edges: (number | null)[];
+}
+
+/** Mean distance from the median: how tightly a set of positions lines up. */
+function spreadOf(values: number[]): number {
+  const m = median(values);
+  return values.reduce((sum, v) => sum + Math.abs(v - m), 0) / values.length;
+}
+
+/**
+ * How the body's day cells are aligned: left (a spreadsheet's text cells), right (its number
+ * cells) or centred — whichever edge the cells that fit their column keep in line. A long cell
+ * that runs on past its column (a split shift in a narrow column) belongs to the column where
+ * that edge is, not where its middle happens to fall.
+ */
+function dayCellAnchor(body: RowCluster[], columns: Band[], dayColumns: number[]): Pick<Geometry, 'anchor' | 'edges'> {
+  const spreads: Record<Geometry['anchor'], number[]> = { left: [], centre: [], right: [] };
+  const lefts: (number | null)[] = [];
+  const rights: (number | null)[] = [];
+  for (const c of dayColumns) {
+    const band = columns[c]!;
+    // Cells no wider than the column (its edges come from the header, which may sit off-centre).
+    const fits = body.flatMap((r) => r.items).filter((p) => cx(p) >= band.x0 && cx(p) < band.x1 && p.x1 - p.x0 <= (band.x1 - band.x0) * 0.9);
+    lefts.push(fits.length >= 3 ? median(fits.map((p) => p.x0)) : null);
+    rights.push(fits.length >= 3 ? median(fits.map((p) => p.x1)) : null);
+    if (fits.length < 3) continue;
+    spreads.left.push(spreadOf(fits.map((p) => p.x0)));
+    spreads.centre.push(spreadOf(fits.map(cx)));
+    spreads.right.push(spreadOf(fits.map((p) => p.x1)));
+  }
+  const none = { anchor: 'centre' as const, edges: [] };
+  if (spreads.centre.length < 2) return none;
+  const [l, c, r] = [median(spreads.left), median(spreads.centre), median(spreads.right)];
+  // Centred unless one edge lines up clearly better.
+  if (c - l >= 0.5 && l <= r) return { anchor: 'left', edges: lefts };
+  if (c - r >= 0.5 && r < l) return { anchor: 'right', edges: rights };
+  return none;
+}
+
+/** Where a text item belongs across the page: its middle, or — for a day cell longer than its column — its aligned edge. */
+function placeOf(p: PositionedItem, g: Pick<Geometry, 'daysFrom' | 'step' | 'anchor' | 'edges'>): number {
+  const runsOn = p.x1 - p.x0 > g.step * 0.9 && cx(p) >= g.daysFrom;
+  if (!runsOn || g.anchor === 'centre') return cx(p);
+  // The day whose cells start (or end) where this one does: the header above it may be off-centre.
+  const known = g.edges.filter((e): e is number => e !== null);
+  if (g.anchor === 'left') {
+    const edge = Math.max(...known.filter((e) => e <= p.x0 + 1.5));
+    return Number.isFinite(edge) ? edge + g.step * 0.3 : p.x0 + 1;
+  }
+  const edge = Math.min(...known.filter((e) => e >= p.x1 - 1.5));
+  return Number.isFinite(edge) ? edge - g.step * 0.3 : p.x1 - 1;
 }
 
 /** How many of the rows have text covering each x inside [lo, hi) (the rows' items whose centre is inside). */
@@ -316,7 +374,12 @@ function deriveGeometry(rows: RowCluster[], headerIdx: number, periodIdx: number
   const body = rows.slice(bodyStart);
   // Column labels near the day header ("NAME" | "POSITION", "#" | "EMPLOYEE") part columns printed too close for a gap.
   const leading = splitByLabels(textChannels(body, -Infinity, left), leadingLabels(rows, headerIdx - 3, bodyStart + 3, left), body, left);
-  const trailing = textChannels(body, right, Infinity);
+  // Day cells' alignment, from the cells that fit their column (decided before the notes columns,
+  // so a long Sunday cell running on past the grid is not a notes column).
+  const dayBandIdx = bands.map((_, i) => i);
+  const geo = { daysFrom: left, step, ...dayCellAnchor(body, bands, dayBandIdx) };
+  const placed = body.map((row) => ({ ...row, items: row.items.filter((p) => placeOf(p, geo) >= right) }));
+  const trailing = textChannels(placed, right, Infinity);
   const columns: Band[] = leading.length ? [...leading] : [{ x0: left - 1, x1: left - 1 }];
   const dayColumnIndexes: number[][] = [];
   const period = periodIdx !== null ? rows[periodIdx]! : null;
@@ -333,12 +396,12 @@ function deriveGeometry(rows: RowCluster[], headerIdx: number, periodIdx: number
     }
   }
   columns.push(...trailing);
-  return { columns, dayColumnIndexes };
+  return { columns, dayColumnIndexes, ...geo };
 }
 
-/** The column a phrase belongs to: the one containing its centre, else the nearest. */
-function columnOf(p: Phrase, columns: Band[]): number {
-  const c = cx(p);
+/** The column a phrase belongs to: the one containing its place (placeOf; else its centre), else the nearest. */
+function columnOf(p: Phrase, columns: Band[], at: number = cx(p)): number {
+  const c = at;
   let best = 0;
   let bestDist = Infinity;
   columns.forEach((band, i) => {
@@ -393,6 +456,11 @@ export interface PdfTable {
   pageCount: number;
   /** Each page's text, row by row with cells separated by " | " — the text layer the AI reader cross-checks. */
   pageTexts: string[];
+  /**
+   * Rows (page and row, like rowRefs) holding a day cell longer than its column: which day it
+   * belongs to was inferred from the column alignment, not read from where it sits.
+   */
+  runOnRows: { page: number; row: number }[];
 }
 
 /**
@@ -404,6 +472,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
   const grid: string[][] = [];
   const rowRefs: { page: number; row: number }[] = [];
   const pageTexts: string[] = [];
+  const runOnRows: { page: number; row: number }[] = [];
   let geometry: Geometry | null = null;
   let headerSeen = false;
   pages.forEach((items, pageIndex) => {
@@ -439,7 +508,7 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
       const isHeader = headerIdx >= 0 && r >= headerIdx && r <= lastHeaderRow && headerDays(row) !== null;
       // Whole items, not phrases: neighbouring cells can sit closer than a space apart.
       for (const p of [...row.items].sort((a, b) => a.x0 - b.x0)) {
-        const col = columnOf(p, g.columns);
+        const col = isHeader ? columnOf(p, g.columns) : columnOf(p, g.columns, placeOf(p, g));
         // A day header names the whole day: every half of a split day carries it.
         const day = isHeader ? g.dayColumnIndexes.find((idx) => idx.includes(col)) : undefined;
         for (const c of day ?? [col]) cells[c]!.push(p);
@@ -447,12 +516,13 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
       pageGrid.push(cells.map((c) => c.reduce((text, item, k) => (k === 0 ? item.text : `${text}${glue(c[k - 1]!, item)}${item.text}`), '').trim()));
       ys.push(row.y);
       refs.push(r + 1);
+      if (!isHeader && row.items.some((p) => p.x1 - p.x0 > g.step * 0.9 && cx(p) >= g.daysFrom)) runOnRows.push({ page: pageIndex + 1, row: r + 1 });
     });
     const merged = mergeContinuationLines(pageGrid, ys, refs);
     grid.push(...merged.grid);
     rowRefs.push(...merged.refs.map((row) => ({ page: pageIndex + 1, row })));
   });
-  return { grid, rowRefs, pageCount: pages.length, pageTexts };
+  return { grid, rowRefs, pageCount: pages.length, pageTexts, runOnRows };
 }
 
 /**

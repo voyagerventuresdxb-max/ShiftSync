@@ -15,7 +15,7 @@
  * Logs carry counts only — never names or cell text.
  */
 import { mapReadingAnswer, type AiReadingContext } from './aiReading.js';
-import { nonPersonReason, personKeyOf } from './personKey.js';
+import { isUnreadableName, nonPersonReason, personKeyOf, UNREADABLE_NAME } from './personKey.js';
 import { isRoleTitle } from './resolveRows.js';
 import { VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
 import { isReadingAnswer, type ReadingAnswer, type ReadingAnswerPage } from './vlmPrompt.js';
@@ -81,12 +81,43 @@ export function gluedTitle(longer: string, shorter: string, shorterRole: string 
   const short = sh.toLowerCase();
   const rest = lower.startsWith(short + ' ') ? l.slice(sh.length + 1) : lower.endsWith(' ' + short) ? l.slice(0, l.length - sh.length - 1) : null;
   if (!rest) return null;
-  const r = rest.replace(/^[\s|/,\-–]+|[\s|/,\-–]+$/g, '');
+  const r = rest.replace(/^[\s|/,\-–—(]+|[\s|/,\-–—)]+$/g, '');
   if (!r) return null;
   if (/^#?\d{1,4}[.)]?$/.test(r)) return r;
-  if (!isRoleTitle(r)) return null;
+  // The other reader read it as this person's title: whatever the title is ("Ana Silva / Sommelier").
   const sameAsRole = shorterRole !== null && normName(shorterRole) === normName(r);
-  return sameAsRole || /^[A-Z]{2,5}$/.test(r) || /\d/.test(r) || r.split(' ').length > 1 ? r : null;
+  if (sameAsRole) return r;
+  if (!isRoleTitle(r)) return null;
+  return /^[A-Z]{2,5}$/.test(r) || /\d/.test(r) || r.split(' ').length > 1 ? r : null;
+}
+
+/**
+ * The days on which two readings of one person disagree because one of them put the cells a day
+ * or two off: a day's times in one reading are another (disagreeing) day's times in the other,
+ * within two days. Every day of such a pair is returned.
+ */
+export function shiftedDays(a: ParsedShiftRow[], b: ParsedShiftRow[]): Set<string> {
+  const timesOn = (rows: ParsedShiftRow[]) => {
+    const by = new Map<string, string[]>();
+    for (const r of rows) by.set(r.date, [...(by.get(r.date) ?? []), segKey(r)]);
+    return new Map([...by].map(([d, keys]) => [d, keys.sort().join(',')]));
+  };
+  const [ta, tb] = [timesOn(a), timesOn(b)];
+  const dates = [...new Set([...ta.keys(), ...tb.keys()])];
+  const differ = dates.filter((d) => (ta.get(d) ?? '') !== (tb.get(d) ?? ''));
+  const dayNo = (d: string) => Date.parse(`${d}T00:00:00Z`) / 86_400_000;
+  const out = new Set<string>();
+  for (const d of differ) {
+    for (const e of differ) {
+      if (d === e || Math.abs(dayNo(d) - dayNo(e)) > 2) continue;
+      const x = ta.get(d);
+      if (x && x === tb.get(e)) {
+        out.add(d);
+        out.add(e);
+      }
+    }
+  }
+  return out;
 }
 
 const peopleOn = (page: ReadingAnswerPage) => (page.sec ?? []).reduce((n, s) => n + (s.ppl?.length ?? 0), 0);
@@ -327,7 +358,14 @@ const withFlag = (r: ParsedShiftRow, flag: RowFlag): ParsedShiftRow => ({ ...r, 
  * alternative, flagged for the manager. The AI still adds what the table reader missed (people,
  * days), flagged as AI-only.
  */
-export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVisionResult | null): Reconciled {
+export function reconcileReadings(
+  ai: ParsedVisionResult | null,
+  table: ParsedVisionResult | null,
+  opts: {
+    /** Table people (personKey) on a row whose day placement was inferred: a cell longer than its column. */
+    placementUncertain?: Set<string>;
+  } = {},
+): Reconciled {
   if (!ai || !table) return { result: (ai ?? table)!, disagreements: 0 };
   let disagreements = 0;
   const aiPeople = ai.people ?? peopleFromRows(ai.rows, ai.leaveRecords, 'ai');
@@ -388,13 +426,22 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
   const refuse = (p: ReadPerson, reason: string, reader: string) => {
     disagreements++;
     refused.add(normName(p.name));
-    refusedRows.push({ page: p.sourcePage, row: p.sourceRow, text: p.name, reason: `Only the ${reader} listed "${p.name}" as a person, and it reads as ${reason}. Not imported; add the person by hand if it is one.` });
+    refusedRows.push({
+      page: p.sourcePage,
+      row: p.sourceRow,
+      text: p.name,
+      reason:
+        reason === UNREADABLE_NAME
+          ? "A row whose name couldn't be read. Add the person and their shifts by hand if it is one."
+          : `Only the ${reader} listed "${p.name}" as a person, and it reads as ${reason}. Not imported; add the person by hand if it is one.`,
+    });
   };
   const refusedRows: UnreadRow[] = [];
 
   for (const a of aiPeople) {
     const t = pairs.get(a);
-    const aiOnlyReason = t ? null : nonPersonReason(a.name);
+    // A name that couldn't be read ("[?]") is never a person, whoever read it.
+    const aiOnlyReason = isUnreadableName(a.name) ? UNREADABLE_NAME : t ? null : nonPersonReason(a.name);
     if (aiOnlyReason) {
       refuse(a, aiOnlyReason, 'AI reader');
       continue;
@@ -405,7 +452,8 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
     const person: ReadPerson = {
       personKey: t?.personKey ?? a.personKey,
       name,
-      roleLabel: a.roleLabel ?? t?.roleLabel ?? gluedRole,
+      // A title glued onto the name is this person's own title: more specific than a section heading.
+      roleLabel: gluedRole ?? a.roleLabel ?? t?.roleLabel ?? null,
       section: a.section ?? t?.section ?? null,
       sourcePage: t?.sourcePage ?? a.sourcePage,
       sourceRow: t?.sourceRow ?? a.sourceRow,
@@ -415,7 +463,7 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
     people.push(person);
     nameMap.set(a.name, name);
     if (t) nameMap.set(t.name, name);
-    const fix = (r: ParsedShiftRow): ParsedShiftRow => ({ ...r, employeeName: name, personKey: person.personKey, section: person.section, sourcePage: person.sourcePage });
+    const fix = (r: ParsedShiftRow): ParsedShiftRow => ({ ...r, employeeName: name, personKey: person.personKey, section: person.section, sourcePage: person.sourcePage, ...(gluedRole ? { roleName: gluedRole } : {}) });
     const aiRows = rowsOf(ai, a).map(fix);
     if (!t) {
       disagreements++;
@@ -425,9 +473,41 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
     }
     const tableRows = rowsOf(table, t).map(fix);
     const dates = [...new Set([...aiRows, ...tableRows].map((r) => r.date))].sort();
+    // The same times on different days: one reader put a row's cells a day or two off. When the
+    // table reader placed this row's cells where they sit in the file, its days stand and the
+    // person is flagged; when it had to infer a day (a cell longer than its column), neither
+    // reading of those days is written and each is shown with both readings.
+    const shiftedAll = shiftedDays(tableRows, aiRows);
+    const shifted = opts.placementUncertain?.has(t.personKey) ? shiftedAll : new Set<string>();
+    if (shiftedAll.size && !shifted.size) {
+      disagreements++;
+      const said = (rows: ParsedShiftRow[]) =>
+        [...shiftedAll].sort().map((d) => ({ d, times: rows.filter((r) => r.date === d).map((r) => `${r.startTime}–${r.endTime}`).join(' · ') })).filter((x) => x.times).map((x) => `${x.d.slice(5)} ${x.times}`).join('; ') || 'nothing';
+      anomalies.push({
+        employeeName: name,
+        date: null,
+        rawText: `Built-in reader: ${said(tableRows)} · AI reader: ${said(aiRows)}`,
+        reason: "The AI reader put some of these times on other days. The file's own text was kept; check the days on the roster.",
+        confidence: 0.5,
+        rowNumber: null,
+      });
+    }
     for (const date of dates) {
       const aDay = aiRows.filter((r) => r.date === date).sort((x, y) => x.startTime.localeCompare(y.startTime));
       const tDay = tableRows.filter((r) => r.date === date).sort((x, y) => x.startTime.localeCompare(y.startTime));
+      if (shifted.has(date)) {
+        disagreements++;
+        const said = (day: ParsedShiftRow[]) => day.map((r) => `${r.startTime}–${r.endTime}`).join(' · ') || 'nothing';
+        anomalies.push({
+          employeeName: name,
+          date,
+          rawText: `Built-in reader: ${said(tDay)} · AI reader: ${said(aDay)}`,
+          reason: "The two readers put the same times on different days for this person, so this day was not imported. Check which day is right on the roster and add the shift on the rota.",
+          confidence: 0.3,
+          rowNumber: null,
+        });
+        continue;
+      }
       const tLeft = [...tDay];
       const aLeft: ParsedShiftRow[] = [];
       for (const r of aDay) {

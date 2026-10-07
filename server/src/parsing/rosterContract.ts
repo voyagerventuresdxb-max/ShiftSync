@@ -102,6 +102,8 @@ export interface ReadingReport {
   fromCache: boolean;
   /** How the reading was checked, in plain words (e.g. a photo has no table reader to cross-check against). */
   note?: string;
+  /** A photo or scan read twice by the AI reader (person by person, day by day) and the readings compared. */
+  crossChecked?: boolean;
 }
 
 export type PersonStatus = 'matched' | 'new' | 'needs_decision';

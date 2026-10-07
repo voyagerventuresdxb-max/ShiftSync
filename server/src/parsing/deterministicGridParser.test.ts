@@ -289,11 +289,9 @@ test('open-ended ("<N>IN"), until-closing ("<N>CL"), and fully-flexible ("IN") s
   assert.equal(result.rows.length, 0, 'none of these should become a normal shift row');
   assert.equal(result.anomalies.length, 3);
   const [openEnded, untilClosing, flexible] = result.anomalies;
-  assert.match(openEnded.reason, /open-ended/i);
-  assert.match(openEnded.reason, /10:00/);
-  assert.match(untilClosing.reason, /closing/i);
-  assert.match(untilClosing.reason, /12:00/);
-  assert.match(flexible.reason, /flexible|on-call/i);
+  assert.equal(openEnded.reason, 'Starts 10 am — no end time printed; set the end time.');
+  assert.equal(untilClosing.reason, 'Starts 12 pm, until close — no end time printed; set the end time.');
+  assert.match(flexible.reason, /on call/i);
   // Understood, not garbage — higher confidence than a genuine unresolved cell.
   assert.ok(result.anomalies.every((a) => a.confidence === 0.7));
 });
@@ -1138,4 +1136,68 @@ test('a capitalised label alone in the name column, on a sheet whose people carr
   );
   assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}|${p.section}`), ['Test Alpha|Captain|TERRACE', 'Test Beta|Server|TERRACE', 'Test Gamma|Runner|POOL DECK', 'Test Delta|Server|POOL DECK']);
   assert.deepEqual(result.unreadRows?.map((u) => u.text), ['POOL DECK']);
+});
+
+test('free-text times, leave codes and open-ended cells as people type them', () => {
+  const grid = [
+    ['', 'Mon 13/04', 'Tue 14/04', 'Wed 15/04', 'Thu 16/04', 'Fri 17/04', 'Sat 18/04', 'Sun 19/04'],
+    ['Test Alpha', '7a-3p', '4p-12a', '12n-8p', '1830-0200', '1000-1500/1900-2400', 'O', 'X'],
+    ['Test Beta', 'REQ', 'S/L', 'A/L', 'HOL', 'DO', 'R/O', '-'],
+    ['Test Gamma', '4pm-close', '5 till close', 'to close', 'open-3pm', 'IN 10', '2CL', '4CL'],
+  ];
+  const result = parseExcelGrid(grid, '2026-04-13');
+  assert.deepEqual(keys(result.rows), [
+    'Test Alpha|2026-04-13|07:00-15:00',
+    'Test Alpha|2026-04-14|16:00-00:00',
+    'Test Alpha|2026-04-15|12:00-20:00',
+    'Test Alpha|2026-04-16|18:30-02:00',
+    'Test Alpha|2026-04-17|10:00-15:00',
+    'Test Alpha|2026-04-17|19:00-00:00',
+  ]);
+  // Leave and day-off codes are leave, never cells to check.
+  assert.equal(result.leaveRecords.filter((l) => l.employeeName === 'Test Beta').length, 6);
+  assert.ok(!result.anomalies.some((a) => a.employeeName !== 'Test Gamma'));
+  // Open-ended: flagged with what was read, the missing end never invented; a closing shift at a bare hour is pm.
+  const said = result.anomalies.filter((a) => a.employeeName === 'Test Gamma').map((a) => a.reason);
+  assert.deepEqual(said, [
+    'Starts 4 pm, until close — no end time printed; set the end time.',
+    'Starts 5 pm, until close — no end time printed; set the end time.',
+    'Until close — no start or end time printed; set the hours.',
+    'From opening until 3 pm — no start time printed; set the start time.',
+    'Starts 10 am — no end time printed; set the end time.',
+    'Starts 2 pm, until close — no end time printed; set the end time.',
+    'Starts 4 pm, until close — no end time printed; set the end time.',
+  ]);
+});
+
+test('a roster that writes dotted times both ways: the either-way cells are shown to check, never guessed', () => {
+  const result = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['Test Alpha', '18.30-01.00', '9.5-15']], '2026-04-13');
+  assert.deepEqual(keys(result.rows), ['Test Alpha|2026-04-13|18:30-01:00']);
+  assert.match(result.anomalies.find((a) => a.date === '2026-04-14')!.reason, /both as hours\.minutes/);
+});
+
+test('name and title written in one cell ("Name / Title", "Name (Title)") are split — even a title no vocabulary knows', () => {
+  const slash = parseExcelGrid(
+    [
+      ['', 'Mon 13/04', 'Tue 14/04'],
+      ['Test Alpha / Sommelier', '9-17', ''],
+      ['Test Beta / Commis', '', '10-18'],
+      ['Test Gamma / Commis', '11-19', ''],
+      ['Test Delta / Cashier', '', '12-20'],
+    ],
+    '2026-04-13',
+  );
+  assert.deepEqual(slash.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|Sommelier', 'Test Beta|Commis', 'Test Gamma|Commis', 'Test Delta|Cashier']);
+  const paren = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['Test Alpha (RM)', '9-17', ''], ['Test Beta (Waiter 2)', '', '10-18']], '2026-04-13');
+  assert.deepEqual(paren.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|Waiter 2']);
+  // A hyphenated name is one name.
+  const hyphen = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['Ana-Maria Popescu', '9-17', '']], '2026-04-13');
+  assert.deepEqual(hyphen.people?.map((p) => p.name), ['Ana-Maria Popescu']);
+});
+
+test('a row whose name could not be read ("[?]", "?", "…") is an unread row, never a person', () => {
+  const result = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['Test Alpha', '9-17', ''], ['[?]', '', '10-18'], ['…', '', '']], '2026-04-13');
+  assert.deepEqual(result.people?.map((p) => p.name), ['Test Alpha']);
+  assert.equal(result.unreadRows?.length, 2);
+  assert.ok(result.unreadRows!.every((u) => /^A row whose name couldn't be read\./.test(u.reason)));
 });

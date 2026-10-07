@@ -29,8 +29,8 @@ import { isAllCapsLabel } from './escalation.js';
 import { isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias, isRoleTitle } from './resolveRows.js';
 import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
-import { parseShiftText, parseSingleTime, sheetDotStyle, type ShiftTextOptions } from './shiftText.js';
-import { columnHeading, isFooterTotalOrNote, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf } from './personKey.js';
+import { ambiguousDottedTime, parseShiftText, parseSingleTime, sheetDotStyle, type ShiftTextOptions } from './shiftText.js';
+import { columnHeading, combinedLabelOrder, isFooterTotalOrNote, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf, splitNameTitle, UNREADABLE_NAME } from './personKey.js';
 import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -53,9 +53,11 @@ export class RosterExtractionAnomalyError extends Error {
 }
 
 const LEAVE_CODES: Record<string, LeaveRecord['category']> = {
-  off: 'day_off', 'day off': 'day_off', do: 'day_off', rest: 'day_off',
-  al: 'leave', 'a/l': 'leave', 'annual leave': 'leave',
-  sick: 'leave', sl: 'leave', 'sick leave': 'leave',
+  off: 'day_off', 'day off': 'day_off', 'day-off': 'day_off', dayoff: 'day_off', 'off day': 'day_off', do: 'day_off', rest: 'day_off', 'rest day': 'day_off',
+  // A day with no shift, as people mark it: "O", "X", a dash, "R/O" (rest / requested off), "REQ".
+  o: 'day_off', x: 'day_off', '-': 'day_off', '–': 'day_off', '—': 'day_off', 'r/o': 'day_off', req: 'day_off', 'req off': 'day_off', 'requested off': 'day_off',
+  al: 'leave', 'a/l': 'leave', 'annual leave': 'leave', hol: 'leave', hols: 'leave', vac: 'leave', vacation: 'leave', leave: 'leave',
+  sick: 'leave', sl: 'leave', 's/l': 'leave', 'sick leave': 'leave', mc: 'leave',
   unpaid: 'leave', 'unpaid leave': 'leave',
   ul: 'leave', // Unpaid Leave (Bar des Pres shorthand)
   ph: 'public_holiday', 'public holiday': 'public_holiday', holiday: 'public_holiday',
@@ -82,6 +84,9 @@ const CAPTION_WORDS = /^(covers?|pax|events?|functions?|bookings?|reservations?|
 
 /** A footer, totals or note line ("Prepared by: …", "Total staff on rota 22", "Page 1 of 2"): never a person or a section. */
 const isFooterOrNote = isFooterTotalOrNote;
+
+/** What the review says about a row whose name couldn't be read ("[?]", "?", "…"). */
+const UNREADABLE_ROW = "A row whose name couldn't be read. Add the person and their shifts by hand if it is one.";
 
 /** Words that name a group of staff, not a person ("Bar Team", "Night Crew"). */
 const GROUP_WORDS = /\b(team|staff|crew|squad|section|department|dept|group|shift|service|foh|boh|management)\b/i;
@@ -327,9 +332,10 @@ export type CellParseResult =
  * order) into shift interval(s) or a leave code. Times are read by
  * shiftText.ts: "9-17", "17:00-01:00", "4pm to 2am", "11 17 18 25" (AM
  * start/end, PM start/end), "10am/3pm-7pm/12am", "10:30-4:00-8:00-12",
- * decimal hours and dot separators. Also "10IN"/"12CL"/"IN" (open-ended /
- * until-closing / fully-flexible shorthand, confirmed with the Bar des Pres
- * venue) and leave/absence codes.
+ * decimal hours and dot separators, "7a-3p", "12n", "1830-0200". Also
+ * "10IN"/"12CL"/"IN", "4pm-close", "open-3pm" (open-ended / until-closing /
+ * fully-flexible shorthand: flagged, never given an invented end) and
+ * leave/absence codes ("OFF", "O", "X", "-", "REQ", "S/L", "HOL").
  */
 function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>, timeOptions: ShiftTextOptions = {}): CellParseResult {
   if (isBlank(raw)) return { kind: 'blank' };
@@ -351,25 +357,69 @@ function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>
 
   // Fully flexible / on-call: no fixed start or end at all.
   if (/^in$/i.test(text)) {
-    return { kind: 'flagged', raw: text, reason: 'Flexible/on-call shift — no fixed start or end time given; needs a manager to assign specific hours.' };
+    return { kind: 'flagged', raw: text, reason: 'On call — no start or end time printed; set the hours.' };
   }
-  // "<N>IN" — a real start time, open-ended (no end given).
-  const openEnded = text.match(/^(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\s*in$/i);
-  if (openEnded) {
-    const start = parseSingleTime(openEnded[1]!, timeOptions);
-    if (start) return { kind: 'flagged', raw: text, reason: `Open-ended shift — starts ${start}, no end time given.` };
-  }
-  // "<N>CL" — a real start time, runs until closing (not a literal end time).
-  const untilClosing = text.match(/^(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\s*(?:cl|close|closing)$/i);
-  if (untilClosing) {
-    const start = parseSingleTime(untilClosing[1]!, timeOptions);
-    if (start) return { kind: 'flagged', raw: text, reason: `Shift starts ${start}, runs until closing (no fixed end time) — show as "until close" rather than a guessed time.` };
+  // Open-ended cells: one end of the shift is printed, the other is "close" / "open" / left out.
+  // They are flagged with what was read; the missing end is never invented.
+  const open = openEndedCell(text, timeOptions);
+  if (open) return { kind: 'flagged', raw: text, reason: open };
+  // A dotted time this roster writes both ways (".5" beside "18.30"): shown to check, never guessed.
+  if (ambiguousDottedTime(text, timeOptions)) {
+    return { kind: 'flagged', raw: text, reason: 'This roster writes times both as hours.minutes ("18.30") and as decimal hours ("18.5"), so this cell could be read either way. Check it on the roster.' };
   }
 
   const read = parseShiftText(text, timeOptions);
   if (read) return { kind: 'shifts', intervals: read.segments.map((s) => ({ start: s.start, end: s.end })) };
 
   return { kind: 'unresolved', raw: text };
+}
+
+/** One time as people type it: "10", "10:30", "18.30", "4pm", "7a", "1830", "noon". */
+const TIME_WORD = String.raw`(?:\d{1,4}(?:[:.]\d{1,2})?\s*(?:a\.?m\.?|p\.?m\.?|a|p)?|noon|midnight|12\s*[nm])`;
+const UNTIL = String.raw`(?:-|–|—|~|to|till|til|'til|until|thru)`;
+const CLOSE = String.raw`(?:cl|close|closing|late|finish)`;
+
+/**
+ * An open-ended cell: the start is printed and the end is closing time or left out ("10IN",
+ * "IN 10", "4CL", "4pm-close", "5 till close"), the end is printed and the start is opening time
+ * ("open-3pm"), or neither ("to close", "open-close"). Returns what was read, for the manager, or
+ * null when the cell is not one.
+ */
+function openEndedCell(text: string, timeOptions: ShiftTextOptions): string | null {
+  const t = text.trim();
+  /** "16:00" → "4 pm", "10:30" → "10:30 am", "12:00" → "12 pm", "00:00" → "midnight". */
+  const plain = (hm: string) => {
+    const [h, m] = hm.split(':').map(Number) as [number, number];
+    if (h === 0 && m === 0) return 'midnight';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}${m ? `:${String(m).padStart(2, '0')}` : ''} ${h < 12 ? 'am' : 'pm'}`;
+  };
+  const startIn = t.match(new RegExp(`^(?:in|start|from)\\s*[:\\-]?\\s*(${TIME_WORD})$`, 'i')) ?? t.match(new RegExp(`^(${TIME_WORD})\\s*(?:in|start|onwards?)$`, 'i'));
+  if (startIn) {
+    const at = parseSingleTime(startIn[1]!, timeOptions);
+    if (at) return `Starts ${plain(at)} — no end time printed; set the end time.`;
+  }
+  const untilClose = t.match(new RegExp(`^(${TIME_WORD})\\s*${UNTIL}?\\s*${CLOSE}$`, 'i'));
+  if (untilClose) {
+    const at = parseSingleTime(untilClose[1]!, timeOptions);
+    if (at) {
+      // A closing shift that starts at a bare hour starts in the afternoon or evening ("4CL" =
+      // 4 pm until close) unless "am" is written.
+      const bare = /^\s*\d{1,2}(?:[:.]\d{2})?\s*$/.test(untilClose[1]!);
+      const hour = Number(at.slice(0, 2));
+      const startAt = bare && hour >= 1 && hour <= 11 ? `${String(hour + 12).padStart(2, '0')}${at.slice(2)}` : at;
+      return `Starts ${plain(startAt)}, until close — no end time printed; set the end time.`;
+    }
+  }
+  const fromOpen = t.match(new RegExp(`^(?:open|opening)\\s*${UNTIL}\\s*(${TIME_WORD})$`, 'i'));
+  if (fromOpen) {
+    const at = parseSingleTime(fromOpen[1]!, timeOptions);
+    if (at) return `From opening until ${plain(at)} — no start time printed; set the start time.`;
+  }
+  if (new RegExp(`^(?:${UNTIL}\\s*)?${CLOSE}$|^(?:open|opening)\\s*${UNTIL}\\s*${CLOSE}$`, 'i').test(t)) {
+    return 'Until close — no start or end time printed; set the hours.';
+  }
+  return null;
 }
 
 /** One cell's text read by the table reader's own rules — so the AI reader's cells mean the same. */
@@ -917,6 +967,13 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     }
   }
   const peopleCarryTitles = dataRows >= 3 && titledRows / dataRows >= 0.8;
+  // A name column that writes the title in the same cell ("Ana Silva / Waiter", "Ana Silva (RM)"):
+  // the column's own order, from all its cells, so a title no vocabulary knows splits off too.
+  const nameColumnLabels: string[] = [];
+  for (let r = header.dataStartIdx; r < dataEndIdx; r++) nameColumnLabels.push(normalizeCell(grid[r]?.[hasTitleColumn ? nameColIndex : 0]));
+  const combinedOrder = combinedLabelOrder(nameColumnLabels);
+  /** A name cell that holds the title too, split; null when it holds a name (or a heading) alone. */
+  const splitLead = (label: string) => (label ? splitNameTitle(label, combinedOrder) : null);
   /** A header that only the ALL-CAPS pattern recognised, in a sheet where that pattern proves nothing. */
   const isPatternOnlyHeaderInCapsVenue = (label: string) => allCapsVenue && canonicalRoleName(label) === label;
 
@@ -1130,7 +1187,11 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // Single-label-column shape: the name column IS where a role/section
       // header also appears (e.g. Gattopardo's "SUPERVISORS"), so header
       // vs. real name is discriminated by content, not position.
-      const firstCell = withoutLeadingIndex(normalizeCell(row[0]));
+      const leadText = withoutLeadingIndex(normalizeCell(row[0]));
+      // Name and title in one cell: the name is the label, the title is this person's own role.
+      const combined = splitLead(leadText);
+      const firstCell = combined?.name ?? leadText;
+      const roleOfRow = combined?.title || currentRole;
       if (SUMMARY_ROW_LABELS.has(firstCell.toLowerCase()) || (firstCell && isFooterOrNote(firstCell))) continue; // footer/summary/totals line, never a staff row or a real section header
 
       // Every distinct non-blank value in this row (name column + day
@@ -1244,7 +1305,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // shown as an unread row, never imported under a title.
       const notPerson = nonPersonReason(firstCell);
       if (notPerson) {
-        if (rowHasData) {
+        if (notPerson === UNREADABLE_NAME) {
+          addUnread(r, [firstCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), UNREADABLE_ROW);
+          if (rowHasData) staffRowsWithRealDataProcessed++;
+        } else if (rowHasData) {
           addUnread(r, [firstCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), `"${firstCell}" reads as ${notPerson}; its shifts were not imported. Add them by hand if they belong to someone.`);
           staffRowsWithRealDataProcessed++;
         }
@@ -1257,8 +1321,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       const peopleBefore = peopleSoFar;
       hasSeenAnyStaffRow = true;
       if (rowHasData || !daysBlank(row)) {
-        const key = addPerson(r, employeeName, currentRole);
-        if (processStaffRow(r, row, employeeName, currentRole, new Set([0]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
+        const key = addPerson(r, employeeName, roleOfRow);
+        if (processStaffRow(r, row, employeeName, roleOfRow, new Set([0]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
         continue;
       }
 
@@ -1272,9 +1336,9 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       const unlikeBanners = unlikeSheetBanners(employeeName);
       const personLike = looksLikePersonName(employeeName) && !GROUP_WORDS.test(employeeName) && (unlikeBanners || !(mixedCaseVenue && isAllCapsLabel(employeeName)));
       const insideRealSection = !currentRoleIsProvisional || (currentRole === '' && peopleBefore > 0);
-      if (personLike && (insideRealSection || unlikeBanners)) {
-        const key = addPerson(r, employeeName, currentRole);
-        if (processStaffRow(r, row, employeeName, currentRole, new Set([0]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
+      if (personLike && (insideRealSection || unlikeBanners || combined)) {
+        const key = addPerson(r, employeeName, roleOfRow);
+        if (processStaffRow(r, row, employeeName, roleOfRow, new Set([0]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
         continue;
       }
       if (currentRoleIsProvisional) {
@@ -1395,15 +1459,19 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     // A title or heading where the name should be is never a person. When the title cell holds
     // a person's name instead, this row has the two the other way round; otherwise its shifts
     // are shown as an unread row.
-    let employeeName = nameCell;
-    let rowTitle = titleCell;
-    const notPerson = nonPersonReason(nameCell);
+    const combinedName = splitLead(nameCell);
+    let employeeName = combinedName?.name ?? nameCell;
+    let rowTitle = titleCell || combinedName?.title || '';
+    const notPerson = nonPersonReason(employeeName);
     if (notPerson) {
       if (looksLikePersonName(titleCell) && !nonPersonReason(titleCell)) {
         employeeName = titleCell;
         rowTitle = nameCell;
       } else {
-        if (hasData(row)) {
+        if (notPerson === UNREADABLE_NAME) {
+          addUnread(r, [titleCell, nameCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), UNREADABLE_ROW);
+          if (hasData(row)) staffRowsWithRealDataProcessed++;
+        } else if (hasData(row)) {
           addUnread(r, [titleCell, nameCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), `"${nameCell}" reads as ${notPerson}; its shifts were not imported. Add them by hand if they belong to someone.`);
           staffRowsWithRealDataProcessed++;
         }
