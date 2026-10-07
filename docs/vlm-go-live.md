@@ -149,26 +149,53 @@ It never shows a key, project id or provider message. Owners only; 3 runs per 5 
 - **Off:** delete `GEMINI_VERTEX_PROJECT` (and `GOOGLE_SERVICE_ACCOUNT_JSON`) in Railway, redeploy. Image uploads go back to the clear 422; spreadsheets are unaffected.
 - **Rotate:** in Google Cloud, create a new JSON key for `shiftsync-vision`, replace the Railway value, redeploy, run `vlm:check`, then delete the old key under **Keys**.
 
-## Voice: what is sent with a recording, and who decides who a name is
+## Voice: exactly what is sent to the model, and who decides what it means
 
-- **Transcription** (`POST /api/voice/transcribe`) sends the audio plus a bounded spelling hint built by
-  `buildVocabularyHint` (`server/src/voice/transcribe.ts`) from the caller's **own venue only**: the
-  display names of its **active** team members, its section names and its role names, and six fixed
-  scheduling words. Never sent: phone numbers, email addresses, applicants (join requests), inactive
-  staff, or anything from another venue. Any term that looks like contact data (an `@`, or six or more
-  digits) is dropped even if it was typed into a name; the list is de-duplicated and capped at 150 terms
-  and 4,000 characters. The model is told to use it only to spell words that were actually spoken.
-- **Intent** (`POST /api/voice/parse-intent`) sends the transcript and the caller's own venue context
-  (team names with ids; for managers also roles, sections, templates, the next week's shifts, pending
-  swap requests and pending applicants' names — never their phone numbers).
-- **The server decides who a person is**, never the model: `server/src/voice/people.ts` looks the
-  spoken name up in the caller's venue (exact name, spelling variants such as Yousef/Yusuf, short
-  forms such as Jim/James, then sound-alike names) and settles on one person only when exactly one
-  fits strongly. Two or more → "Which one?" with each person's role; close names → "did you mean";
-  nothing close → the caller picks from their team. Sections, roles and "closing"/"lunch"-style
-  service words are checked against the venue's own lists the same way (`vocabulary.ts`). Every
-  reading still needs the caller's Confirm, and the confirm sheet spells out the full name, role, day,
-  date and times. Nobody is ever created from a voice command.
+Both voice calls send the same bounded spelling hint and nothing else from the venue. The hint is
+built by `buildVocabularyHint` (`server/src/voice/transcribe.ts`, loaded by `venueSpellingHint` in
+`server/src/voice/context.ts`) from the caller's **own venue only**: the display names of its
+**active** team members, its section names, and six fixed scheduling words. Any term that looks like
+contact data (an `@`, or six or more digits) is dropped even if it was typed into a name; the list is
+de-duplicated and capped at 150 terms and 4,000 characters. The model is told to use it only to spell
+words that were actually said.
+
+- **Transcription** (`POST /api/voice/transcribe`) sends the audio and the spelling hint.
+- **Intent** (`POST /api/voice/parse-intent`) sends the transcript (as the user turn) and a system
+  prompt (`server/src/voice/prompts.ts`) holding only: the caller's account role; the venue's today
+  and a 14-day weekday calendar (dates, no records); the tools that role may use (staff: their own
+  availability, swaps, time off and the reads; managers and owners: every tool), plus DECLINED and
+  UNRECOGNIZED; the rules for names, times and code-mixed words; and the spelling hint.
+- **Never sent:** ids of any kind, phone numbers, email addresses, applicants (join requests), shifts,
+  swap requests, templates, role names, announcements or shout-outs, inactive staff, or anything from
+  another venue. `server/eval/voice/voiceTools.test.ts` checks the prompt for every one of these.
+
+The model answers with **one tool and the words as heard** (`{ tool, args, confidence, summary }`):
+a name as said ("Omar"), a section or role as said ("the bar"), a day from the calendar, a time
+exactly as said ("6", "6pm", "half past six"). It never returns ids. The server
+(`server/src/voice/tools.ts`) looks everything up in the caller's venue:
+
+- **People:** `server/src/voice/people.ts` settles on one person only when exactly one fits strongly
+  (exact name, spelling variants such as Yousef/Yusuf, short forms such as Jim/James, then
+  sound-alike names). Two or more fit: "Which one?" with each person's role. Close names: "did you
+  mean". Nothing close: the caller picks from their team. Nobody is ever created from a voice command.
+- **Sections, roles and service words** ("closing", "lunch", Tagalog "gabi", Hindi "subah") are
+  checked against the venue's own lists the same way (`vocabulary.ts`).
+- **Shifts** are found by person, day and (if said) time; **swap requests** by requester and/or day;
+  **applicants** by name among pending join requests; **templates** by name.
+- **Times** are read on the server (`times.ts`). "6pm to 2" is 18:00–02:00. "18:30 to 1" is
+  18:30–01:00. "6 to 2" could be 06:00–14:00 or 18:00–02:00, so the caller is asked, with the evening
+  reading first, unless they said "tonight", "evening", "lunch" or similar. "Closing", "opening" and
+  "a double" come from the venue's own templates and upcoming shifts, or are asked for.
+
+**Reads** (who is working, who is in a section, pending requests, recent announcements and
+shout-outs, my schedule) are answered by the server from the venue's records after the model call.
+The model never sees the results, and stored text is returned as plain data. Staff see only
+published shifts and section assignments, and only their own requests.
+
+**Changes** still need the caller's Confirm. The confirm sheet spells out the full name, role, day,
+date and times, and `/execute` re-checks everything before writing: the role, the venue of every id,
+active role and person, real dates, no past days, and no overlaps. It has its own rate limit, and a
+retried Confirm for the same command runs once.
 
 ## Cost
 
