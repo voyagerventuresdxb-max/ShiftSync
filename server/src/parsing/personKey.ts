@@ -18,6 +18,21 @@ const LIGATURE_PIECE = /^(ffi|ffl|ff|fi|fl|ft|st)$/;
  * ("Ana Stewart", "St John") are never run together.
  */
 export function joinLigatureSplits(text: string): string {
+  return joinCutWords(joinLonePieces(text));
+}
+
+/**
+ * A word cut just after its ligature, the glyph kept with the letters before it ("Offi cial",
+ * "Griffi n", "Tiff any", "Duff y"): joined, unless what follows is a name particle ("Jeff de").
+ */
+function joinCutWords(text: string): string {
+  return text.replace(/(\p{L})(ffi|ffl|ff|fi|fl) (\p{Ll}+)(?![\p{L}])/gu, (m, a: string, lig: string, rest: string) =>
+    NAME_PARTICLE.test(rest) && rest !== 'y' && rest !== 'e' ? m : `${a}${lig}${rest}`,
+  );
+}
+
+/** A lone ligature piece between spaces, glued to the letters around it. */
+function joinLonePieces(text: string): string {
   if (!/\s(ffi|ffl|ff|fi|fl|ft|st)\s|\s(ffi|ffl|ff|fi|fl|ft|st)$|^(ffi|ffl|ff|fi|fl|ft|st)\s/.test(text)) return text;
   const tokens = text.split(/(\s+)/);
   const out: string[] = [];
@@ -176,6 +191,30 @@ export function isUnreadableName(label: string): boolean {
  * heading ("NAME TITLE", "BAR"), a total or count line, a footer, signature or note, a
  * caption, a bare number, or a name that couldn't be read ("[?]") is never imported as a person.
  */
+/** Particles a name may carry in lower case ("de la Paz", "van der Berg", "bin Rashed"). */
+const NAME_PARTICLE = /^(de|da|das|dos|do|di|dei|degli|del|della|du|la|le|van|von|der|den|ter|ten|zu|zum|al|el|bin|binti|bint|ibn|ap|af|y|e|mac|st|[dlo]['’]\p{L}+)$/u;
+/** Words a footer, an office note or a label carries, never a name ("Official copy – for staff only", "Final version"). */
+const NON_NAME_WORD = /^(only|copy|check|daily|final|version|official|use|staff|for|by|approved|verified|printed|total|note|notes)$/i;
+
+/**
+ * Why a label can't be a name on its own shape: brackets, digits, a dash between lower-case
+ * words ("fluid – check daily"), a word a footer or label uses, a lower-case word that is not a
+ * name particle, or more than five words. Checked on the label as printed and with its ligature
+ * splits joined, so a split ("O ffi cial copy") never hides it.
+ */
+function notNameShape(label: string): string | null {
+  const joined = joinLigatureSplits(label);
+  const wordsOf = (s: string) => s.split(/\s+/).map((w) => w.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '')).filter(Boolean);
+  if (/[()[\]{}]/.test(joined) || /\d/.test(joined)) return 'a note or a label, not a name';
+  if (/\p{Ll}\s*[–—]\s*\p{L}|\p{Ll}\s+-\s+\p{L}/u.test(joined)) return 'a note or a label, not a name';
+  const words = wordsOf(joined);
+  if (words.length > 5) return 'a line of text, not a name';
+  // A footer's words, as printed or with its ligature splits joined ("sta ff only" is "staff only").
+  if ([...words, ...wordsOf(label)].some((w) => NON_NAME_WORD.test(w))) return 'a note or a label, not a name';
+  if (words.some((w) => /^\p{Ll}/u.test(w) && !NAME_PARTICLE.test(w))) return 'a note or a label, not a name';
+  return null;
+}
+
 export function nonPersonReason(label: string): string | null {
   const s = joinLigatureSplits(label.trim().replace(/\s+/g, ' '));
   if (!s) return 'blank';
@@ -188,7 +227,7 @@ export function nonPersonReason(label: string): string | null {
   if (CAPTION_LINE.test(s)) return 'a caption, not a person';
   if (isSectionLabel(s)) return 'a section heading, not a name';
   if (isRoleTitle(s)) return 'a title or role, not a name';
-  return null;
+  return notNameShape(label.trim().replace(/\s+/g, ' '));
 }
 
 /** A title in a combined cell: a known role or banner word, an abbreviation ("RM"), or a numbered title ("Waiter 3"). */

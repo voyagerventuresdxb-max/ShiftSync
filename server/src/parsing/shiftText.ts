@@ -194,10 +194,13 @@ export function withinOneDay(segments: { start: string; end: string }[]): boolea
   let first: number | null = null;
   let last = -1;
   for (const s of segments) {
-    for (const t of [s.start, s.end]) {
+    for (const [k, t] of [s.start, s.end].entries()) {
       let m = minutes(t);
       // One segment may start where the last ended ("16-18, 18-26").
       while (m < last) m += 1440;
+      // Every segment starts on the day the cell is for: "18-26 11-17" is a night and the next
+      // morning — two days' halves run together, not one day.
+      if (k === 0 && m >= 1440) return false;
       first ??= m;
       last = m;
     }

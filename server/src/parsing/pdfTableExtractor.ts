@@ -496,11 +496,17 @@ const joinedText = (items: PositionedItem[]) => [...items].sort((a, b) => a.x0 -
  * count against it. Codes and counts weigh nothing either way: a colour key's words beside the
  * grid ("Holiday", "Sick") read as leave in any column.
  */
-function fitOf(body: RowCluster[], dayColumns: Band[], days: { from: number; to: number }, step: number, read: (text: string) => number): number {
+function fitOf(body: RowCluster[], dayColumns: Band[], days: { from: number; to: number }, step: number, read: (text: string) => number, pm: Set<number> = new Set(), startOf: (text: string) => number | null = () => null): number {
   let score = 0;
   let straddling = 0;
   for (const row of body) {
-    for (const items of cellsByColumn(row, dayColumns, step)) if (items.length) score += read(joinedText(items));
+    cellsByColumn(row, dayColumns, step).forEach((items, k) => {
+      if (!items.length) return;
+      const text = joinedText(items);
+      // A PM half holding a morning start ("11 17") is an AM pair a half-day off: the header sits off its columns.
+      const start = pm.has(k) ? startOf(text) : null;
+      score += start !== null && start < 12 * 60 ? -1 : read(text);
+    });
     for (const p of row.items) {
       if (p.x1 - p.x0 > step * 0.9) continue;
       const c = cx(p);
@@ -527,9 +533,12 @@ interface DayLayout {
 }
 
 /** A header printed off its columns by this many columns either way is tried on the body. */
-const HEADER_OFFSETS = [1, -1, 2, -2];
+const HEADER_OFFSETS = [1, -1, 2, -2, 0.5, -0.5, 1.5, -1.5];
 
-/** The day bands moved `offset` columns (one step each) along the page, past either end as needed. */
+/**
+ * The day bands moved `offset` columns (one step each) along the page, past either end as
+ * needed; a half offset (an AM | PM half-day) lies halfway between the two whole ones.
+ */
 function shiftedBands(bands: Band[], step: number, offset: number): Band[] {
   const at = (i: number): Band => {
     if (i >= 0 && i < bands.length) return bands[i]!;
@@ -538,7 +547,9 @@ function shiftedBands(bands: Band[], step: number, offset: number): Band[] {
     const end = bands[bands.length - 1]!.x1;
     return { x0: end + past * step, x1: end + (past + 1) * step };
   };
-  return bands.map((_, k) => at(k + offset));
+  if (Number.isInteger(offset)) return bands.map((_, k) => at(k + offset));
+  const [lo, hi] = [Math.floor(offset), Math.ceil(offset)];
+  return bands.map((_, k) => ({ x0: (at(k + lo).x0 + at(k + hi).x0) / 2, x1: (at(k + lo).x1 + at(k + hi).x1) / 2 }));
 }
 
 /**
@@ -562,6 +573,14 @@ function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: nu
       memo.set(text, v);
     }
     return v;
+  };
+  const starts = new Map<string, number | null>();
+  const startOf = (text: string) => {
+    if (!starts.has(text)) {
+      const cell = interpretCell(text, timeOptions);
+      starts.set(text, cell.kind === 'shifts' ? Number(cell.intervals[0]!.start.slice(0, 2)) * 60 + Number(cell.intervals[0]!.start.slice(3, 5)) : null);
+    }
+    return starts.get(text)!;
   };
   const first = dayHeads(rows[dayRowIdxs[0]!]!)!;
   const layouts: DayLayout[] = [];
@@ -595,7 +614,8 @@ function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: nu
           }
         });
         const days = { from: bands[0]!.x0, to: bands[bands.length - 1]!.x1 };
-        layouts.push({ dayBands: bands, dayColumns, perDay, step: from.step, score: fitOf(body, dayColumns, days, step, read), offset });
+        const pm = new Set(perDay.filter((idx) => idx.length === 2).map((idx) => idx[1]!));
+        layouts.push({ dayBands: bands, dayColumns, perDay, step: from.step, score: fitOf(body, dayColumns, days, step, read, pm, startOf), offset });
       }
     }
   }
@@ -613,7 +633,12 @@ function chooseDayLayout(rows: RowCluster[], dayRowIdxs: number[], periodIdx: nu
   // be anchored and nothing on it is read as placed. A tie (nothing to tell them apart) stays put.
   const clear = Math.max(3, Math.ceil(cells * 0.05));
   const best = shifted && shifted.score > plain.score + clear ? shifted : plain;
-  const unanchored = best.offset !== 0 || (!!shifted && shifted.score > plain.score + 0.5);
+  // Times in the body with no day header over them (a header hanging past one end of the grid, a
+  // body column left bare at the other) mean the header is off its columns: never anchored.
+  const from = best.dayBands[0]!.x0;
+  const to = best.dayBands[best.dayBands.length - 1]!.x1;
+  const unheaded = body.flatMap((r) => r.items).filter((p) => p.x1 - p.x0 <= step * 0.9 && (cx(p) < from || cx(p) >= to) && cx(p) >= from - step && cx(p) < to + step && read(p.text) > 0).length;
+  const unanchored = best.offset !== 0 || (!!shifted && shifted.score > plain.score + 0.5) || unheaded >= 2;
   const margin = Math.max(2, Math.ceil(cells * 0.02));
   const rival = layouts.filter((l) => l !== best && l.offset === best.offset && l.score >= best.score - margin && differsFrom(l, best)).sort((a, b) => b.score - a.score)[0] ?? null;
   return { best, rival, unanchored };

@@ -122,7 +122,7 @@ test('aiReadRoster: with too little time left no re-read is started, and the sho
 
 test('reconcileReadings: matching shifts are "both"; one-reader people are kept (an AI-only person\'s shifts only when a second AI reading confirms them); times that differ on a cell the table reader had to guess keep the printed text\'s with both readings', () => {
   const ai = mapReadingAnswer(
-    answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', '10-18']), person('Test Betta', 2, ['12-20', '']), person('Test Only Ai', 3, ['9-17', ''])] }]),
+    answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', '10-18']), person('Test Betta', 2, ['12-20', '']), person('Test Solo Ai', 3, ['9-17', ''])] }]),
     { today: TODAY, clientWeekStart: null },
   );
   const table = parseExcelGrid(
@@ -132,7 +132,7 @@ test('reconcileReadings: matching shifts are "both"; one-reader people are kept 
       // "11-6pm": the table reader has to guess the start's am / pm.
       ['Test Alpha', '9-17', '11-6pm'],
       ['Test Beta', '12-20', ''],
-      ['Test Only Table', '', '9-17'],
+      ['Test Solo Table', '', '9-17'],
     ],
     TODAY,
     { today: TODAY, clientWeekStart: null },
@@ -148,14 +148,14 @@ test('reconcileReadings: matching shifts are "both"; one-reader people are kept 
   assert.equal(beta.readerSource, 'both');
   assert.deepEqual(beta.nameAlternatives, [{ reader: 'ai', name: 'Test Betta' }]);
   // A person only the AI reader saw: listed, but no shift saved on its word alone — each day shown to check.
-  assert.equal(row('Test Only Ai', '2026-08-24'), undefined);
-  assert.equal(result.people!.find((p) => p.name === 'Test Only Ai')!.readerSource, 'ai');
-  assert.ok(result.anomalies.some((x) => x.employeeName === 'Test Only Ai' && x.date === '2026-08-24' && /Only the AI reader saw this person/.test(x.reason)));
+  assert.equal(row('Test Solo Ai', '2026-08-24'), undefined);
+  assert.equal(result.people!.find((p) => p.name === 'Test Solo Ai')!.readerSource, 'ai');
+  assert.ok(result.anomalies.some((x) => x.employeeName === 'Test Solo Ai' && x.date === '2026-08-24' && /Only the AI reader saw this person/.test(x.reason)));
   // Confirmed by a second, independent AI reading (a photo or an unanchored text PDF), the shift is saved, flagged.
-  assert.deepEqual(reconcileReadings(ai, table, { aiConfirmed: true }).result.rows.find((r) => r.employeeName === 'Test Only Ai')?.flags, ['ai_only']);
+  assert.deepEqual(reconcileReadings(ai, table, { aiConfirmed: true }).result.rows.find((r) => r.employeeName === 'Test Solo Ai')?.flags, ['ai_only']);
   // A person only the table reader read, from the file's own text for certain: kept as read (the person is marked table-only).
-  assert.equal(row('Test Only Table', '2026-08-25').flags, undefined);
-  assert.equal(result.people!.find((p) => p.name === 'Test Only Table')!.readerSource, 'table');
+  assert.equal(row('Test Solo Table', '2026-08-25').flags, undefined);
+  assert.equal(result.people!.find((p) => p.name === 'Test Solo Table')!.readerSource, 'table');
   assert.equal(disagreements, 4, 'times differ on a guessed cell, a misread name, one AI-only person, one table-only person');
   assert.equal(aiDiffCells, 0);
   assert.equal(new Set(result.rows.map((r) => r.rowNumber)).size, result.rows.length, 'row numbers stay unique');
