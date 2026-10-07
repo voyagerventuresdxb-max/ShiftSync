@@ -557,7 +557,8 @@ export function reconcileReadings(
       const aLeft: ParsedShiftRow[] = [];
       for (const r of aDay) {
         const same = tLeft.findIndex((x) => segKey(x) === segKey(r));
-        if (same >= 0) rows.push({ ...tLeft.splice(same, 1)[0]!, readerSource: 'both' });
+        // A segment both read on this day is confirmed, whatever else differs.
+        if (same >= 0) rows.push(confirmed({ ...tLeft.splice(same, 1)[0]!, readerSource: 'both' }));
         else aLeft.push(r);
       }
       const anchor = aLeft.length ? tLeft.shift() ?? null : null;

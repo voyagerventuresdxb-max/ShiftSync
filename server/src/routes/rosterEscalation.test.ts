@@ -269,11 +269,13 @@ test('too many empty roles, with consent: the grid goes to the provider as text 
   assert.equal(status, 200);
   assert.deepEqual([body.escalation.reason, body.escalation.status], ['empty_roles', 'used']);
   assert.equal((mock.calls[0] as VisionInput).kind, 'grid');
-  // The AI's person is primary; the people only the built-in reader found stay, flagged — nobody is dropped.
+  // The AI's person is primary; the people only the built-in reader found stay, marked as such —
+  // nobody is dropped. Their shifts, read from the file's own cells, carry no flag of their own.
   assert.equal(body.preview[0].employeeName, AI_NAME);
   assert.deepEqual(body.preview[0].flags, ['ai_only']);
   assert.deepEqual(body.readPeople.map((p: { name: string; readerSource: string }) => `${p.name}|${p.readerSource}`), [`${AI_NAME}|ai`, 'Test Alpha|table', 'Test Beta|table']);
-  assert.ok(body.preview.filter((r: { employeeName: string }) => r.employeeName === 'Test Alpha').every((r: { flags: string[] }) => r.flags.includes('table_only')));
+  assert.ok(body.people.filter((p: { name: string }) => p.name === 'Test Alpha').every((p: { flags: { kind: string }[] }) => p.flags.some((f) => f.kind === 'table_only')));
+  assert.ok(body.preview.filter((r: { employeeName: string }) => r.employeeName === 'Test Alpha').every((r: { flags?: string[] }) => !r.flags));
   assert.equal(body.reading.ai, 'used');
   assert.ok(body.reading.disagreements >= 3);
   assert.equal(await allowanceUsed(), true);
