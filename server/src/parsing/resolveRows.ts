@@ -1,6 +1,8 @@
 import type { PrismaClient } from '@prisma/client';
+import { similarity } from '../lib/textSimilarity.js';
 import { normalizeHeader } from './templates.js';
 import type { ParsedShiftRow, PreviewRow, RowIssue, UploadPreviewSummary } from './types.js';
+import type { PeopleSummary, PersonFlag, PersonPreview, ReaderSource, ReadPerson, RowReadingInfo } from './rosterContract.js';
 
 /** Case/whitespace-insensitive key for matching names against DB records. */
 export function nameKey(value: string): string {
@@ -216,58 +218,340 @@ export function isRecognizedRoleAlias(raw: string): boolean {
   return Object.prototype.hasOwnProperty.call(ROLE_ALIASES, nameKey(raw));
 }
 
+
+/** The venue role every role-unresolved person is imported under until the manager assigns one. */
+export const TEAM_MEMBER_ROLE_NAME = 'Team member';
+
 /**
- * Resolves parsed rows against a Location's existing Role and User records.
- * - Missing Role => blocking error (Shift.roleId is a required FK).
- * - Missing/unmatched employee => non-blocking warning; shift is created
- *   unassigned (Shift.userId is nullable) so managers can review/assign it.
+ * Key for matching a PERSON's name: `nameKey` on the NFC form, so the same name typed with
+ * precomposed or decomposed accents gives one key. Deliberately keeps accents and tone marks
+ * (see templates.ts: folding them merges different Vietnamese names), so only an exact match
+ * on this key ever links a roster name to a staff member without asking.
+ */
+export function personNameKey(value: string): string {
+  return nameKey(String(value ?? '').normalize('NFC'));
+}
+
+/**
+ * Loose key: NFKD with combining marks stripped, then `nameKey` (lowercase, punctuation and
+ * hyphens to spaces, whitespace collapsed). Only ever used to SUGGEST a possible match
+ * ("José" vs "Jose"), never to link on its own.
+ */
+export function foldedNameKey(value: string): string {
+  return nameKey(String(value ?? '').normalize('NFKD').replace(/\p{M}+/gu, ''));
+}
+
+export interface VenueUser {
+  id: string;
+  fullName: string;
+  roleId: string | null;
+}
+
+/** Everything about one venue that a roster is matched against. */
+export interface VenueMatchContext {
+  /** nameKey(Role.name) -> id, active roles only. */
+  roleByName: Map<string, string>;
+  /** Remembered roster label (nameKey) -> roleId, active roles only. */
+  roleAliasByLabel: Map<string, string>;
+  /** Active staff. */
+  users: VenueUser[];
+  /** personNameKey(fullName) -> active staff with that name (more than one = ambiguous). */
+  usersByKey: Map<string, VenueUser[]>;
+  /** Remembered printed name (personNameKey) -> userId of an active staff member. */
+  nameAliasByKey: Map<string, string>;
+}
+
+type ContextClient = Pick<PrismaClient, 'role' | 'user' | 'rosterRoleAlias' | 'rosterNameAlias'>;
+
+export function buildVenueMatchContext(
+  roles: { id: string; name: string }[],
+  users: VenueUser[],
+  roleAliases: { normalizedLabel: string; roleId: string }[],
+  nameAliases: { normalizedName: string; userId: string }[],
+): VenueMatchContext {
+  const roleByName = new Map(roles.map((r) => [nameKey(r.name), r.id]));
+  const activeRoleIds = new Set(roles.map((r) => r.id));
+  const roleAliasByLabel = new Map(roleAliases.filter((a) => activeRoleIds.has(a.roleId)).map((a) => [a.normalizedLabel, a.roleId]));
+  const usersByKey = new Map<string, VenueUser[]>();
+  for (const user of users) {
+    const key = personNameKey(user.fullName);
+    if (!key) continue;
+    usersByKey.set(key, [...(usersByKey.get(key) ?? []), user]);
+  }
+  const activeUserIds = new Set(users.map((u) => u.id));
+  const nameAliasByKey = new Map(nameAliases.filter((a) => activeUserIds.has(a.userId)).map((a) => [a.normalizedName, a.userId]));
+  return { roleByName, roleAliasByLabel, users, usersByKey, nameAliasByKey };
+}
+
+export async function loadVenueMatchContext(prisma: ContextClient, locationId: string): Promise<VenueMatchContext> {
+  const [roles, users, roleAliases, nameAliases] = await Promise.all([
+    prisma.role.findMany({ where: { locationId, isActive: true } }),
+    prisma.user.findMany({ where: { locationId, isActive: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
+    prisma.rosterRoleAlias.findMany({ where: { locationId } }),
+    prisma.rosterNameAlias.findMany({ where: { locationId } }),
+  ]);
+  return buildVenueMatchContext(roles, users.map((u) => ({ id: u.id, fullName: u.fullName, roleId: u.roleId })), roleAliases, nameAliases);
+}
+
+/**
+ * Titles only the review's role RESOLUTION maps. Deliberately not in ROLE_ALIASES: the grid
+ * parser uses that table (isRecognizedRoleAlias / canonicalRoleName) to tell a role column
+ * from a name column, where a bare "AM" is the AM/PM marker. Here the label is already known
+ * to be a role/title, so the common hospitality abbreviations are safe to map.
+ */
+const RESOLVE_ONLY_ROLE_ALIASES: Record<string, string> = {
+  am: 'Management', // Assistant Manager
+  jam: 'Management', // Junior Assistant Manager
+  arm: 'Management', // Assistant Restaurant Manager
+  'asst rm': 'Management',
+  'chef de pass': 'Chef',
+  'chef de partie': 'Chef',
+  'demi chef de partie': 'Chef',
+  'sous chef': 'Chef',
+  'junior sous chef': 'Chef',
+  'head chef': 'Chef',
+  'executive chef': 'Chef',
+  'pastry chef': 'Chef',
+  busser: 'Runner',
+  bussers: 'Runner',
+  busboy: 'Runner',
+};
+
+/**
+ * A role key without a trailing position number: "waiter 3", "head waiter 1", "runner 2nd",
+ * "waiter ii", "waiter3" -> "waiter" / "head waiter" / "runner". Rosters number people within
+ * a title; the number is never part of the role.
+ */
+export function stripRoleOrdinal(key: string): string {
+  return key
+    .replace(/(?:\s+(?:\d+(?:st|nd|rd|th)?|i{1,3}|iv))+$/u, '')
+    .replace(/(?<=\p{L})\d+$/u, '')
+    .trim();
+}
+
+/**
+ * Resolves a role label as printed to one of the venue's active roles: its own exact role
+ * name first (a venue's own "GRO" beats the generic alias bucket), then a mapping the manager
+ * asked to remember, then the canonical alias table, then the resolve-only abbreviations —
+ * each tried on the label as printed and then without a trailing number ("Waiter 3").
+ * Null when none applies (non-blocking: the person is imported as "Team member").
+ */
+export function resolveRoleLabel(label: string | null | undefined, ctx: VenueMatchContext): string | null {
+  const raw = String(label ?? '').trim();
+  if (!raw) return null;
+  const tryKey = (key: string): string | null => {
+    if (!key) return null;
+    const resolveOnly = Object.prototype.hasOwnProperty.call(RESOLVE_ONLY_ROLE_ALIASES, key) ? RESOLVE_ONLY_ROLE_ALIASES[key] : undefined;
+    return (
+      ctx.roleByName.get(key) ??
+      ctx.roleAliasByLabel.get(key) ??
+      ctx.roleByName.get(nameKey(canonicalRoleName(key))) ??
+      (resolveOnly ? ctx.roleByName.get(nameKey(resolveOnly)) : undefined) ??
+      null
+    );
+  };
+  const key = nameKey(raw);
+  const stripped = stripRoleOrdinal(key);
+  return tryKey(key) ?? (stripped !== key ? tryKey(stripped) : null);
+}
+
+type TokenMatch = 'equal' | 'initial' | 'prefix' | 'spelling';
+
+function tokenMatch(a: string, b: string): TokenMatch | null {
+  if (a === b) return 'equal';
+  if ((a.length === 1 && b.startsWith(a)) || (b.length === 1 && a.startsWith(b))) return 'initial';
+  if (Math.min(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a))) return 'prefix';
+  const maxLen = Math.max(a.length, b.length);
+  const distance = Math.round((1 - similarity(a, b)) * maxLen);
+  const allowed = maxLen >= 7 ? 2 : maxLen >= 4 ? 1 : 0;
+  return distance > 0 && distance <= allowed ? 'spelling' : null;
+}
+
+/**
+ * How close a printed name is to a staff member's name, when they are NOT the same key:
+ * 'strong' (same letters without accents, first name only, a nickname that starts the name,
+ * an initial for the surname) or 'weak' (a small spelling difference). Null = unrelated.
+ */
+export function nameCloseness(printed: string, staffName: string): 'strong' | 'weak' | null {
+  const fa = foldedNameKey(printed);
+  const fb = foldedNameKey(staffName);
+  if (!fa || !fb) return null;
+  if (fa === fb) return 'strong';
+  const ta = fa.split(' ');
+  const tb = fb.split(' ');
+  const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  const kinds: TokenMatch[] = [];
+  for (let i = 0; i < short.length; i++) {
+    const kind = tokenMatch(short[i]!, long[i]!);
+    if (!kind) return null;
+    kinds.push(kind);
+  }
+  // A lone initial for the first name ("M. Lopez") says too little to suggest anyone.
+  if (kinds[0] === 'initial') return null;
+  if (short.length < long.length) return kinds.every((k) => k === 'equal' || k === 'prefix') ? 'strong' : 'weak';
+  return kinds.includes('spelling') ? 'weak' : 'strong';
+}
+
+interface NameMatch {
+  /** Linked without asking: one exact name match, or a remembered "same person". */
+  userId: string | null;
+  candidates: { userId: string; fullName: string; strength: 'strong' | 'weak' }[];
+}
+
+export function matchPersonName(name: string, ctx: VenueMatchContext): NameMatch {
+  const key = personNameKey(name);
+  if (!key) return { userId: null, candidates: [] };
+  const exact = ctx.usersByKey.get(key) ?? [];
+  if (exact.length === 1) return { userId: exact[0]!.id, candidates: [] };
+  if (exact.length > 1) {
+    // Two staff share this exact name: never pick one silently.
+    return { userId: null, candidates: exact.map((u) => ({ userId: u.id, fullName: u.fullName, strength: 'weak' as const })) };
+  }
+  const aliased = ctx.nameAliasByKey.get(key);
+  if (aliased) return { userId: aliased, candidates: [] };
+  const candidates = ctx.users
+    .map((u) => ({ userId: u.id, fullName: u.fullName, strength: nameCloseness(name, u.fullName) }))
+    .filter((c): c is { userId: string; fullName: string; strength: 'strong' | 'weak' } => c.strength !== null)
+    .sort((a, b) => (a.strength === b.strength ? 0 : a.strength === 'strong' ? -1 : 1))
+    .slice(0, 3);
+  return { userId: null, candidates };
+}
+
+type ReadingRow = ParsedShiftRow & RowReadingInfo;
+
+/** The person a row belongs to: the reader's personKey, else its source row, else its name. */
+export function personKeyOf(row: ReadingRow): string {
+  if (row.personKey) return row.personKey;
+  if (row.sourceRowIndex !== undefined) return `row:${row.sourceRowIndex}`;
+  return `name:${personNameKey(row.employeeName) || `#${row.rowNumber}`}`;
+}
+
+function combinedReader(sources: (ReaderSource | undefined)[]): ReaderSource | undefined {
+  const known = sources.filter((s): s is ReaderSource => !!s);
+  if (known.length === 0) return undefined;
+  if (known.every((s) => s === 'ai')) return 'ai';
+  if (known.every((s) => s === 'table')) return 'table';
+  return 'both';
+}
+
+/**
+ * One PersonPreview per person on the roster — every person a reader saw, including people
+ * with no shifts that week — matched against the venue. Exact name (or a remembered link) =
+ * matched; anything close is only ever a suggestion (needs_decision + possible_match); the
+ * same name on two rows or under two sections is flagged, never merged or dropped here.
+ */
+export function buildPeoplePreview(rows: ReadingRow[], readPeople: ReadPerson[] | undefined, ctx: VenueMatchContext): PersonPreview[] {
+  const rowsByKey = new Map<string, ReadingRow[]>();
+  for (const row of rows) {
+    const key = personKeyOf(row);
+    rowsByKey.set(key, [...(rowsByKey.get(key) ?? []), row]);
+  }
+  const readByKey = new Map((readPeople ?? []).map((p) => [p.personKey, p]));
+  const keys = [...new Set([...(readPeople ?? []).map((p) => p.personKey), ...rowsByKey.keys()])];
+
+  const people: PersonPreview[] = keys.flatMap((personKey) => {
+    const personRows = rowsByKey.get(personKey) ?? [];
+    const read = readByKey.get(personKey);
+    const name = (read?.name ?? personRows[0]?.employeeName ?? '').trim();
+    if (!name) return [];
+    const roleLabel = read?.roleLabel?.trim() || personRows.find((r) => r.roleName.trim())?.roleName.trim() || null;
+    const section = read?.section ?? personRows.find((r) => r.section)?.section ?? null;
+    const match = matchPersonName(name, ctx);
+    const matchedUser = match.userId ? ctx.users.find((u) => u.id === match.userId) : undefined;
+    // The role their shifts get if the manager assigns none: the printed label, else a row's
+    // own label, else (already on staff) their current role. Null = role_unresolved.
+    const rowRoleId = personRows.map((r) => resolveRoleLabel(r.roleName, ctx)).find((id): id is string => !!id) ?? null;
+    const resolvedRoleId = resolveRoleLabel(roleLabel, ctx) ?? rowRoleId ?? matchedUser?.roleId ?? null;
+
+    const flags: PersonFlag[] = [];
+    if (match.candidates.length > 0) flags.push({ kind: 'possible_match', candidates: match.candidates.map(({ userId, fullName }) => ({ userId, fullName })) });
+    const reader = read?.readerSource ?? combinedReader(personRows.map((r) => r.readerSource));
+    if (reader === 'ai') flags.push({ kind: 'ai_only' });
+    if (reader === 'table') flags.push({ kind: 'table_only' });
+    if (!resolvedRoleId) flags.push({ kind: 'role_unresolved' });
+
+    const sourceRows = read
+      ? [{ page: read.sourcePage, row: read.sourceRow }]
+      : [...new Map(personRows.map((r) => [`${r.sourcePage ?? ''}:${r.sourceRowIndex ?? r.rowNumber}`, { page: r.sourcePage ?? null, row: r.sourceRowIndex ?? null }])).values()];
+
+    const preview: PersonPreview = {
+      personKey,
+      name,
+      normalizedName: personNameKey(name),
+      roleLabel,
+      resolvedRoleId,
+      section,
+      status: match.userId ? 'matched' : match.candidates.length > 0 ? 'needs_decision' : 'new',
+      matchedUserId: match.userId,
+      flags,
+      shiftCount: personRows.length,
+      rowNumbers: personRows.map((r) => r.rowNumber),
+      sourceRows,
+      // The review screen's preselection: only an exact (or remembered) match links. A close
+      // name is never preselected as the same person — the manager answers it (the review
+      // screen won't confirm until they do), and a confirm without an answer creates.
+      suggestedAction: match.userId ? 'link' : 'create',
+      suggestedUserId: match.userId,
+    };
+    return [preview];
+  });
+
+  // The same name on two or more entries: listed twice, or under two sections.
+  const byName = new Map<string, PersonPreview[]>();
+  for (const person of people) byName.set(person.normalizedName, [...(byName.get(person.normalizedName) ?? []), person]);
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const personKeys = group.map((p) => p.personKey);
+    const sections = [...new Set(group.map((p) => p.section).filter((s): s is string => !!s))];
+    for (const person of group) {
+      person.flags.push({ kind: 'duplicate_name', personKeys });
+      if (sections.length >= 2) person.flags.push({ kind: 'two_sections', sections });
+      person.status = 'needs_decision';
+    }
+  }
+  return people;
+}
+
+export function summarizePeople(people: PersonPreview[]): PeopleSummary {
+  return {
+    total: people.length,
+    matched: people.filter((p) => p.status === 'matched').length,
+    new: people.filter((p) => p.status === 'new').length,
+    needsDecision: people.filter((p) => p.status === 'needs_decision').length,
+    roleUnresolved: people.filter((p) => p.flags.some((f) => f.kind === 'role_unresolved')).length,
+  };
+}
+
+export interface ResolveRowsOptions {
+  /** Every person the readers saw, including people with no shifts that week. */
+  readPeople?: ReadPerson[];
+}
+
+/**
+ * Resolves parsed rows against a Location's roles and staff, and groups them into people.
+ * Nothing here blocks: an unresolved role is a flag (the person is imported as "Team member"
+ * unless the manager assigns a role), an unknown name is a new person, a close name is a
+ * question for the manager. Nothing is written.
  */
 export async function resolveRowsAgainstDatabase(
-  prisma: PrismaClient,
+  prisma: ContextClient,
   locationId: string,
   rows: ParsedShiftRow[],
-): Promise<{ previewRows: PreviewRow[]; summary: UploadPreviewSummary }> {
-  const [roles, users] = await Promise.all([
-    prisma.role.findMany({ where: { locationId, isActive: true } }),
-    prisma.user.findMany({ where: { locationId, isActive: true } }),
-  ]);
-
-  const roleByName = new Map(roles.map((r) => [nameKey(r.name), r.id]));
-  const userByName = new Map(users.map((u) => [nameKey(u.fullName), u.id]));
-  const userByNameFull = new Map(users.map((u) => [nameKey(u.fullName), u]));
+  options: ResolveRowsOptions = {},
+): Promise<{ previewRows: PreviewRow[]; summary: UploadPreviewSummary & { people: PeopleSummary }; people: PersonPreview[] }> {
+  const ctx = await loadVenueMatchContext(prisma, locationId);
+  const people = buildPeoplePreview(rows, options.readPeople, ctx);
+  const personByKey = new Map(people.map((p) => [p.personKey, p]));
 
   const previewRows: PreviewRow[] = rows.map((row) => {
     const issues: RowIssue[] = [];
-    // Resolve the role via a RAW exact match against this venue's own seeded
-    // Role.name FIRST, falling back to the canonical alias map only when the
-    // raw string isn't itself a real role here. This ordering matters: a
-    // venue can seed a Role whose name happens to equal one of ROLE_ALIASES'
-    // own keys (a real, distinct "GRO"/"Captain"/"Outlet Manager" role,
-    // deliberately different from that generic bucket's "Host"/"Head
-    // Waiter"/"Management") — trying the alias-canonicalized name first
-    // would silently redirect every such row to the wrong, generic role
-    // with `status: 'matched'` and no warning surfaced at all, overriding a
-    // previously-correct exact match. Checking the raw string first doesn't
-    // weaken the intended synonym-matching case: a roster saying "Server"
-    // for a venue that seeded "Waiter" (not "Server") still falls through
-    // to the alias lookup exactly as before, since no venue seeds a role
-    // literally named after its own synonym.
-    const canonicalRole = canonicalRoleName(row.roleName);
-    const resolvedUserId = userByName.get(nameKey(row.employeeName)) ?? null;
-    const matchedUser = userByNameFull.get(nameKey(row.employeeName));
+    const person = personByKey.get(personKeyOf(row));
+    const resolvedUserId = person?.matchedUserId ?? null;
+    const matchedUser = resolvedUserId ? ctx.users.find((u) => u.id === resolvedUserId) : undefined;
 
-    // The file provided no role at all (as opposed to one we simply don't
-    // recognize) for a staff member who already exists with a role on file
-    // — fall back to their existing role rather than blocking the import.
-    // Deliberately narrow: a non-blank-but-unresolved role (typo, a role
-    // the venue hasn't set up yet) is NEVER affected by this fallback and
-    // still blocks exactly as before, since it only triggers when the raw
-    // roleName is empty.
+    // The file gave no role at all for someone already on staff with one: use theirs.
     const usedExistingRoleFallback = !row.roleName.trim() && !!matchedUser?.roleId;
-    const resolvedRoleId =
-      roleByName.get(nameKey(row.roleName)) ??
-      roleByName.get(nameKey(canonicalRole)) ??
-      (usedExistingRoleFallback ? matchedUser!.roleId : null);
+    const resolvedRoleId = resolveRoleLabel(row.roleName, ctx) ?? (usedExistingRoleFallback ? matchedUser!.roleId : null);
 
     if (usedExistingRoleFallback) {
       issues.push({
@@ -277,42 +561,37 @@ export async function resolveRowsAgainstDatabase(
         message: `Role for "${row.employeeName}" was not specified in the file — inferred from their existing staff record.`,
       });
     }
-
     if (!resolvedRoleId) {
       issues.push({
         rowNumber: row.rowNumber,
         field: 'role',
-        severity: 'error',
+        severity: 'warning',
         message: row.roleName.trim()
-          ? `Role "${row.roleName}" does not exist for this location. Add it first, or fix the spelling in the sheet.`
-          : 'No role could be identified for this shift. Assign one manually before importing.',
+          ? `Role "${row.roleName}" does not exist for this location yet. Assign a role on the review screen, or this shift is added as "${TEAM_MEMBER_ROLE_NAME}".`
+          : `No role could be identified for this shift. Assign a role on the review screen, or it is added as "${TEAM_MEMBER_ROLE_NAME}".`,
       });
     }
     if (!resolvedUserId) {
       issues.push({
         rowNumber: row.rowNumber,
         field: 'employeeName',
-        severity: 'warning',
-        message: `No active employee named "${row.employeeName}" found. This shift will be imported as unassigned.`,
+        severity: 'info',
+        message: `"${row.employeeName}" is not on your staff list yet. Confirming adds them.`,
       });
     }
 
-    const status: PreviewRow['status'] = !resolvedRoleId
-      ? 'unmatched_role'
-      : !resolvedUserId
-        ? 'new_employee'
-        : 'matched';
-
+    const status: PreviewRow['status'] = !resolvedRoleId ? 'unmatched_role' : !resolvedUserId ? 'new_employee' : 'matched';
     return { ...row, status, resolvedRoleId, resolvedUserId, issues };
   });
 
-  const summary: UploadPreviewSummary = {
+  const summary = {
     totalRows: previewRows.length,
     matchedRows: previewRows.filter((r) => r.status === 'matched').length,
     newEmployeeRows: previewRows.filter((r) => r.status === 'new_employee').length,
     unmatchedRoleRows: previewRows.filter((r) => r.status === 'unmatched_role').length,
     errorRows: previewRows.filter((r) => r.status === 'error').length,
+    people: summarizePeople(people),
   };
 
-  return { previewRows, summary };
+  return { previewRows, summary, people };
 }

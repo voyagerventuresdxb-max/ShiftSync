@@ -3,6 +3,7 @@ import { uploadRoster, ApiError, type UploadResponse } from '../../api/schedules
 import { useIdentity } from '../../state/IdentityContext';
 import { useOnboardingState } from '../../state/OnboardingStateContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
+import { ReadingProgress } from '../rosterReview/ReadingProgress';
 
 /**
  * Onboarding · 03 · Roster — ported from `ShiftSync Roster.dc.html`.
@@ -373,6 +374,8 @@ export default function RosterScreen({
           </svg>
         )}
       </div>
+
+      {uploading && <ReadingProgress className="rr-onboarding" />}
 
       {(zone.phase === 'consent' || (zone.phase === 'ready' && zone.result.escalation)) && (
         <div

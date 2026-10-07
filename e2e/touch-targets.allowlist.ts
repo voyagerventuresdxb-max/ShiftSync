@@ -47,7 +47,6 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^(Fine Dining|Bar \/ Lounge|Nightclub|Rooftop \/ Beach Club|Hotel F&B Outlet|Café \/ Bakery)$/, route: '/onboarding', category: 'b', reason: 'venue-type chips (35px) wrap into rows 8px apart: expansions overlap; locked prototype spacing' },
   { label: /^(Fewer|More) sections$/, route: '/onboarding', category: 'b', reason: 'stepper pair 36x36 with a 6px gap: expansions overlap' },
   { label: /^Skip intro$/, route: '/onboarding', category: 'b', reason: '14px text link 14px under the carousel CTA' },
-  { label: /^(Remove|Looks right|Done|\+ Custom|[A-Za-z ]+)$/, route: '/onboarding/review', category: 'b', reason: 'Review row editor: 27px role chips wrap 6px apart inside an overflow:hidden panel; Remove/Looks right sit within 14px of them' },
   { label: /^Cancel$/, route: '/scheduling', category: 'b', reason: 'PersonalRota cover-request Cancel wraps under the substitute <select> at 390px' },
   { label: /^Back on$/, route: '/floor-plan', category: 'b', reason: '86-list rows 6px apart: 26px "Back on" buttons would overlap each other' },
   { label: /^(COPY|SAVE AS IMAGE)$/i, route: '/onboarding/invite', category: 'b', reason: 'measured (a) in one capture and (b) in another depending on the wrapped layout; hit-44 applied, exception kept until confirmed on a device' },

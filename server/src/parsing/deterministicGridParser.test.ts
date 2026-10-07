@@ -231,9 +231,10 @@ test('an ALL-CAPS caption before any real staff row is NOT mistaken for a role h
   assert.ok(kalim.every((r) => r.roleName === ''));
   const kadak = result.rows.filter((r) => r.employeeName === 'Kadak');
   assert.ok(kadak.every((r) => r.roleName === 'RUNNERS'));
-  // "COVERS" itself is treated as a (non-real) staff row, same as before,
-  // producing an anomaly for its unparseable cell rather than a shift.
-  assert.ok(result.anomalies.some((a) => a.employeeName === 'COVERS'));
+  // "COVERS" is a caption describing the day, not a person: neither a staff member nor a shift,
+  // and its event note is not an anomaly about anyone.
+  assert.deepEqual(result.people?.map((p) => p.name), ['Kalim', 'Kadak']);
+  assert.ok(!result.anomalies.some((a) => a.employeeName === 'COVERS'));
 });
 
 test('per-row title column (Bar des Pres FOH style): role comes from column A, name from column B', () => {
@@ -304,15 +305,12 @@ test('four hyphen-chained numbers with no slash ("10:30-4:00-8:00-12") split int
   ];
   const result = parseExcelGrid(grid, WEEK_START);
   assert.equal(result.rows.length, 2);
+  // A 12-hour chain without am/pm reads forward in time (shiftText.ts): 10:30-16:00, then
+  // 20:00-midnight — not the literal 10:30-04:00 (a 17.5-hour overnight) it used to give.
   assert.deepEqual(
-    result.rows.map((r) => `${r.startTime}-${r.endTime}`).sort(),
-    ['08:00-12:00', '10:30-04:00'].sort(),
+    result.rows.map((r) => `${r.startTime}-${r.endTime}${r.overnight ? '+' : ''}`).sort(),
+    ['10:30-16:00', '20:00-00:00+'],
   );
-  // Note: bare numbers are read as literal 24h hours (no am/pm inference),
-  // consistent with how every other bare-number cell in this parser is
-  // handled — see the honesty note in the report about this specific
-  // example possibly not matching real intent (10:30am-4:00pm was almost
-  // certainly meant, not 10:30pm-4:00am).
 });
 
 test('legend-code shifts: a footer legend block (code | label | time-range) resolves coded cells to real shift times', () => {
@@ -864,4 +862,162 @@ test('a header whose weekday disagrees with its date keeps the date and flags ev
   const alphaRow = result.rows.find((r) => r.date === '2026-08-19')!;
   assert.equal(flagged[0]!.rowNumber, alphaRow.rowNumber, 'the flag is linked to the shift row it applies to');
   assert.equal(flagged[1]!.rowNumber, null, 'a leave entry has no shift row to link to');
+});
+
+// --- Reading the printed week and every person (roster reading rework) ----------------------
+
+const TODAY = '2026-10-07';
+const today = { today: TODAY, clientWeekStart: null };
+
+test('a weekday row ABOVE the date row: shifts are dated in the printed week, not the upload week', () => {
+  // Before: the weekday row was taken as THE header and anchored to the current week (the
+  // "landed in the week of 28 Sep" bug); the date row beneath it was skipped.
+  const grid = [
+    ['', 'MONDAY', 'TUESDAY', 'WEDNESDAY'],
+    ['', '24-Aug', '25-Aug', '26-Aug'],
+    ['Test Alpha', '9-17', '', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, '2026-09-28', today);
+  assert.deepEqual(result.rows.map((r) => r.date), ['2026-08-24', '2026-08-26']);
+  assert.equal(result.week?.weekStart, '2026-08-24');
+  assert.equal(result.week?.source, 'printed_dates');
+});
+
+test('two rosters in the same format for different printed weeks land in their own weeks', () => {
+  const roster = (d: number) => [
+    ['', `${d}-Aug`, `${d + 1}-Aug`],
+    ['', 'MONDAY', 'TUESDAY'],
+    ['Test Alpha', '9-17', '9-17'],
+  ];
+  assert.equal(parseExcelGrid(roster(17), TODAY, today).week?.weekStart, '2026-08-17');
+  assert.equal(parseExcelGrid(roster(24), TODAY, today).week?.weekStart, '2026-08-24');
+});
+
+test('weekday-only headers take the week from a title above the grid; with nothing printed they ask for confirmation', () => {
+  const titled = [['Rota 24 - 30 Aug', '', ''], ['', 'Mon', 'Tue'], ['Test Alpha', '9-17', '9-17']];
+  const r1 = parseExcelGrid(titled, TODAY, today);
+  assert.deepEqual(r1.rows.map((r) => r.date), ['2026-08-24', '2026-08-25']);
+  assert.equal(r1.week?.source, 'title');
+  const bare = parseExcelGrid([['', 'Mon', 'Tue'], ['Test Alpha', '9-17', '9-17']], TODAY, today);
+  assert.equal(bare.week?.source, 'weekday_only');
+  assert.equal(bare.week?.needsConfirmation, true);
+  assert.equal(bare.week?.weekStart, '2026-10-12', 'the coming Monday, never silently the current week');
+});
+
+test('"Aug 17", "17th Aug" and "MONDAY 17 AUGUST" headers are day headers', () => {
+  for (const [a, b] of [['Aug 17', 'Aug 18'], ['17th Aug', '18th Aug'], ['MONDAY 17 AUGUST', 'TUESDAY 18 AUGUST']]) {
+    const result = parseExcelGrid([['', a, b], ['Test Alpha', '9-17', '9-17']], TODAY, today);
+    assert.deepEqual(result.rows.map((r) => r.date), ['2026-08-17', '2026-08-18'], a);
+  }
+});
+
+test('every person is listed, including people with no times all week; banners, headcounts and captions are not people', () => {
+  // Family-A shape: a COVERS caption, a first group with no banner, banners printed across the
+  // days (merged), a headcount row after each group, and people whose week is colour only.
+  const banner = (label: string) => ['', label, label, label];
+  const grid = [
+    ['', '17-Aug', '18-Aug', '19-Aug'],
+    ['', 'MONDAY', 'TUESDAY', 'WEDNESDAY'],
+    ['COVERS', '', 'Party - 20pax', ''],
+    ['Test Lead One', '11 17 18 25', '', '12 16 18 24'],
+    ['Test Lead Blank', '', '', ''],
+    ['Test Lead Two', '9.5 15.5 18 23', '', ''],
+    ['3', '2', '1', '1'],
+    banner('SUPERVISORS'),
+    ['Test Sup Blank', '', '', ''],
+    ['Test Sup One', '16 18 18.5 26', '', ''],
+    ['2', '1', '0', '0'],
+  ];
+  const result = parseExcelGrid(grid, TODAY, today);
+  assert.deepEqual(
+    result.people?.map((p) => `${p.name}|${p.section ?? ''}`),
+    ['Test Lead One|', 'Test Lead Blank|', 'Test Lead Two|', 'Test Sup Blank|SUPERVISORS', 'Test Sup One|SUPERVISORS'],
+  );
+  assert.ok(result.people?.every((p) => p.readerSource === 'table' && p.personKey));
+  assert.deepEqual(result.unreadRows, []);
+  const one = result.rows.filter((r) => r.employeeName === 'Test Lead One');
+  assert.ok(one.every((r) => r.personKey === result.people![0]!.personKey && r.readerSource === 'table'));
+  assert.deepEqual(result.rows.filter((r) => r.employeeName === 'Test Sup One').map((r) => `${r.startTime}-${r.endTime}`), ['16:00-18:00', '18:30-02:00']);
+});
+
+test('day sub-columns saved without their merge (CSV): the blank-headed columns belong to the day before them', () => {
+  const grid = [
+    ['', '17-Aug', '', '', '', '18-Aug', '', '', ''],
+    ['', 'AM', '', 'PM', '', 'AM', '', 'PM', ''],
+    ['Test Alpha', '11', '17', '18', '25', '', '', '18', '26'],
+  ];
+  const result = parseExcelGrid(grid, TODAY, today);
+  assert.deepEqual(
+    result.rows.map((r) => `${r.date} ${r.startTime}-${r.endTime} ${r.managerNotes}`),
+    ['2026-08-17 11:00-17:00 [AM]', '2026-08-17 18:00-01:00 [PM]', '2026-08-18 18:00-02:00 [PM]'],
+  );
+});
+
+test('title column vs name column is decided by content: numbered titles and abbreviations are titles', () => {
+  const grid = [
+    ['', '', 'Mon', 'Tue'],
+    ['Test Name One', 'RM', '4pm to 2am', 'OFF'],
+    ['Test Name Two', 'Waiter 3', '1pm to 11pm', 'UL'],
+    ['Test Name Three', 'HW 2', 'OFF', '10am/3pm-7pm/12am'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Name One|RM', 'Test Name Two|Waiter 3', 'Test Name Three|HW 2']);
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName} ${r.startTime}-${r.endTime}`), [
+    'Test Name One 16:00-02:00',
+    'Test Name Two 13:00-23:00',
+    'Test Name Three 10:00-15:00',
+    'Test Name Three 19:00-00:00',
+  ]);
+});
+
+test('a banner merged across a title-column sheet is a section, never a person', () => {
+  const grid = [
+    ['', '', 'Mon', 'Tue'],
+    ['RM', 'Test Name One', '9-17', 'OFF'],
+    ['WAITER', 'WAITER', 'WAITER', 'WAITER'],
+    ['Waiter 1', 'Test Name Two', 'OFF', '9-17'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.section ?? ''}`), ['Test Name One|', 'Test Name Two|WAITER']);
+});
+
+test('dot separators read as hours.minutes when the sheet shows minutes; decimal hours otherwise', () => {
+  const minutes = parseExcelGrid([['', 'Mon', 'Tue'], ['Test Alpha', '18.30-01.00', '10.00-15.00/19.00-00.00']], '2026-08-17');
+  assert.deepEqual(minutes.rows.map((r) => `${r.startTime}-${r.endTime}`), ['18:30-01:00', '10:00-15:00', '19:00-00:00']);
+  const decimal = parseExcelGrid([['', 'Mon', 'Tue'], ['Test Alpha', '9.5 15.5 18 23', '18.5 26']], '2026-08-17');
+  assert.deepEqual(decimal.rows.map((r) => `${r.startTime}-${r.endTime}`), ['09:30-15:30', '18:00-23:00', '18:30-02:00']);
+});
+
+test('an ambiguous blank-week label that opens the listing is grouped as a heading AND listed as an unread row, never dropped', () => {
+  const grid = [
+    ['', 'Mon', 'Tue'],
+    ['Poolside Detail', '', ''],
+    ['Test Alpha', '9-17', '9-17'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.unreadRows?.map((u) => u.text), ['Poolside Detail']);
+  assert.match(result.unreadRows![0]!.reason, /section heading/);
+});
+
+test('a headcount number alone in the title column is not a section heading (the old /^d+/ typo let it become one)', () => {
+  const grid = [
+    ['', '', 'Mon', 'Tue'],
+    ['RM', 'Test Alpha', '9-17', '9-17'],
+    ['12', '', '', ''],
+    ['', 'Test Beta', '10-18', ''],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.rows.filter((r) => r.employeeName === 'Test Beta').map((r) => r.roleName), ['']);
+  assert.ok(!result.anomalies.some((a) => a.rawText === '12'));
+});
+
+test('an employee-ID column before the names is not a title column', () => {
+  const grid = [
+    ['', '', 'Mon', 'Tue'],
+    ['SUPERVISORS', '', '', ''],
+    ['1042', 'Test Alpha', '9-17', ''],
+    ['1043', 'Test Beta', '', '10-18'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|SUPERVISORS', 'Test Beta|SUPERVISORS']);
 });

@@ -3,6 +3,7 @@ import { prisma } from '../prisma.js';
 import { withAuditedTransaction } from '../auditLog.js';
 import { notifyUser } from '../push.js';
 import { consumeInviteUse } from '../inviteLinks.js';
+import { personNameKey } from '../../parsing/resolveRows.js';
 
 export const JOIN_PHONE_TAKEN_ERROR = "This phone number already belongs to another staff account, so this request can't be approved. Decline it instead.";
 
@@ -151,9 +152,25 @@ export async function decideJoinRequest(input: {
   const created = await withAuditedTransaction(
     prisma,
     async (tx) => {
-      const user = await tx.user.create({
-        data: { locationId: existing.locationId, fullName: existing.fullName, phone: existing.phone, jobTitle },
-      });
+      // A roster import adds everyone on the roster as staff with no phone. When that person
+      // joins through the venue link, the request claims their record (and its shifts)
+      // instead of creating a second one — only when exactly one such unclaimed record
+      // (no phone, no email: nobody has ever signed in as it) carries the same name.
+      const nameKey = personNameKey(existing.fullName);
+      const unclaimed = nameKey
+        ? (
+            await tx.user.findMany({
+              where: { locationId: existing.locationId, isActive: true, deletedAt: null, phone: null, email: null },
+              select: { id: true, fullName: true },
+            })
+          ).filter((u) => personNameKey(u.fullName) === nameKey)
+        : [];
+      const claimed = unclaimed.length === 1;
+      const user = claimed
+        ? await tx.user.update({ where: { id: unclaimed[0]!.id }, data: { phone: existing.phone, ...(jobTitle ? { jobTitle } : {}) } })
+        : await tx.user.create({
+            data: { locationId: existing.locationId, fullName: existing.fullName, phone: existing.phone, jobTitle },
+          });
       // Same atomic guard as the decline branch above. If this loses the
       // race, throwing rolls back the `user.create` too, so a losing
       // approval never leaves an orphan User with no matching approved
@@ -165,7 +182,7 @@ export async function decideJoinRequest(input: {
       if (result.count === 0) {
         throw new JoinRequestAlreadyReviewedError();
       }
-      return user;
+      return { id: user.id, claimed };
     },
     (user) => ({
       locationId: existing.locationId,
@@ -173,7 +190,7 @@ export async function decideJoinRequest(input: {
       action: 'JOIN_APPROVED',
       entityType: 'JoinRequest',
       entityId: input.requestId,
-      note: `Approved join request for ${existing.fullName} — created User ${user.id}`,
+      note: `Approved join request for ${existing.fullName} — ${user.claimed ? 'linked to existing' : 'created'} User ${user.id}`,
     }),
   ).catch((err) => {
     if (err instanceof JoinRequestAlreadyReviewedError) return 'already_reviewed' as const;

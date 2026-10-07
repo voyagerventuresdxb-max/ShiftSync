@@ -1,6 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import path from 'node:path';
-import { cleanupTestOrgs, continueThroughVenue, signupNewVenue, testVenueName } from './helpers';
+import { cleanupTestOrgs, confirmOnboardingReview, continueThroughVenue, signupNewVenue, testVenueName } from './helpers';
 
 /**
  * Full real onboarding gate: Welcome (hold gesture + carousel) -> Account
@@ -26,30 +26,13 @@ async function uploadRoster(page: Page) {
   await page.waitForURL('**/onboarding/review**');
 }
 
-/** Resolves every flagged/unflagged review row (clicking "Looks right"/"Done"
- * for each), making an inline name+role edit on the first one, until the
- * footer's Confirm & Continue button is enabled. */
-async function resolveReviewRows(page: Page) {
+/** On the shared roster review: renames the first person and picks their role inline. */
+async function editFirstPerson(page: Page) {
   await page.waitForSelector("text=Here's what we found.");
-  let first = true;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const confirmBtn = page.getByRole('button', { name: /Confirm & Continue|Review \d+ flagged first/ });
-    const label = (await confirmBtn.textContent())?.trim() ?? '';
-    if (label.startsWith('Confirm & Continue')) break;
-
-    const header = page.locator('div[role="button"]').first();
-    await header.click();
-    const panel = header.locator('xpath=following-sibling::div[1]');
-    await panel.waitFor({ state: 'visible' });
-
-    if (first) {
-      await panel.locator('input').first().fill('E2E Edited Name');
-      await panel.getByRole('button', { name: 'Bartender', exact: true }).click();
-      first = false;
-    }
-    await panel.getByRole('button', { name: /Looks right|Done/ }).click();
-  }
+  const card = page.getByTestId('rr-person').first();
+  await card.getByRole('button', { name: 'Shifts, name & role' }).click();
+  await card.getByLabel('Name on your staff list').fill('E2E Edited Name');
+  await card.getByLabel(/^Role for /).selectOption('Bartender');
 }
 
 /** Triggers a click that opens a wa.me/whatsapp.com popup, aborts its
@@ -104,10 +87,9 @@ test.describe('onboarding — full real gate', () => {
     await page.getByPlaceholder('e.g. Sefarina, DIFC').fill('E2E Test Restaurant');
     await continueThroughVenue(page);
     await uploadRoster(page);
-    await resolveReviewRows(page);
-
-    await page.getByRole('button', { name: 'Confirm & Continue' }).click();
-    await page.waitForURL('**/onboarding/invite**');
+    await editFirstPerson(page);
+    const confirmed = await confirmOnboardingReview(page);
+    expect(confirmed.createdPeople).toBe(3);
 
     // Join link + QR
     await page.waitForSelector('text=Venue join-link', { timeout: 15000 });
@@ -130,13 +112,11 @@ test.describe('onboarding — full real gate', () => {
     const shareUrl = await captureAbortedWhatsAppLink(context, () => page.getByRole('link', { name: 'Share to WhatsApp' }).click());
     expect(shareUrl).toMatch(/wa\.me|whatsapp\.com/);
 
-    // Individual invite — the onboarding Owner created at signup is the one
-    // real Staff Directory entry for a brand-new venue (roster-confirmed
-    // rows without a matching existing User don't create one — they only
-    // become real Users later, when that person self-onboards via the join
-    // link, per InviteScreen's own documented behavior).
+    // Individual invite — everyone confirmed on Review is a real staff member
+    // now, so the imported team is listed here (plus the Owner from signup).
     await page.getByText('Or invite someone individually').click();
     await page.waitForSelector('text=Tick anyone to send a direct invite.');
+    await expect(page.getByText('E2E Edited Name')).toBeVisible();
     const firstStaffRow = page.locator('input[placeholder="Add mobile number"]').first();
     await firstStaffRow.fill('501234567');
     await firstStaffRow.blur();

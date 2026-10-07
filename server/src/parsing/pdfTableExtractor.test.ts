@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from './pdfTableExtractor.js';
+import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
+import { extractPdfGrid, extractPdfTable, hasPdfTextLayer, MalformedPdfError, pdfPageCount } from './pdfTableExtractor.js';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { privateFixture, privateFixtureSkipMessage } from './privateFixtures.js';
 
@@ -69,16 +69,17 @@ test('real reference-venue PDF (private, local only): full pipeline (extractPdfG
   // on this reconstructed grid the header text lands in a middle column beside a stray number.
   assert.deepEqual(staffPerRole, { '': 3, SUPERVISORS: 2, 'HEAD WAITERS': 3, WAITERS: 1, RUNNERS: 7 });
 
-  // Two shiftless staff share a row with entries of a static legend box in the trailing
-  // column, surfaced as leave records (a manager can dismiss a coincidence in seconds;
-  // silently dropping a person is worse). Staff with a fully blank week and no such
-  // coincidence produce nothing — never a section header, never shift rows.
-  assert.deepEqual(result.leaveRecords.map((r) => r.leaveCode).sort(), ['PH', 'Request']);
+  // Every person is read, including the 5 with no times all week (their week is shown only
+  // by cell colour): 21 people, in the sections they are printed under.
+  assert.equal(result.people?.length, 21);
+  const peoplePerSection: Record<string, number> = {};
+  for (const p of result.people ?? []) peoplePerSection[p.section ?? ''] = (peoplePerSection[p.section ?? ''] ?? 0) + 1;
+  assert.deepEqual(peoplePerSection, { '': 4, SUPERVISORS: 3, 'HEAD WAITERS': 4, WAITERS: 2, RUNNERS: 8 });
 
-  // The only 2 anomalies are the non-employee "COVERS" covers-count row's two unparseable
-  // annotation cells, flagged rather than dropped or misread as a real shift.
-  assert.equal(result.anomalies.length, 2);
-  assert.ok(result.anomalies.every((a) => a.employeeName === 'COVERS'));
+  // The colour key to the right runs alongside banner and headcount rows too, so it is read
+  // as a key, never as anyone's leave; the COVERS caption is not a person and not an anomaly.
+  assert.deepEqual(result.leaveRecords, []);
+  assert.deepEqual(result.anomalies, []);
 });
 
 test('synthetic reference-layout PDF (public stand-in for the real file): the same structure comes through', async () => {
@@ -108,8 +109,10 @@ test('synthetic reference-layout PDF (public stand-in for the real file): the sa
   assert.deepEqual(firstDay.map((r) => `${r.startTime}-${r.endTime}${r.overnight ? '+' : ''}`), ['11:00-17:00', '18:00-01:00+']);
   // Legend entries beside shiftless staff surface as leave records; beside working staff they are ignored.
   assert.deepEqual(result.leaveRecords.map((r) => `${r.employeeName}:${r.leaveCode}`).sort(), ['Test Runner Kai:PH', 'Test Runner Lee:Request']);
-  // The covers caption's two annotations are anomalies, not shifts.
-  assert.deepEqual(result.anomalies.map((a) => a.employeeName), ['COVERS', 'COVERS']);
+  // Blank-week staff are still people; the covers caption is neither a person nor an anomaly.
+  for (const name of ['Test Head Gray', 'Test Runner Kai', 'Test Runner Lee']) assert.ok(result.people?.some((p) => p.name === name), name);
+  assert.ok(!result.people?.some((p) => p.name === 'COVERS'));
+  assert.deepEqual(result.anomalies, []);
 });
 
 test('synthetic scanned roster (public stand-in for the real scan): image-only, no text layer, not malformed', async () => {
@@ -447,4 +450,84 @@ test('a well-formed PDF with no text layer does NOT throw MalformedPdfError', as
   const buffer = Buffer.from(await doc.save());
   await assert.doesNotReject(() => hasPdfTextLayer(buffer));
   assert.equal(await hasPdfTextLayer(buffer), false);
+  assert.equal(await pdfPageCount(buffer), 1);
+});
+
+/** Text centred on x (as spreadsheet exports print cells), with an optional rotation. */
+async function buildCentredPdf(items: { text: string; x: number; y: number; rotate?: number }[], size = 8): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([800, 400]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const item of items) {
+    const w = font.widthOfTextAtSize(item.text, size);
+    if (item.rotate) page.drawText(item.text, { x: item.x + size / 2, y: item.y - w / 2, size, font, rotate: degrees(item.rotate) });
+    else page.drawText(item.text, { x: item.x - w / 2, y: item.y, size, font });
+  }
+  return Buffer.from(await doc.save());
+}
+
+test('family-A shape: centred cells, a date row over a weekday row, AM | PM halves and four decimal sub-cells per day', async () => {
+  // Day d spans x = 200 + 120d … +120; its four sub-cells are centred at +15, +45, +75, +105.
+  const day = (d: number, sub: number) => 200 + 120 * d + 15 + 30 * sub;
+  const items: { text: string; x: number; y: number }[] = [];
+  ['17-Aug', '18-Aug'].forEach((t, d) => items.push({ text: t, x: 200 + 120 * d + 60, y: 380 }));
+  ['MONDAY', 'TUESDAY'].forEach((t, d) => items.push({ text: t, x: 200 + 120 * d + 60, y: 368 }));
+  for (const d of [0, 1]) items.push({ text: 'AM', x: 200 + 120 * d + 30, y: 356 }, { text: 'PM', x: 200 + 120 * d + 90, y: 356 });
+  items.push({ text: 'COVERS', x: 100, y: 344 }, { text: 'Party - 20pax', x: day(1, 0), y: 344 });
+  // Sub-cells sit closer together than a space: each is still its own cell.
+  ['11', '17', '18', '25'].forEach((t, s) => items.push({ text: t, x: day(0, s), y: 332 }));
+  ['18.5', '26'].forEach((t, s) => items.push({ text: t, x: day(1, s + 2), y: 332 }));
+  items.push({ text: 'Test Person One', x: 100, y: 332 });
+  items.push({ text: 'Test Person Blank', x: 100, y: 320 });
+  items.push({ text: 'SUPERVISORS', x: 320, y: 308 }); // a banner centred across the days
+  items.push({ text: 'Test Person Two', x: 100, y: 296 }, { text: '9.5', x: day(0, 0), y: 296 }, { text: '15.5', x: day(0, 1), y: 296 });
+  items.push({ text: 'Holiday', x: 470, y: 320 }, { text: 'Sick', x: 470, y: 308 }); // a colour key beside the rows
+  const buffer = await buildCentredPdf(items);
+
+  const table = await extractPdfTable(buffer);
+  assert.equal(table.pageCount, 1);
+  const result = parseExcelGrid(table.grid, WEEK_START, { today: '2026-10-07', clientWeekStart: null, rowRefs: table.rowRefs });
+  assert.equal(result.week?.weekStart, '2026-08-17');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.section ?? ''}|${p.sourcePage}`), ['Test Person One||1', 'Test Person Blank||1', 'Test Person Two|SUPERVISORS|1']);
+  assert.deepEqual(
+    result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}|${r.managerNotes}`),
+    [
+      'Test Person One|2026-08-17|11:00-17:00|[AM]',
+      'Test Person One|2026-08-17|18:00-01:00|[PM]',
+      'Test Person One|2026-08-18|18:30-02:00|[PM]',
+      'Test Person Two|2026-08-17|09:30-15:30|[AM]',
+    ],
+  );
+  assert.deepEqual(result.leaveRecords, [], 'a colour key is nobody\'s leave');
+  assert.deepEqual(result.anomalies, []);
+  assert.match(table.pageTexts[0]!, /Test Person Blank/);
+});
+
+test('rotated weekday headers are read in place', async () => {
+  const items: { text: string; x: number; y: number; rotate?: number }[] = [
+    { text: '17-Aug', x: 200, y: 380 },
+    { text: '18-Aug', x: 300, y: 380 },
+    { text: 'MONDAY', x: 200, y: 340, rotate: 90 },
+    { text: 'TUESDAY', x: 300, y: 340, rotate: 90 },
+    { text: 'Test Person One', x: 80, y: 300 },
+    { text: '9-17', x: 200, y: 300 },
+    { text: '10-18', x: 300, y: 300 },
+  ];
+  const result = parseExcelGrid(await extractPdfGrid(await buildCentredPdf(items)), WEEK_START);
+  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime}-${r.endTime}`), ['2026-08-17 09:00-17:00', '2026-08-18 10:00-18:00']);
+});
+
+test('a header repeated at the top of page 2 is not read again as data; rows keep their page', async () => {
+  const header = [
+    { text: 'Mon 17/08', x: 200, y: 380 },
+    { text: 'Tue 18/08', x: 300, y: 380 },
+  ];
+  const buffer = await buildMultiPagePdf([
+    [...header, { text: 'Fatima', x: 20, y: 360 }, { text: '9-17', x: 190, y: 360 }],
+    [...header, { text: 'Yusuf', x: 20, y: 360 }, { text: '10-18', x: 290, y: 360 }],
+  ]);
+  const table = await extractPdfTable(buffer);
+  const result = parseExcelGrid(table.grid, WEEK_START, { rowRefs: table.rowRefs });
+  assert.deepEqual(result.people?.map((p) => `${p.name}@${p.sourcePage}`), ['Fatima@1', 'Yusuf@2']);
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName} ${r.date}`), ['Fatima 2026-08-17', 'Yusuf 2026-08-18']);
 });

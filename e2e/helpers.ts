@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -149,4 +149,20 @@ export async function continueThroughVenue(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Fine Dining' }).click();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page.waitForURL('**/onboarding/roster**');
+}
+
+/**
+ * On the onboarding Review step (the shared roster review): confirms the roster as reviewed
+ * and continues to Invite. Returns the confirm response body.
+ */
+export async function confirmOnboardingReview(page: Page): Promise<{ createdPeople: number; createdShifts: number; createdCount: number }> {
+  const confirm = page.getByTestId('rr-confirm');
+  await expect(confirm).toBeEnabled({ timeout: 20000 });
+  const responsePromise = page.waitForResponse((res) => res.url().includes('/confirm'));
+  await confirm.click();
+  const body = (await (await responsePromise).json()) as { createdPeople: number; createdShifts: number; createdCount: number };
+  await page.waitForSelector('text=Your team is in.');
+  await page.getByRole('button', { name: 'Continue to Invite' }).click();
+  await page.waitForURL('**/onboarding/invite**');
+  return body;
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiError, ThinkingLevel, type GoogleGenAI } from '@google/genai';
+import { ApiError, MediaResolution, ThinkingLevel, type GoogleGenAI } from '@google/genai';
 import { visionConfig } from '../lib/aiConfig.js';
 import { MAX_OUTPUT_TOKENS } from '../lib/aiBudget.js';
 import {
@@ -25,7 +25,7 @@ process.env.AI_VISION_USER_DAILY_LIMIT = '1000000';
 process.env.AI_VISION_VENUE_DAILY_LIMIT = '1000000';
 
 /** A fake SDK client: answers each call from `script` in order (a status number throws an ApiError). */
-function fakeClient(script: (number | { text: string; usage?: { promptTokenCount: number; candidatesTokenCount: number } })[]) {
+function fakeClient(script: (number | { text: string; usage?: { promptTokenCount: number; candidatesTokenCount: number }; finishReason?: string })[]) {
   const calls: { model: string; parts: unknown[]; config?: Record<string, unknown> }[] = [];
   const client = {
     models: {
@@ -33,7 +33,7 @@ function fakeClient(script: (number | { text: string; usage?: { promptTokenCount
         calls.push({ model: req.model, parts: req.contents[0]!.parts, config: req.config });
         const step = script[Math.min(calls.length - 1, script.length - 1)]!;
         if (typeof step === 'number') throw new ApiError({ message: `simulated ${step}`, status: step });
-        return { text: step.text, usageMetadata: step.usage };
+        return { text: step.text, usageMetadata: step.usage, candidates: [{ finishReason: step.finishReason ?? 'STOP' }] };
       },
     },
   } as unknown as GoogleGenAI;
@@ -84,11 +84,49 @@ test('every call caps its output and asks for the lowest thinking level; billed 
   assert.equal(billedOutputTokens({ promptTokenCount: 5 }), null, 'no output count: charged the conservative reservation');
 });
 
-test('a grid is sent as text with the reference week', async () => {
+test('a grid is sent as text — and never with a reference week, which biased the model towards the upload week', async () => {
   const { client, calls } = fakeClient([{ text: '{}' }]);
   await new GeminiVisionProvider(config, { client, wait: noWait }).readRoster({ kind: 'grid', text: 'Name\tMon', originalFilename: 'g.csv', weekStart: '2026-08-17' });
   const sent = JSON.stringify(calls[0]!.parts);
-  assert.ok(sent.includes('Name\\tMon') && sent.includes('2026-08-17') && !sent.includes('inlineData'));
+  assert.ok(sent.includes('Name\\tMon') && !sent.includes('inlineData'));
+  assert.ok(!sent.includes('2026-08-17'), 'no week is suggested to the model');
+  assert.equal(calls[0]!.config?.mediaResolution, undefined, 'text input has no media to resolve');
+});
+
+test('a PDF goes natively at high media resolution with its own text layer, page by page; a focused read names its page', async () => {
+  const { client, calls } = fakeClient([{ text: '{}' }]);
+  const pdf: VisionInput = { kind: 'file', data: Buffer.from('%PDF'), mimeType: 'application/pdf', originalFilename: 'r.pdf', pageTexts: ['Test Alpha | 9-17', 'Test Beta | 10-18'], focus: { page: 2 }, strict: true };
+  await new GeminiVisionProvider(config, { client, wait: noWait }).readRoster(pdf);
+  assert.equal(calls[0]!.config?.mediaResolution, MediaResolution.MEDIA_RESOLUTION_HIGH);
+  const sent = JSON.stringify(calls[0]!.parts);
+  assert.ok(sent.includes('"inlineData"') && sent.includes('application/pdf'));
+  assert.ok(sent.includes('Read ONLY page 2'), 'the focused page is named');
+  assert.ok(sent.includes('Test Beta | 10-18') && !sent.includes('Test Alpha'), 'only that page\'s text layer is sent');
+  assert.ok(sent.includes('Count the person rows again'), 'the stricter second read asks for a recount');
+});
+
+test('an answer cut off at the output cap is marked truncated (never trusted as complete)', async () => {
+  const { client } = fakeClient([{ text: '{"pages":[', finishReason: 'MAX_TOKENS' }]);
+  const out = await new GeminiVisionProvider(config, { client, wait: noWait }).readRoster(image);
+  assert.equal(out.truncated, true);
+});
+
+test('a read with too little time left before its deadline starts no attempt; each attempt\'s timeout fits the deadline', async () => {
+  const late = fakeClient([{ text: '{}' }]);
+  const { error } = await captureErrors(() => new GeminiVisionProvider(config, { client: late.client, wait: noWait }).readRoster({ ...image, deadline: Date.now() + 2000 }));
+  assert.equal(late.calls.length, 0);
+  assert.ok(error instanceof VisionProviderError);
+  const timely = fakeClient([{ text: '{}' }]);
+  await new GeminiVisionProvider(config, { client: timely.client, wait: noWait }).readRoster({ ...image, deadline: Date.now() + 40_000 });
+  const timeout = (timely.calls[0]!.config?.httpOptions as { timeout: number }).timeout;
+  assert.ok(timeout <= 40_000 && timeout > 30_000, `timeout ${timeout}`);
+});
+
+test('a timed-out attempt (504) is retried on the fallback model', async () => {
+  const { client, calls } = fakeClient([504, { text: '{"ok":1}' }]);
+  const { result } = await captureErrors(() => new GeminiVisionProvider(config, { client, wait: noWait }).readRoster(image));
+  assert.equal(result?.model, 'fallback-m');
+  assert.equal(calls.length, 2);
 });
 
 test('a retired primary (404) is logged loudly with its ID and the fallback model answers', async () => {

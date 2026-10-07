@@ -74,6 +74,16 @@
   --glass-border: color-mix(in oklab, oklch(1 0 0) 12%, transparent);
 }
 
+/* Roster upload's indeterminate "still reading" hairline (features/rosterReview/ReadingProgress). */
+@keyframes rr-reading {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 @keyframes rise {
   from {
     opacity: 0;

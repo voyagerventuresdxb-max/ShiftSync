@@ -411,103 +411,9 @@ body {
   border-color: var(--text-secondary);
 }
 
-.preview {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
-
-.preview-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.badge-ok {
-  color: var(--success);
-  border-color: var(--success);
-}
-
-.badge-new {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 .badge-warn {
   color: #d9a441;
   border-color: #d9a441;
-}
-
-.badge-err {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-
-.parse-issues {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.parse-issues strong {
-  color: var(--text);
-}
-
-.parse-issues ul {
-  margin: 0.4rem 0 0;
-  padding-left: 1.25rem;
-}
-
-.filter-bar {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.anomaly-block {
-  background: var(--surface-2);
-  border: 1px solid var(--accent);
-  border-left-width: 3px;
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-
-.anomaly-block strong {
-  color: var(--accent);
-}
-
-.anomaly-block ul {
-  margin: 0.4rem 0 0;
-  padding-left: 1.25rem;
-  list-style: none;
-}
-
-.anomaly-block li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.35rem 0;
-}
-
-.anomaly-block li.anomaly-reviewed {
-  color: var(--text-tertiary, var(--text-secondary));
-  opacity: 0.6;
-}
-
-.preview-summary-line {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.preview-summary-line strong {
-  color: var(--text);
 }
 
 .chip {
@@ -570,102 +476,11 @@ body {
   color: var(--text-secondary);
 }
 
-.overnight-tag {
-  margin-left: 0.35rem;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--accent);
-  border-radius: 4px;
-  padding: 0 0.3rem;
-  font-size: var(--text-xs);
-}
-
-.status-tag {
-  border-radius: 999px;
-  padding: 0.15rem 0.6rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.status-matched {
-  background: rgba(46, 158, 91, 0.15);
-  color: var(--success);
-}
-
-.status-new_employee {
-  background: rgba(229, 169, 60, 0.15);
-  color: var(--accent);
-}
-
-.status-unmatched_role {
-  background: rgba(217, 164, 65, 0.15);
-  color: #d9a441;
-}
-
-.status-error {
-  background: rgba(229, 72, 77, 0.15);
-  color: var(--danger);
-}
-
-.row-issues {
-  margin-left: 0.4rem;
-  color: var(--danger);
-  cursor: help;
-}
-
 .preview-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
   margin-top: 0.25rem;
-}
-
-/* Needs-Review / Matched roster sections — bordered sub-panels inside the
-   already-bordered .upload-card, same treatment as .parse-issues /
-   .anomaly-block (surface-2 fill, hairline border, rounded corners). */
-.preview-section {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.9rem 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.preview-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.preview-section-header .hint {
-  margin: 0;
-}
-
-/* Bottom-anchored bar that replaces the plain .preview-actions row once the
-   preview is split into sections — same right-aligned button pair (nesting
-   .preview-actions unchanged), plus outstanding-count text on the left. */
-.preview-sticky-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-top: 0.25rem;
-  padding: 0.75rem 0 0;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-}
-
-.preview-sticky-count {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
 }
 
 .staff-directory {

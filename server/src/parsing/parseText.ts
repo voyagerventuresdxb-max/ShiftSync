@@ -7,37 +7,25 @@
  * Strategy: each line is classified as a header (day name), a shift
  * assignment ("Maria 6pm-2am Fri"), or noise. Shift lines are tokenized into
  * name, time range, and day, then normalized with the same server helpers
- * used by the workbook parser (parseDateCell/parseTimeCell/...).
+ * used by the workbook parser (parseDateCell/parseTimeCell/...). The week
+ * comes from a title line that names it ("Week of 24/08", "Rota 24 - 30 Aug")
+ * when the text has one (weekDetection.ts), never from the upload date alone.
  */
 
 import { currentVenueWeekStart } from '../lib/venueWeek.js';
 import { DEFAULT_VENUE_TIMEZONE } from './normalize.js';
 import { isOvernight, parseTimeCell } from './normalize.js';
+import { detectWeek, parseDayLabel, parseTitleDate, type DayLabel } from './weekDetection.js';
+import type { WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, RowIssue } from './types.js';
 
-const DAY_NAMES =
-  /(sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat)/i;
+/** A weekday as a whole word ("Fri"), never inside a name ("Simon", "Sunil", "Monica"). */
+const DAY_WORD = /\b(sunday|sun|monday|mon|tuesday|tues|tue|wednesday|wed|thursday|thurs|thu|friday|fri|saturday|sat)\b/gi;
 
 const TIME_TOKEN =
   /(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2}|\d{3,4})/gi;
-
-/** Day-name -> offset from the week's first day (Sunday = 0). */
-const DAY_OFFSET: Record<string, number> = {
-  sunday: 0,
-  sun: 0,
-  monday: 1,
-  mon: 1,
-  tuesday: 2,
-  tue: 2,
-  wednesday: 3,
-  wed: 3,
-  thursday: 4,
-  thu: 4,
-  friday: 5,
-  fri: 5,
-  saturday: 6,
-  sat: 6,
-};
+/** Same pattern, not global: safe for `.test` (a global regex keeps state between calls). */
+const HAS_TIME = /(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2}|\d{3,4})/i;
 
 interface ParsedLine {
   employeeName: string;
@@ -48,16 +36,24 @@ interface ParsedLine {
   raw: string;
 }
 
+export interface TextWeekContext {
+  /** Today in the venue's timezone (YYYY-MM-DD). */
+  today: string;
+  /** The week the client asked for; used only when the text names no week. */
+  clientWeekStart: string | null;
+}
+
 /**
  * Parse a roster text block into ParsedShiftRow[].
  * @param text Raw text extracted from a PDF (or pasted).
- * @param weekStart ISO date (YYYY-MM-DD) of the first day of the roster week.
- *                  Day names in the text are resolved against this week.
+ * @param weekStart ISO date (YYYY-MM-DD) of the week's Monday, used for day names when the text
+ *                  names no week of its own (and as "today" when `ctx` is not given).
  */
 export function parseRosterText(
   text: string,
   weekStart: string,
-): { rows: ParsedShiftRow[]; issues: RowIssue[] } {
+  ctx: TextWeekContext = { today: weekStart, clientWeekStart: weekStart },
+): { rows: ParsedShiftRow[]; issues: RowIssue[]; week: WeekDetection } {
   const issues: RowIssue[] = [];
   const rows: ParsedShiftRow[] = [];
 
@@ -66,49 +62,58 @@ export function parseRosterText(
     .map((l) => l.trim())
     .filter(Boolean);
 
-  for (const raw of lines) {
+  // The week: a line that names it ("Week of 24/08", "Rota 24 - 30 Aug") anchors the day names.
+  const titles = lines.filter((l) => !HAS_TIME.test(l) && parseTitleDate(l) !== null);
+  const monday: DayLabel = { weekday: 0, day: null, month: null, year: null, numericOnly: false };
+  const anchor = detectWeek([monday], titles.slice(0, 1), ctx);
+  const week = anchor.week;
+
+  lines.forEach((raw, index) => {
+    const lineNumber = index + 1;
     const parsed = parseLine(raw);
     if (!parsed) {
       // A line that looks like it was meant to be a shift but failed to parse.
       if (looksLikeShift(raw)) {
         issues.push({
-          rowNumber: 0,
+          rowNumber: lineNumber,
           severity: 'warning',
           message: `Could not parse line: "${raw}"`,
         });
       }
-      continue;
+      return;
     }
 
-    const isoDate = dayToDate(weekStart, parsed.dayName);
+    const isoDate = dayToDate(week.weekStart, parsed.dayName);
     if (!isoDate) {
       issues.push({
-        rowNumber: 0,
+        rowNumber: lineNumber,
         severity: 'warning',
         message: `Unknown day "${parsed.dayName}" on line: ${raw}`,
       });
-      continue;
+      return;
     }
 
+    const rowNumber = rows.length + 1;
     const rowIssues: RowIssue[] = [];
     if (!parsed.employeeName) {
-      rowIssues.push({ rowNumber: 0, field: 'employeeName', severity: 'error', message: 'Employee name is missing.' });
+      rowIssues.push({ rowNumber, field: 'employeeName', severity: 'error', message: 'Employee name is missing.' });
     }
     if (!parsed.role) {
-      rowIssues.push({ rowNumber: 0, field: 'role', severity: 'error', message: 'Role is missing.' });
+      // Not blocking: the shift is kept and the role is assigned on the review screen.
+      rowIssues.push({ rowNumber, field: 'role', severity: 'warning', message: `No role for "${parsed.employeeName}" — assign one on the review screen.` });
     }
     if (parsed.start === parsed.end) {
-      rowIssues.push({ rowNumber: 0, field: 'endTime', severity: 'error', message: 'Start time and end time are identical (zero-length shift).' });
+      rowIssues.push({ rowNumber, field: 'endTime', severity: 'error', message: 'Start time and end time are identical (zero-length shift).' });
     }
     issues.push(...rowIssues);
 
     const hasBlockingError = rowIssues.some((i) => i.severity === 'error');
-    if (hasBlockingError) continue;
+    if (hasBlockingError) return;
 
     rows.push({
-      rowNumber: 0,
+      rowNumber,
       employeeName: parsed.employeeName,
-      roleName: parsed.role ?? 'staff',
+      roleName: parsed.role ?? '',
       date: isoDate,
       startTime: parsed.start,
       endTime: parsed.end,
@@ -116,17 +121,14 @@ export function parseRosterText(
       breakMinutes: 0,
       managerNotes: null,
     });
-  }
+  });
 
-  return { rows, issues };
+  return { rows, issues, week };
 }
 
 /** Parse a single line into a ParsedLine, or null if it is not a shift line. */
 function parseLine(raw: string): ParsedLine | null {
   if (isHeaderLine(raw)) return null;
-
-  const dayMatch = raw.match(DAY_NAMES);
-  if (!dayMatch) return null;
 
   const times = [...raw.matchAll(TIME_TOKEN)].map((m) => m[0]);
   if (times.length < 2) return null;
@@ -140,50 +142,64 @@ function parseLine(raw: string): ParsedLine | null {
   const namePart = raw.slice(0, firstTimeIndex).trim();
   if (!namePart) return null;
 
-  const { name, role } = splitNameRole(namePart);
+  // The day: a weekday word after the times, else one in the name part that is not the name.
+  const after = [...raw.slice(firstTimeIndex).matchAll(DAY_WORD)].map((m) => m[0]);
+  const before = [...namePart.matchAll(DAY_WORD)].map((m) => ({ word: m[0], index: m.index! }));
+  let dayName = after[0];
+  let nameText = namePart;
+  if (!dayName && before.length) {
+    // "Fri Maria 6pm-2am" or "Maria Fri 6pm-2am": the day word is taken out of the name.
+    const day = before[before.length - 1]!;
+    dayName = day.word;
+    nameText = `${namePart.slice(0, day.index)} ${namePart.slice(day.index + day.word.length)}`.replace(/\s+/g, ' ').trim();
+  }
+  if (!dayName || !nameText) return null;
+
+  const { name, role } = splitNameRole(nameText);
 
   return {
     employeeName: name,
     role,
     start,
     end,
-    dayName: dayMatch[0],
+    dayName,
     raw,
   };
 }
 
-/** Split a name-part into employee name and optional role label. */
+/** Common hospitality role labels that may trail the name in a text line, longest first. */
+const ROLE_LABELS = [
+  'floor staff',
+  'bartender',
+  'waitress',
+  'supervisor',
+  'hostess',
+  'manager',
+  'kitchen',
+  'barista',
+  'server',
+  'waiter',
+  'runner',
+  'busser',
+  'chef',
+  'cook',
+  'host',
+  'bar',
+];
+
+/** Split a name-part into employee name and optional role label (a whole word, never part of a name). */
 function splitNameRole(namePart: string): { name: string; role?: string } {
-  // Common hospitality role labels that may trail the name in a text line.
-  const roleLabels = [
-    'bartender',
-    'server',
-    'waiter',
-    'waitress',
-    'chef',
-    'cook',
-    'host',
-    'hostess',
-    'runner',
-    'busser',
-    'barista',
-    'floor staff',
-    'kitchen',
-    'bar',
-    'manager',
-    'supervisor',
-  ];
-  const lower = namePart.toLowerCase();
-  for (const label of roleLabels) {
-    if (lower.includes(label)) {
-      const name = namePart
-        .replace(new RegExp(label, 'i'), '')
-        .replace(/[-–—|,]/g, '')
-        .trim();
-      return { name, role: label };
-    }
+  for (const label of ROLE_LABELS) {
+    const re = new RegExp(`(?:^|[\\s\\-–—|,(])${label}(?=$|[\\s\\-–—|,)])`, 'i');
+    const m = namePart.match(re);
+    if (!m) continue;
+    const name = `${namePart.slice(0, m.index)} ${namePart.slice(m.index! + m[0].length)}`
+      .replace(/[-–—|,()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (name) return { name, role: label };
   }
-  return { name: namePart };
+  return { name: namePart.replace(/[-–—|,]+\s*$/, '').trim() };
 }
 
 /**
@@ -200,37 +216,35 @@ function normalizeTimeToken(token: string): string {
 /** True for header/noise lines that should be skipped. */
 function isHeaderLine(raw: string): boolean {
   const lower = raw.toLowerCase();
-  if (/^(roster|schedule|week of|week starting|shift|staff|team)/i.test(lower)) {
+  if (/^(roster|rota|schedule|week of|week starting|shift|staff|team)/i.test(lower)) {
     return true;
   }
   // A line that is only a day name (e.g. "Monday").
-  if (/^(sunday|sun|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat)$/i.test(lower)) {
-    return true;
-  }
+  const day = parseDayLabel(raw);
+  if (day && day.day === null) return true;
   return false;
 }
 
 /** Heuristic: does this line look like it was meant to be a shift? */
 function looksLikeShift(raw: string): boolean {
-  return DAY_NAMES.test(raw) && /\d/.test(raw);
+  DAY_WORD.lastIndex = 0;
+  const found = DAY_WORD.test(raw) && /\d/.test(raw);
+  DAY_WORD.lastIndex = 0;
+  return found;
 }
 
-/** Resolve a day name to an ISO date within the week starting at weekStart. */
+const DAY_OFFSET: Record<string, number> = {
+  monday: 0, mon: 0, tuesday: 1, tues: 1, tue: 1, wednesday: 2, wed: 2, thursday: 3, thurs: 3, thu: 3,
+  friday: 4, fri: 4, saturday: 5, sat: 5, sunday: 6, sun: 6,
+};
+
+/** Resolve a day name to an ISO date within the week starting at weekStart (a Monday). */
 function dayToDate(weekStart: string, dayName: string): string | null {
-  const key = dayName.trim().toLowerCase();
-  const targetOffset = DAY_OFFSET[key];
-  if (targetOffset === undefined) return null;
-
-  const [y, m, d] = weekStart.split('-').map(Number);
-  const base = new Date(y, m - 1, d);
-  const startOffset = base.getDay(); // Sunday=0..Saturday=6
-  const delta = (targetOffset - startOffset + 7) % 7;
-  base.setDate(base.getDate() + delta);
-
-  const yy = base.getFullYear();
-  const mm = String(base.getMonth() + 1).padStart(2, '0');
-  const dd = String(base.getDate()).padStart(2, '0');
-  return `${yy}-${mm}-${dd}`;
+  const offset = DAY_OFFSET[dayName.trim().toLowerCase()];
+  if (offset === undefined) return null;
+  const base = new Date(`${weekStart}T00:00:00Z`);
+  base.setUTCDate(base.getUTCDate() + offset);
+  return base.toISOString().slice(0, 10);
 }
 
 /**

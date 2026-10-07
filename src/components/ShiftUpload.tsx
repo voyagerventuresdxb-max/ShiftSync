@@ -1,17 +1,22 @@
 import { useCallback, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2 } from 'lucide-react';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
-import { OfflineActionNotice } from './shiftsync/OfflineNotice';
 import {
   ApiError,
   confirmRoster,
   uploadRoster,
+  type ConfirmResponse,
+  type ConfirmRosterRequest,
   type PreviewRow,
   type UploadResponse,
 } from '../api/schedules';
+import { RosterReview } from '../features/rosterReview/RosterReview';
+import { ImportResult } from '../features/rosterReview/ImportResult';
+import { reviewPeople } from '../features/rosterReview/reviewModel';
+import { btnPrimary } from '../features/rosterReview/styles';
+import { ReadingProgress } from '../features/rosterReview/ReadingProgress';
 
 const ACCEPTED = '.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp';
 
@@ -21,17 +26,22 @@ interface Props {
   /** Optional id of the manager committing the roster (audit trail). */
   createdById?: string;
   /**
-   * Called after a batch is successfully committed, with the reviewed shift
-   * rows that were persisted. Lets the parent flush the committed shifts
-   * into the main roster view state so the grid and weekly totals update
-   * immediately instead of staying stale.
+   * Called after a batch is successfully committed, with the shift rows that
+   * were written (named after the staff member each one now belongs to, dated
+   * in the week they landed in). Lets the parent flush them into the roster
+   * view, refresh the staff list and show the imported week.
    *
    * `batchId` is passed alongside so the parent can build shift ids that are
    * unique across separate uploads, not just within one — `row.rowNumber` on
    * its own resets per file, so two uploads confirmed in the same session
    * can otherwise collide and silently drop a shift during the merge.
    */
-  onCommitted?: (rows: PreviewRow[], batchId: string, persisted: { rowNumber: number; shiftId: string; userId: string | null }[]) => void;
+  onCommitted?: (
+    rows: PreviewRow[],
+    batchId: string,
+    persisted: { rowNumber: number; shiftId: string; userId: string | null }[],
+    importWeekStart?: string | null,
+  ) => void;
   /**
    * Overrides the "Parsing {fileName}…" label shown while a file is
    * mid-upload/parse. Lets a caller with different framing (e.g. the
@@ -50,10 +60,8 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
   const [data, setData] = useState<UploadResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
-  const [confirmResult, setConfirmResult] = useState<{
-    createdCount: number;
-    skippedCount: number;
-  } | null>(null);
+  const [confirmResult, setConfirmResult] = useState<ConfirmResponse | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // The file being read, kept so the manager can say "yes, send it to the AI reader" without picking it again.
   const fileRef = useRef<File | null>(null);
@@ -66,6 +74,7 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       setConsentMessage(null);
       setSessionExpired(false);
       setConfirmResult(null);
+      setConfirmError(null);
       setFileName(file.name);
       setPhase('uploading');
       try {
@@ -100,45 +109,51 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
     [handleFile],
   );
 
-  const onConfirm = useCallback(async () => {
-    if (!data) return;
-    // Blocked outright while offline: committing a roster is a real,
-    // non-undoable staffing action — a commit that actually lands minutes or
-    // hours later than the manager thinks it did is worse than no commit at
-    // all. No auto-retry — the manager clicks again once back online (the
-    // button re-enables automatically via `online`, see PreviewReview).
-    if (!online) return;
-    setPhase('confirming');
-    try {
-      const res = await confirmRoster(session!.token, data.batchId, createdById);
-      setConfirmResult({ createdCount: res.createdCount, skippedCount: res.skippedCount });
-      setPhase('done');
-      // Flush the reviewed rows into the parent's roster state so the grid
-      // reflects the confirm outcome. `matched` rows were actually persisted
-      // server-side. `unmatched_role` rows were NOT persisted (Shift.roleId
-      // is a required FK, and we deliberately don't guess a role) — they're
-      // still flushed so the manager can see them and act on it, rather than
-      // having them silently vanish from the grid; the parent is responsible
-      // for rendering them as a clearly-flagged, not-yet-saved row.
-      onCommitted?.(
-        data.preview.filter((r) => r.status === 'matched' || r.status === 'unmatched_role'),
-        data.batchId,
-        res.rows,
-      );
-    } catch (err) {
-      // A 404 on confirm means the batchId is missing or expired (the upload
-      // cache was wiped by a server restart, or the 15-min review window
-      // lapsed). Surface a clear, actionable message instead of a bare 404.
-      if (err instanceof ApiError && err.status === 404) {
-        setError('Upload session expired, please re-upload the roster.');
-        setSessionExpired(true);
-      } else {
-        setError(err instanceof Error ? err.message : 'Confirm failed.');
-        setSessionExpired(false);
+  const onConfirm = useCallback(
+    async (request: ConfirmRosterRequest) => {
+      if (!data) return;
+      // Blocked outright while offline: committing a roster is a real,
+      // non-undoable staffing action — a commit that actually lands minutes or
+      // hours later than the manager thinks it did is worse than no commit at
+      // all. No auto-retry — the manager clicks again once back online.
+      if (!online) return;
+      setPhase('confirming');
+      setConfirmError(null);
+      try {
+        const res = await confirmRoster(session!.token, data.batchId, { ...request, createdById: createdById ?? request.createdById ?? null });
+        setConfirmResult(res);
+        setPhase('done');
+        // Every written shift now belongs to a real staff member: hand the parent
+        // those rows under the staff member's name and the date they landed on.
+        const people = reviewPeople(data);
+        const confirmedByPerson = new Map(res.people.map((p) => [p.personKey, p]));
+        const personByRow = new Map(people.flatMap((p) => p.rowNumbers.map((n) => [n, p.personKey] as const)));
+        const previewByRow = new Map(data.preview.map((r) => [r.rowNumber, r]));
+        const written = res.rows.flatMap((w) => {
+          const row = previewByRow.get(w.rowNumber);
+          if (!row) return [];
+          const confirmed = confirmedByPerson.get(personByRow.get(w.rowNumber) ?? '');
+          return [{ ...row, employeeName: confirmed?.name ?? row.employeeName, role: confirmed?.roleName ?? row.role, date: w.date, status: 'matched' as const }];
+        });
+        onCommitted?.(written, data.batchId, res.rows, res.weekStart);
+      } catch (err) {
+        // A 404 on confirm means the batchId is missing or expired (the upload
+        // cache was wiped by a server restart, or the 15-min review window
+        // lapsed). Surface a clear, actionable message instead of a bare 404.
+        if (err instanceof ApiError && err.status === 404) {
+          setError('Upload session expired, please re-upload the roster.');
+          setSessionExpired(true);
+          setPhase('error');
+        } else {
+          // Anything else (a link to someone no longer on staff, a network blip):
+          // keep the review and the manager's decisions on screen.
+          setConfirmError(err instanceof Error ? err.message : 'Confirm failed.');
+          setPhase('preview');
+        }
       }
-      setPhase('error');
-    }
-  }, [data, createdById, onCommitted, session, online]);
+    },
+    [data, createdById, onCommitted, session, online],
+  );
 
   const reset = useCallback(() => {
     setPhase('idle');
@@ -146,6 +161,7 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
     setError(null);
     setSessionExpired(false);
     setConfirmResult(null);
+    setConfirmError(null);
     setFileName(null);
     setConsentMessage(null);
     fileRef.current = null;
@@ -157,9 +173,10 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       <header className="upload-header">
         <h2 className="section-title">Upload Roster</h2>
         <p className="hint">
-          Drop an Excel or CSV shift rota. ShiftSync parses it, resolves staff
-          and roles, and shows a review preview — nothing is saved until you
-          confirm.
+          Drop your roster. ShiftSync reads everyone on it and shows you each
+          person before anything is saved. Confirming adds new people to your
+          staff and their shifts to the rota; importing the same roster again
+          adds nothing twice.
         </p>
       </header>
 
@@ -204,15 +221,18 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       ) : null}
 
       {phase === 'uploading' && (
-        <div className="status-block">
-          <span className="spinner" aria-hidden />
-          <motion.p
-            animate={{ opacity: [1, 0.55, 1] }}
-            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
-          >
-            {uploadingLabel ? uploadingLabel : <>Parsing <strong>{fileName}</strong>…</>}
-          </motion.p>
-        </div>
+        <>
+          <div className="status-block">
+            <span className="spinner" aria-hidden />
+            <motion.p
+              animate={{ opacity: [1, 0.55, 1] }}
+              transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+            >
+              {uploadingLabel ? uploadingLabel : <>Parsing <strong>{fileName}</strong>…</>}
+            </motion.p>
+          </div>
+          <ReadingProgress className="px-6 pb-4" />
+        </>
       )}
 
       {phase === 'error' && error && (
@@ -252,363 +272,31 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
         </div>
       )}
 
-      {phase === 'preview' && data && (
-        <PreviewReview
-          data={data}
-          onConfirm={onConfirm}
-          onReset={reset}
+      {(phase === 'preview' || phase === 'confirming') && data && (
+        <RosterReview
+          key={data.batchId}
+          upload={data}
+          variant="app"
+          confirming={phase === 'confirming'}
+          error={confirmError}
+          createdById={createdById ?? session?.user.id ?? null}
+          persistKey={session ? `shiftsync.rosterReview.${session.user.locationId}.${data.batchId}` : undefined}
+          disabledReason={online ? null : "Requires connection — try again once you're back online."}
+          onConfirm={(request) => void onConfirm(request)}
+          onDiscard={reset}
         />
       )}
 
-      {phase === 'confirming' && (
-        <div className="status-block">
-          <span className="spinner" aria-hidden />
-          <p>Committing shifts…</p>
-        </div>
-      )}
-
       {phase === 'done' && confirmResult && (
-        <motion.div
-          className="success-block text-center"
-          role="status"
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ type: 'spring', stiffness: 160, damping: 26 }}
-        >
-          <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-success" aria-hidden />
-          <p>
-            <strong>{confirmResult.createdCount}</strong> shift
-            {confirmResult.createdCount === 1 ? '' : 's'} committed.
-            {confirmResult.skippedCount > 0 && (
-              <span className="success-warn">
-                {' '}
-                {confirmResult.skippedCount} skipped (unresolved role).
-              </span>
-            )}
-          </p>
-          <button className="btn btn-primary" onClick={reset}>
-            Upload another roster
-          </button>
-        </motion.div>
+        <ImportResult
+          result={confirmResult}
+          actions={
+            <button className={btnPrimary} onClick={reset}>
+              Upload another roster
+            </button>
+          }
+        />
       )}
     </section>
-  );
-}
-
-function PreviewReview({
-  data,
-  onConfirm,
-  onReset,
-}: {
-  data: UploadResponse;
-  onConfirm: () => void;
-  onReset: () => void;
-}) {
-  const { online } = useConnectivity();
-  const { preview, summary, templateDetected, parseIssues, anomalies, leaveRecords, legend } = data;
-  const [filter, setFilter] = useState<'all' | 'error' | 'new_employee' | 'unmatched_role'>('all');
-  const [reviewed, setReviewed] = useState<Set<number>>(new Set());
-  // Anomalies (unresolved cells from the AI vision-fallback path — never
-  // populated by the Excel/CSV/text-PDF paths) don't carry a rowNumber and
-  // aren't PreviewRows, so they need their own review-tracking set. Keyed
-  // by array index, stable for the lifetime of one loaded `data` batch.
-  const [reviewedAnomalies, setReviewedAnomalies] = useState<Set<number>>(new Set());
-
-  const needsReview = preview.filter((r) => r.status !== 'matched');
-  const matched = preview.filter((r) => r.status === 'matched');
-  const visibleNeedsReview = needsReview.filter((r) => filter === 'all' || r.status === filter);
-  const employeeCount = new Set(preview.map((r) => r.employeeName)).size;
-
-  const rowsOutstanding = needsReview.filter((r) => !reviewed.has(r.rowNumber)).length;
-  const anomaliesOutstanding = anomalies.length - reviewedAnomalies.size;
-  const outstanding = rowsOutstanding + anomaliesOutstanding;
-
-  const toggleReviewed = (rowNumber: number) => {
-    setReviewed((prev) => {
-      const next = new Set(prev);
-      if (next.has(rowNumber)) next.delete(rowNumber);
-      else next.add(rowNumber);
-      return next;
-    });
-  };
-
-  const toggleAnomalyReviewed = (idx: number) => {
-    setReviewedAnomalies((prev) => {
-      const next = new Set(prev);
-      if (next.has(idx)) next.delete(idx);
-      else next.add(idx);
-      return next;
-    });
-  };
-
-  const markAllReviewed = () => {
-    setReviewed(new Set(needsReview.map((r) => r.rowNumber)));
-    setReviewedAnomalies(new Set(anomalies.map((_, idx) => idx)));
-  };
-
-  return (
-    <div className="preview">
-      <p className="preview-summary-line">
-        We found <strong>{employeeCount}</strong> employee{employeeCount === 1 ? '' : 's'}, <strong>{summary.totalRows}</strong> shift{summary.totalRows === 1 ? '' : 's'},
-        {' '}<strong>{needsReview.length + anomalies.length}</strong> row{needsReview.length + anomalies.length === 1 ? '' : 's'} that need review.
-      </p>
-      <div className="preview-meta">
-        <span className="badge">
-          {templateDetected ? `Template: ${templateDetected}` : 'Template: auto'}
-        </span>
-        <span className="badge">{summary.totalRows} rows</span>
-        <span className="badge badge-ok">{summary.matchedRows} matched</span>
-        {summary.newEmployeeRows > 0 && (
-          <span className="badge badge-new">{summary.newEmployeeRows} new staff</span>
-        )}
-        {summary.unmatchedRoleRows > 0 && (
-          <span className="badge badge-warn">{summary.unmatchedRoleRows} unmatched role</span>
-        )}
-        {summary.errorRows > 0 && (
-          <span className="badge badge-err">{summary.errorRows} errors</span>
-        )}
-      </div>
-
-      {parseIssues.length > 0 && (
-        <div className="parse-issues">
-          <strong>Parser notes:</strong>
-          <ul>
-            {parseIssues.map((i, idx) => (
-              <li key={idx}>
-                Row {i.rowNumber}
-                {i.field ? ` · ${i.field}` : ''}: {i.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {anomalies.length > 0 && (
-        <div className="anomaly-block" role="alert">
-          <div className="preview-section-header">
-            <div>
-              <strong>⚠ Needs manager review — {anomalies.length} unresolved item{anomalies.length === 1 ? '' : 's'}</strong>
-              <p className="hint">
-                The AI reader could not confidently place these cells (unrecognized codes,
-                illegible text, or unresolved dates). They were left out of the shift list below —
-                mark each one reviewed (or correct the source and re-upload) before this roster can be committed.
-              </p>
-            </div>
-            <button className="btn btn-ghost" onClick={markAllReviewed} disabled={anomaliesOutstanding === 0}>
-              Mark all reviewed
-            </button>
-          </div>
-          <ul>
-            {anomalies.map((a, idx) => (
-              <li key={idx} className={reviewedAnomalies.has(idx) ? 'anomaly-reviewed' : undefined}>
-                <span>
-                  {a.employeeName ? <strong>{a.employeeName}</strong> : <em>Unassigned</em>}
-                  {a.date ? ` · ${a.date}` : ''} — "{a.rawText}": {a.reason}
-                </span>
-                <button
-                  className={`chip${reviewedAnomalies.has(idx) ? ' chip-active' : ''}`}
-                  onClick={() => toggleAnomalyReviewed(idx)}
-                  aria-pressed={reviewedAnomalies.has(idx)}
-                >
-                  {reviewedAnomalies.has(idx) ? 'Reviewed' : 'Mark reviewed'}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {leaveRecords.length > 0 && (
-        <div className="parse-issues">
-          <strong>Non-working days detected ({leaveRecords.length}) — not imported as shifts:</strong>
-          <ul>
-            {leaveRecords.map((l, idx) => (
-              <li key={idx}>
-                {l.employeeName} · {l.date} — {l.leaveCode} ({l.category.replace('_', ' ')})
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {legend.length > 0 && (
-        <div className="parse-issues">
-          <strong>Shift-code legend inferred from the image:</strong>
-          <ul>
-            {legend.map((l, idx) => (
-              <li key={idx}>
-                <strong>{l.code}</strong> — {l.meaning}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <section className="preview-section preview-section-review">
-        <header className="preview-section-header">
-          <div>
-            <p className="eyebrow">Needs Review</p>
-            <p className="hint">
-              These rows won't be turned into shifts automatically. Look them over, then mark each
-              reviewed (or all at once) to unlock committing the roster.{' '}
-              {needsReview.length > 0 && 'To correct a name or role, fix the source file and re-upload — inline edits aren\'t supported here.'}
-            </p>
-          </div>
-          {needsReview.length > 0 && (
-            <button className="btn btn-ghost" onClick={markAllReviewed} disabled={outstanding === 0}>
-              Mark all reviewed
-            </button>
-          )}
-        </header>
-
-        {needsReview.length === 0 ? (
-          <p className="hint px-1">Nothing needs review — every row matched cleanly.</p>
-        ) : (
-          <>
-            <div className="filter-bar">
-              {(
-                [
-                  ['all', 'All'],
-                  ['error', 'Errors'],
-                  ['new_employee', 'New staff'],
-                  ['unmatched_role', 'Unmatched role'],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  className={`chip${filter === key ? ' chip-active' : ''}`}
-                  onClick={() => setFilter(key)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="preview-table-wrap">
-              <table className="preview-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Staff</th>
-                    <th>Role</th>
-                    <th>Date</th>
-                    <th>Start</th>
-                    <th>End</th>
-                    <th>Break</th>
-                    <th>Status</th>
-                    <th>Reviewed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleNeedsReview.map((row) => (
-                    <PreviewRowRow
-                      key={row.rowNumber}
-                      row={row}
-                      reviewed={reviewed.has(row.rowNumber)}
-                      onToggleReviewed={() => toggleReviewed(row.rowNumber)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
-
-      <section className="preview-section preview-section-matched">
-        <header className="preview-section-header">
-          <p className="eyebrow">Matched — will be committed</p>
-        </header>
-        <div className="preview-table-wrap">
-          <table className="preview-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Staff</th>
-                <th>Role</th>
-                <th>Date</th>
-                <th>Start</th>
-                <th>End</th>
-                <th>Break</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {matched.map((row) => (
-                <PreviewRowRow key={row.rowNumber} row={row} />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <div className="preview-sticky-bar">
-        <p className="preview-sticky-count">
-          {outstanding > 0
-            ? `${outstanding} needs-review row${outstanding === 1 ? '' : 's'} left`
-            : needsReview.length > 0
-              ? 'All needs-review rows reviewed'
-              : null}
-        </p>
-        <div className="preview-actions">
-          <button className="btn btn-ghost" onClick={onReset}>
-            Discard
-          </button>
-          <button className="btn btn-primary" onClick={onConfirm} disabled={outstanding > 0 || !online}>
-            Confirm &amp; Commit {summary.matchedRows} shift{summary.matchedRows === 1 ? '' : 's'}
-          </button>
-        </div>
-        {!online && <OfflineActionNotice />}
-      </div>
-    </div>
-  );
-}
-
-function PreviewRowRow({
-  row,
-  reviewed,
-  onToggleReviewed,
-}: {
-  row: PreviewRow;
-  reviewed?: boolean;
-  onToggleReviewed?: () => void;
-}) {
-  const statusLabel: Record<PreviewRow['status'], string> = {
-    matched: 'Matched',
-    new_employee: 'New staff',
-    unmatched_role: 'Unmatched role',
-    error: 'Error',
-  };
-  return (
-    <tr className={`row-${row.status}`}>
-      <td className="cell-num">{row.rowNumber}</td>
-      <td>{row.employeeName}</td>
-      <td>{row.role || '—'}</td>
-      <td>{row.date}</td>
-      <td>{row.startTime}</td>
-      <td>
-        {row.endTime}
-        {row.overnight && <span className="overnight-tag">+1</span>}
-      </td>
-      <td>{row.breakMinutes > 0 ? `${row.breakMinutes}m` : '—'}</td>
-      <td>
-        <span className={`status-tag status-${row.status}`}>{statusLabel[row.status]}</span>
-        {row.issues.length > 0 && (
-          <span className="row-issues" title={row.issues.map((i) => i.message).join('; ')}>
-            ⚠
-          </span>
-        )}
-      </td>
-      {onToggleReviewed && (
-        <td>
-          <button
-            className={`chip${reviewed ? ' chip-active' : ''}`}
-            onClick={onToggleReviewed}
-            aria-pressed={reviewed}
-          >
-            {reviewed ? 'Reviewed' : 'Mark reviewed'}
-          </button>
-        </td>
-      )}
-    </tr>
   );
 }

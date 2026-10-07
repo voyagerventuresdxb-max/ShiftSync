@@ -1,21 +1,18 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { PDFParse } from 'pdf-parse';
 import { prisma } from '../lib/prisma.js';
 import { visionWeeklyLimit } from '../lib/aiBudget.js';
-import { parseWorkbookBuffer, buildMergeExpandedGrid, listOtherSheetNames, TemplateDetectionError } from '../parsing/parseWorkbook.js';
 import { parseExcelGrid, RosterExtractionAnomalyError } from '../parsing/deterministicGridParser.js';
-import { extractPdfGrid, hasPdfTextLayer, MalformedPdfError } from '../parsing/pdfTableExtractor.js';
-import { parseRosterText, currentWeekStart } from '../parsing/parseText.js';
-import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
+import { MalformedPdfError } from '../parsing/pdfTableExtractor.js';
+import { isIsoDate, isMondayIso, venueDateOf, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { venueTimezoneFor } from '../lib/venueTime.js';
-import { AI_TEMPLATE_LABEL, parseRosterGrid, parseRosterImage, VisionIngestionError } from '../parsing/parseVision.js';
+import { AI_READ_BUDGET_MS } from '../parsing/parseVision.js';
 import { getVisionProvider } from '../parsing/visionProvider.js';
-import { deterministicEscalationReason, ESCALATION_REASON_TEXT, type EscalationReason } from '../parsing/escalation.js';
-import { parseScannedPdfViaDocling, DoclingUnavailableError } from '../parsing/doclingClient.js';
-import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName } from '../parsing/resolveRows.js';
-import { persistShifts } from '../parsing/persistShifts.js';
-import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from '../parsing/types.js';
+import { readUploadedRoster, withManualPath } from '../parsing/readUpload.js';
+import { prismaReadingCache, type ReadingCache } from '../parsing/readingCache.js';
+import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName, buildPeoplePreview, loadVenueMatchContext } from '../parsing/resolveRows.js';
+import { persistRosterImport, RosterImportError, mondayOfIso } from '../parsing/persistShifts.js';
+import type { AddedPerson, ConfirmPersonDecision, PersonPreview } from '../parsing/rosterContract.js';
 import { uploadCache } from '../store/uploadCache.js';
 import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
 import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
@@ -90,35 +87,6 @@ const upload = multer({
   },
 });
 
-/** True when the uploaded file is a PDF (by extension or mimetype). */
-function isPdf(file: Express.Multer.File): boolean {
-  return (
-    file.mimetype === 'application/pdf' ||
-    /\.pdf$/i.test(file.originalname)
-  );
-}
-
-/** True when the uploaded file is a raster image — routed straight to the VLM ingestion path. */
-function isImage(file: Express.Multer.File): boolean {
-  return IMAGE_MIME_TYPES.includes(file.mimetype) || /\.(png|jpe?g|webp|gif)$/i.test(file.originalname);
-}
-
-/**
- * Extract plain text from a PDF buffer. Returns the concatenated document
- * text, or null when the PDF yields no extractable text (e.g. a scanned
- * image-only PDF with no OCR layer).
- */
-async function extractPdfText(buffer: Buffer): Promise<string | null> {
-  const parser = new PDFParse({ data: buffer });
-  try {
-    const result = await parser.getText();
-    const text = (result?.text ?? '').trim();
-    return text.length > 0 ? text : null;
-  } finally {
-    await parser.destroy();
-  }
-}
-
 export const schedulesRouter = Router();
 
 /**
@@ -131,20 +99,19 @@ export function __setGridParserForTests(fn: typeof parseExcelGrid | null): void 
   gridParser = fn ?? parseExcelGrid;
 }
 
-/** The manual path, named wherever AI reading can't help. */
-const MANUAL_PATH = 'You can also add staff by hand: People → Add staff member.';
-const AI_CONSENT_MESSAGE =
-  'To read it, ShiftSync needs to send the file to its AI reader, a third-party service outside the UAE. Nothing is sent unless you agree.';
-
-/** What happened to an escalation; returned on the preview so the review screen can say so. */
-interface EscalationOutcome {
-  reason: EscalationReason;
-  status: 'used' | 'needs_consent' | 'unavailable';
-  message: string;
+/** The AI-reading cache the upload route uses (per venue, by file hash). A test seam may swap it. */
+let readingCache: ReadingCache | null = prismaReadingCache;
+export function __setReadingCacheForTests(cache: ReadingCache | null | undefined): void {
+  readingCache = cache === undefined ? prismaReadingCache : cache;
 }
 
-function withManualPath(message: string): string {
-  return /by hand/i.test(message) ? message : `${message} ${MANUAL_PATH}`;
+/**
+ * How long one upload may spend on AI reads, every call and the re-read pass included: inside the
+ * ~120 s the web proxy in front of the API waits for an answer (ROSTER_AI_BUDGET_MS overrides).
+ */
+function aiBudgetMs(): number {
+  const n = Number(process.env.ROSTER_AI_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : AI_READ_BUDGET_MS;
 }
 
 /**
@@ -152,12 +119,17 @@ function withManualPath(message: string): string {
  * multipart/form-data: file=<xlsx|xls|csv|pdf|image>, weekStart?=YYYY-MM-DD (a Monday),
  * aiConsent?="true" (the manager agreed to send THIS file to the AI reader).
  *
- * The deterministic parsers always run first. The file goes to the vision provider only for
- * one of the reasons in parsing/escalation.ts, only when a provider is configured, and only
- * with `aiConsent` — without it the answer is a 422 `ai_consent_required` (nothing sent) or,
- * when a local result exists, that result plus `escalation.status: 'needs_consent'`. The 5 MB
- * cap and the once-per-venue-per-week allowance apply to every AI read. Nothing is written to
- * the database here: the response is a preview with a `batchId` for the confirm step below.
+ * How each kind of file is read lives in parsing/readUpload.ts: spreadsheets deterministically
+ * (the AI reader only for one of the reasons in parsing/escalation.ts), text-layer PDFs by the
+ * AI reader cross-checked by the table reader, photos and scans by the AI reader. A file goes
+ * to the AI reader only when a provider is configured, and only with `aiConsent` — without it
+ * the answer is a 422 `ai_consent_required` (nothing sent) or, when a local result exists, that
+ * result plus `escalation.status: 'needs_consent'`. The 5 MB cap and the per-venue weekly
+ * allowance apply to every AI read; a file read before at this venue is answered from the
+ * cache (no call, no allowance). Dates come from what the roster prints; a client `weekStart`
+ * is used only when it prints none. Nothing is written to the roster here: the response is a
+ * preview with a `batchId` for the confirm step below, plus every person read (`readPeople`),
+ * rows that couldn't be read (`unreadRows`), the detected `week` and a `reading` report.
  * Manager/owner sessions only (like confirm): an AI read costs the venue money and allowance.
  */
 schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRateLimiter, upload.single('file'), async (req, res) => {
@@ -168,250 +140,48 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
     }
     const file = req.file;
 
-    // Optional reference week for text/PDF rosters that use day names
-    // ("Mon", "Friday") instead of explicit dates, and for grid rosters whose
-    // day columns carry no dates. Defaults to the Monday of the current week
-    // in the VENUE's timezone (never the host's clock). A client-sent value
-    // must itself be a Monday.
+    // A client-sent week is used only when the roster prints no dates (weekDetection.ts), and
+    // must itself be a Monday. Without one, a roster printing only weekday names lands in the
+    // coming week and the review screen asks the manager to confirm it.
     const requestedWeekStart = String(req.body?.weekStart ?? '').trim();
     if (requestedWeekStart && !isMondayIso(requestedWeekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
-    const weekStart = requestedWeekStart || currentWeekStart(new Date(), await venueTimezoneFor(locationId));
+    const timezone = await venueTimezoneFor(locationId);
     const aiConsent = String(req.body?.aiConsent ?? '') === 'true';
 
-    let parsed: { rows: ParsedShiftRow[]; issues: RowIssue[]; templateLabel: string | null } | null = null;
-    let anomalies: AnomalyRecord[] = [];
-    let leaveRecords: LeaveRecord[] = [];
-    let legend: { code: string; meaning: string }[] = [];
-    let escalation: EscalationOutcome | undefined;
-
-    const adopt = (result: ParsedVisionResult) => {
-      parsed = { rows: result.rows, issues: result.issues, templateLabel: result.templateLabel };
-      anomalies = result.anomalies;
-      leaveRecords = result.leaveRecords;
-      legend = result.legend;
-    };
-
-    /**
-     * Gate in front of an AI read that has NO local result to fall back on. Returns the 422 body
-     * to send, or null to proceed. With no provider configured nothing can be sent, so there is
-     * nothing to consent to: the caller's vision entry point answers with its own local fallback
-     * or `vision_unconfigured`.
-     */
-    const gateWithoutLocalResult = async (reason: EscalationReason) => {
-      if (!getVisionProvider()) return null;
-      if (!aiConsent) {
-        return { error: `${ESCALATION_REASON_TEXT[reason]} ${AI_CONSENT_MESSAGE}`, errorCode: 'ai_consent_required', escalationReason: reason };
-      }
-      const blockReason = await checkVisionFallbackAllowed(file.size, locationId);
-      return blockReason ? { error: withManualPath(blockReason), errorCode: 'vision_fallback_blocked' } : null;
-    };
-
-    /** Runs an AI read whose gate passed; records the weekly allowance only when the AI actually answered. */
-    const readWithAi = async (run: () => Promise<ParsedVisionResult>) => {
-      const result = await run();
-      if (result.templateLabel === AI_TEMPLATE_LABEL) await markVisionFallbackUsed(locationId);
-      return result;
-    };
-
-    /**
-     * Escalation of a SUCCESSFUL but suspect local result (ALL-CAPS venue, many empty roles):
-     * the local result stays unless the manager agreed and the AI read succeeds.
-     */
-    const maybeEscalate = async (local: ParsedVisionResult, run: () => Promise<ParsedVisionResult>) => {
-      const reason = deterministicEscalationReason(local);
-      if (!reason || !getVisionProvider()) return local;
-      if (!aiConsent) {
-        escalation = { reason, status: 'needs_consent', message: `${ESCALATION_REASON_TEXT[reason]} ${AI_CONSENT_MESSAGE}` };
-        return local;
-      }
-      const blockReason = await checkVisionFallbackAllowed(file.size, locationId);
-      if (blockReason) {
-        escalation = { reason, status: 'unavailable', message: blockReason };
-        return local;
-      }
-      try {
-        const ai = await readWithAi(run);
-        escalation = { reason, status: 'used', message: 'Read by the AI reader. Check every row before confirming.' };
-        return ai;
-      } catch (err) {
-        if (!(err instanceof VisionIngestionError)) throw err;
-        escalation = { reason, status: 'unavailable', message: `${err.message} The built-in reader's result is shown instead.` };
-        return local;
-      }
-    };
-
-    /** The grid parser proved it dropped real data: AI reader (with consent), else a clear 422. */
-    const escalateExtractionAnomaly = async (
-      anomaly: RosterExtractionAnomalyError,
-      run: () => Promise<ParsedVisionResult>,
-    ): Promise<{ result: ParsedVisionResult } | { status: number; body: Record<string, unknown> }> => {
-      if (!getVisionProvider()) {
-        return { status: 422, body: { error: withManualPath(anomaly.message), errorCode: 'roster_extraction_anomaly' } };
-      }
-      const gate = await gateWithoutLocalResult('extraction_anomaly');
-      if (gate) return { status: 422, body: gate };
-      try {
-        const ai = await readWithAi(run);
-        escalation = { reason: 'extraction_anomaly', status: 'used', message: 'Read by the AI reader. Check every row before confirming.' };
-        return { result: ai };
-      } catch (err) {
-        if (err instanceof VisionIngestionError) return { status: 422, body: { error: withManualPath(err.message), errorCode: err.code } };
-        throw err;
-      }
-    };
-
-    const visionError = (err: unknown) => {
-      if (err instanceof VisionIngestionError) return res.status(422).json({ error: withManualPath(err.message), errorCode: err.code });
-      throw err;
-    };
-
-    if (isImage(file)) {
-      // Arbitrary layouts (screenshots, colour-coded grids, hand-made templates):
-      // nothing to parse locally, so this is the image_or_scan escalation.
-      const gate = await gateWithoutLocalResult('image_or_scan');
-      if (gate) return res.status(422).json(gate);
-      try {
-        adopt(await readWithAi(() => parseRosterImage(file.buffer, file.mimetype, file.originalname, weekStart, { locationId: req.user!.locationId, userId: req.user!.id })));
-      } catch (err) {
-        return visionError(err);
-      }
-    } else if (isPdf(file)) {
-      // Check for a real, positioned text layer first (pdfjs-dist) — a
-      // scanned/photographed PDF has none at all, and no amount of text
-      // reconstruction can recover data that was never encoded as text.
-      const hasTextLayer = await hasPdfTextLayer(file.buffer);
-      const readPdfWithAi = (localFallback = true) => () =>
-        parseRosterImage(file.buffer, 'application/pdf', file.originalname, weekStart, { localFallback, locationId: req.user!.locationId, userId: req.user!.id });
-
-      if (hasTextLayer) {
-        // PRIMARY path for a text-layer PDF: reconstruct the grid from real
-        // character positions (no network call, fully reproducible) and reuse
-        // the exact same deterministic interpreter as Excel/CSV.
-        const grid = await extractPdfGrid(file.buffer);
-        let gridResult: ParsedVisionResult | null = null;
-        try {
-          gridResult = gridParser(grid, weekStart);
-        } catch (err) {
-          if (!(err instanceof RosterExtractionAnomalyError)) throw err;
-          const outcome = await escalateExtractionAnomaly(err, readPdfWithAi(false));
-          if ('status' in outcome) return res.status(outcome.status).json(outcome.body);
-          adopt(outcome.result);
-        }
-        if (gridResult && gridResult.templateLabel === 'Deterministic Grid Parser') {
-          adopt(await maybeEscalate(gridResult, readPdfWithAi(false)));
-        } else if (gridResult) {
-          // Text layer present but the grid parser didn't recognise the shape — try the
-          // line-oriented text parser (cheap, no API call), then the AI reader. Docling is
-          // NOT tried here: it has no demonstrated value on text-layer PDFs.
-          const text = await extractPdfText(file.buffer);
-          const textResult = text ? parseRosterText(text, weekStart) : null;
-          if (textResult && textResult.rows.length > 0) {
-            parsed = { rows: textResult.rows, issues: textResult.issues, templateLabel: 'PDF Text Roster' };
-          } else {
-            const gate = await gateWithoutLocalResult('unrecognized_layout');
-            if (gate) return res.status(422).json(gate);
-            try {
-              adopt(await readWithAi(readPdfWithAi()));
-            } catch (err) {
-              return visionError(err);
-            }
-          }
-        }
-      } else {
-        // No text layer at all (scanned/photographed PDF) — try the local Docling
-        // sidecar first (free and local; see doclingClient.ts for its evaluation),
-        // then the AI reader.
-        let doclingResult: ParsedVisionResult | null = null;
-        try {
-          doclingResult = await parseScannedPdfViaDocling(file.buffer, file.originalname, weekStart);
-        } catch (err) {
-          if (!(err instanceof DoclingUnavailableError)) throw err;
-        }
-        if (doclingResult) {
-          console.log(
-            `[schedules] PDF resolved via Docling sidecar: ${doclingResult.rows.length} rows, ${doclingResult.anomalies.length} anomalies, ${doclingResult.leaveRecords.length} leave records.`,
-          );
-          adopt(doclingResult);
-        } else {
-          const gate = await gateWithoutLocalResult('image_or_scan');
-          if (gate) return res.status(422).json(gate);
-          try {
-            adopt(await readWithAi(readPdfWithAi()));
-          } catch (err) {
-            return visionError(err);
-          }
-        }
-      }
-    } else {
-      try {
-        const workbook = parseWorkbookBuffer(file.buffer, file.originalname);
-        parsed = { rows: workbook.rows, issues: workbook.issues, templateLabel: workbook.templateLabel };
-      } catch (err) {
-        if (!(err instanceof TemplateDetectionError)) throw err;
-        // Doesn't match any of the 3 long-format ("one row per shift") templates —
-        // likely a grid-format roster (day-of-week columns, merged section headers).
-        // The deterministic grid parser is the PRIMARY path for this shape; the AI
-        // reader is only an escalation (see parsing/escalation.ts).
-        const grid = buildMergeExpandedGrid(file.buffer, file.originalname);
-        // Every parser in this app only ever reads the workbook's first sheet —
-        // surfaced unconditionally whenever more than one sheet exists, since only
-        // the manager can tell whether the other tabs matter.
-        const otherSheetNames = listOtherSheetNames(file.buffer, file.originalname);
-        const ignoredSheetsAnomaly: AnomalyRecord | null =
-          otherSheetNames.length > 0
-            ? {
-                employeeName: null,
-                date: null,
-                rawText: otherSheetNames.join(', '),
-                reason:
-                  `This file has ${otherSheetNames.length} other sheet(s) that were not read (${otherSheetNames.join(', ')}) — ` +
-                  `only the first sheet was parsed, and no rows were extracted from the other sheet(s) listed above ` +
-                  `(this is a diagnostic, not an automatic recovery). If your roster data is on a different tab, move ` +
-                  `or copy it to the first tab and re-upload.`,
-                confidence: 0,
-                rowNumber: null,
-                kind: 'ignored_workbook_sheets',
-              }
-            : null;
-        const withSheetsNote = (result: ParsedVisionResult): ParsedVisionResult =>
-          ignoredSheetsAnomaly ? { ...result, anomalies: [ignoredSheetsAnomaly, ...result.anomalies] } : result;
-        const readGridWithAi = (localFallback = true) => () => parseRosterGrid(grid, file.originalname, weekStart, { localFallback, locationId: req.user!.locationId, userId: req.user!.id });
-
-        let deterministicResult: ParsedVisionResult | null = null;
-        try {
-          deterministicResult = gridParser(grid, weekStart);
-        } catch (gridErr) {
-          if (!(gridErr instanceof RosterExtractionAnomalyError)) throw gridErr;
-          const outcome = await escalateExtractionAnomaly(gridErr, readGridWithAi(false));
-          if ('status' in outcome) return res.status(outcome.status).json(outcome.body);
-          adopt(withSheetsNote(outcome.result));
-        }
-
-        if (deterministicResult && deterministicResult.templateLabel === 'Deterministic Grid Parser') {
-          adopt(withSheetsNote(await maybeEscalate(deterministicResult, readGridWithAi(false))));
-        } else if (deterministicResult) {
-          // A layout the grid parser genuinely doesn't recognise (e.g. days-as-rows).
-          const gate = await gateWithoutLocalResult('unrecognized_layout');
-          if (gate) return res.status(422).json(gate);
-          try {
-            adopt(withSheetsNote(await readWithAi(readGridWithAi())));
-          } catch (gridErr) {
-            if (gridErr instanceof TemplateDetectionError) return res.status(422).json({ error: gridErr.message });
-            return visionError(gridErr);
-          }
-        }
-      }
-    }
-
-    const result = parsed as { rows: ParsedShiftRow[]; issues: RowIssue[]; templateLabel: string | null } | null;
-    if (!result) throw new Error('upload: no parse result was produced');
+    const outcome = await readUploadedRoster(file, {
+      locationId,
+      userId: req.user!.id,
+      today: venueDateOf(new Date(), timezone),
+      clientWeekStart: requestedWeekStart || null,
+      aiConsent,
+      provider: getVisionProvider(),
+      aiBlockedReason: () => checkVisionFallbackAllowed(file.size, locationId),
+      markAiUsed: () => markVisionFallbackUsed(locationId),
+      cache: readingCache,
+      deadline: Date.now() + aiBudgetMs(),
+      gridParser,
+    });
+    if (!outcome.ok) return res.status(outcome.status).json(outcome.body);
+    const { result, reading, escalation } = outcome;
+    const { anomalies, leaveRecords, legend } = result;
+    console.log(
+      `[schedules.upload] read: ${result.rows.length} shifts, ${result.people?.length ?? 0} people, ${result.unreadRows?.length ?? 0} unread rows, ` +
+        `ai=${reading.ai} table=${reading.table} disagreements=${reading.disagreements} week=${result.week.source}`,
+    );
 
     // For image/VLM uploads, an all-leave week (or a sheet where every cell
     // needed manager review) is a valid, non-error outcome — anomalies and
     // leaveRecords still carry useful data even with zero workable rows.
     // Only hard-reject when nothing at all came out (no rows, no anomalies,
-    // no leave records, and no parse issues to surface).
-    if (result.rows.length === 0 && anomalies.length === 0 && leaveRecords.length === 0 && result.issues.length === 0) {
+    // no leave records, no parse issues, nobody read and no row left unread).
+    if (
+      result.rows.length === 0 &&
+      anomalies.length === 0 &&
+      leaveRecords.length === 0 &&
+      result.issues.length === 0 &&
+      (result.people?.length ?? 0) === 0 &&
+      (result.unreadRows?.length ?? 0) === 0
+    ) {
       return res.status(422).json({
         error: withManualPath('No valid shift rows could be parsed from this file.'),
         templateDetected: result.templateLabel,
@@ -419,8 +189,8 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       });
     }
 
-    const { previewRows, summary } = await resolveRowsAgainstDatabase(prisma, locationId, result.rows);
-    const batchId = uploadCache.put(locationId, null, previewRows);
+    const { previewRows, summary, people } = await resolveRowsAgainstDatabase(prisma, locationId, result.rows, { readPeople: result.people });
+    const batchId = uploadCache.put(locationId, null, previewRows, { people });
 
     return res.status(200).json({
       batchId,
@@ -433,8 +203,16 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       anomalies,
       leaveRecords,
       legend,
+      // Reading (rosterContract.ts): every person read (people with no shifts included), rows
+      // that couldn't be read, the week the roster prints, and what each reader did.
+      readPeople: result.people ?? [],
+      unreadRows: result.unreadRows ?? [],
+      week: result.week,
+      reading,
       // Present when the AI reader was used, or would help but needs consent / is unavailable.
       ...(escalation ? { escalation } : {}),
+      // One entry per person on the roster (the review screen's unit); summary.people counts them.
+      people,
       preview: previewRows.map((r) => ({
         rowNumber: r.rowNumber,
         employeeName: r.employeeName,
@@ -447,6 +225,12 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
         managerNotes: r.managerNotes,
         status: r.status,
         issues: r.issues,
+        ...(r.personKey ? { personKey: r.personKey } : {}),
+        ...(r.section !== undefined ? { section: r.section } : {}),
+        ...(r.sourcePage !== undefined ? { sourcePage: r.sourcePage } : {}),
+        ...(r.readerSource ? { readerSource: r.readerSource } : {}),
+        ...(r.flags?.length ? { flags: r.flags } : {}),
+        ...(r.alternatives?.length ? { alternatives: r.alternatives } : {}),
       })),
     });
   } catch (err) {
@@ -470,35 +254,77 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
   }
 });
 
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const CONFIRM_DECISION_ACTIONS = new Set(['create', 'link', 'skip']);
+
+/** Validates `people` from a confirm body; a string is the 400 message. */
+function parsePersonDecisions(raw: unknown, people: PersonPreview[]): Map<string, ConfirmPersonDecision> | string {
+  const decisions = new Map<string, ConfirmPersonDecision>();
+  if (raw === undefined || raw === null) return decisions;
+  if (!Array.isArray(raw)) return '"people" must be a list of decisions.';
+  const known = new Set(people.map((p) => p.personKey));
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') return 'Each entry in "people" must be an object.';
+    const { personKey, action, userId, name, roleName } = entry as Record<string, unknown>;
+    if (typeof personKey !== 'string' || !known.has(personKey)) return 'A decision names a person who is not in this roster. Please re-upload the file.';
+    if (typeof action !== 'string' || !CONFIRM_DECISION_ACTIONS.has(action)) return `Unknown action for a person: use create, link or skip.`;
+    if (action === 'link' && (typeof userId !== 'string' || !userId)) return 'Linking a person needs the staff member (userId).';
+    if (name !== undefined && name !== null && (typeof name !== 'string' || name.length > 120)) return 'A name must be text, up to 120 characters.';
+    if (roleName !== undefined && roleName !== null && (typeof roleName !== 'string' || roleName.length > 80)) return 'A role must be text, up to 80 characters.';
+    decisions.set(personKey, {
+      personKey,
+      action: action as ConfirmPersonDecision['action'],
+      ...(typeof userId === 'string' ? { userId } : {}),
+      ...(typeof name === 'string' ? { name } : {}),
+      ...(roleName === null || typeof roleName === 'string' ? { roleName } : {}),
+    });
+  }
+  return decisions;
+}
+
+/** Validates `addedPeople` from a confirm body; a string is the 400 message. */
+function parseAddedPeople(raw: unknown): AddedPerson[] | string {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return '"addedPeople" must be a list.';
+  if (raw.length > 200) return 'Too many people added at once.';
+  const added: AddedPerson[] = [];
+  for (const entry of raw) {
+    const { name, roleName } = (entry ?? {}) as Record<string, unknown>;
+    if (typeof name !== 'string' || !name.trim() || name.length > 120) return 'Each added person needs a name (up to 120 characters).';
+    if (roleName !== undefined && roleName !== null && (typeof roleName !== 'string' || roleName.length > 80)) return 'A role must be text, up to 80 characters.';
+    added.push({ name: name.trim(), roleName: typeof roleName === 'string' && roleName.trim() ? roleName.trim() : null });
+  }
+  return added;
+}
+
 /**
  * POST /api/schedules/upload/:batchId/confirm
  * body: {
  *   createdById?: string,
- *   edits?: { rowNumber: number; employeeName?: string; role?: string }[],
+ *   weekStart?: string,                 // ISO Monday the manager confirmed; shifts move by the whole weeks between it and the roster's own week
+ *   people?: ConfirmPersonDecision[],   // per personKey: create (new staff) | link (existing staff, userId) | skip
+ *   addedPeople?: AddedPerson[],        // "add missing person" (no shifts)
+ *   rememberRoleMappings?: boolean,     // save printed role label -> role for labels assigned by hand
+ *   edits?: { rowNumber: number; employeeName?: string; role?: string; startTime?: string; endTime?: string; overnight?: boolean }[],
  *   removedRowNumbers?: number[],
  * }
  *
- * Commits a previously-previewed batch to the Shift table. Rows with an
- * unresolved role are skipped (cannot satisfy the required FK) and reported
- * back in `skippedCount` for the manager to fix and re-upload separately.
- * `requireManager`-gated (2026-09-05 — see MEMORY.md; a real, pre-existing
- * gap the `withAuditedTransaction` review found: this was `requireSession`-
- * only, so any authenticated STAFF session could confirm a batch — including
- * one uploaded by someone else at the same venue, since `ownedOrNotFound`
- * only checks venue, not uploader — bulk-creating real Shift rows for the
- * whole venue). The batch must still belong to the caller's venue.
+ * Commits a reviewed batch (see parsing/persistShifts.ts's persistRosterImport): every person
+ * not skipped becomes or links to a real staff member and gets their shifts; nobody is dropped
+ * for an unresolved role. Idempotent: confirming the same roster again creates no staff and no
+ * shifts (identical shifts are counted in `skippedDuplicates`; a different shift overlapping one
+ * the person already has is listed in `overlaps`, not written). A person with no decision gets
+ * the conservative default (exact name match -> link, else create), so older clients that send
+ * only `edits`/`removedRowNumbers` keep working. Linking to someone outside the caller's venue
+ * is a 400. Manager/owner sessions only; the batch must belong to the caller's venue
+ * (2026-09-05: this was requireSession-only, so a STAFF session could bulk-create shifts).
  *
- * `edits`/`removedRowNumbers` back the onboarding Review screen's inline
- * name/role corrections (added alongside that screen — see
- * `src/features/onboarding/ReviewScreen.tsx`): the cached preview rows only
- * carry whatever `resolvedRoleId`/`resolvedUserId` upload-time matching
- * found, so an edited `role`/`employeeName` has to be RE-resolved here
- * before persisting, not just spliced into the display string. A `role` that
- * doesn't match any existing Role for this location is created on the fly
- * (this is also how a Review "+ Custom" role becomes a real, reusable chip
- * for the venue going forward, per product spec — a brand-new venue starts
- * with zero seeded Role rows, so even picking one of the 9 canonical chip
- * labels routinely hits this path, not just genuine custom terms).
+ * `edits`/`removedRowNumbers` back the review screen's per-row corrections: an edited
+ * `role`/`employeeName` is RE-resolved here, not just spliced into the display string, and a
+ * `role` that matches no existing Role is created on the fly (canonical name; a deactivated
+ * one is reactivated). `startTime`/`endTime` carry the manager's pick when the two readers
+ * read different times.
  */
 schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager, async (req, res) => {
   try {
@@ -516,16 +342,22 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
       if (!ownedOrNotFound(req, res, onBehalfUser, `Staff member "${createdById}" not found.`)) return;
     }
 
+    const requestedWeekStart = typeof req.body?.weekStart === 'string' ? req.body.weekStart.trim() : '';
+    if (requestedWeekStart && !isMondayIso(requestedWeekStart)) return res.status(400).json({ error: WEEK_START_NOT_MONDAY_ERROR });
+
     const removedRowNumbers = new Set<number>(
       Array.isArray(req.body?.removedRowNumbers) ? req.body.removedRowNumbers.filter((n: unknown) => typeof n === 'number') : [],
     );
-    const editsByRow = new Map<number, { employeeName?: string; role?: string }>();
+    const editsByRow = new Map<number, { employeeName?: string; role?: string; startTime?: string; endTime?: string; overnight?: boolean }>();
     if (Array.isArray(req.body?.edits)) {
       for (const raw of req.body.edits) {
         if (!raw || typeof raw.rowNumber !== 'number') continue;
         editsByRow.set(raw.rowNumber, {
           employeeName: typeof raw.employeeName === 'string' ? raw.employeeName : undefined,
           role: typeof raw.role === 'string' ? raw.role : undefined,
+          startTime: typeof raw.startTime === 'string' && HHMM.test(raw.startTime) ? raw.startTime : undefined,
+          endTime: typeof raw.endTime === 'string' && HHMM.test(raw.endTime) ? raw.endTime : undefined,
+          overnight: typeof raw.overnight === 'boolean' ? raw.overnight : undefined,
         });
       }
     }
@@ -607,21 +439,57 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
           }
         }
 
+        if (edit.startTime) next.startTime = edit.startTime;
+        if (edit.endTime) next.endTime = edit.endTime;
+        if (edit.startTime || edit.endTime || edit.overnight !== undefined) next.overnight = edit.overnight ?? next.endTime <= next.startTime;
+
         return next;
       });
     }
 
+    // The batch's people. Re-derived from the (edited) rows when the cache predates people, or
+    // when an older client renamed rows instead of sending per-person decisions.
+    const renamedRows = [...editsByRow.values()].some((e) => e.employeeName?.trim());
+    const usePersonDecisions = Array.isArray(req.body?.people);
+    let people: PersonPreview[] = batch.people ?? [];
+    if (!batch.people || (renamedRows && !usePersonDecisions)) {
+      const derived = buildPeoplePreview(rows, undefined, await loadVenueMatchContext(prisma, batch.locationId));
+      people = [...derived, ...(batch.people ?? []).filter((p) => p.shiftCount === 0)];
+    }
+
+    const decisions = parsePersonDecisions(req.body?.people, people);
+    if (typeof decisions === 'string') return res.status(400).json({ error: decisions });
+    const addedPeople = parseAddedPeople(req.body?.addedPeople);
+    if (typeof addedPeople === 'string') return res.status(400).json({ error: addedPeople });
+
+    // The manager confirmed a different week than the one the shifts are dated in: move every
+    // shift by the same whole number of weeks, so they land in the roster's printed week.
+    const dates = rows.map((r) => r.date).filter(isIsoDate).sort();
+    const detectedWeekStart = dates.length > 0 ? mondayOfIso(dates[0]!) : null;
+    const weekDeltaDays =
+      requestedWeekStart && detectedWeekStart ? Math.round((Date.parse(`${requestedWeekStart}T00:00:00Z`) - Date.parse(`${detectedWeekStart}T00:00:00Z`)) / 86_400_000) : 0;
+
     const result = await withAuditedTransaction(
       prisma,
-      (tx) => persistShifts(tx, batch.locationId, createdById, rows),
+      (tx) =>
+        persistRosterImport(tx, {
+          locationId: batch.locationId,
+          actorId: req.user!.id,
+          createdById,
+          rows,
+          people,
+          decisions,
+          addedPeople,
+          weekDeltaDays,
+          rememberRoleMappings: req.body?.rememberRoleMappings === true,
+        }),
       // Only write a real audit row when at least one shift was actually
-      // created — a batch where every row was skipped for an unresolved
-      // role (persisted.createdCount === 0) would otherwise still produce a
-      // SHIFT_CREATED entry pointing at the batchId (not a real Shift id),
-      // a false compliance-audit record claiming a shift was created when
-      // none was. Same guard shape as floorPlan.ts's publish route.
+      // created — a confirm that wrote nothing (every person skipped, every
+      // shift already on the rota) would otherwise produce a SHIFT_CREATED
+      // entry pointing at no real Shift. New staff get their own
+      // STAFF_CREATED rows inside the import.
       (persisted) =>
-        persisted.createdCount > 0
+        persisted.createdShifts > 0
           ? {
               locationId: batch.locationId,
               actorId: req.user!.id,
@@ -629,15 +497,20 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
               entityType: 'Shift',
               entityId: persisted.rows[0]!.shiftId,
               shiftId: persisted.rows[0]!.shiftId,
-              note: `Imported ${persisted.createdCount} shift(s) from roster upload (${persisted.skippedCount} skipped)`,
+              note:
+                `Imported ${persisted.createdShifts} shift(s) from roster upload ` +
+                `(${persisted.createdPeople} new staff, ${persisted.linkedPeople} existing, ${persisted.skippedDuplicates} already on the rota, ` +
+                `${persisted.overlaps.length} overlapping, ${persisted.skippedPeople} people skipped)`,
             }
           : null,
+      // A big roster is a few hundred rows; the default 5s is too tight against a remote database.
+      { maxWait: 10_000, timeout: 30_000 },
     );
     // Deleted only after the transaction commits — deleting it before commit
     // and then having the transaction roll back (e.g. the audit write fails)
     // would permanently strand the batch as unretryable with nothing
-    // actually persisted. This does leave a narrow window where a duplicate
-    // concurrent confirm on the same batchId isn't caught (see MEMORY.md).
+    // actually persisted. A second confirm racing this one is safe: the
+    // import holds a per-venue lock and is idempotent (see persistRosterImport).
     uploadCache.delete(batchId);
 
     // Real delivery on top of the write above (never inside the transaction
@@ -660,13 +533,16 @@ schedulesRouter.post('/upload/:batchId/confirm', requireSession, requireManager,
       void notifySchedulePublished([...userIds], weekStart);
     }
 
+    const { rows: persistedRows, skippedRowCount, ...outcome } = result;
     return res.status(201).json({
-      message: `Imported ${result.createdCount} shift(s).`,
-      createdCount: result.createdCount,
-      skippedCount: result.skippedCount,
-      rows: result.rows,
+      message: `Imported ${result.createdShifts} shift(s): ${result.createdPeople} new staff, ${result.linkedPeople} already on staff.`,
+      createdCount: result.createdShifts,
+      skippedCount: skippedRowCount,
+      rows: persistedRows,
+      ...outcome,
     });
   } catch (err) {
+    if (err instanceof RosterImportError) return res.status(err.status).json({ error: err.message });
     console.error('[schedules.confirm] failed', err);
     return res.status(500).json({ error: 'Unexpected error while saving shifts.' });
   }

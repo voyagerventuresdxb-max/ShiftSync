@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeTime, parseShiftCell, resolveRoleCategory } from './deterministicParser.js';
+import { normalizeTime, parseShiftCell, processRowsIntoRoster, resolveRoleCategory } from './deterministicParser.js';
 
 test('normalizeTime converts 12h and 24h formats to 24h HH:mm', () => {
   assert.equal(normalizeTime('10'), '10:00');
@@ -71,4 +71,16 @@ test('resolveRoleCategory maps titles to hierarchy', () => {
   assert.equal(resolveRoleCategory('Runner'), 'RUNNER');
   assert.equal(resolveRoleCategory('Food Runner'), 'RUNNER');
   assert.equal(resolveRoleCategory('Unknown Title'), 'WAITER'); // fallback default
+});
+
+test('processRowsIntoRoster dates columns by the printed header, not by position in the current week; titles and banners are not staff', () => {
+  const grid = [
+    ['Rota', '', '', ''],
+    ['', '', '24-Aug', '25-Aug'],
+    ['WAITERS', '', '', ''],
+    ['Waiter', 'Test Alpha', '9am-5pm', 'Off'],
+  ];
+  const result = processRowsIntoRoster(grid, '2026-10-05');
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.roleName}|${r.date}`), ['Test Alpha|Waiter|2026-08-24']);
+  assert.equal(result.anomalies.length, 0, 'no title or banner was read as a person');
 });

@@ -261,3 +261,25 @@ test('a legend-coded cell resolved by the model as a leave/absence type (not a w
   assert.equal(result.leaveRecords[0].category, 'day_off');
   assert.equal(result.leaveRecords[0].leaveCode, 'OFF');
 });
+
+test('an answer in the original schema with weekday-only dates: dated in the reference week, and every employee is still a person', () => {
+  const parsed = {
+    venueTemplateNotes: '',
+    legend: [],
+    documentAnomalies: [],
+    employees: [
+      { rawName: 'Test Alpha', role: null, cells: [{ date: 'Tuesday', rawText: '9-17', period: null, interpretation: 'worked_shift', startTime: '09:00', endTime: '17:00', leaveCode: null, confidence: 0.9, needsReview: false, reviewReason: null }] },
+      { rawName: 'Test Blank', role: null, cells: [] },
+    ],
+  };
+  const result = mapVlmResponseToResult(parsed as never, '2026-08-17');
+  assert.deepEqual(result.rows.map((r) => `${r.employeeName}|${r.date}`), ['Test Alpha|2026-08-18']);
+  assert.deepEqual(result.people?.map((p) => p.name), ['Test Alpha', 'Test Blank']);
+});
+
+test('an answer in the current transcription schema is mapped by the same entry point', () => {
+  const parsed = { title: 'Rota 24 - 30 Aug', days: ['Mon', 'Tue'], key: [], pages: [{ p: 1, rows: 1, sec: [{ h: 'WAITERS', n: 1, ppl: [{ nm: 'Test Alpha', t: null, i: 1, c: ['', '4pm to 2am'] }] }], unread: [] }] };
+  const result = mapVlmResponseToResult(parsed as never, '2026-10-05');
+  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime}-${r.endTime} ${r.roleName}`), ['2026-08-25 16:00-02:00 WAITERS']);
+  assert.equal(result.week?.source, 'title');
+});

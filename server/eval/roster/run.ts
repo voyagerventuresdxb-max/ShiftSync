@@ -1,29 +1,42 @@
 /**
  * npm run eval:roster [-- options]
  *
- * Scores the roster parsers against the eval corpus (server/eval/roster/corpus/, see generate.ts)
- * and writes a markdown report. The deterministic path always runs, offline. The vision path
- * runs only where the upload route would escalate (or on every roster with --vision-all):
+ * Scores the roster readers and writes a markdown report, over two corpora:
+ *  - the original 18-roster corpus (server/eval/roster/corpus/, see generate.ts): the
+ *    deterministic path always runs, offline; the vision path runs only where the upload route
+ *    would escalate (or on every roster with --vision-all);
+ *  - the layout families (families.ts, 36 rosters, generated into out/families): every file
+ *    read through the production upload path (parsing/readUpload.ts) with no client weekStart.
  *
- *   --vision=none      (default) deterministic only
- *   --vision=mock      a MockVisionProvider that answers with the truth — checks the pipeline
- *                      and the scorer, NOT a model score
- *   --vision=recorded  replays server/eval/roster/recorded/<id>.json (captured with --record)
- *   --vision=live      the configured provider (Vertex/Gemini); refuses without credentials
- *   --record           with --vision=live, saves each answer to recorded/<id>.json
+ *   --vision=none      legacy: deterministic only (default). Families: no AI configured.
+ *   --vision=mock      legacy: a truth echo. Families (their default): truth with perturbations.
+ *                      Pipeline checks, NOT a model score.
+ *   --vision=recorded  replays answers captured with --record (offline)
+ *   --vision=live      the configured provider (Vertex/Gemini), every call through the spend cap
+ *                      (withAiBudget); refuses without credentials
+ *   --record           with --vision=live, saves each answer (recorded/, or beside the private truth)
+ *   --corpus=legacy|families|all   (default all)
+ *   --only=A01,B1      families whose id starts with one of these
+ *   --now=ISO          the reading's "today" (default: now)
+ *   --dev-private      also the private DEV files (SHIFTSYNC_PRIVATE_FIXTURES_DIR) against the
+ *                      hand-verified truth in SHIFTSYNC_DEV_TRUTH_DIR — report outside the repo
  *   --price-in=N --price-out=N   USD per 1M input/output tokens, for the cost column
  *   --out=PATH         report path (default server/eval/roster/out/report.md, gitignored)
  *
  * Logs and the report carry roster ids and numbers only — never a name or a phone number.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { mapVlmResponseToResult } from '../../src/parsing/parseVision.js';
 import { getVisionProvider, MockVisionProvider, type VisionOutput, type VisionProvider } from '../../src/parsing/visionProvider.js';
 import { CORPUS_DIR } from './generate.js';
 import { runDeterministic } from './pipeline.js';
 import { pct, score, totals, truthAsVlmJson, type Score } from './score.js';
 import type { Truth } from './spec.js';
+import { FAMILY_DIR, generateFamilies, loadFamilies } from './familyCorpus.js';
+import { runFamilyEval } from './familyRun.js';
+import type { FamilyVisionMode } from './familyPipeline.js';
+import { privateFixturesDir } from '../../src/parsing/privateFixtures.js';
 
 type Mode = 'none' | 'mock' | 'recorded' | 'live';
 const RECORDED_DIR = join('server', 'eval', 'roster', 'recorded');
@@ -165,10 +178,25 @@ export async function runEval(o: EvalOptions): Promise<EvalReport> {
   return { markdown: `${lines.join('\n')}\n`, deterministic, vision };
 }
 
-export function parseArgs(argv: string[]): EvalOptions & { out: string } {
-  const get = (name: string) => argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
-  const vision = (get('vision') ?? 'none') as Mode;
+export interface CliOptions extends EvalOptions {
+  out: string;
+  /** Which corpora: the original 18-roster corpus, the layout families, or both. */
+  corpus: 'legacy' | 'families' | 'all';
+  /** The families' AI reader: the --vision mode when given, else the mock. */
+  familyVision: FamilyVisionMode;
+  /** Also read the private DEV files (SHIFTSYNC_PRIVATE_FIXTURES_DIR) against SHIFTSYNC_DEV_TRUTH_DIR. */
+  devPrivate: boolean;
+  only: string[];
+  now: Date;
+}
+
+export function parseArgs(argv: string[]): CliOptions {
+  const get = (name: string) => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+  const given = get('vision');
+  const vision = (given ?? 'none') as Mode;
   if (!['none', 'mock', 'recorded', 'live'].includes(vision)) throw new Error(`--vision must be none|mock|recorded|live`);
+  const corpus = (get('corpus') ?? 'all') as CliOptions['corpus'];
+  if (!['legacy', 'families', 'all'].includes(corpus)) throw new Error('--corpus must be legacy|families|all');
   const num = (v: string | undefined) => (v === undefined ? null : Number(v));
   return {
     vision,
@@ -177,14 +205,50 @@ export function parseArgs(argv: string[]): EvalOptions & { out: string } {
     priceIn: num(get('price-in')),
     priceOut: num(get('price-out')),
     out: get('out') ?? join('server', 'eval', 'roster', 'out', 'report.md'),
+    corpus,
+    familyVision: (given ?? 'mock') as FamilyVisionMode,
+    devPrivate: argv.includes('--dev-private'),
+    only: (get('only') ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    now: get('now') ? new Date(get('now')!) : new Date(),
   };
+}
+
+/** The layout-family corpus (and, with --dev-private, the private DEV files) through the upload path. */
+async function runFamilies(opts: CliOptions): Promise<string> {
+  if (!loadFamilies().length) {
+    console.log('[eval:roster] generating the layout-family corpus (Chromium, about a minute)…');
+    await generateFamilies();
+  }
+  let live: VisionProvider | null = null;
+  if (opts.familyVision === 'live') {
+    live = getVisionProvider();
+    if (!live) throw new Error('--vision=live needs a configured vision provider (GEMINI_VERTEX_PROJECT or GEMINI_API_KEY).');
+  }
+  const common = { now: opts.now, mode: opts.familyVision, live, record: opts.record, only: opts.only };
+  const parts: string[] = [];
+  const synthetic = await runFamilyEval({ ...common, dataDir: FAMILY_DIR, truths: loadFamilies(), label: `Layout families (AI reader: ${opts.familyVision})` });
+  parts.push(synthetic.markdown);
+  if (opts.devPrivate) {
+    const truthDir = process.env.SHIFTSYNC_DEV_TRUTH_DIR?.trim();
+    if (!truthDir || !existsSync(truthDir)) throw new Error('--dev-private needs SHIFTSYNC_DEV_TRUTH_DIR (hand-verified truth, kept outside the repo).');
+    const truths = readdirSync(truthDir).filter((f) => f.endsWith('.truth.json')).sort().map((f) => JSON.parse(readFileSync(join(truthDir, f), 'utf8')));
+    // Real names: recordings of the private files stay beside their truth, outside the repo.
+    const dev = await runFamilyEval({ ...common, only: [], dataDir: privateFixturesDir(), truths, label: `Private DEV files (AI reader: ${opts.familyVision})`, recordDir: join(truthDir, 'recorded') });
+    parts.push(dev.markdown);
+  }
+  return parts.join('\n');
 }
 
 if (process.argv[1] && /run\.ts$/.test(process.argv[1])) {
   const opts = parseArgs(process.argv.slice(2));
-  const report = await runEval(opts);
+  // The private files' report names no one, but it is kept beside them, never in the repository.
+  if (opts.devPrivate && resolve(opts.out).startsWith(resolve(process.cwd()))) throw new Error('--dev-private: write the report outside the repository (--out=<path>).');
+  const sections: string[] = [];
+  if (opts.corpus !== 'families') sections.push((await runEval(opts)).markdown);
+  if (opts.corpus !== 'legacy') sections.push(await runFamilies(opts));
+  const markdown = sections.join('\n');
   mkdirSync(dirname(opts.out), { recursive: true });
-  writeFileSync(opts.out, report.markdown);
-  console.log(report.markdown);
+  writeFileSync(opts.out, markdown);
+  console.log(markdown);
   console.log(`[eval:roster] report written to ${opts.out}`);
 }

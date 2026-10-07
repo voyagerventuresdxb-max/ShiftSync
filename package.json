@@ -42,7 +42,7 @@
     "cap:open": "cap open android",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "vlm:check": "tsx server/scripts/vlm-check.ts",
-    "eval:roster": "tsx server/eval/roster/run.ts",
+    "eval:roster": "node scripts/with-branch-schema.mjs \"tsx server/eval/roster/run.ts\"",
     "eval:roster:generate": "tsx server/eval/roster/generate.ts",
     "fixtures:restore-private": "node scripts/restore-private-fixtures.mjs"
   },

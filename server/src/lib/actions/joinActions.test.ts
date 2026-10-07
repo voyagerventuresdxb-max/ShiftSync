@@ -128,3 +128,40 @@ test('fileJoinRequest: concurrent re-applies on separate connections file one re
     await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
   }
 });
+
+// 2026-10 roster review rework: a roster import adds everyone on the roster as staff with no
+// phone. Joining through the venue link must claim that record (and its shifts), not create a
+// second staff member with the same name.
+test('decideJoinRequest(approve) claims the one unclaimed roster-imported record with the same name instead of creating a duplicate', async () => {
+  const { location, manager, joinRequest } = await createFixture('claim imported');
+  const imported = await prisma.user.create({ data: { locationId: location.id, fullName: '__joinactions-test__ applicant', systemRole: 'STAFF' } });
+  try {
+    const result = await decideJoinRequest({ requestId: joinRequest.id, decision: 'approve', reviewedById: manager.id });
+    assert.equal(result.result, 'ok');
+    assert.equal((result as { userId?: string }).userId, imported.id);
+    const claimed = await prisma.user.findUnique({ where: { id: imported.id } });
+    assert.equal(claimed!.phone, '+971500000099');
+    assert.equal(await prisma.user.count({ where: { locationId: location.id, systemRole: 'STAFF' } }), 1);
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});
+
+test('decideJoinRequest(approve) never claims when two unclaimed records share the name', async () => {
+  const { location, manager, joinRequest } = await createFixture('claim ambiguous');
+  await prisma.user.createMany({
+    data: [
+      { locationId: location.id, fullName: '__joinactions-test__ Applicant', systemRole: 'STAFF' },
+      { locationId: location.id, fullName: '__joinactions-test__ Applicant', systemRole: 'STAFF' },
+    ],
+  });
+  try {
+    const result = await decideJoinRequest({ requestId: joinRequest.id, decision: 'approve', reviewedById: manager.id });
+    assert.equal(result.result, 'ok');
+    const created = await prisma.user.findUnique({ where: { id: (result as { userId?: string }).userId! } });
+    assert.equal(created!.phone, '+971500000099');
+    assert.equal(await prisma.user.count({ where: { locationId: location.id, fullName: '__joinactions-test__ Applicant' } }), 3, 'two same-named records: a new one is created, neither is claimed');
+  } finally {
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
+});

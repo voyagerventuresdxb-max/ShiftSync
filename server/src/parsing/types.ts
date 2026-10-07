@@ -4,6 +4,7 @@
  * Pure data contracts, no DB or HTTP imports, so the parsing engine stays
  * unit-testable in isolation from Express/Prisma.
  */
+import type { ReadPerson, RowReadingInfo, UnreadRow, WeekDetection } from './rosterContract.js';
 
 /** Canonical field keys every master template must resolve to. */
 export type TemplateField =
@@ -49,7 +50,7 @@ export interface RowIssue {
 }
 
 /** A cleanly-parsed shift, ready for role/user resolution against the DB. */
-export interface ParsedShiftRow {
+export interface ParsedShiftRow extends RowReadingInfo {
   rowNumber: number;
   /**
    * Identifies which single physical source-file row (one grid row / one
@@ -161,6 +162,12 @@ export interface ParsedVisionResult {
   anomalies: AnomalyRecord[];
   leaveRecords: LeaveRecord[];
   legend: { code: string; meaning: string }[];
+  /** Every person the reader saw, including people with no shifts that week (readers that track people). */
+  people?: ReadPerson[];
+  /** Rows that look like roster rows but could not be read into a person or shifts. */
+  unreadRows?: UnreadRow[];
+  /** The week the roster prints (readers that read day headers). */
+  week?: WeekDetection;
 }
 
 /** Resolution status of a parsed row against Location/Role/User tables. */

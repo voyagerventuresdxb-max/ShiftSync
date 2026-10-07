@@ -3,7 +3,8 @@
  * rosters (day-of-week columns, optional AM/PM sub-columns, role-section
  * header rows), replacing a Gemini call for the majority of real-world
  * uploads (Excel exports, digitally-created files) with direct cell-grid
- * reading. No network call, no model, fully reproducible.
+ * reading. No network call, no model, fully reproducible. Also the table
+ * reader behind text-layer PDFs (pdfTableExtractor.ts builds the grid).
  *
  * Input is the merge-expanded grid from buildMergeExpandedGrid() — merges
  * must already be expanded so a day header that spans AM/PM sub-columns, or
@@ -20,10 +21,17 @@
  *    printing an overnight end time, e.g. "26:00" = 2am next day) is always
  *    normalized by subtracting 24 and marking the shift overnight — never
  *    passed through as a literal invalid time.
+ *
+ * Dates come from what the sheet prints (weekDetection.ts): printed day-month
+ * headers, or a title naming the week; never the week of the upload.
  */
 import { isAllCapsLabel } from './escalation.js';
-import { parseDateCell, resolveDayMonthDate, printedWeekdayMismatch, isOvernight, cellToText } from './normalize.js';
+import { isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
+import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
+import { parseShiftText, parseSingleTime, sheetDotStyle, type ShiftTextOptions } from './shiftText.js';
+import { looksLikePersonName, personKeyOf } from './personKey.js';
+import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
 /**
@@ -43,16 +51,6 @@ export class RosterExtractionAnomalyError extends Error {
     this.name = 'RosterExtractionAnomalyError';
   }
 }
-
-const DAY_OFFSET: Record<string, number> = {
-  sunday: 0, sun: 0,
-  monday: 1, mon: 1,
-  tuesday: 2, tue: 2, tues: 2,
-  wednesday: 3, wed: 3,
-  thursday: 4, thu: 4, thurs: 4,
-  friday: 5, fri: 5,
-  saturday: 6, sat: 6,
-};
 
 const LEAVE_CODES: Record<string, LeaveRecord['category']> = {
   off: 'day_off', 'day off': 'day_off', do: 'day_off', rest: 'day_off',
@@ -75,6 +73,20 @@ const LEAVE_CODES: Record<string, LeaveRecord['category']> = {
  * the coverage gap the structural signal was built to avoid.
  */
 const SUMMARY_ROW_LABELS = new Set(['total', 'totals', 'subtotal', 'sum', 'grand total', 'hours', 'total hours']);
+
+/**
+ * Caption rows printed above or inside the listing that describe the day, not a person:
+ * a covers/pax line, an events line, notes. Same closed-vocabulary reasoning as above.
+ */
+const CAPTION_WORDS = /^(covers?|pax|events?|functions?|bookings?|reservations?|notes?|remarks?|comments?|forecast|occupancy|day of the week|date)\b/i;
+
+/** A footer or note line ("Prepared by: …", "Page 1 of 2", "Legend: …"): never a person or a section. */
+function isFooterOrNote(label: string): boolean {
+  return /^(prepared|approved|printed|signed|signature|checked|legend|key|page)\b/i.test(label) || /\bpage \d+ of \d+\b/i.test(label) || /:\s*\S/.test(label) || /_{3,}/.test(label);
+}
+
+/** Words that name a group of staff, not a person ("Bar Team", "Night Crew"). */
+const GROUP_WORDS = /\b(team|staff|crew|squad|section|department|dept|group|shift|service|foh|boh|management)\b/i;
 
 /**
  * `key in obj` also matches inherited Object.prototype property names
@@ -101,69 +113,8 @@ function isBlank(value: unknown): boolean {
   return s === '' || s === '-';
 }
 
-/** Resolves a day-header cell (day name, "17-Aug", "Mon 17/08", ISO date, Excel date) to an ISO date anchored to weekStart. */
-function resolveHeaderDate(cell: unknown, weekStart: string): string | null {
-  const iso = parseDateCell(cell);
-  if (iso) return iso;
-
-  const raw = normalizeCell(cell);
-  if (!raw) return null;
-
-  const dayMonth = resolveDayMonthDate(raw, weekStart);
-  if (dayMonth) return dayMonth;
-
-  const key = raw.toLowerCase();
-  const offset = DAY_OFFSET[key];
-  if (offset === undefined) return null;
-  const [wy, wm, wd] = weekStart.split('-').map(Number);
-  const base = new Date(wy, wm - 1, wd);
-  const startOffset = base.getDay();
-  const delta = (offset - startOffset + 7) % 7;
-  base.setDate(base.getDate() + delta);
-  const yy = base.getFullYear();
-  const mm = String(base.getMonth() + 1).padStart(2, '0');
-  const dd = String(base.getDate()).padStart(2, '0');
-  return `${yy}-${mm}-${dd}`;
-}
-
-/** Converts a single time token ("9", "9am", "9:30", "18.5", "26") to 24h HH:mm, rolling >=24h hours to wall-clock time. */
-function normalizeTimeToken(token: string): string | null {
-  const raw = token.trim().toLowerCase();
-  if (!raw) return null;
-
-  // Decimal-hour form seen in real rota exports ("18.5" = 18:30).
-  const decimal = raw.match(/^(\d{1,2})\.(\d{1,2})$/);
-  if (decimal) {
-    let hour = parseInt(decimal[1], 10);
-    const fractional = Number(`0.${decimal[2]}`);
-    const minute = Math.round(fractional * 60);
-    hour = hour % 24; // OVERNIGHT-ROLLOVER RULE: 24+ is hours-past-midnight, never a literal hour.
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-  }
-
-  const m = raw.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
-  if (!m) return null;
-  let hour = parseInt(m[1], 10);
-  const minute = m[2] ? parseInt(m[2], 10) : 0;
-  const meridiem = m[3];
-
-  if (meridiem) {
-    if (meridiem === 'am') {
-      if (hour === 12) hour = 0;
-    } else if (hour !== 12) {
-      hour += 12;
-    }
-  } else {
-    // OVERNIGHT-ROLLOVER RULE: a rota may print an overnight end time as
-    // hours-past-midnight ("26:00" = 2am next day). Always normalize to a
-    // true wall-clock hour instead of passing the raw number through — an
-    // hour of 24+ is never a literal valid time.
-    hour = hour % 24;
-  }
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
+/** One time token of a legend line ("07:00", "7am") as HH:mm. */
+const legendTime = (token: string) => parseSingleTime(token);
 
 interface ShiftInterval {
   start: string;
@@ -253,8 +204,8 @@ function matchLegendRow(row: unknown[]): LegendLineMatch | null {
     for (let i = firstNonBlankIdx + 1; i < cells.length; i++) {
       const rangeMatch = cells[i].match(RANGE_ONLY_RE);
       if (!rangeMatch) continue;
-      const start = normalizeTimeToken(rangeMatch[1]);
-      const end = normalizeTimeToken(rangeMatch[2]);
+      const start = legendTime(rangeMatch[1]);
+      const end = legendTime(rangeMatch[2]);
       if (!start || !end) continue;
       const label = cells.slice(firstNonBlankIdx + 1, i).find((c) => c !== '') ?? null;
       return { code: first, start, end, label };
@@ -265,8 +216,8 @@ function matchLegendRow(row: unknown[]): LegendLineMatch | null {
     if (!cell) continue;
     const m = cell.match(SINGLE_CELL_LEGEND_RE);
     if (!m) continue;
-    const start = normalizeTimeToken(m[2]);
-    const end = normalizeTimeToken(m[3]);
+    const start = legendTime(m[2]);
+    const end = legendTime(m[3]);
     if (start && end) return { code: m[1], start, end, label: null };
   }
 
@@ -354,7 +305,8 @@ function detectLegend(
   return { legend, map, footerStartRow: legend.length > 0 ? separatorIdx : null };
 }
 
-type CellParseResult =
+
+export type CellParseResult =
   | { kind: 'blank' }
   | { kind: 'leave'; category: LeaveRecord['category']; code: string }
   | { kind: 'shifts'; intervals: ShiftInterval[] }
@@ -373,19 +325,15 @@ type CellParseResult =
   | { kind: 'flagged'; raw: string; reason: string };
 
 /**
- * Parses one day-cell's raw content into shift interval(s) or a leave code.
- * Handles: "9-17", "9am-5pm", "17:00-01:00" (single range); "10am/3pm-7pm/
- * 12am", "9-13/18-23" (multi-segment split shifts, slash/semicolon
- * separated, using the same start-pending/bridge logic as the deterministic
- * PDF-text fallback); "10:30-4:00-8:00-12" (four hyphen-chained numbers,
- * no slash — two shifts back to back, as printed on the Bar des Pres
- * reference file); "11 17 18 25" (four space-separated numbers = AM
- * start/end, PM start/end, as literally printed on the Gattopardo
- * reference venue's rota); "10IN"/"12CL"/"IN" (open-ended/until-closing/
- * fully-flexible shorthand, confirmed with the Bar des Pres venue); and
- * leave/absence codes.
+ * Parses one day-cell's raw content (or one day's sub-cells joined in column
+ * order) into shift interval(s) or a leave code. Times are read by
+ * shiftText.ts: "9-17", "17:00-01:00", "4pm to 2am", "11 17 18 25" (AM
+ * start/end, PM start/end), "10am/3pm-7pm/12am", "10:30-4:00-8:00-12",
+ * decimal hours and dot separators. Also "10IN"/"12CL"/"IN" (open-ended /
+ * until-closing / fully-flexible shorthand, confirmed with the Bar des Pres
+ * venue) and leave/absence codes.
  */
-function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>): CellParseResult {
+function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>, timeOptions: ShiftTextOptions = {}): CellParseResult {
   if (isBlank(raw)) return { kind: 'blank' };
   const text = normalizeCell(raw);
   const lower = text.toLowerCase();
@@ -408,91 +356,29 @@ function parseCellValue(raw: unknown, fileLegend?: Record<string, ShiftInterval>
     return { kind: 'flagged', raw: text, reason: 'Flexible/on-call shift — no fixed start or end time given; needs a manager to assign specific hours.' };
   }
   // "<N>IN" — a real start time, open-ended (no end given).
-  const openEnded = text.match(/^(\d{1,2}(?::\d{2})?)\s*in$/i);
+  const openEnded = text.match(/^(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\s*in$/i);
   if (openEnded) {
-    const start = normalizeTimeToken(openEnded[1]);
+    const start = parseSingleTime(openEnded[1]!, timeOptions);
     if (start) return { kind: 'flagged', raw: text, reason: `Open-ended shift — starts ${start}, no end time given.` };
   }
   // "<N>CL" — a real start time, runs until closing (not a literal end time).
-  const untilClosing = text.match(/^(\d{1,2}(?::\d{2})?)\s*cl$/i);
+  const untilClosing = text.match(/^(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)\s*(?:cl|close|closing)$/i);
   if (untilClosing) {
-    const start = normalizeTimeToken(untilClosing[1]);
+    const start = parseSingleTime(untilClosing[1]!, timeOptions);
     if (start) return { kind: 'flagged', raw: text, reason: `Shift starts ${start}, runs until closing (no fixed end time) — show as "until close" rather than a guessed time.` };
   }
 
-  // Four hyphen-chained numbers with no slash/semicolon separator: two
-  // back-to-back shifts, e.g. "10:30-4:00-8:00-12" -> 10:30-4:00 and
-  // 8:00-12:00. Distinct from the slash-separated multi-segment form below
-  // (same two-shifts-in-one-cell idea, different punctuation convention).
-  const hyphenChain4 = text.match(
-    /^(\d{1,2}(?::\d{2})?)\s*-\s*(\d{1,2}(?::\d{2})?)\s*-\s*(\d{1,2}(?::\d{2})?)\s*-\s*(\d{1,2}(?::\d{2})?)$/,
-  );
-  if (hyphenChain4) {
-    const [start1, end1, start2, end2] = hyphenChain4.slice(1, 5).map(normalizeTimeToken);
-    if (start1 && end1 && start2 && end2) {
-      return { kind: 'shifts', intervals: [{ start: start1, end: end1 }, { start: start2, end: end2 }] };
-    }
-  }
-
-  // Four space-separated numbers: AM start, AM end, PM start, PM end.
-  const fourNums = text.match(/^(\d{1,2}(?:\.\d{1,2})?)\s+(\d{1,2}(?:\.\d{1,2})?)\s+(\d{1,2}(?:\.\d{1,2})?)\s+(\d{1,2}(?:\.\d{1,2})?)$/);
-  if (fourNums) {
-    const [amStart, amEnd, pmStart, pmEnd] = fourNums.slice(1, 5).map(normalizeTimeToken);
-    if (amStart && amEnd && pmStart && pmEnd) {
-      return { kind: 'shifts', intervals: [{ start: amStart, end: amEnd }, { start: pmStart, end: pmEnd }] };
-    }
-  }
-
-  // Two space-separated numbers: single start/end, no AM/PM split.
-  const twoNums = text.match(/^(\d{1,2}(?:\.\d{1,2})?)\s+(\d{1,2}(?:\.\d{1,2})?)$/);
-  if (twoNums) {
-    const [start, end] = twoNums.slice(1, 3).map(normalizeTimeToken);
-    if (start && end) return { kind: 'shifts', intervals: [{ start, end }] };
-  }
-
-  // Multi-segmented split shifts, separated by / ; or , — same
-  // bridge-segment logic as the deterministic PDF-text fallback:
-  // "10am/3pm-7pm/12am" -> two intervals via a pending-start bridge.
-  const segments = text.split(/[/;,]/).map((s) => s.trim()).filter(Boolean);
-  if (segments.length > 0) {
-    const intervals: ShiftInterval[] = [];
-    let pendingStart: string | null = null;
-    let matchedAny = false;
-    for (const segment of segments) {
-      const pair = segment.match(/^(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*[-–to]+\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$/i);
-      if (pair) {
-        const first = normalizeTimeToken(pair[1]);
-        const second = normalizeTimeToken(pair[2]);
-        if (first && second) {
-          matchedAny = true;
-          if (pendingStart) {
-            intervals.push({ start: pendingStart, end: first });
-            pendingStart = second;
-          } else {
-            intervals.push({ start: first, end: second });
-          }
-        }
-        continue;
-      }
-      const bare = segment.match(/^(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$/i);
-      if (bare) {
-        const time = normalizeTimeToken(bare[1]);
-        if (time) {
-          matchedAny = true;
-          if (pendingStart) {
-            intervals.push({ start: pendingStart, end: time });
-            pendingStart = null;
-          } else {
-            pendingStart = time;
-          }
-        }
-      }
-    }
-    if (matchedAny && intervals.length > 0) return { kind: 'shifts', intervals };
-  }
+  const read = parseShiftText(text, timeOptions);
+  if (read) return { kind: 'shifts', intervals: read.segments.map((s) => ({ start: s.start, end: s.end })) };
 
   return { kind: 'unresolved', raw: text };
 }
+
+/** One cell's text read by the table reader's own rules — so the AI reader's cells mean the same. */
+export function interpretCell(text: string, timeOptions: ShiftTextOptions = {}): CellParseResult {
+  return parseCellValue(text, undefined, timeOptions);
+}
+
 
 /**
  * True when a lone label sitting in an otherwise-blank row looks like a
@@ -540,6 +426,26 @@ function isRoleHeaderLabel(candidate: string, hasSeenAnyStaffRow: boolean): bool
   return letters === letters.toUpperCase() && letters !== letters.toLowerCase();
 }
 
+interface DayColumn {
+  /** The sheet columns this day (or day half) occupies: one, or several merged sub-columns. */
+  colIndexes: number[];
+  date: string;
+  period: 'AM' | 'PM' | null;
+  /** The header prints a weekday that `date` doesn't fall on ("Thu 19/08" when 19/08 is a Wednesday). */
+  weekdayMismatch?: { header: string; printed: string; actual: string };
+}
+
+/**
+ * One day's cell text: the sub-cells joined in column order ("11 17 18 25" from four
+ * AM-start/AM-end/PM-start/PM-end columns). A label merged across the sub-columns (repeated by
+ * merge expansion) counts once.
+ */
+function dayCellText(row: unknown[], col: DayColumn): string {
+  const parts = col.colIndexes.map((c) => normalizeCell(row[c])).filter((v) => v !== '' && v !== '-');
+  if (parts.length > 1 && parts.every((p) => p === parts[0]) && !/^\d+(?:[.:]\d+)?$/.test(parts[0]!)) return parts[0]!;
+  return parts.join(' ');
+}
+
 /**
  * Structural override for the case-based header signal above: true when
  * ANY day-column cell on this row holds real shift-shaped content (a
@@ -558,9 +464,9 @@ function isRoleHeaderLabel(candidate: string, hasSeenAnyStaffRow: boolean): bool
  * vocabulary — checked BEFORE the case-based signal at every call site
  * below so it can never be overridden by it.
  */
-function rowHasShiftShapedData(row: unknown[], columns: DayColumn[], fileLegend: Record<string, ShiftInterval>): boolean {
+function rowHasShiftShapedData(row: unknown[], columns: DayColumn[], fileLegend: Record<string, ShiftInterval>, timeOptions: ShiftTextOptions): boolean {
   for (const col of columns) {
-    const parsed = parseCellValue(row[col.colIndex], fileLegend);
+    const parsed = parseCellValue(dayCellText(row, col), fileLegend, timeOptions);
     if (parsed.kind === 'shifts' || parsed.kind === 'leave' || parsed.kind === 'flagged') return true;
   }
   return false;
@@ -576,18 +482,13 @@ function rowHasShiftShapedData(row: unknown[], columns: DayColumn[], fileLegend:
  * comes in lower than this independent count, something dropped real data
  * regardless of which code path caused it — see RosterExtractionAnomalyError.
  *
- * Mirrors the two row-level exclusions the main loop itself applies before
- * a row can ever become a staff row — a blank label (no employee name) and
- * a bare-number headcount/totals row — so this doesn't count rows the main
- * loop was never going to treat as staff in the first place (e.g. a
- * per-shift headcount summary row whose numbers coincidentally parse as a
- * valid "start end" time pair, like "2 2"). Also counts a row whose day
- * columns are blank but a trailing notes column carries a recognizable
- * leave code, matching the same fallback processStaffRow applies (see
- * `extraNoteExcludedCols`) — otherwise an employee whose only signal is a
- * coincidental leave-code note (no real day-column data at all) would be
- * counted as "expected" here but not by the main loop's day-column check,
- * a false mismatch in the other direction.
+ * Mirrors the row-level exclusions the main loop itself applies before
+ * a row can ever become a staff row — a blank label (no employee name), a
+ * bare-number headcount/totals row, a summary or caption row — so this
+ * doesn't count rows the main loop was never going to treat as staff in
+ * the first place. Also counts a row whose day columns are blank but a
+ * trailing notes column carries a recognizable leave code, matching the
+ * same fallback processStaffRow applies (see `extraNoteExcludedCols`).
  */
 function countRowsWithRealShiftData(
   grid: unknown[][],
@@ -597,8 +498,9 @@ function countRowsWithRealShiftData(
   fileLegend: Record<string, ShiftInterval>,
   labelColIndex: number,
   excludedNoteCols: Set<number>,
+  timeOptions: ShiftTextOptions,
 ): number {
-  const dayColIndexSet = new Set(columns.map((c) => c.colIndex));
+  const dayColIndexSet = new Set(columns.flatMap((c) => c.colIndexes));
   let count = 0;
   for (let r = dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
@@ -606,8 +508,9 @@ function countRowsWithRealShiftData(
     if (!label) continue; // no employee name in this row -> can never become a staff row
     if (/^\d+(\.\d+)?$/.test(label)) continue; // headcount/totals row, same exclusion the main loop applies
     if (SUMMARY_ROW_LABELS.has(label.toLowerCase())) continue; // footer/summary caption
+    if (CAPTION_WORDS.test(label) || isFooterOrNote(label)) continue; // caption / note line
 
-    if (rowHasShiftShapedData(row, columns, fileLegend)) {
+    if (rowHasShiftShapedData(row, columns, fileLegend, timeOptions)) {
       count++;
       continue;
     }
@@ -623,109 +526,191 @@ function countRowsWithRealShiftData(
   return count;
 }
 
-interface DayColumn {
-  colIndex: number;
-  date: string;
-  period: 'AM' | 'PM' | null;
-  /** The header prints a weekday that `date` doesn't fall on ("Thu 19/08" when 19/08 is a Wednesday). */
-  weekdayMismatch?: { header: string; printed: string; actual: string };
-}
+// --- day headers ------------------------------------------------------------------------------
 
-/**
- * Longest span, in days, one header row's dates may cover. Two weeks of day
- * columns is the widest layout this parser targets; a "header" whose dates
- * straddle more than that is a row of unrelated values (e.g. shift ranges
- * that happen to read as day-month dates), not consecutive days.
- */
-const MAX_HEADER_DATE_SPAN_DAYS = 13;
+const PERIOD_CELL = /^(am|pm)$/i;
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-/**
- * Whether a row that has >=2 cells resolving as header dates is really a
- * header, or a data row that merely LOOKS like one.
- *
- * Content alone can't answer this: resolveDayMonthDate accepts numeric
- * pairs, so a shift range whose end hour is <=12 ("9-12", "8-11") reads as
- * a calendar date (Dec 9, Nov 8). Any row holding two of them — an opening-
- * cover line above the real header, or the first employee's own row directly
- * beneath it — used to be taken for a header, silently shifting every date
- * in the file or swallowing that employee's whole week.
- *
- * Same principle as isRoleHeaderLabel/rowHasShiftShapedData next door: real
- * shift-shaped content is proof a row is data, whatever else it resembles.
- *  - No date cell also parses as a shift (day names, "17-Aug", ISO/Date
- *    cells): unambiguously a header.
- *  - Otherwise the cells are ambiguous — "17/08" is both a date AND a valid
- *    17:00-08:00 shift, and numeric day-month headers are a supported layout
- *    — so fall back to structure: a header lists one short run of days. Its
- *    dates must span >=2 distinct days within MAX_HEADER_DATE_SPAN_DAYS,
- *    which shift-derived "dates" ("9-12","8-11" -> Dec 9, Nov 8, or the
- *    same shift repeated, i.e. one date) don't.
- *
- * Residual: a data row whose shift ranges happen to read as consecutive days
- * (e.g. "8-12","9-12","10-12" = Dec 8, 9, 10) is indistinguishable by
- * content or structure from a numeric header and is still accepted.
- */
-function isPlausibleHeaderRow(row: unknown[], weekStart: string): boolean {
-  const dates: string[] = [];
-  const dateColumns: DayColumn[] = [];
+/** The day labels a row prints, by column (column 0, the name column, never holds one). */
+function rowDayLabels(row: unknown[]): Map<number, DayLabel> {
+  const out = new Map<number, DayLabel>();
   for (let c = 1; c < row.length; c++) {
-    const date = resolveHeaderDate(row[c], weekStart);
-    if (date) {
-      dates.push(date);
-      dateColumns.push({ colIndex: c, date, period: null });
-    }
+    const label = parseDayLabel(row[c] instanceof Date || typeof row[c] === 'number' ? row[c] : normalizeCell(row[c]));
+    if (label) out.set(c, label);
   }
-  if (dates.length < 2) return false;
-  // Legend codes are detected after the header is found, so there is none to
-  // consult here — and a legend code ("M", "E") never resolves as a date.
-  if (!rowHasShiftShapedData(row, dateColumns, {})) return true;
-
-  const distinct = [...new Set(dates)].sort();
-  if (distinct.length < 2) return false;
-  const spanDays = (Date.parse(distinct[distinct.length - 1]) - Date.parse(distinct[0])) / 86_400_000;
-  return spanDays <= MAX_HEADER_DATE_SPAN_DAYS;
+  return out;
 }
 
-/** Locates the day-header row and, if present, the AM/PM sub-header row directly beneath it. */
-function findHeaderRows(grid: unknown[][], weekStart: string): { dayRowIdx: number; periodRowIdx: number | null; dataStartIdx: number } | null {
-  for (let r = 0; r < Math.min(grid.length, 15); r++) {
+/** Collapses runs of identical labels (one header merged across sub-columns) into one entry. */
+function distinctRuns(labels: Map<number, DayLabel>): DayLabel[] {
+  const out: DayLabel[] = [];
+  let prevKey = '';
+  for (const [, l] of [...labels].sort((a, b) => a[0] - b[0])) {
+    const key = JSON.stringify(l);
+    if (key !== prevKey) out.push(l);
+    prevKey = key;
+  }
+  return out;
+}
+
+/**
+ * Whether a row is a day-header row. Day and month names make it one outright (with at least
+ * two days, and most of the row's cells being days). A row of digits only ("17/08 | 18/08") also
+ * reads as shift times ("9-12" = 9 Dec), so it counts only as a run of consecutive days — which
+ * a data row's shift times never form.
+ */
+function isDayHeaderRow(row: unknown[], labels: Map<number, DayLabel>): boolean {
+  const runs = distinctRuns(labels);
+  if (runs.length < 2) return false;
+  let nonBlank = 0;
+  for (let c = 1; c < row.length; c++) if (normalizeCell(row[c])) nonBlank++;
+  if (labels.size / Math.max(1, nonBlank) < 0.6) return false;
+  if (runs.some((l) => !l.numericOnly)) return true;
+  return isConsecutiveDayRun(runs);
+}
+
+function isPeriodRow(row: unknown[]): boolean {
+  const cells = row.slice(1).map(normalizeCell).filter(Boolean);
+  return cells.length >= 2 && cells.filter((c) => PERIOD_CELL.test(c)).length / cells.length >= 0.6;
+}
+
+interface HeaderBlock {
+  dayRowIdxs: number[];
+  periodRowIdx: number | null;
+  dataStartIdx: number;
+  /** Text printed above the header rows (titles such as "Rota 24 - 30 Aug"). */
+  titles: string[];
+}
+
+/** Locates the stacked day-header rows (dates and/or weekdays), the AM/PM row under them, and any title above. */
+function findHeaderBlock(grid: unknown[][]): HeaderBlock | null {
+  for (let r = 0; r < Math.min(grid.length, 30); r++) {
     const row = grid[r] ?? [];
-    // First row that is PLAUSIBLY a header wins and is final — the loop
-    // returns immediately, so no later row can override it. A row that
-    // merely has date-shaped cells but reads as data is skipped, not chosen.
-    if (isPlausibleHeaderRow(row, weekStart)) {
-      const nextRow = grid[r + 1] ?? [];
-      const nextIsPeriodRow = nextRow.slice(1).some((cell) => /^(am|pm)$/i.test(normalizeCell(cell)));
-      if (nextIsPeriodRow) {
-        return { dayRowIdx: r, periodRowIdx: r + 1, dataStartIdx: r + 2 };
-      }
-      // Some files stack a second header row with no AM/PM concept at all
-      // — a weekday-name row ("Monday", "Tuesday", ...) repeating the same
-      // dates already read from the numeric-date row above it. Detected
-      // with the same gate as the date row itself and skipped, so it isn't
-      // mistaken for the first staff row — and, by the same gate, a real
-      // first staff row whose shift ranges read as dates ("6-10","7-11")
-      // is NOT mistaken for it, which used to drop that employee entirely.
-      const dataStartIdx = isPlausibleHeaderRow(nextRow, weekStart) ? r + 2 : r + 1;
-      return { dayRowIdx: r, periodRowIdx: null, dataStartIdx };
+    if (!isDayHeaderRow(row, rowDayLabels(row))) continue;
+    const dayRowIdxs = [r];
+    let periodRowIdx: number | null = null;
+    let next = r + 1;
+    // A second stacked header row (weekdays under dates, or dates under weekdays), then AM/PM.
+    while (next < grid.length && next <= r + 3) {
+      const candidate = grid[next] ?? [];
+      if (periodRowIdx === null && isDayHeaderRow(candidate, rowDayLabels(candidate))) dayRowIdxs.push(next);
+      else if (periodRowIdx === null && isPeriodRow(candidate)) periodRowIdx = next;
+      else break;
+      next++;
     }
+    const titles: string[] = [];
+    for (let t = 0; t < r; t++) {
+      for (const cell of grid[t] ?? []) {
+        const text = normalizeCell(cell);
+        if (text && !titles.includes(text)) titles.push(text);
+      }
+    }
+    return { dayRowIdxs, periodRowIdx, dataStartIdx: next, titles };
   }
   return null;
 }
 
-function buildDayColumns(grid: unknown[][], header: { dayRowIdx: number; periodRowIdx: number | null }, weekStart: string): DayColumn[] {
-  const dayRow = grid[header.dayRowIdx] ?? [];
+/** Combines what stacked header rows print over one column ("17-Aug" over "MONDAY"). */
+function mergeLabels(a: DayLabel | undefined, b: DayLabel): DayLabel {
+  if (!a) return b;
+  return {
+    weekday: a.weekday ?? b.weekday,
+    day: a.day ?? b.day,
+    month: a.month ?? b.month,
+    year: a.year ?? b.year,
+    numericOnly: a.numericOnly && b.numericOnly,
+  };
+}
+
+export interface GridParseOptions {
+  /** Today in the venue's timezone (YYYY-MM-DD): the reference for unprinted years. Default: weekStart. */
+  today?: string;
+  /** The week the client asked for; used only when the sheet prints no dates. Default: weekStart. */
+  clientWeekStart?: string | null;
+  /** Page and row of each grid row in the source file (PDF reconstruction); default: the grid row. */
+  rowRefs?: { page: number | null; row: number }[];
+}
+
+function buildDayColumns(
+  grid: unknown[][],
+  header: HeaderBlock,
+  ctx: { today: string; clientWeekStart: string | null },
+): { columns: DayColumn[]; week: WeekDetection } | null {
+  const labelsByCol = new Map<number, DayLabel>();
+  const rawByCol = new Map<number, string>();
+  for (const r of header.dayRowIdxs) {
+    for (const [c, l] of rowDayLabels(grid[r] ?? [])) {
+      labelsByCol.set(c, mergeLabels(labelsByCol.get(c), l));
+      rawByCol.set(c, [rawByCol.get(c), normalizeCell(grid[r]![c])].filter(Boolean).join(' '));
+    }
+  }
+  const cols = [...labelsByCol.keys()].sort((a, b) => a - b);
+  if (cols.length === 0) return null;
+  // One slot per printed day: adjacent columns printing the same label are one merged day.
+  const slots: { cols: number[]; label: DayLabel }[] = [];
+  for (const c of cols) {
+    const label = labelsByCol.get(c)!;
+    const last = slots[slots.length - 1];
+    if (last && last.cols[last.cols.length - 1] === c - 1 && JSON.stringify(last.label) === JSON.stringify(label)) last.cols.push(c);
+    else slots.push({ cols: [c], label });
+  }
+  // A day header that was merged across sub-columns but saved without its merge (CSV) prints
+  // only over the first one: the blank-headed columns up to the next day belong to that day.
+  // The last day takes as many as the others do.
+  const headerRows = header.dayRowIdxs.map((r) => grid[r] ?? []);
+  const blankHeaded = (c: number) => headerRows.every((row) => !normalizeCell(row[c]));
+  const widths: number[] = [];
+  slots.forEach((slot, i) => {
+    const next = slots[i + 1]?.cols[0];
+    const usualWidth = widths.length ? Math.round(widths.reduce((a, b) => a + b, 0) / widths.length) : 1;
+    const limit = next ?? slot.cols[slot.cols.length - 1]! + Math.max(0, usualWidth - slot.cols.length) + 1;
+    for (let c = slot.cols[slot.cols.length - 1]! + 1; c < limit && blankHeaded(c); c++) slot.cols.push(c);
+    if (next !== undefined) widths.push(slot.cols.length);
+  });
+  const { week, dates } = detectWeek(slots.map((s) => s.label), header.titles, ctx);
   const periodRow = header.periodRowIdx !== null ? grid[header.periodRowIdx] ?? [] : null;
   const columns: DayColumn[] = [];
-  for (let c = 1; c < dayRow.length; c++) {
-    const date = resolveHeaderDate(dayRow[c], weekStart);
-    if (!date) continue;
-    const periodCell = periodRow ? normalizeCell(periodRow[c]).toUpperCase() : '';
-    const period = periodCell === 'AM' || periodCell === 'PM' ? (periodCell as 'AM' | 'PM') : null;
-    const mismatch = printedWeekdayMismatch(dayRow[c], date);
-    columns.push({ colIndex: c, date, period, ...(mismatch ? { weekdayMismatch: { header: normalizeCell(dayRow[c]), ...mismatch } } : {}) });
-  }
-  return columns;
+  slots.forEach((slot, i) => {
+    const date = dates[i];
+    if (!date) return;
+    const printedWeekday = slot.label.weekday;
+    const actual = weekdayOf(date);
+    const mismatch =
+      printedWeekday !== null && printedWeekday !== actual
+        ? { header: rawByCol.get(slot.cols[0]!) ?? '', printed: WEEKDAY_NAMES[printedWeekday]!, actual: WEEKDAY_NAMES[actual]! }
+        : undefined;
+    // AM/PM sub-columns split the day; without them, all of the day's columns are one cell. A
+    // blank sub-header cell belongs to the period printed before it (a merge saved without it).
+    const byPeriod = new Map<string, number[]>();
+    let carried = '';
+    for (const c of slot.cols) {
+      const p = periodRow ? normalizeCell(periodRow[c]).toUpperCase() : '';
+      const key = p === 'AM' || p === 'PM' ? p : p ? '' : carried;
+      carried = key;
+      byPeriod.set(key, [...(byPeriod.get(key) ?? []), c]);
+    }
+    for (const [p, colIndexes] of byPeriod) {
+      columns.push({ colIndexes, date, period: (p || null) as DayColumn['period'], ...(mismatch ? { weekdayMismatch: mismatch } : {}) });
+    }
+  });
+  return { columns, week };
+}
+
+/**
+ * Two leading columns before the days: which is the per-row title ("RM", "Head waiter 1",
+ * "Sup") and which the person's name? Titles repeat a role word, carry numbers or short
+ * capital abbreviations; names are words of letters. Returns null when neither column leans.
+ */
+function titleColumnByContent(pairs: { col0: string; col1: string }[]): 0 | 1 | null {
+  const roleish = (v: string) =>
+    // A number alone ("1042") is an ID, not a title; a word with a number ("Waiter 3") is one.
+    isRecognizedRoleAlias(v) || isRecognizedRoleAlias(v.replace(/\s*\d+$/, '')) || /[A-Za-z].*\d/.test(v) || /^[A-Z]{2,4}$/.test(v) || canonicalRoleName(v) !== v;
+  const nameish = (v: string) => looksLikePersonName(v) && !roleish(v);
+  const score = (vals: string[]) => vals.filter(roleish).length - vals.filter(nameish).length;
+  const s0 = score(pairs.map((p) => p.col0));
+  const s1 = score(pairs.map((p) => p.col1));
+  if (s0 === s1) return null;
+  return s0 > s1 ? 0 : 1;
 }
 
 /**
@@ -734,21 +719,35 @@ function buildDayColumns(grid: unknown[][], header: { dayRowIdx: number; periodR
  * day-grid roster at all (e.g. no recognizable date header row) — callers
  * should treat that as "not this shape" and try another path, not as a
  * hard error.
+ *
+ * `weekStart` is the fallback reference week: the year reference when
+ * `options.today` is not given, and the week for weekday-only headers when
+ * `options.clientWeekStart` is not given (callers that pass both use it for
+ * nothing else). Besides rows, the result lists every person read
+ * (`people`, including people with no shifts that week), rows that could not
+ * be read (`unreadRows`) and the detected `week`.
  */
-export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisionResult {
+export function parseExcelGrid(grid: unknown[][], weekStart: string, options: GridParseOptions = {}): ParsedVisionResult {
   const rows: ParsedShiftRow[] = [];
   const issues: RowIssue[] = [];
   const anomalies: AnomalyRecord[] = [];
   const leaveRecords: LeaveRecord[] = [];
+  const people: ReadPerson[] = [];
+  const unreadRows: UnreadRow[] = [];
+  const refOf = (r: number) => options.rowRefs?.[r] ?? { page: null, row: r + 1 };
 
-  const header = findHeaderRows(grid, weekStart);
+  const header = findHeaderBlock(grid);
   if (!header) {
     return { templateLabel: 'Deterministic Grid Parser (no day-header row detected)', rows, issues, anomalies, leaveRecords, legend: [] };
   }
-  const columns = buildDayColumns(grid, header, weekStart);
-  if (columns.length === 0) {
+  const built = buildDayColumns(grid, header, {
+    today: options.today ?? weekStart,
+    clientWeekStart: options.clientWeekStart === undefined ? weekStart : options.clientWeekStart,
+  });
+  if (!built || built.columns.length === 0) {
     return { templateLabel: 'Deterministic Grid Parser (no resolvable day columns)', rows, issues, anomalies, leaveRecords, legend: [] };
   }
+  const { columns, week } = built;
 
   // Legend detection is additive: when no legend block is found (the vast
   // majority of files), `fileLegend` is an empty map and `parseCellValue`'s
@@ -762,109 +761,66 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // shift on its own).
   const dataEndIdx = footerStartRow ?? grid.length;
 
+  // How this sheet writes dotted times ("18.30" = 18:30 when any cell shows ".30"; else decimal hours).
+  const dayTexts: string[] = [];
+  for (let r = header.dataStartIdx; r < dataEndIdx; r++) for (const col of columns) dayTexts.push(dayCellText(grid[r] ?? [], col));
+  const timeOptions: ShiftTextOptions = { dotMeans: sheetDotStyle(dayTexts) };
+  const cellOf = (row: unknown[], col: DayColumn) => parseCellValue(dayCellText(row, col), fileLegend, timeOptions);
+  const hasData = (row: unknown[]) => rowHasShiftShapedData(row, columns, fileLegend, timeOptions);
+  const daysBlank = (row: unknown[]) => columns.every((col) => dayCellText(row, col) === '');
+  /** One label merged across the whole row: every filled cell (at least three) carries the same text. */
+  const isMergedBanner = (row: unknown[]) => {
+    const filled = row.map(normalizeCell).filter(Boolean);
+    return filled.length >= 3 && filled.every((v) => v === filled[0]) && !hasData(row);
+  };
+
   // Most rosters have exactly one leading column (the staff name). Some
   // print an explicit per-row title in its own column before the name
   // (e.g. "RM" | "Nedak Mizon" | ... — Bar des Pres FOH style), on top
   // of (or instead of) grouping staff under section headers. Inferred from
   // where the day columns actually start, rather than hardcoded, so both
   // shapes work without knowing in advance which one a given file uses.
-  const firstDayColIndex = columns[0].colIndex;
+  const firstDayColIndex = Math.min(...columns.flatMap((c) => c.colIndexes));
+  const lastDayColIndex = Math.max(...columns.flatMap((c) => c.colIndexes));
   const hasTitleColumn = firstDayColIndex >= 2;
   let nameColIndex = hasTitleColumn ? firstDayColIndex - 1 : 0;
   let titleColIndex: number | null = hasTitleColumn ? 0 : null;
 
   // With exactly 2 leading columns, position alone can't say which is the
-  // staff name and which is the role — "Role, Name, Mon..." (Bar des
-  // Pres's own layout, the shape the col0=title/col1=name default above
-  // was built for) and the reverse "Name, Role, Mon..." are structurally
-  // identical from the header row alone. Disambiguate by content instead:
-  // sample each candidate column against the known role-alias vocabulary
-  // and see which one actually looks like roles. Only overrides the
-  // position-based default on a confident, one-sided signal — with no
-  // signal on either side (e.g. this venue's role titles genuinely aren't
-  // in ROLE_ALIASES yet, a separate vocabulary gap) the sheet is
-  // genuinely ambiguous and gets flagged for manual review below instead
-  // of silently resolved on a guess either way.
+  // staff name and which is the role — "Role, Name, Mon..." and the reverse
+  // "Name, Role, Mon..." are structurally identical from the header row
+  // alone. Disambiguate by content: titles repeat role words, carry numbers
+  // ("Waiter 3") or short capital abbreviations ("RM", "JAM"); names are
+  // words of letters. Rows where both columns hold the same text (a label
+  // merged across both) say nothing and are left out. With no lean either
+  // way the sheet is genuinely ambiguous and gets flagged for manual review
+  // below instead of silently resolved on a guess either way.
   let columnOrderAmbiguous = false;
   if (hasTitleColumn && firstDayColIndex === 2) {
-    // Prefer rows where BOTH candidate columns are populated — a genuine
-    // per-row (title, name) pair is the most reliable signal available,
-    // and excludes a section-header-only row (one column blank, e.g.
-    // "FLOOR" in column 0 with column 1 empty) from corrupting the sample:
-    // "floor" is itself a ROLE_ALIASES key, so a "FLOOR" section header
-    // would otherwise get miscounted as evidence that column 0 holds
-    // roles even on a sheet where column 0 is actually the name column —
-    // a header's own column placement doesn't reliably indicate which
-    // column means what, only a real paired data row does.
-    const pairedRows: { col0: string; col1: string }[] = [];
+    const pairs: { col0: string; col1: string }[] = [];
     for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
       const v0 = normalizeCell(grid[r]?.[0]);
       const v1 = normalizeCell(grid[r]?.[1]);
-      if (v0 && v1) pairedRows.push({ col0: v0, col1: v1 });
+      if (v0 && v1 && v0 !== v1 && !CAPTION_WORDS.test(v0) && !CAPTION_WORDS.test(v1)) pairs.push({ col0: v0, col1: v1 });
     }
-
-    let col0: { hits: number; total: number };
-    let col1: { hits: number; total: number };
-    if (pairedRows.length > 0) {
-      col0 = { hits: pairedRows.filter((p) => isRecognizedRoleAlias(p.col0)).length, total: pairedRows.length };
-      col1 = { hits: pairedRows.filter((p) => isRecognizedRoleAlias(p.col1)).length, total: pairedRows.length };
-    } else {
-      // No genuine two-value rows anywhere on the sheet to sample from
-      // (rare in practice — a real roster's staff rows almost always
-      // carry both a title and a name per row). Fall back to every
-      // non-blank value per column, header rows included — noisier, but
-      // still better than no signal at all when it's the only signal
-      // there is.
-      const fullColumnShare = (colIndex: number): { hits: number; total: number } => {
-        let hits = 0;
-        let total = 0;
-        for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
-          const v = normalizeCell(grid[r]?.[colIndex]);
-          if (!v) continue;
-          total++;
-          if (isRecognizedRoleAlias(v)) hits++;
-        }
-        return { hits, total };
-      };
-      col0 = fullColumnShare(0);
-      col1 = fullColumnShare(1);
-    }
-
-    if (col0.hits === 0 && col1.hits === 0) {
-      // No content signal on either side — e.g. this venue's own role
-      // titles ("RM", "Chef de Rang", ...) genuinely aren't in
-      // ROLE_ALIASES yet. Position alone would just be a guess here.
-      columnOrderAmbiguous = true;
-    } else if (col0.hits > 0 && col1.hits === 0) {
-      // Only column 0 has any role-vocabulary hits — content agrees with
-      // the position default (col0=title/col1=name). A real staff-name
-      // column essentially never accidentally matches role vocabulary, so
-      // even a low hit *rate* on column 0 (most real rosters mix a few
-      // recognized titles with several venue-specific ones ROLE_ALIASES
-      // doesn't know yet) is still a confident, one-sided signal — it's
-      // the zero-vs-nonzero split that matters, not the absolute rate.
-    } else if (col1.hits > 0 && col0.hits === 0) {
-      // Mirror image: only column 1 has hits — content confidently
-      // disagrees with the position default. Column 1 is the role column
-      // here, column 0 is the name.
+    const titleCol = titleColumnByContent(pairs);
+    if (titleCol === 1) {
       titleColIndex = 1;
       nameColIndex = 0;
-    } else {
-      // Both columns have at least one hit (rare — e.g. a name that
-      // happens to coincidentally match a role alias). Fall back to
-      // comparing rates, and only trust a clear, not marginal, lean.
-      const col0Rate = col0.hits / col0.total;
-      const col1Rate = col1.hits / col1.total;
-      const CONFIDENT_MARGIN = 0.25;
-      if (col1Rate - col0Rate > CONFIDENT_MARGIN) {
-        titleColIndex = 1;
-        nameColIndex = 0;
-      } else if (col0Rate - col1Rate > CONFIDENT_MARGIN) {
-        // keep col0=title/col1=name
-      } else {
-        columnOrderAmbiguous = true;
-      }
+    } else if (titleCol === null) {
+      columnOrderAmbiguous = pairs.length > 0;
     }
+  }
+
+  // Columns to the right of the days that run alongside rows which are not people (a banner, a
+  // headcount line, an empty row): a colour key or side legend, not anyone's notes.
+  const sideLegendCols = new Set<number>();
+  for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+    const row = grid[r] ?? [];
+    const label = normalizeCell(row[hasTitleColumn ? nameColIndex : 0]);
+    const personLike = label && !/^\d+(\.\d+)?$/.test(label);
+    if (personLike && !(daysBlank(row) && isRoleHeaderLabel(label, true))) continue;
+    for (let c = lastDayColIndex + 1; c < row.length; c++) if (normalizeCell(row[c])) sideLegendCols.add(c);
   }
 
   // An "ALL-CAPS venue": every row that carries real shift data has its staff name in capitals.
@@ -872,22 +828,41 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // with a blank week looks exactly like one), so a header recognised ONLY by that pattern is
   // treated like an unrecognised header below — provisional and flagged for the manager —
   // instead of silently relabelling everyone beneath it. Vocabulary matches are unaffected.
-  const allCapsVenue = (() => {
-    if (columnOrderAmbiguous) return false;
-    const labelCol = hasTitleColumn ? nameColIndex : 0;
-    const labels: string[] = [];
-    for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
-      const row = grid[r] ?? [];
-      const label = normalizeCell(row[labelCol]);
-      if (!label || /^d+(.d+)?$/.test(label) || !rowHasShiftShapedData(row, columns, fileLegend)) continue;
-      labels.push(label);
-    }
-    return labels.length >= 2 && labels.every(isAllCapsLabel);
-  })();
+  const dataLabels: string[] = [];
+  for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+    const row = grid[r] ?? [];
+    const label = normalizeCell(row[hasTitleColumn ? nameColIndex : 0]);
+    if (!label || /^\d+(\.\d+)?$/.test(label) || !hasData(row)) continue;
+    dataLabels.push(label);
+  }
+  const allCapsVenue = !columnOrderAmbiguous && dataLabels.length >= 2 && dataLabels.every(isAllCapsLabel);
+  const mixedCaseVenue = dataLabels.some((l) => !isAllCapsLabel(l));
   /** A header that only the ALL-CAPS pattern recognised, in a sheet where that pattern proves nothing. */
   const isPatternOnlyHeaderInCapsVenue = (label: string) => allCapsVenue && canonicalRoleName(label) === label;
 
+  // How THIS sheet prints its section banners, learned from the banners the role vocabulary
+  // recognises: centred / merged across the days (never alone in the name column), and/or in
+  // capitals. A blank-week label that doesn't look like the sheet's own banners is a person.
+  const knownBanners: { text: string; awayFromName: boolean }[] = [];
+  if (!hasTitleColumn) {
+    for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+      const row = grid[r] ?? [];
+      if (hasData(row)) continue;
+      const inDays = columns.map((col) => dayCellText(row, col)).filter(Boolean);
+      const first = normalizeCell(row[0]);
+      for (const text of new Set([first, ...inDays])) {
+        if (text && canonicalRoleName(text) !== text) knownBanners.push({ text, awayFromName: inDays.includes(text) });
+      }
+    }
+  }
+  const bannersAwayFromName = knownBanners.length > 0 && knownBanners.every((b) => b.awayFromName);
+  const bannersInCaps = knownBanners.length > 0 && knownBanners.every((b) => isAllCapsLabel(b.text));
+  /** A name-column label printed unlike every banner of this sheet. */
+  const unlikeSheetBanners = (label: string) => bannersAwayFromName || (bannersInCaps && !isAllCapsLabel(label));
+
   let currentRole = '';
+  /** The section banner the following people are listed under, as printed (null before any). */
+  let currentSection: string | null = null;
   // True whenever `currentRole` was set by the unrecognized-section-header
   // promotion below (or hasn't been set to anything real yet), false once
   // it's been set by a REAL, recognized header (vocabulary or ALL-CAPS
@@ -896,14 +871,13 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // headers (e.g. fixture 2's "Poolside Detail" -> "Shisha Terrace" ->
   // "Valet & Door") each correctly take over from the last. A REAL role
   // must never be silently overwritten by an ambiguous blank row, though
-  // — see the promotion site below for why (a blank-week employee sitting
-  // INSIDE an already-correct section, e.g. Gattopardo's Lomur between
-  // Nelim and Nedak under HEAD WAITERS, is structurally indistinguishable
-  // from a genuine new header at that one row; only refusing to touch an
-  // already-real currentRole prevents that from corrupting Nedak's role).
+  // — a blank-week employee sitting INSIDE an already-correct section is
+  // a person, never a new header.
   let currentRoleIsProvisional = true;
   let rowNumber = 1;
   let hasSeenAnyStaffRow = false;
+  /** People rows read so far (to tell a blank-week person in a header-less first group from a heading). */
+  let peopleSoFar = 0;
   // One value per physical sheet row treated as a staff row (unlike
   // `rowNumber` above, a per-SHIFT counter — one busy employee's several
   // shifts share one `sourceRowIndex` but get different `rowNumber`s), so a
@@ -911,7 +885,24 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // name alone (two different real staff sharing a name land on different
   // physical rows, hence different indices).
   let sourceRowCounter = 0;
-  const dayColIndexes = new Set(columns.map((c) => c.colIndex));
+  const dayColIndexes = new Set(columns.flatMap((c) => c.colIndexes));
+
+  const setSection = (label: string, provisional: boolean) => {
+    currentRole = label;
+    currentSection = label;
+    currentRoleIsProvisional = provisional;
+  };
+  const addPerson = (r: number, name: string, roleLabel: string | null): string => {
+    const ref = refOf(r);
+    const personKey = personKeyOf(name, ref.page, ref.row);
+    people.push({ personKey, name, roleLabel: roleLabel || null, section: currentSection, sourcePage: ref.page, sourceRow: ref.row, readerSource: 'table' });
+    peopleSoFar++;
+    return personKey;
+  };
+  const addUnread = (r: number, text: string, reason: string) => {
+    const ref = refOf(r);
+    unreadRows.push({ page: ref.page, row: ref.row, text, reason });
+  };
 
   /**
    * Parses every day-column cell for one confirmed staff row (shared by
@@ -919,26 +910,29 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
    * found — feeds the post-loop sanity check (RosterExtractionAnomalyError).
    */
   function processStaffRow(
+    r: number,
     row: unknown[],
     employeeName: string,
     roleName: string,
     extraNoteExcludedCols: Set<number>,
     sourceRowIndex: number,
+    personKey: string,
   ): boolean {
+    const ref = refOf(r);
     let hasShiftOrLeaveThisRow = false;
     for (const col of columns) {
-      const parsed = parseCellValue(row[col.colIndex], fileLegend);
+      const parsed = cellOf(row, col);
       if (parsed.kind === 'blank') continue;
 
       // The date wins (it's the more specific of the two), but a weekday that
       // disagrees with it means the column may be the wrong day: flag every
       // entry under it for the manager rather than guess.
       if (col.weekdayMismatch) {
-        const { header, printed, actual } = col.weekdayMismatch;
+        const { header: printedHeader, printed, actual } = col.weekdayMismatch;
         anomalies.push({
           employeeName,
           date: col.date,
-          rawText: header,
+          rawText: printedHeader,
           reason: `The day header says ${printed}, but ${col.date} is a ${actual}. Check which day this is before confirming.`,
           confidence: 0.5,
           rowNumber: parsed.kind === 'shifts' ? rowNumber : null,
@@ -1003,6 +997,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
           overnight: isOvernight(interval.start, interval.end),
           breakMinutes: 0,
           managerNotes: col.period ? `[${col.period}]` : null,
+          personKey,
+          section: currentSection,
+          sourcePage: ref.page,
+          readerSource: 'table',
         });
       }
     }
@@ -1014,15 +1012,16 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     // that as an explicit leave record instead. Deliberately narrow: only
     // fires when the day columns were completely empty, so a real working
     // week with some unrelated trailing text (e.g. a "Closing" note next
-    // to someone who worked normally) is never misread as an absence.
+    // to someone who worked normally) is never misread as an absence. A
+    // side legend (colour key) running alongside the rows is nobody's note.
     if (!hasShiftOrLeaveThisRow) {
       for (let c = 0; c < row.length; c++) {
-        if (extraNoteExcludedCols.has(c) || dayColIndexes.has(c)) continue;
+        if (extraNoteExcludedCols.has(c) || dayColIndexes.has(c) || sideLegendCols.has(c)) continue;
         const note = normalizeCell(row[c]);
         if (!note) continue;
         const lower = note.toLowerCase();
         if (hasOwnKey(LEAVE_CODES, lower)) {
-          leaveRecords.push({ employeeName, date: weekStart, leaveCode: note, category: LEAVE_CODES[lower] });
+          leaveRecords.push({ employeeName, date: week.weekStart, leaveCode: note, category: LEAVE_CODES[lower] });
           hasShiftOrLeaveThisRow = true;
           break; // one leave record is enough to surface "this person is out"
         }
@@ -1040,10 +1039,9 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // Raw label text of every row promoted to a provisional section header
   // (see the `!hasTitleColumn` branch below) — one AnomalyRecord is
   // emitted per unique text after the loop, listing every row it ended up
-  // grouping, rather than one per occurrence (a header can legitimately
-  // repeat if merge-expansion or a reconstructed-PDF grid ever splits one
-  // section across more than one raw row).
+  // grouping, rather than one per occurrence.
   const unrecognizedHeaderTexts = new Set<string>();
+  const HEADING_NOTE = 'Read as a section heading. If this is a person with no shifts this week, add them on the review screen.';
 
   for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
     const row = grid[r] ?? [];
@@ -1065,10 +1063,20 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       const nonBlankValues: string[] = [];
       if (firstCell) nonBlankValues.push(firstCell);
       for (const col of columns) {
-        const v = normalizeCell(row[col.colIndex]);
+        const v = dayCellText(row, col);
         if (v) nonBlankValues.push(v);
       }
       if (nonBlankValues.length === 0) continue; // fully blank row
+
+      const rowHasData = hasData(row);
+      // A label merged across the whole row heads a section (provisionally when the vocabulary doesn't know it).
+      if (isMergedBanner(row) && !CAPTION_WORDS.test(nonBlankValues[0]!) && !isRoleHeaderLabel(nonBlankValues[0]!, hasSeenAnyStaffRow)) {
+        setSection(nonBlankValues[0]!, true);
+        unrecognizedHeaderTexts.add(nonBlankValues[0]!);
+        continue;
+      }
+      // A caption line (covers / events / notes) or a footer describes the day, never a person.
+      if (firstCell && !rowHasData && (CAPTION_WORDS.test(firstCell) || isFooterOrNote(firstCell) || (mixedCaseVenue && isAllCapsLabel(firstCell) && !daysBlank(row) && !isRoleHeaderLabel(firstCell, false)))) continue;
 
       // Role/section-header detection takes priority over everything else
       // below: a header row can carry an unrelated stray value alongside
@@ -1082,12 +1090,18 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       // what isRoleHeaderLabel's case/vocabulary signal would otherwise
       // say — this is what stops an ALL-CAPS staff name from being
       // misread as a new section header once hasSeenAnyStaffRow is true.
-      const rowHasData = rowHasShiftShapedData(row, columns, fileLegend);
-      const roleMatch = rowHasData ? undefined : nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
+      // Likewise, on a sheet whose banners sit away from the name column, a
+      // name-column label in capitals is a person, not a banner.
+      const roleMatch = rowHasData
+        ? undefined
+        : nonBlankValues.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow) && !(v === firstCell && bannersAwayFromName && canonicalRoleName(v) === v));
       if (roleMatch) {
-        currentRole = roleMatch;
-        currentRoleIsProvisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
-        if (currentRoleIsProvisional) unrecognizedHeaderTexts.add(roleMatch);
+        const provisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
+        setSection(roleMatch, provisional);
+        if (provisional) {
+          unrecognizedHeaderTexts.add(roleMatch);
+          if (roleMatch === firstCell) addUnread(r, roleMatch, HEADING_NOTE);
+        }
         continue;
       }
 
@@ -1108,7 +1122,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         if (rowHasData) {
           const dayCellSummary = columns
             .map((col) => {
-              const v = normalizeCell(row[col.colIndex]);
+              const v = dayCellText(row, col);
               return v ? `${col.date}: ${v}` : null;
             })
             .filter((v): v is string => v !== null)
@@ -1126,56 +1140,50 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
             rowNumber: null,
             kind: 'unrecognized_merged_name_cell',
           });
+          addUnread(r, dayCellSummary, 'This row has shifts but no name.');
+          continue;
+        }
+        // One heading printed away from the name column (centred across the days): a section
+        // banner the role vocabulary doesn't know. It can't be a person — names sit in the name
+        // column — so it groups the rows below, provisionally and flagged.
+        const texts = [...new Set(nonBlankValues)];
+        if (texts.length === 1 && !/^\d+(\.\d+)?$/.test(texts[0]!) && !isFooterOrNote(texts[0]!) && !CAPTION_WORDS.test(texts[0]!)) {
+          setSection(texts[0]!, true);
+          unrecognizedHeaderTexts.add(texts[0]!);
         }
         continue; // no employee name in this row — can't emit a staff row either way
       }
 
-      // Try the normal staff-row path first, completely unchanged — this
-      // is what still lets a blank-day-columns employee with a note-column
-      // leave code (e.g. Gattopardo's Ruren/Rumur — see the "leave
-      // detection" fallback inside processStaffRow) produce their real
-      // LeaveRecord exactly as before. Only when this produces genuinely
-      // NOTHING do we consider the row for header promotion below.
+      // A named row. With shift/leave data it is a person; with nothing in its days it is a
+      // person with no shifts this week — or a section heading the vocabulary doesn't know.
       const employeeName = firstCell;
+      const peopleBefore = peopleSoFar;
       hasSeenAnyStaffRow = true;
-      const hadRealData = processStaffRow(row, employeeName, currentRole, new Set([0]), sourceRowCounter++);
-      if (hadRealData) {
-        staffRowsWithRealDataProcessed++;
+      if (rowHasData || !daysBlank(row)) {
+        const key = addPerson(r, employeeName, currentRole);
+        if (processStaffRow(r, row, employeeName, currentRole, new Set([0]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
         continue;
       }
 
-      // Produced nothing at all AND every day-column cell is truly blank
-      // (a stronger bar than "no shift-shaped data", which an unresolved-
-      // but-present cell like the COVERS caption's "Sofia - 20pax" also
-      // satisfies): structurally header-shaped, but not recognized via
-      // vocabulary or the ALL-CAPS pattern — a genuinely novel
-      // section-header label ("Poolside Detail"), or an ALL-CAPS header
-      // that happens to be the very first one in the sheet
-      // (isRoleHeaderLabel's pattern signal requires hasSeenAnyStaffRow,
-      // see its own doc comment). Adopt the raw label as a PROVISIONAL
-      // role for whoever follows (so they stay correctly grouped together
-      // instead of every one of them independently landing on roleName
-      // ""), and flag it as an explicit, blocking anomaly for the manager
-      // to resolve — never auto-guessed/fuzzy-matched to an existing role
-      // (see report for why a wrong guess here is worse than surfacing it).
-      //
-      // Known, accepted ambiguity, NEUTRALIZED rather than just documented:
-      // a genuinely blank-week employee with no note-column code either (a
-      // real pattern — see the Gattopardo reference fixture's Lomur, who
-      // sits between Nelim and Nedak inside the already-correct HEAD
-      // WAITERS section) is structurally indistinguishable from a genuine
-      // new header at this one row alone. The `currentRoleIsProvisional`
-      // guard is what makes this safe either way: if a REAL header already
-      // applies here (Lomur's case), this block never touches it, so Nedak
-      // still correctly inherits HEAD WAITERS unchanged — confirmed against
-      // both real reference fixtures (Gattopardo, Bar des Pres), not just
-      // reasoned about; the first version of this fix (no provisional
-      // guard) was caught doing exactly this corruption by that same test
-      // suite before it shipped. Only ever replaces a role that was ITSELF
-      // already provisional (or empty) — see the field's own doc comment.
-      if (currentRoleIsProvisional && columns.every((col) => isBlank(row[col.colIndex]))) {
-        currentRole = firstCell;
-        unrecognizedHeaderTexts.add(firstCell);
+      // Every day cell is blank. A name-like label inside a section whose header is real (or in
+      // a header-less first group that already has people), or printed unlike every banner of
+      // this sheet, is a person with a blank week. A label that names a group, is written in
+      // capitals among mixed-case names, or opens the listing is a heading the vocabulary
+      // doesn't know: it groups the rows below provisionally and is flagged (see
+      // `currentRoleIsProvisional`), and — since it might still be a person with a blank week —
+      // it is listed as an unread row too, never dropped.
+      const unlikeBanners = unlikeSheetBanners(employeeName);
+      const personLike = looksLikePersonName(employeeName) && !GROUP_WORDS.test(employeeName) && (unlikeBanners || !(mixedCaseVenue && isAllCapsLabel(employeeName)));
+      const insideRealSection = !currentRoleIsProvisional || (currentRole === '' && peopleBefore > 0);
+      if (personLike && (insideRealSection || unlikeBanners)) {
+        const key = addPerson(r, employeeName, currentRole);
+        if (processStaffRow(r, row, employeeName, currentRole, new Set([0]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
+        continue;
+      }
+      if (currentRoleIsProvisional) {
+        setSection(employeeName, true);
+        unrecognizedHeaderTexts.add(employeeName);
+        if (personLike) addUnread(r, employeeName, HEADING_NOTE);
       }
       continue;
     }
@@ -1191,6 +1199,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       const col0Val = normalizeCell(row[0]);
       const col1Val = normalizeCell(row[1]);
       if (!col0Val && !col1Val) continue; // fully blank row
+      if (CAPTION_WORDS.test(col0Val || col1Val) || isFooterOrNote(col0Val || col1Val)) continue;
 
       if (!col0Val || !col1Val) {
         const label = col0Val || col1Val;
@@ -1198,21 +1207,23 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
         if (SUMMARY_ROW_LABELS.has(label.toLowerCase())) continue; // footer/summary caption
         // Same structural override as the single-label-column shape above:
         // real shift-shaped data on this row rules out a header match.
-        if (!rowHasShiftShapedData(row, columns, fileLegend) && isRoleHeaderLabel(label, hasSeenAnyStaffRow)) {
-          currentRole = label;
+        if (!hasData(row) && isRoleHeaderLabel(label, hasSeenAnyStaffRow)) {
+          setSection(label, false);
           continue;
         }
       }
 
+      const rawText = `"${col0Val || '(blank)'}" | "${col1Val || '(blank)'}"`;
       anomalies.push({
         employeeName: null,
         date: null,
-        rawText: `"${col0Val || '(blank)'}" | "${col1Val || '(blank)'}"`,
+        rawText,
         reason:
           'Could not confidently tell which of the first two columns is the staff name and which is the role (neither matches known role vocabulary clearly enough to disambiguate). Flagged for manual entry instead of guessing.',
         confidence: 0.3,
         rowNumber: null,
       });
+      addUnread(r, rawText, "Couldn't tell which column is the name and which is the title.");
       continue;
     }
 
@@ -1221,19 +1232,35 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     // an empty name column always means "not a real staff row."
     const nameCell = normalizeCell(row[nameColIndex]);
     const titleCell = normalizeCell(row[titleColIndex!]);
+    const lead = nameCell || titleCell;
+    if (lead && (CAPTION_WORDS.test(lead) || isFooterOrNote(lead)) && !hasData(row)) continue; // caption / note line
+
+    // A banner merged across the row (the same text in every filled cell), or a role word alone in
+    // the name column with no title and no days, heads a section; it is nobody's name.
+    if (nameCell && (isMergedBanner(row) || (daysBlank(row) && (nameCell === titleCell || (!titleCell && canonicalRoleName(nameCell) !== nameCell))))) {
+      setSection(nameCell, canonicalRoleName(nameCell) === nameCell);
+      continue;
+    }
 
     if (!nameCell) {
+      const rowHasData = hasData(row);
       const headerCandidates: string[] = [];
       if (titleCell) headerCandidates.push(titleCell);
       for (const col of columns) {
-        const v = normalizeCell(row[col.colIndex]);
+        const v = dayCellText(row, col);
         if (v) headerCandidates.push(v);
       }
-      const roleMatch = headerCandidates.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
+      const roleMatch = rowHasData ? undefined : headerCandidates.find((v) => isRoleHeaderLabel(v, hasSeenAnyStaffRow));
       if (roleMatch) {
-        currentRole = roleMatch;
-        currentRoleIsProvisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
-        if (currentRoleIsProvisional) unrecognizedHeaderTexts.add(roleMatch);
+        const provisional = isPatternOnlyHeaderInCapsVenue(roleMatch);
+        setSection(roleMatch, provisional);
+        if (provisional) unrecognizedHeaderTexts.add(roleMatch);
+        continue;
+      }
+      if (rowHasData) {
+        // A title and shifts but no name: never attributed to anyone, never dropped.
+        const summary = [titleCell, ...columns.map((col) => dayCellText(row, col)).filter(Boolean)].filter(Boolean).join(' | ');
+        addUnread(r, summary, 'This row has shifts but no name.');
         continue;
       }
       // One unrecognised label on an otherwise blank row (no staff name, no day data): a novel
@@ -1245,11 +1272,11 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
       if (
         label &&
         currentRoleIsProvisional &&
-        !/^d+(.d+)?$/.test(label) &&
+        !/^\d+(\.\d+)?$/.test(label) &&
         !SUMMARY_ROW_LABELS.has(label.toLowerCase()) &&
-        columns.every((col) => isBlank(row[col.colIndex]))
+        daysBlank(row)
       ) {
-        currentRole = label;
+        setSection(label, true);
         unrecognizedHeaderTexts.add(label);
       }
       continue;
@@ -1261,9 +1288,11 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     hasSeenAnyStaffRow = true;
     // A per-row title is more specific than whatever section header
     // preceded it and always takes precedence; falls back to the
-    // section-derived role when this row's own title cell is blank.
-    const roleName = titleCell || currentRole;
-    if (processStaffRow(row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]), sourceRowCounter++)) staffRowsWithRealDataProcessed++;
+    // section-derived role when this row's own title cell is blank (or
+    // only a number, such as an employee ID, which is no title).
+    const roleName = (/^\d+$/.test(titleCell) ? '' : titleCell) || currentRole;
+    const key = addPerson(r, employeeName, roleName);
+    if (processStaffRow(r, row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
   }
 
   // One blocking anomaly per unique unrecognized section header, listing
@@ -1292,10 +1321,10 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     });
   }
 
-  // Hard sanity gate (item 1, independent of the structural heuristic fix
-  // above): re-derive "how many rows plainly carry real shift data" from
-  // scratch and compare against how many the loop actually processed. A
-  // shortfall means real data was dropped somewhere — silently returning a
+  // Hard sanity gate (independent of the structural heuristic fix above):
+  // re-derive "how many rows plainly carry real shift data" from scratch
+  // and compare against how many the loop actually processed. A shortfall
+  // means real data was dropped somewhere — silently returning a
   // 200-shaped partial/empty result would hide that from the manager
   // uploading the file, so this throws instead of returning.
   //
@@ -1306,16 +1335,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
   // gate would trip on every such file for no new information.
   if (!columnOrderAmbiguous) {
     const labelColIndex = hasTitleColumn ? nameColIndex : 0;
-    const excludedNoteCols = hasTitleColumn ? new Set([nameColIndex, titleColIndex!]) : new Set([0]);
-    const minExpectedStaffRows = countRowsWithRealShiftData(
-      grid,
-      header.dataStartIdx,
-      dataEndIdx,
-      columns,
-      fileLegend,
-      labelColIndex,
-      excludedNoteCols,
-    );
+    const excludedNoteCols = new Set([...(hasTitleColumn ? [nameColIndex, titleColIndex!] : [0]), ...sideLegendCols]);
+    const minExpectedStaffRows = countRowsWithRealShiftData(grid, header.dataStartIdx, dataEndIdx, columns, fileLegend, labelColIndex, excludedNoteCols, timeOptions);
     if (staffRowsWithRealDataProcessed < minExpectedStaffRows) {
       throw new RosterExtractionAnomalyError(
         `Found real shift data on ${minExpectedStaffRows} row(s) of the uploaded file, but only ${staffRowsWithRealDataProcessed} could be matched to an employee. This usually means a staff name or section header was misread — please check the file and try again, or contact support.`,
@@ -1330,5 +1351,8 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string): ParsedVisi
     anomalies,
     leaveRecords,
     legend,
+    people,
+    unreadRows,
+    week,
   };
 }

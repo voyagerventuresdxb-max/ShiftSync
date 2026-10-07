@@ -18,13 +18,10 @@ import { stripUaeCountryCode } from './phoneFormat';
  *    already mints server-side (`POST` via `mintInvite` — a real scannable
  *    QR PNG, not the prototype's placeholder pseudo-QR pattern).
  *  - "Or invite someone individually" lists real Staff Directory entries
- *    (`fetchStaffDirectory`), not the prototype's 12 seeded names. Staff
- *    parsed from the roster but not yet matched to a real User (Review's
- *    "new employee" rows) have no User record yet and so don't appear here
- *    — that's by design, not a gap: they're exactly who the primary QR/link
- *    flow is for (they self-onboard and create their own User by tapping
- *    it), while this fallback list is for already-known staff who need a
- *    direct nudge or have no WhatsApp group to share the link in.
+ *    (`fetchStaffDirectory`), not the prototype's 12 seeded names. Everyone
+ *    confirmed on Review is a real staff member by now (confirm creates or
+ *    links one per person on the roster), so the whole imported team is in
+ *    this list, ready for a phone number and a direct invite.
  *  - "Send N direct invites" has no bulk-messaging backend to call (none
  *    exists anywhere in this app) — it opens one `wa.me/<phone>` deep link
  *    per selected person, client-side, the same mechanism the main Share-

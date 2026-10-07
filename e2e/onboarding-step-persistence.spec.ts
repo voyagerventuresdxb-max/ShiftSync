@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
-import { cleanupTestOrgs, continueThroughVenue, signupNewVenue, testVenueName } from './helpers';
+import { cleanupTestOrgs, confirmOnboardingReview, continueThroughVenue, signupNewVenue, testVenueName } from './helpers';
 
 /**
  * The onboarding step lives in the URL (/onboarding/:step), not plain React
@@ -75,7 +75,7 @@ test.describe('onboarding — step position survives a reload', () => {
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.waitForURL('**/onboarding/review**');
     await page.waitForSelector("text=Here's what we found.");
-    const rowCountBefore = await page.locator('div[role="button"]').count();
+    const rowCountBefore = await page.getByTestId('rr-person').count();
     expect(rowCountBefore).toBeGreaterThan(0);
 
     await page.reload();
@@ -85,23 +85,15 @@ test.describe('onboarding — step position survives a reload', () => {
     await expect(page.getByText('Nothing to review yet.')).toHaveCount(0);
     await page.waitForSelector("text=Here's what we found.");
     expect(new URL(page.url()).pathname).toBe('/onboarding/review');
-    const rowCountAfter = await page.locator('div[role="button"]').count();
+    const rowCountAfter = await page.getByTestId('rr-person').count();
     expect(rowCountAfter).toBe(rowCountBefore);
 
-    // The rest of the flow still works post-resume (Confirm & Continue ->
-    // Invite), proving this isn't just a display artifact.
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const confirmBtn = page.getByRole('button', { name: /Confirm & Continue|Review \d+ flagged first/ });
-      const label = (await confirmBtn.textContent())?.trim() ?? '';
-      if (label.startsWith('Confirm & Continue')) break;
-      const header = page.locator('div[role="button"]').first();
-      await header.click();
-      const panel = header.locator('xpath=following-sibling::div[1]');
-      await panel.waitFor({ state: 'visible' });
-      await panel.getByRole('button', { name: /Looks right|Done/ }).click();
-    }
-    await page.getByRole('button', { name: 'Confirm & Continue' }).click();
-    await page.waitForURL('**/onboarding/invite**');
+    // The rest of the flow still works post-resume (confirm -> Invite),
+    // proving this isn't just a display artifact.
+    await confirmOnboardingReview(page);
+
+    // The batch is spent: Back to Review has nothing stale to confirm again.
+    await page.goto('/onboarding/review');
+    await expect(page.getByText('Nothing to review yet.')).toBeVisible();
   });
 });

@@ -256,3 +256,19 @@
       0 0 0 200vmax rgba(5, 4, 3, 0.62);
   }
 }
+
+/*
+ * The shared roster review (src/features/rosterReview) is built on the app's
+ * theme tokens; inside onboarding it takes the wizard's champagne palette by
+ * redefining those tokens for its subtree only.
+ */
+.ob-root .rr-onboarding {
+  --bg: var(--ob-ink);
+  --surface: var(--ob-ink-2);
+  --surface-2: var(--ob-ink-hi);
+  --border: rgba(239, 234, 224, 0.1);
+  --text: var(--ob-bone);
+  --text-secondary: var(--ob-stone);
+  --accent: var(--ob-champagne);
+  color: var(--ob-bone);
+}

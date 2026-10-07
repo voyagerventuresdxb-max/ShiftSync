@@ -11,8 +11,11 @@ import type { ParsedVisionResult } from './types.js';
  *  - all_caps_venue      every staff name is written in capitals, which defeats the parser's
  *                        "headers are in caps" signal; the local result exists but is suspect
  *  - empty_roles         more than the configured share of shift rows have no role
+ *  - rows_not_read       the built-in reader saw rows it could not read (or found nobody)
+ *  - ai_cross_check      a text-layer PDF: the AI reader reads it and the built-in reader
+ *                        cross-checks it (rosterReading.ts); without the AI, the built-in result
  */
-export type EscalationReason = 'image_or_scan' | 'extraction_anomaly' | 'unrecognized_layout' | 'all_caps_venue' | 'empty_roles';
+export type EscalationReason = 'image_or_scan' | 'extraction_anomaly' | 'unrecognized_layout' | 'all_caps_venue' | 'empty_roles' | 'rows_not_read' | 'ai_cross_check';
 
 /** Manager-facing reason, used in the consent prompt and the review-screen notice. */
 export const ESCALATION_REASON_TEXT: Record<EscalationReason, string> = {
@@ -21,6 +24,8 @@ export const ESCALATION_REASON_TEXT: Record<EscalationReason, string> = {
   unrecognized_layout: "This roster's layout isn't one the built-in reader knows, so it needs the AI reader.",
   all_caps_venue: 'Every name on this roster is in capital letters, which the built-in reader can confuse with section headings. The AI reader can double-check it.',
   empty_roles: 'Many shifts on this roster came out without a role. The AI reader can usually fill those in.',
+  rows_not_read: "Some rows of this roster couldn't be read by the built-in reader. The AI reader can read them.",
+  ai_cross_check: 'This PDF was read by the built-in reader. The AI reader can read it too and cross-check every row.',
 };
 
 /** A label written entirely in capitals (at least 3 letters, so initials and "AM" don't count). */
