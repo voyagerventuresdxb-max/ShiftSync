@@ -141,6 +141,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
     }
     for (const text of spec.footerLines ?? []) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text, span: columns }] });
     if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: `Prepared by: Duty Manager    Printed ${roster.dates[0]}    Page ${spec.pages} of ${spec.pages}`, span: columns }] });
+    for (const [label, days] of spec.signOffRows ?? []) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: label, span: 1 }, ...roster.dates.map((_, d) => ({ text: days[d] ?? '', span: 4 }))] });
     // The colour key sits to the right of the grid, one entry per row from the COVERS row on.
     const firstSide = rows.findIndex((x) => x.kind === 'caption') + 1;
     roster.legend.forEach((l, i) => {
@@ -208,6 +209,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
   }
   for (const text of spec.footerLines ?? []) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text, span: columns }] });
   if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: 'Notes: UL = unpaid leave, AL = annual leave, CL = until close, IN = start time only', span: columns }] });
+  for (const [label, days] of spec.signOffRows ?? []) rows.push({ kind: 'footer', page: spec.pages, cells: [...order.map((k) => ({ text: k === 'name' ? label : '', span: 1 })), ...roster.dates.map((_, d) => ({ text: days[d] ?? '', span: 1 }))] });
   assignPages(rows);
   const width: Record<'no' | 'name' | 'title', number> = spec.tightLead ? { no: 28, name: 128, title: 96 } : { no: 40, name: 150, title: 110 };
   return { columns, colWidths: [...order.map((k) => (spec.combined && k === 'name' ? 230 : width[k])), ...Array(7).fill(spec.dayWidth ?? (spec.narrowDays ? 54 : 150))], rows, pages: spec.pages };

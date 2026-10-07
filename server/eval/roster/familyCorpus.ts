@@ -96,6 +96,9 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
   if (spec.faintNames) truth.printed.faintNames = true;
   if (spec.combined) truth.printed.combined = spec.combined;
   if (spec.sharedSlips) truth.printed.sharedSlips = true;
+  if (spec.signOffRows?.length) truth.printed.signOffs = spec.signOffRows.map(([label, cells]) => ({ label, cells: truth.week.dates.map((_, d) => cells[d] ?? '') }));
+  if (spec.aiNoise) truth.printed.aiNoise = true;
+  if (spec.lowContrast) truth.printed.lowContrast = true;
   return { file, data, truth };
 }
 
