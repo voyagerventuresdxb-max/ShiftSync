@@ -81,13 +81,12 @@ async function execute(role: keyof typeof CALLER, transcript: string, intent: Pa
   });
 }
 
-const shoutout = (targetUserName: string, targetUserId: string | null, confidence = 0.92) => ({
-  intent: 'POST_SHOUTOUT',
-  targetUserId,
-  targetUserName,
-  content: 'Great job',
+/** The model's answer under the tool contract: the tool, and the name exactly as heard. Never an id. */
+const shoutout = (person: string, confidence = 0.92) => ({
+  tool: 'POST_SHOUTOUT',
+  args: { person, message: 'Great job' },
   confidence,
-  summary: `Give ${targetUserName} a shoutout with this note.`,
+  summary: `Give ${person} a shoutout with this note.`,
 });
 const locations = () => [fx.locationId, fx.otherLocationId];
 const question = (i: ParsedIntent) => {
@@ -96,9 +95,15 @@ const question = (i: ParsedIntent) => {
 };
 const offered = (i: ParsedIntent) => (question(i).options ?? []).map((o) => (o.intent === 'POST_SHOUTOUT' ? o.targetUserId : `${o.intent}?`));
 const logRow = (id: string | null) => prisma.voiceInteractionLog.findUniqueOrThrow({ where: { id: id! } });
+const dayAhead = (n: number) => {
+  const d = new Date(`${fx.today}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const label = (iso: string) => new Date(`${iso}T00:00:00.000Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 
 test('a person who exists: the confirm sheet names them in full and previews the shout-out', async () => {
-  const { intent } = await parse('MANAGER', 'Give Layla a shout-out saying great job', shoutout('Layla', null));
+  const { intent } = await parse('MANAGER', 'Give Layla a shout-out saying great job', shoutout('Layla'));
   assert.equal(intent.intent, 'POST_SHOUTOUT');
   if (intent.intent !== 'POST_SHOUTOUT') return;
   assert.equal(intent.targetUserId, fx.users.layla);
@@ -109,7 +114,7 @@ test('a person who exists: the confirm sheet names them in full and previews the
 
 test("a person who isn't at the venue: a plain message naming them, no choices, nothing changes, and the log says why", async () => {
   const before = await snapshot(prisma, locations());
-  const { intent, voiceLogId } = await parse('MANAGER', 'Give Rana a shout-out saying great job', shoutout('Rana', null));
+  const { intent, voiceLogId } = await parse('MANAGER', 'Give Rana a shout-out saying great job', shoutout('Rana'));
   const q = question(intent);
   assert.equal(q.summary, "I couldn't find Rana on your team.");
   assert.match(q.reason, /add them in People/);
@@ -122,9 +127,7 @@ test("a person who isn't at the venue: a plain message naming them, no choices, 
 });
 
 test('a staff member is not told to add people; a similar name is suggested', async () => {
-  const { intent } = await parse('STAFF', 'Ask Mariel to cover my shift tomorrow', {
-    intent: 'REQUEST_SWAP', shiftId: fx.shifts['sam+1'], targetUserId: null, targetUserName: 'Mariel', reason: null, confidence: 0.9, summary: 'Ask Mariel to cover.',
-  });
+  const { intent } = await parse('STAFF', 'Ask Mariel to cover my shift tomorrow', { tool: 'REQUEST_SWAP', args: { person: 'Mariel', day: dayAhead(1) }, confidence: 0.9, summary: 'Ask Mariel to cover.' });
   const q = question(intent);
   assert.equal(q.summary, "I couldn't find Mariel on your team.");
   assert.doesNotMatch(q.reason, /People/);
@@ -136,10 +139,12 @@ test('a staff member is not told to add people; a similar name is suggested', as
   assert.match(options[0]!.summary, new RegExp(`^Ask ${PEOPLE.maricel.name} to cover your \\w{3} \\d{1,2} \\w{3} shift\\.$`));
 });
 
-test('two people share the first name: "Which Karim?", one complete reading each, even when the model picked one at high confidence', async () => {
-  for (const modelId of [null, fx.users.karim]) {
+test('two people share the first name: "Which Karim?", one complete reading each, even when the model slips an id in', async () => {
+  // The contract has no id fields; one a model adds anyway is dropped before anything is looked up.
+  for (const extra of [{}, { targetUserId: fx.users.karim }]) {
     const before = await snapshot(prisma, locations());
-    const { intent, voiceLogId } = await parse('MANAGER', 'Give Karim a shout-out saying great job', shoutout('Karim', modelId));
+    const raw = { ...shoutout('Karim'), ...extra, args: { ...shoutout('Karim').args, ...extra } };
+    const { intent, voiceLogId } = await parse('MANAGER', 'Give Karim a shout-out saying great job', raw);
     const q = question(intent);
     assert.equal(q.summary, 'Which Karim did you mean?');
     assert.deepEqual(q.person, { heard: 'Karim', status: 'ambiguous' });
@@ -158,7 +163,7 @@ test('two people share the first name: "Which Karim?", one complete reading each
 
 test('picking one Karim and confirming posts exactly one shout-out, to that person; the log keeps the question', async () => {
   const transcript = 'Give Karim a shout-out saying great job';
-  const { intent, voiceLogId } = await parse('MANAGER', transcript, shoutout('Karim', null));
+  const { intent, voiceLogId } = await parse('MANAGER', transcript, shoutout('Karim'));
   const aziz = question(intent).options!.find((o) => o.intent === 'POST_SHOUTOUT' && o.targetUserId === fx.users.karim2)!;
   const res = await execute('MANAGER', transcript, aziz, voiceLogId);
   assert.equal(res.status, 201);
@@ -172,26 +177,20 @@ test('picking one Karim and confirming posts exactly one shout-out, to that pers
 test('three people share the first name: all three are offered', async () => {
   const third = await prisma.user.create({ data: { locationId: fx.locationId, fullName: 'Karim Bashir', systemRole: 'STAFF' } });
   try {
-    const { intent } = await parse('MANAGER', 'Give Karim a shout-out saying great job', shoutout('Karim', fx.users.karim2));
+    const { intent } = await parse('MANAGER', 'Give Karim a shout-out saying great job', shoutout('Karim'));
     assert.deepEqual(offered(intent).sort(), [fx.users.karim, fx.users.karim2, third.id].sort());
   } finally {
     await prisma.user.delete({ where: { id: third.id } });
   }
 });
 
-test("the model's pick disagreeing with the name it heard: both are offered, as 'Who did you mean?'", async () => {
-  const { intent } = await parse('MANAGER', 'Give Layla a shout-out saying great job', shoutout('Layla', fx.users.omar));
-  const q = question(intent);
-  assert.equal(q.summary, 'Who did you mean?');
-  assert.deepEqual(offered(intent).sort(), [fx.users.layla, fx.users.omar].sort());
-});
-
-test("another venue's people are never offered or shown, even with their id or a near spelling", async () => {
-  for (const [said, heard, id] of [
-    ['Give Bartholomew a shout-out', 'Bartholomew', fx.other.person],
-    ['Give Bartolomew Quil a shout-out', 'Bartolomew Quil', null],
+test("another venue's people are never offered or shown, even by full name or a near spelling", async () => {
+  for (const [said, heard] of [
+    ['Give Bartholomew a shout-out', 'Bartholomew'],
+    ['Give Bartolomew Quil a shout-out', 'Bartolomew Quil'],
+    ['Give Bartholomew a shout-out', 'Bartholomew Quill'],
   ] as const) {
-    const { intent } = await parse('MANAGER', said, shoutout(heard, id));
+    const { intent } = await parse('MANAGER', said, shoutout(heard));
     const q = question(intent);
     assert.equal(q.person?.status, 'missing');
     assert.deepEqual(q.options, undefined);
@@ -203,14 +202,14 @@ test("another venue's people are never offered or shown, even with their id or a
 const VENUE_B_NAME = 'Bartholomew Quill';
 
 test('a name the caller never said is not echoed back', async () => {
-  const { intent } = await parse('MANAGER', 'give them a shout-out', shoutout('Zebedee', null));
+  const { intent } = await parse('MANAGER', 'give them a shout-out', shoutout('Zebedee'));
   const q = question(intent);
   assert.equal(q.summary, "I couldn't find that person on your team.");
   assert.ok(!JSON.stringify(intent).includes('Zebedee'));
 });
 
 test('a staff caller asking for a shout-out is refused for the role, not asked which person', async () => {
-  const { intent } = await parse('STAFF', 'Give Karim a shout-out', shoutout('Karim', null));
+  const { intent } = await parse('STAFF', 'Give Karim a shout-out', shoutout('Karim'));
   const q = question(intent);
   assert.equal(q.reason, VOICE_ROLE_REFUSAL);
   assert.equal(q.options, undefined);
@@ -218,7 +217,7 @@ test('a staff caller asking for a shout-out is refused for the role, not asked w
 });
 
 test('low confidence because of the name: still the person question, logged as low confidence', async () => {
-  const { intent, voiceLogId } = await parse('MANAGER', 'Give Karim a shout-out saying great job', shoutout('Karim', null, 0.4));
+  const { intent, voiceLogId } = await parse('MANAGER', 'Give Karim a shout-out saying great job', shoutout('Karim', 0.4));
   assert.equal(question(intent).summary, 'Which Karim did you mean?');
   assert.equal(offered(intent).length, 2);
   const row = await logRow(voiceLogId);
@@ -226,11 +225,9 @@ test('low confidence because of the name: still the person question, logged as l
 });
 
 test('a section assignment and a new shift look the name up the same way', async () => {
-  const tomorrow = new Date(`${fx.today}T00:00:00.000Z`);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const date = tomorrow.toISOString().slice(0, 10);
+  const date = dayAhead(1);
   const section = await parse('MANAGER', 'Put Karim on the terrace tomorrow evening', {
-    intent: 'ASSIGN_SECTION', sectionId: fx.sections.Terrace, staffId: null, targetUserName: 'Karim', shiftDate: date, period: 'PM', confidence: 0.9, summary: 'Put Karim on the terrace.',
+    tool: 'ASSIGN_SECTION', args: { person: 'Karim', section: 'terrace', day: date, period: 'PM' }, confidence: 0.9, summary: 'Put Karim on the terrace.',
   });
   const options = question(section.intent).options ?? [];
   assert.deepEqual(options.map((o) => (o.intent === 'ASSIGN_SECTION' ? [o.staffId, o.details?.section] : null)).sort(), [
@@ -239,50 +236,51 @@ test('a section assignment and a new shift look the name up the same way', async
   ].sort());
 
   const shift = await parse('MANAGER', 'Create a server shift for Rana tomorrow from 12 to 8', {
-    intent: 'CREATE_SHIFT', roleId: fx.roles.Server, userId: null, targetUserName: 'Rana', date, start: '12:00', end: '20:00', confidence: 0.9, summary: 'Create a shift.',
+    tool: 'CREATE_SHIFT', args: { role: 'server', person: 'Rana', day: date, start: '12', end: '8' }, confidence: 0.9, summary: 'Create a shift.',
   });
   assert.equal(question(shift.intent).summary, "I couldn't find Rana on your team.");
 
-  // An open shift names nobody: nothing to look up.
+  // An open shift names nobody: nothing to look up. "12 to 8" with no am/pm: noon to 8pm is the only plausible reading.
   const open = await parse('MANAGER', 'Add an open server shift tomorrow from 12 to 8', {
-    intent: 'CREATE_SHIFT', roleId: fx.roles.Server, userId: null, date, start: '12:00', end: '20:00', confidence: 0.9, summary: 'Create an open shift.',
+    tool: 'CREATE_SHIFT', args: { role: 'server', day: date, start: '12', end: '8' }, confidence: 0.9, summary: 'Create an open shift.',
   });
-  assert.equal(open.intent.intent, 'CREATE_SHIFT');
-  assert.deepEqual(open.intent.intent === 'CREATE_SHIFT' && open.intent.details, { person: null, role: 'Server' });
+  assert.equal(open.intent.intent, 'UNRECOGNIZED', '12 to 8 could be noon–8pm or midnight–8am: asked');
+  const readings = question(open.intent).options!.map((o) => (o.intent === 'CREATE_SHIFT' ? `${o.start}-${o.end}` : ''));
+  assert.deepEqual(readings, ['12:00-20:00', '00:00-08:00'], 'the evening (later) reading first');
+  const clear = await parse('MANAGER', 'Add an open server shift tomorrow from 12pm to 8pm', {
+    tool: 'CREATE_SHIFT', args: { role: 'server', day: date, start: '12pm', end: '8pm' }, confidence: 0.9, summary: 'Create an open shift.',
+  });
+  assert.equal(clear.intent.intent, 'CREATE_SHIFT');
+  assert.deepEqual(clear.intent.intent === 'CREATE_SHIFT' && [clear.intent.start, clear.intent.end, clear.intent.details], ['12:00', '20:00', { person: null, role: 'Server' }]);
 });
 
 test('not understood, with no reason from the model: human words, never the old "supported command" text', async () => {
-  const { intent } = await parse('MANAGER', 'order more limes', { intent: 'UNRECOGNIZED', summary: 'Could not determine what to do.' });
+  const { intent } = await parse('MANAGER', 'order more limes', { tool: 'UNRECOGNIZED', args: {}, summary: 'Could not determine what to do.' });
   const q = question(intent);
   assert.equal(q.summary, VOICE_DIDNT_CATCH);
   assert.match(q.reason, /^Try again with who, what and when/);
   // A recognised command with nothing filled in is asked about, not "didn't catch that".
-  const shapeless = question((await parse('MANAGER', 'give a shout-out', { intent: 'POST_SHOUTOUT', confidence: 0.9, summary: 'x' })).intent);
+  const shapeless = question((await parse('MANAGER', 'give a shout-out', { tool: 'POST_SHOUTOUT', args: {}, confidence: 0.9, summary: 'x' })).intent);
   assert.equal(shapeless.summary, "I've got a shout-out — who is it for, and what should it say?");
+});
+
+test('the model is asked for every key, at temperature 0, and the arguments have no ids', async () => {
+  await parse('MANAGER', 'Give Layla a shout-out saying great job', shoutout('Layla'));
+  assert.equal(lastRequest.config?.temperature, 0);
+  const schema = lastRequest.config?.responseSchema as unknown as { required: string[]; properties: { args: { required: string[] } } };
+  assert.deepEqual(schema.required.slice(0, 2), ['tool', 'args']);
+  assert.ok(schema.properties.args.required.includes('end'));
+  assert.ok(schema.properties.args.required.includes('section'));
+  assert.ok(!schema.properties.args.required.some((k) => /id$/i.test(k)));
 });
 
 // Seen live (real model, every key optional, temperature unset): recognised commands with parts left
 // out, at 0.95 confidence. They used to end in the generic "I didn't catch what you'd like to do.".
-const dayAhead = (n: number) => {
-  const d = new Date(`${fx.today}T00:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
-const label = (iso: string) => new Date(`${iso}T00:00:00.000Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-
-test('the model is asked for every key, at temperature 0', async () => {
-  await parse('MANAGER', 'Give Layla a shout-out saying great job', shoutout('Layla', null));
-  assert.equal(lastRequest.config?.temperature, 0);
-  assert.ok(lastRequest.config?.responseSchema?.required?.includes('end'));
-  assert.ok(lastRequest.config?.responseSchema?.required?.includes('sectionId'));
-});
-
-test('a new shift with no end or role (live answer): says what it has, asks for exactly those two; nothing changes', async () => {
+test('a new shift with no end or role: says what it has, asks for exactly those two; nothing changes', async () => {
   const date = dayAhead(3);
   const before = await snapshot(prisma, locations());
-  const { intent, voiceLogId } = await parse('MANAGER', 'Create a bartender shift for Alex on Friday from 6 p.m. to 2 a.m.', {
-    intent: 'CREATE_SHIFT', summary: 'Create a Bartender shift for Alex Morgan on Friday, October 9th from 18:00 to 02:00.', confidence: 0.95,
-    date, start: '18:00', templateId: null, templateName: null, weekStart: null,
+  const { intent, voiceLogId } = await parse('MANAGER', 'Create a shift on Friday from 6 p.m.', {
+    tool: 'CREATE_SHIFT', args: { day: date, start: '18:00' }, summary: 'Create a shift from 18:00.', confidence: 0.95,
   });
   const q = question(intent);
   assert.equal(q.summary, `I've got a new shift on ${label(date)} from 18:00 — what time does it end, and which role?`);
@@ -293,53 +291,49 @@ test('a new shift with no end or role (live answer): says what it has, asks for 
   assert.equal((await logRow(voiceLogId)).declineReason, 'incomplete:CREATE_SHIFT:end,roleId');
 });
 
-test('a section move with no section, day or period (live answer): names the person, asks for those three', async () => {
+test('a section move with no section or day: names the person, asks for those two ("evening" already says PM)', async () => {
   const { intent } = await parse('MANAGER', 'Put Alex on the bar tomorrow evening.', {
-    intent: 'ASSIGN_SECTION', summary: 'Put Alex on the bar tomorrow evening.', confidence: 0.95, staffId: fx.users.alex, targetUserName: 'Alex', userId: null, weekStart: null,
+    tool: 'ASSIGN_SECTION', args: { person: 'Alex' }, summary: 'Put Alex on the bar tomorrow evening.', confidence: 0.95,
   });
   const q = question(intent);
-  assert.equal(q.summary, `I've got a section move for ${PEOPLE.alex.name} — which section, which day, and morning or evening?`);
-  assert.deepEqual(q.incomplete?.missing, ['sectionId', 'shiftDate', 'period']);
+  assert.equal(q.summary, `I've got a section move for ${PEOPLE.alex.name} — which section, and which day?`);
+  assert.deepEqual(q.incomplete?.missing, ['sectionId', 'shiftDate']);
   assert.equal(q.person, undefined);
 });
 
 test('"Put Karim on the terrace…" missing its parts still asks which Karim; with its parts, it is the "Which Karim?" choice', async () => {
-  const said = 'Put Karim on the terrace tomorrow evening.';
-  const partial = question(
-    (await parse('MANAGER', said, { intent: 'ASSIGN_SECTION', summary: 'Put Karim on the terrace.', confidence: 0.95, staffId: null, targetUserName: 'Karim', userId: null, weekStart: null })).intent,
-  );
+  const said = 'Put Karim on the terrace tomorrow.';
+  const partial = question((await parse('MANAGER', said, { tool: 'ASSIGN_SECTION', args: { person: 'Karim' }, summary: 'Put Karim on the terrace.', confidence: 0.95 })).intent);
   assert.equal(partial.summary, `I've got a section move for Karim — which Karim (${PEOPLE.karim2.name} or ${PEOPLE.karim.name}), which section, which day, and morning or evening?`);
   assert.deepEqual(partial.person, { heard: 'Karim', status: 'ambiguous' });
   const complete = question(
-    (await parse('MANAGER', said, {
-      intent: 'ASSIGN_SECTION', summary: 'Put Karim on the terrace.', confidence: 0.95, staffId: null, targetUserName: 'Karim', userId: null, weekStart: null,
-      sectionId: fx.sections.Terrace, shiftDate: dayAhead(1), period: 'PM', dutyLabel: null,
-    })).intent,
+    (await parse('MANAGER', said, { tool: 'ASSIGN_SECTION', args: { person: 'Karim', section: 'terrace', day: dayAhead(1), period: 'PM' }, summary: 'Put Karim on the terrace.', confidence: 0.95 })).intent,
   );
   assert.equal(complete.summary, 'Which Karim did you mean?');
   assert.equal(complete.options?.length, 2);
 });
 
 test('a shout-out to someone missing, with the note left out too: the person comes first', async () => {
-  const q = question((await parse('MANAGER', 'Give Rana a shout-out', { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Rana', content: null, confidence: 0.9, summary: 'x' })).intent);
+  const q = question((await parse('MANAGER', 'Give Rana a shout-out', { tool: 'POST_SHOUTOUT', args: { person: 'Rana' }, confidence: 0.9, summary: 'x' })).intent);
   assert.equal(q.summary, "I couldn't find Rana on your team.");
 });
 
 test('every key sent, null where unused: a complete answer is unaffected', async () => {
-  const nulls = Object.fromEntries(['targetUserId', 'userId', 'staffId', 'clearAssignee', 'date', 'availabilityType', 'shiftId', 'swapRequestId', 'joinRequestId', 'roleId', 'start', 'end', 'sectionId', 'shiftDate', 'period', 'dutyLabel', 'weekStart', 'templateName', 'templateId', 'reason', 'unrecognizedReason', 'alternatives'].map((k) => [k, null]));
-  const { intent } = await parse('MANAGER', 'Give Layla a shout-out saying great job', { ...nulls, intent: 'POST_SHOUTOUT', targetUserName: 'Layla', content: 'Great job', confidence: 0.95, summary: 'Give Layla a shout-out.', hasAdditionalRequest: false });
+  const nullArgs = Object.fromEntries(['person', 'personFull', 'newPerson', 'unassign', 'requester', 'applicant', 'section', 'role', 'template', 'day', 'endDay', 'newDay', 'at', 'start', 'end', 'start2', 'end2', 'period', 'availability', 'week', 'message', 'reason', 'duty', 'category'].map((k) => [k, null]));
+  const top = { unrecognizedReason: null, hasAdditionalRequest: false, alternatives: null };
+  const { intent } = await parse('MANAGER', 'Give Layla a shout-out saying great job', { ...top, tool: 'POST_SHOUTOUT', args: { ...nullArgs, person: 'Layla', message: 'Great job' }, confidence: 0.95, summary: 'Give Layla a shout-out.' });
   assert.equal(intent.intent, 'POST_SHOUTOUT');
-  const staffAsked = question((await parse('STAFF', 'Give Karim a shout-out', { ...nulls, intent: 'POST_SHOUTOUT', targetUserName: 'Karim', content: null, confidence: 0.9, summary: 'x' })).intent);
+  const staffAsked = question((await parse('STAFF', 'Give Karim a shout-out', { ...top, tool: 'POST_SHOUTOUT', args: { ...nullArgs, person: 'Karim' }, confidence: 0.9, summary: 'x' })).intent);
   assert.equal(staffAsked.reason, VOICE_ROLE_REFUSAL, 'an out-of-role command missing parts is still refused for the role, not asked about');
 });
 
-test('"Move Alex\'s shift to 7pm", every key sent: the name is whose shift it is, not a new person — the person stays', async () => {
+test('"Move Alex\'s shift to 7pm": the name is whose shift it is, not a new person — the person stays', async () => {
   const { intent } = await parse('MANAGER', "Move Alex's shift tomorrow to start at 7 p.m.", {
-    intent: 'EDIT_SHIFT', shiftId: fx.shifts['alex+1'], start: '19:00', end: null, date: null, roleId: null,
-    userId: null, targetUserName: 'Alex', clearAssignee: null, confidence: 0.92, summary: "Move Alex's shift to 19:00.",
+    tool: 'EDIT_SHIFT', args: { person: 'Alex', day: dayAhead(1), start: '7 p.m.' }, confidence: 0.92, summary: "Move Alex's shift to 19:00.",
   });
   assert.equal(intent.intent, 'EDIT_SHIFT');
   if (intent.intent !== 'EDIT_SHIFT') return;
+  assert.equal(intent.shiftId, fx.shifts['alex+1']);
   assert.equal(intent.userId, undefined);
   assert.equal(intent.start, '19:00');
   assert.ok(!('person' in (intent.details ?? {})), 'no change of person in the preview');
@@ -347,28 +341,26 @@ test('"Move Alex\'s shift to 7pm", every key sent: the name is whose shift it is
 
 test('"Give Alek a shout-out." with no note: Alex Morgan is still named, and offered as the same words with his name to read again', async () => {
   const said = 'Give Alek a shout-out.';
-  const q = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alek', content: null, confidence: 0.9, summary: 'Give Alek a shout-out.' })).intent);
+  const q = question((await parse('MANAGER', said, { tool: 'POST_SHOUTOUT', args: { person: 'Alek' }, confidence: 0.9, summary: 'Give Alek a shout-out.' })).intent);
   assert.equal(q.summary, "I couldn't find Alek on your team.");
   assert.ok(q.reason.startsWith(`Did you mean ${PEOPLE.alex.name}? If Alek is new`), q.reason);
   assert.equal(q.options, undefined, 'no complete reading to confirm: the note is missing');
   assert.deepEqual(q.retry, [{ person: PEOPLE.alex.name, text: `Give ${PEOPLE.alex.name} a shout-out.` }]);
   // Reading those words again: the person is settled, and only the note is asked for.
-  const again = question((await parse('MANAGER', q.retry![0]!.text, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: PEOPLE.alex.name, content: null, confidence: 0.9, summary: 'x' })).intent);
+  const again = question((await parse('MANAGER', q.retry![0]!.text, { tool: 'POST_SHOUTOUT', args: { person: PEOPLE.alex.name }, confidence: 0.9, summary: 'x' })).intent);
   assert.equal(again.summary, `I've got a shout-out for ${PEOPLE.alex.name} — what should it say?`);
 });
 
-test('"Alix": a short sound-alike is asked about, even when the model picked Alex — another name (Aziz) is within two letters', async () => {
+test('"Alix": a short sound-alike is asked about — another name (Aziz) is within two letters', async () => {
   const said = 'Give Alix a shout-out.';
-  const asked = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alix', content: null, confidence: 0.9, summary: said })).intent);
+  const asked = question((await parse('MANAGER', said, { tool: 'POST_SHOUTOUT', args: { person: 'Alix' }, confidence: 0.9, summary: said })).intent);
   assert.equal(asked.summary, "I couldn't find Alix on your team.");
   assert.deepEqual(asked.retry, [{ person: PEOPLE.alex.name, text: `Give ${PEOPLE.alex.name} a shout-out.` }]);
-  const picked = question((await parse('MANAGER', said, { intent: 'POST_SHOUTOUT', targetUserId: fx.users.alex, targetUserName: 'Alix', content: null, confidence: 0.9, summary: said })).intent);
-  assert.equal(picked.summary, "I couldn't find Alix on your team.");
 });
 
 test('nobody close to the name said: the whole team is offered to pick from, each as a checked reading with their role', async () => {
   const before = await snapshot(prisma, locations());
-  const { intent } = await parse('MANAGER', 'Give Bartholomew a shout-out saying great job', shoutout('Bartholomew', null));
+  const { intent } = await parse('MANAGER', 'Give Bartholomew a shout-out saying great job', shoutout('Bartholomew'));
   const q = question(intent);
   assert.equal(q.summary, "I couldn't find Bartholomew on your team.");
   assert.equal(q.options, undefined);
@@ -386,7 +378,7 @@ test('nobody close to the name said: the whole team is offered to pick from, eac
 
 test('the same sentence from the model as summary and reason reaches the app once', async () => {
   const limes = 'I can only help with scheduling, shifts, rotas, and staff announcements.';
-  const q = question((await parse('MANAGER', 'Order more limes.', { intent: 'UNRECOGNIZED', summary: limes, unrecognizedReason: limes, confidence: null })).intent);
+  const q = question((await parse('MANAGER', 'Order more limes.', { tool: 'UNRECOGNIZED', args: {}, summary: limes, unrecognizedReason: limes, confidence: null })).intent);
   assert.equal(q.summary, limes);
   assert.notEqual(q.reason, limes);
 });

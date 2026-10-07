@@ -106,6 +106,14 @@ export const transcribeRateLimiter = makeAiRouteLimiter(20, true);
  */
 export const parseIntentRateLimiter = makeAiRouteLimiter(30, true);
 
+/**
+ * POST /api/voice/execute: one confirmed voice command per call, no model call. 30 per 5 minutes per
+ * session (the same allowance as /parse-intent, since every execute follows a parse) caps a
+ * scripted client hammering the write path with hand-built bodies. Every request counts,
+ * refusals included: a refused body is exactly what such a client sends.
+ */
+export const voiceExecuteRateLimiter = makeAiRouteLimiter(30, false);
+
 /** POST /api/ai/self-test: two tiny real model calls per request, so a handful per 5 minutes. Every request counts. */
 export const aiSelfTestRateLimiter = makeAiRouteLimiter(3, false);
 

@@ -4,11 +4,11 @@ import { PrismaClient } from '@prisma/client';
 import {
   buildContext,
   normalizeHasAdditionalRequest,
-  normalizeParsedIntent,
-  missingFields,
   refinePublishRotaResponse,
+  resolveModelAnswer,
   refineApplyRotaTemplateResponse,
 } from './parseIntent.js';
+import { normalizeToolCall } from './tools.js';
 import type { ParsedIntent } from './intentSchema.js';
 import { repeatsSentence } from '../../../shared/voiceIntents.js';
 import { venueToday, venueTimezoneFor } from '../lib/venueTime.js';
@@ -244,7 +244,9 @@ test('refinePublishRotaResponse: a non-empty week gets the exact recomputed shif
     assert.equal(result.intent, 'PUBLISH_ROTA');
     if (result.intent === 'PUBLISH_ROTA') {
       assert.equal(result.weekStart, weekStartStr, 'weekStart must survive the refinement unchanged');
-      assert.equal(result.summary, `This will publish 4 shifts across 2 staff members for the week of ${weekStartStr} — confirm?`);
+      // Every shift is a draft, so all four change; two distinct people have shifts and are notified.
+      assert.deepEqual(result.counts, { shiftsChanging: 4, peopleNotified: 2 });
+      assert.equal(result.summary, 'This will publish 4 new or changed shifts for the week of Mon 2 Nov and notify 2 people — confirm?');
     }
   } finally {
     await prisma.shift.deleteMany({ where: { id: { in: shifts.map((s) => s.id) } } });
@@ -380,150 +382,69 @@ test('refineApplyRotaTemplateResponse: an empty templates list is rejected with 
   }
 });
 
-// POST_ANNOUNCEMENT / POST_SHOUTOUT (Slice 4) have no refinement pass —
-// unlike PUBLISH_ROTA/APPLY_ROTA_TEMPLATE, there is no structured reference
-// id to independently re-score against a candidate list (spec
-// 2026-09-11-voice-post-announcement-shoutout-design.md §8.1): "content" is
-// free text, and the whole point of this slice's design (§2.1) is that it is
-// captured once, verbatim, and never regenerated. So the "refinement" test
-// for this slice is the deliberate ABSENCE of transformation — this is the
-// half of that guarantee that happens inside normalizeParsedIntent, i.e.
-// between Gemini's raw JSON and /parse-intent's response; the other half
-// (that /execute posts that exact string with no further transformation) is
-// covered in routes/voice.test.ts's POST_ANNOUNCEMENT/POST_SHOUTOUT
-// byte-identical tests. Together the two prove the pipeline has no second
-// cleanup pass anywhere (spec §10's regression test), split across the two
-// files the same way this codebase already splits parse-time vs
-// execute-time coverage for every other intent.
+// The tool contract: the model's answer is one tool and the words as heard. normalizeToolCall is
+// the narrowing layer between Gemini's raw JSON and the server's lookups; it never invents a value
+// and never keeps an id-looking key the schema doesn't have.
 
-test('normalizeParsedIntent: POST_ANNOUNCEMENT carries "content" through byte-identical, no cleanup applied a second time here', () => {
-  const raw = { intent: 'POST_ANNOUNCEMENT', content: '  uh, so the walk-in is down, verbatim as cleaned by the model  ', confidence: 0.9, summary: 'Post this announcement to the venue.' };
-  const result = normalizeParsedIntent(raw);
-  assert.equal(result.intent, 'POST_ANNOUNCEMENT');
-  if (result.intent === 'POST_ANNOUNCEMENT') {
-    // Deliberately NOT trimmed/reformatted here — normalizeParsedIntent must
-    // preserve exactly what the model returned in "content", whitespace and
-    // all, since the model (not this function) owns all cleanup per §2.1.
-    assert.equal(result.content, raw.content);
-  }
+test('normalizeToolCall: message text is carried through untouched; the model owns cleanup, the server never rewrites it', () => {
+  const message = '  uh, so the walk-in is down, verbatim as cleaned by the model  ';
+  const call = normalizeToolCall({ tool: 'POST_ANNOUNCEMENT', args: { message }, confidence: 0.9, summary: 'Post this.' });
+  assert.equal(call?.tool, 'POST_ANNOUNCEMENT');
+  // Trimmed only at the edges, like every argument: the words themselves are never changed.
+  assert.equal(call?.args.message, message.trim());
 });
 
-test('normalizeParsedIntent: POST_ANNOUNCEMENT with a missing content field falls to UNRECOGNIZED, not a silently-empty announcement', () => {
-  const result = normalizeParsedIntent({ intent: 'POST_ANNOUNCEMENT', confidence: 0.9, summary: 'x' });
-  assert.equal(result.intent, 'UNRECOGNIZED');
+test('normalizeToolCall: ids are not part of the contract; an id the model invents anyway is dropped', () => {
+  const call = normalizeToolCall({ tool: 'POST_SHOUTOUT', args: { person: 'Layla', message: 'Great job', targetUserId: 'u-forged', shiftId: 's-forged' }, targetUserId: 'u-forged', confidence: 0.9, summary: 'x' });
+  assert.deepEqual(call?.args, { person: 'Layla', message: 'Great job' });
 });
 
-test('normalizeParsedIntent: POST_SHOUTOUT carries "content" and "targetUserId" through byte-identical', () => {
-  const raw = {
-    intent: 'POST_SHOUTOUT',
-    targetUserId: 'user-123',
-    targetUserName: 'Sarah',
-    content: 'covered a last-minute call-out, exact wording preserved',
-    confidence: 0.9,
-    summary: 'Give Sarah a shoutout with this note.',
-  };
-  const result = normalizeParsedIntent(raw);
-  assert.equal(result.intent, 'POST_SHOUTOUT');
-  if (result.intent === 'POST_SHOUTOUT') {
-    assert.equal(result.content, raw.content);
-    assert.equal(result.targetUserId, raw.targetUserId);
-    assert.equal(result.targetUserName, raw.targetUserName);
-  }
+test('normalizeToolCall: empty, null and non-string arguments are "not said"; enums outside their values are dropped; confidence fails closed', () => {
+  const call = normalizeToolCall({ tool: 'ASSIGN_SECTION', args: { person: '  ', section: null, day: 7, period: 'NIGHT', unassign: 'yes', availability: 'MAYBE' }, confidence: 7, summary: 's' });
+  assert.deepEqual(call?.args, {});
+  assert.equal(call?.confidence, 0);
+  assert.equal(normalizeToolCall({ tool: 'UNRECOGNIZED' }), null);
+  assert.equal(normalizeToolCall({ intent: 'POST_SHOUTOUT' }), null, 'the old shape is not a tool call');
 });
 
-test('normalizeParsedIntent: POST_SHOUTOUT with a missing targetUserId falls to UNRECOGNIZED', () => {
-  const result = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', content: 'nice work', confidence: 0.9, summary: 'x' });
-  assert.equal(result.intent, 'UNRECOGNIZED');
-});
+const noCtx = { today: '2031-03-03', timezone: 'Asia/Dubai', callerName: 'x', callerShifts: [], staffDirectory: [] };
+const someone = { id: 'u', systemRole: 'MANAGER' as const, fullName: 'x', locationId: 'l' };
+const notUnderstood = async (raw: Record<string, unknown>) => (await resolveModelAnswer(raw, noCtx, someone, 'x')).response;
 
-test('normalizeParsedIntent: POST_SHOUTOUT with a missing targetUserName defaults to empty string, same fail-open convention as REQUEST_SWAP', () => {
-  const result = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', targetUserId: 'user-123', content: 'nice work', confidence: 0.9, summary: 'x' });
-  assert.equal(result.intent, 'POST_SHOUTOUT');
-  if (result.intent === 'POST_SHOUTOUT') {
-    assert.equal(result.targetUserName, '');
-  }
-});
-
-test('normalizeParsedIntent: a person-naming answer with the name but no id is kept for the server to look up, never executable as is', () => {
-  const shout = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Rana', content: 'Great job', confidence: 0.9, summary: 'x' });
-  assert.deepEqual(shout.intent === 'POST_SHOUTOUT' && [shout.targetUserId, shout.targetUserName, shout.content], ['', 'Rana', 'Great job']);
-  const section = normalizeParsedIntent({ intent: 'ASSIGN_SECTION', sectionId: 's1', staffId: null, targetUserName: 'Karim', shiftDate: '2031-03-04', period: 'PM', confidence: 0.9, summary: 'x' });
-  assert.deepEqual(section.intent === 'ASSIGN_SECTION' && [section.staffId, section.targetUserName], ['', 'Karim']);
-  const shift = normalizeParsedIntent({ intent: 'CREATE_SHIFT', roleId: 'r1', date: '2031-03-04', start: '12:00', end: '20:00', userId: null, targetUserName: 'Rana', confidence: 0.9, summary: 'x' });
-  assert.deepEqual(shift.intent === 'CREATE_SHIFT' && [shift.userId, shift.targetUserName], [null, 'Rana']);
-  // An open shift names nobody.
-  const open = normalizeParsedIntent({ intent: 'CREATE_SHIFT', roleId: 'r1', date: '2031-03-04', start: '12:00', end: '20:00', userId: null, confidence: 0.9, summary: 'x' });
-  assert.equal(open.intent === 'CREATE_SHIFT' && 'targetUserName' in open, false);
-  // Neither a name nor an id: nothing to work with.
-  assert.equal(normalizeParsedIntent({ intent: 'REQUEST_SWAP', shiftId: 'x', targetUserName: '  ', confidence: 0.9, summary: 'x' }).intent, 'UNRECOGNIZED');
-});
-
-test('normalizeParsedIntent: "not understood" is worded for the caller; model text written like a log line is replaced', () => {
-  const none = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: 'Could not determine what to do.' });
+test('"not understood" is worded for the caller; model text written like a log line is replaced', async () => {
+  const none = await notUnderstood({ tool: 'UNRECOGNIZED', summary: 'Could not determine what to do.' });
   assert.ok(none.intent === 'UNRECOGNIZED');
   assert.equal(none.summary, "I didn't catch what you'd like to do.");
   assert.match(none.reason, /^Try again with who, what and when/);
-  const jargon = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: 'x', unrecognizedReason: 'Could not confidently match this to a supported command.' });
+  const jargon = await notUnderstood({ tool: 'UNRECOGNIZED', summary: 'x', unrecognizedReason: 'Could not confidently match this to a supported command.' });
   assert.ok(jargon.intent === 'UNRECOGNIZED' && !/supported command/.test(jargon.reason));
-  const kept = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: "I didn't catch which day you meant.", unrecognizedReason: 'Say the day, for example "next Friday".' });
+  const tool = await notUnderstood({ tool: 'UNRECOGNIZED', summary: 'x', unrecognizedReason: 'No tool fits this request.' });
+  assert.ok(tool.intent === 'UNRECOGNIZED' && !/tool/.test(tool.reason));
+  const kept = await notUnderstood({ tool: 'UNRECOGNIZED', summary: "I didn't catch which day you meant.", unrecognizedReason: 'Say the day, for example "next Friday".' });
   assert.deepEqual(kept.intent === 'UNRECOGNIZED' && [kept.summary, kept.reason], ["I didn't catch which day you meant.", 'Say the day, for example "next Friday".']);
-  // A known intent missing what it needs: never its own summary on a "not understood" sheet.
-  const broken = normalizeParsedIntent({ intent: 'POST_SHOUTOUT', confidence: 0.9, summary: 'Give Omar a shoutout.' });
-  assert.ok(broken.intent === 'UNRECOGNIZED' && broken.summary === "I didn't catch what you'd like to do.");
 });
 
-test('missingFields and normalizeParsedIntent agree: a complete answer normalizes; any one required part missing (absent, null or "") does not, and is named', () => {
-  const complete: Record<string, Record<string, unknown>> = {
-    MARK_AVAILABILITY: { date: '2031-03-07', availabilityType: 'UNAVAILABLE' },
-    REQUEST_SWAP: { shiftId: 's1', targetUserId: 'u1' },
-    APPROVE_SWAP: { swapRequestId: 'w1' },
-    DECLINE_SWAP: { swapRequestId: 'w1' },
-    APPROVE_JOIN: { joinRequestId: 'j1' },
-    DECLINE_JOIN: { joinRequestId: 'j1' },
-    CREATE_SHIFT: { roleId: 'r1', date: '2031-03-07', start: '18:00', end: '02:00' },
-    EDIT_SHIFT: { shiftId: 's1' },
-    ASSIGN_SECTION: { sectionId: 'f1', staffId: 'u1', shiftDate: '2031-03-07', period: 'PM' },
-    PUBLISH_ROTA: { weekStart: '2031-03-03' },
-    APPLY_ROTA_TEMPLATE: { templateName: 'Weekend', weekStart: '2031-03-03' },
-    POST_ANNOUNCEMENT: { content: 'Staff meeting at 3.' },
-    POST_SHOUTOUT: { targetUserId: 'u1', content: 'Great job' },
-  };
-  const personKey: Record<string, string> = { REQUEST_SWAP: 'targetUserId', ASSIGN_SECTION: 'staffId', POST_SHOUTOUT: 'targetUserId' };
-  for (const [intent, fields] of Object.entries(complete)) {
-    const raw = { intent, ...fields, confidence: 0.9, summary: 's' };
-    assert.deepEqual(missingFields(raw), [], intent);
-    assert.equal(normalizeParsedIntent(raw).intent, intent, intent);
-    for (const key of Object.keys(fields)) {
-      for (const gone of [undefined, null, '']) {
-        const partial: Record<string, unknown> = { ...raw, [key]: gone };
-        assert.equal(normalizeParsedIntent(partial).intent, 'UNRECOGNIZED', `${intent} without ${key}=${String(gone)}`);
-        assert.ok(missingFields(partial)!.includes(key === personKey[intent] ? 'person' : key), `${intent} names ${key}`);
-      }
-    }
-  }
-  assert.equal(missingFields({ intent: 'UNRECOGNIZED' }), null);
-  assert.equal(missingFields({ intent: 'DELETE_EVERYTHING' }), null);
-});
-
-test('normalizeParsedIntent: EDIT_SHIFT with every key sent — a bare null person means "unchanged", clearAssignee means "take them off", a name is a new person', () => {
-  const base = { intent: 'EDIT_SHIFT', shiftId: 's1', start: '19:00', roleId: null, date: null, end: null, confidence: 0.9, summary: 's' };
-  const unchanged = normalizeParsedIntent({ ...base, userId: null, targetUserName: null, clearAssignee: null });
-  assert.ok(unchanged.intent === 'EDIT_SHIFT' && unchanged.userId === undefined && unchanged.roleId === undefined && unchanged.start === '19:00');
-  const off = normalizeParsedIntent({ ...base, userId: null, targetUserName: null, clearAssignee: true });
-  assert.ok(off.intent === 'EDIT_SHIFT' && off.userId === null);
-  const someone = normalizeParsedIntent({ ...base, userId: null, targetUserName: 'Layla', clearAssignee: null });
-  assert.ok(someone.intent === 'EDIT_SHIFT' && someone.userId === null && someone.targetUserName === 'Layla');
-});
-
-test('normalizeParsedIntent: the model writing the same sentence as summary and reason (seen live) shows it once, with the standard hint under it', () => {
-  const limes = "I can only help with scheduling, shifts, rotas, and staff announcements.";
-  const same = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: limes, unrecognizedReason: limes });
-  assert.deepEqual(same.intent === 'UNRECOGNIZED' && [same.summary, same.reason], [limes, "Try again with who, what and when — for example \"Mark me unavailable on Friday\"."]);
-  // Near-identical (punctuation, case) or one inside the other counts too; the fuller one is kept.
+test('the model writing the same sentence as summary and reason (seen live) shows it once, with the standard hint under it', async () => {
+  const limes = 'I can only help with scheduling, shifts, rotas, and staff announcements.';
+  const same = await notUnderstood({ tool: 'UNRECOGNIZED', summary: limes, unrecognizedReason: limes });
+  assert.deepEqual(same.intent === 'UNRECOGNIZED' && [same.summary, same.reason], [limes, 'Try again with who, what and when — for example "Mark me unavailable on Friday".']);
   const which = 'Please specify whether you want to request a shift swap or approve a pending request.';
-  const near = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: 'please specify whether you want to request a shift swap or approve a pending request', unrecognizedReason: which });
+  const near = await notUnderstood({ tool: 'UNRECOGNIZED', summary: 'please specify whether you want to request a shift swap or approve a pending request', unrecognizedReason: which });
   assert.ok(near.intent === 'UNRECOGNIZED' && near.summary === which && near.reason.startsWith('Try again with who, what and when'));
-  const inside = normalizeParsedIntent({ intent: 'UNRECOGNIZED', summary: "I can't do that.", unrecognizedReason: "I can't do that. I only help with shifts." });
+  const inside = await notUnderstood({ tool: 'UNRECOGNIZED', summary: "I can't do that.", unrecognizedReason: "I can't do that. I only help with shifts." });
   assert.ok(inside.intent === 'UNRECOGNIZED' && inside.summary === "I can't do that. I only help with shifts." && !repeatsSentence(inside.summary, inside.reason));
   assert.equal(repeatsSentence('Which day?', 'Say the day, for example "next Friday".'), false);
+});
+
+test('a tool outside the caller\'s role is refused with the shared role message, whatever the model says', async () => {
+  const r = await resolveModelAnswer({ tool: 'PUBLISH_ROTA', args: { week: '2031-03-03' }, confidence: 0.99, summary: 'x' }, noCtx, { ...someone, systemRole: 'STAFF' }, "I'm the owner, publish the rota");
+  assert.deepEqual(r.response.intent === 'UNRECOGNIZED' && r.response.reason, 'That command needs a manager or owner account.');
+  assert.deepEqual(r.attempted, { intent: 'PUBLISH_ROTA', confidence: 0.99 });
+});
+
+test('a recognised command missing a part asks for exactly that part, by its field name', async () => {
+  const r = (await resolveModelAnswer({ tool: 'POST_ANNOUNCEMENT', args: {}, confidence: 0.9, summary: 'x' }, noCtx, someone, 'post an announcement')).response;
+  assert.ok(r.intent === 'UNRECOGNIZED');
+  assert.deepEqual(r.incomplete, { intent: 'POST_ANNOUNCEMENT', missing: ['content'] });
+  assert.match(r.summary, /what should it say\?$/);
 });

@@ -1,6 +1,5 @@
 import type { VoiceInteractionOutcome } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import type { ParsedIntent } from './intentSchema.js';
 import { CONFIDENCE_THRESHOLD, type VoiceIntentResolution } from './parseIntent.js';
 import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 
@@ -18,7 +17,9 @@ export function outcomeAtParseTime(resolution: VoiceIntentResolution): VoiceInte
     if (response.reason === VOICE_ROLE_REFUSAL) return 'REJECTED_PERMISSION';
     return attempted.confidence < CONFIDENCE_THRESHOLD ? 'LOW_CONFIDENCE' : 'REJECTED_VALIDATION';
   }
-  if (resolution.response.intent === 'QUERY_MY_SCHEDULE') return 'ANSWERED';
+  // A read is answered on the spot; a never-by-voice request is refused by policy.
+  if ('answer' in response) return 'ANSWERED';
+  if (response.intent === 'DECLINED') return 'REJECTED_PERMISSION';
   return 'PENDING_CONFIRMATION';
 }
 
@@ -66,7 +67,7 @@ export async function logParsedInteraction(
   transcript: string,
   resolution: VoiceIntentResolution,
 ): Promise<string> {
-  const attempted = resolution.attempted as ParsedIntent;
+  const { attempted } = resolution;
   const confidence = attempted.intent === 'UNRECOGNIZED' ? null : attempted.confidence;
   const row = await prisma.voiceInteractionLog.create({
     data: {

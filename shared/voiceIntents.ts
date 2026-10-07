@@ -6,7 +6,14 @@
  * before anything is sent to /execute). The server's 403 stays the real
  * guard; this is the same list so the two can never disagree.
  */
-export const STAFF_INTENTS = ['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE'] as const;
+/**
+ * Questions answered by the server from the venue's own records (never by the model, never
+ * executed): no Confirm. Every role may ask them; what each answer contains is scoped to the
+ * caller's role and venue on the server (server/src/voice/reads.ts).
+ */
+export const READ_VOICE_INTENTS = ['QUERY_MY_SCHEDULE', 'WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS'] as const;
+
+export const STAFF_INTENTS = ['MARK_AVAILABILITY', 'REQUEST_SWAP', 'REQUEST_TIME_OFF', ...READ_VOICE_INTENTS] as const;
 
 export const MANAGER_INTENTS = [
   ...STAFF_INTENTS,
@@ -21,7 +28,13 @@ export const MANAGER_INTENTS = [
   'APPLY_ROTA_TEMPLATE',
   'POST_ANNOUNCEMENT',
   'POST_SHOUTOUT',
+  'CANCEL_SHIFT',
 ] as const;
+
+/** True for a question the server answers (`answer` on the parsed intent); it is never confirmed or executed. */
+export function isReadVoiceIntent(intent: string): boolean {
+  return (READ_VOICE_INTENTS as readonly string[]).includes(intent);
+}
 
 export type VoiceRole = 'OWNER' | 'MANAGER' | 'STAFF';
 

@@ -27,7 +27,7 @@ test('weekdayMismatch: no weekday, two weekdays, or no date in the intent → no
 test('the prompt carries a 14-day calendar with weekday names, starting today', () => {
   assert.equal(calendarDay('2031-03-03', 0), 'Monday 2031-03-03');
   assert.equal(calendarDay('2031-03-03', 4), 'Friday 2031-03-07');
-  const prompt = buildSystemPrompt('STAFF', { today: '2031-03-03', callerName: 'X', callerShifts: [], staffDirectory: [] });
+  const prompt = buildSystemPrompt('STAFF', { today: '2031-03-03', hint: '' });
   assert.match(prompt, /Today is Monday 2031-03-03\./);
   assert.match(prompt, /Calendar .*Monday 2031-03-03; Tuesday 2031-03-04; .*Sunday 2031-03-16\. Weeks start on Monday\./);
 });

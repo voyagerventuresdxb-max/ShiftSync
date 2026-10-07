@@ -1,9 +1,12 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
+import type { GoogleGenAI } from '@google/genai';
+import { __setVoiceIntentClientForTests } from '../voice/parseIntent.js';
+import { venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 
 // These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
 // (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
@@ -30,6 +33,25 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+}
+
+/**
+ * Scripts the intent model for the next /parse-intent calls (no network, nothing paid): the
+ * answer under the tool contract. Every parse test here uses it; none calls a real model.
+ */
+function scriptModel(raw: Record<string, unknown>): void {
+  __setVoiceIntentClientForTests({
+    models: { generateContent: async () => ({ text: JSON.stringify(raw), usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }) },
+  } as unknown as GoogleGenAI);
+}
+after(() => __setVoiceIntentClientForTests(null));
+
+/** The next Friday (today counts) on the venue's own calendar. */
+async function nextFriday(locationId: string): Promise<string> {
+  const today = venueToday(await venueTimezoneFor(locationId));
+  const d = new Date(`${today}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + ((5 - d.getUTCDay() + 7) % 7));
+  return d.toISOString().slice(0, 10);
 }
 
 /** Issues a real bearer session token for a real User, exactly like a login would. */
@@ -204,7 +226,7 @@ test('POST /api/voice/execute: MARK_AVAILABILITY from a STAFF session creates a 
     data: { locationId: location!.id, fullName: '__task6-test__ availability staff', systemRole: 'STAFF' },
   });
 
-  const markDate = '2026-09-15';
+  const markDate = '2031-09-15';
   const transcript = "I can't work on September 15th";
 
   try {
@@ -992,7 +1014,7 @@ test('POST /api/voice/execute: requires a real session (401 without a bearer tok
     const res = await fetch(`${baseUrl}/api/voice/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcript: 'x', intent: { intent: 'MARK_AVAILABILITY', date: '2026-09-15', type: 'UNAVAILABLE', summary: 'x' } }),
+      body: JSON.stringify({ transcript: 'x', intent: { intent: 'MARK_AVAILABILITY', date: '2031-09-15', type: 'UNAVAILABLE', summary: 'x' } }),
     });
     assert.equal(res.status, 401);
   });
@@ -1016,7 +1038,7 @@ test('POST /api/voice/execute: CREATE_SHIFT from a MANAGER session creates a rea
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           transcript: 'create a shift tomorrow 9 to 5',
-          intent: { intent: 'CREATE_SHIFT', roleId: role!.id, date: '2026-09-22', start: '09:00', end: '17:00', userId: null, confidence: 0.9, summary: 'Create an open shift, Sept 22nd, 9am-5pm.' },
+          intent: { intent: 'CREATE_SHIFT', roleId: role!.id, date: '2031-09-22', start: '09:00', end: '17:00', userId: null, confidence: 0.9, summary: 'Create an open shift, Sept 22nd, 9am-5pm.' },
         }),
       });
       assert.equal(res.status, 201, 'MANAGER must be able to execute CREATE_SHIFT');
@@ -1056,9 +1078,9 @@ test('POST /api/voice/execute: EDIT_SHIFT from a MANAGER session updates only th
     data: { locationId: location!.id, fullName: '__task-final-fix-test__ edit-shift new assignee', systemRole: 'STAFF' },
   });
 
-  const originalDate = new Date('2026-09-24T00:00:00.000Z');
-  const originalStart = new Date('2026-09-24T09:00:00.000Z');
-  const originalEnd = new Date('2026-09-24T17:00:00.000Z');
+  const originalDate = new Date('2031-09-24T00:00:00.000Z');
+  const originalStart = new Date('2031-09-24T09:00:00.000Z');
+  const originalEnd = new Date('2031-09-24T17:00:00.000Z');
   const shift = await prisma.shift.create({
     data: {
       locationId: location!.id,
@@ -1129,7 +1151,7 @@ test('POST /api/voice/execute: a STAFF session cannot CREATE_SHIFT even with a h
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           transcript: 'create a shift for myself',
-          intent: { intent: 'CREATE_SHIFT', roleId: role!.id, date: '2026-09-22', start: '09:00', end: '17:00', userId: null, confidence: 0.9, summary: 'x' },
+          intent: { intent: 'CREATE_SHIFT', roleId: role!.id, date: '2031-09-22', start: '09:00', end: '17:00', userId: null, confidence: 0.9, summary: 'x' },
         }),
       });
       assert.equal(res.status, 403);
@@ -1137,7 +1159,7 @@ test('POST /api/voice/execute: a STAFF session cannot CREATE_SHIFT even with a h
       assert.match(body.error, /does not permit/i);
     });
 
-    const leaked = await prisma.shift.findMany({ where: { locationId: location!.id, date: new Date('2026-09-22T00:00:00.000Z'), roleId: role!.id, userId: null } });
+    const leaked = await prisma.shift.findMany({ where: { locationId: location!.id, date: new Date('2031-09-22T00:00:00.000Z'), roleId: role!.id, userId: null } });
     assert.equal(leaked.length, 0, 'no Shift may be created from a STAFF-session CREATE_SHIFT attempt');
   } finally {
     await prisma.user.delete({ where: { id: staffCaller.id } }).catch(() => {});
@@ -1168,7 +1190,7 @@ test('POST /api/voice/execute: ASSIGN_SECTION from a MANAGER session creates a r
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           transcript: 'move the staff member to the bar section tomorrow afternoon',
-          intent: { intent: 'ASSIGN_SECTION', sectionId: section.id, staffId: staff.id, shiftDate: '2026-09-23', period: 'PM', dutyLabel: null, confidence: 0.9, summary: 'x' },
+          intent: { intent: 'ASSIGN_SECTION', sectionId: section.id, staffId: staff.id, shiftDate: '2031-09-23', period: 'PM', dutyLabel: null, confidence: 0.9, summary: 'x' },
         }),
       });
       assert.equal(res.status, 201);
@@ -1221,7 +1243,7 @@ test('POST /api/voice/execute: a real voiceLogId gets its outcome updated to EXE
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           transcript: "I can't work next Monday",
-          intent: { intent: 'MARK_AVAILABILITY', date: '2026-09-28', type: 'UNAVAILABLE', confidence: 0.95, summary: 'x' },
+          intent: { intent: 'MARK_AVAILABILITY', date: '2031-09-28', type: 'UNAVAILABLE', confidence: 0.95, summary: 'x' },
           voiceLogId: logRow.id,
         }),
       });
@@ -1241,10 +1263,8 @@ test('POST /api/voice/execute: a real voiceLogId gets its outcome updated to EXE
 test('POST /api/voice/parse-intent returns voiceLogId and writes a real VoiceInteractionLog row', async () => {
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
-  if (!process.env.GEMINI_API_KEY) {
-    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
-    return;
-  }
+  // A scripted model (no network): the server's own handling is what's under test.
+  scriptModel({ tool: 'UNRECOGNIZED', args: {}, summary: "I didn't catch that." });
 
   const staffCaller = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task13-test__ parse-log staff', systemRole: 'STAFF' },
@@ -1278,10 +1298,7 @@ test('POST /api/voice/parse-intent: QUERY_MY_SCHEDULE from a STAFF session resol
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
-  if (!process.env.GEMINI_API_KEY) {
-    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
-    return;
-  }
+  scriptModel({ tool: 'QUERY_MY_SCHEDULE', args: {}, confidence: 0.95, summary: 'When do I work next?' });
 
   const staffCaller = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task7-test__ query-schedule staff', systemRole: 'STAFF' },
@@ -1324,9 +1341,7 @@ test('POST /api/voice/parse-intent: QUERY_MY_SCHEDULE from a MANAGER session als
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role, 'seed data (location + role) must exist to run this test');
-  if (!process.env.GEMINI_API_KEY) {
-    return;
-  }
+  scriptModel({ tool: 'QUERY_MY_SCHEDULE', args: { week: null }, confidence: 0.95, summary: 'My schedule this week.' });
 
   const manager = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task7-test__ query-schedule manager', systemRole: 'MANAGER' },
@@ -1400,10 +1415,6 @@ test('POST /api/voice/parse-intent: a mutating+mutating compound transcript reso
   // fixture here also needs a seeded FloorPlanImage for this location.
   const floorPlanImage = await prisma.floorPlanImage.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && role && floorPlanImage, 'seed data (location + role + a floor plan image) must exist to run this test');
-  if (!process.env.GEMINI_API_KEY) {
-    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
-    return;
-  }
 
   const manager = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task9-test__ compound manager', systemRole: 'MANAGER' },
@@ -1418,6 +1429,13 @@ test('POST /api/voice/parse-intent: a mutating+mutating compound transcript reso
     data: { locationId: location!.id, floorPlanImageId: floorPlanImage!.id, label: '__task9-test__ Bar', polygon: [], paxCapacity: 6 },
   });
 
+  scriptModel({
+    tool: 'ASSIGN_SECTION',
+    args: { person: ahmed.fullName, section: section.label, day: await nextFriday(location!.id), period: 'PM' },
+    confidence: 0.9,
+    summary: 'Move Ahmed to the bar Friday afternoon.',
+    hasAdditionalRequest: true,
+  });
   let voiceLogId = '';
   try {
     const token = await sessionFor(manager.id);
@@ -1426,7 +1444,7 @@ test('POST /api/voice/parse-intent: a mutating+mutating compound transcript reso
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          transcript: 'Move Ahmed to the bar section this Friday afternoon, and also give Layla a Bartender shift Saturday at 6pm',
+          transcript: `Move ${ahmed.fullName} to the bar section this Friday afternoon, and also give Layla a Bartender shift Saturday at 6pm`,
         }),
       });
       assert.equal(res.status, 200);
@@ -1452,10 +1470,7 @@ test('POST /api/voice/parse-intent: a read-only+mutating compound transcript fla
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   const floorPlanImage = await prisma.floorPlanImage.findFirst({ where: { locationId: location!.id } });
   assert.ok(location && floorPlanImage, 'seed data (location + a floor plan image) must exist to run this test');
-  if (!process.env.GEMINI_API_KEY) {
-    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
-    return;
-  }
+  scriptModel({ tool: 'QUERY_MY_SCHEDULE', args: {}, confidence: 0.9, summary: 'My schedule this week.', hasAdditionalRequest: true });
 
   const manager = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task9-test__ compound query manager', systemRole: 'MANAGER' },
@@ -1498,10 +1513,7 @@ test('POST /api/voice/parse-intent: a read-only+mutating compound transcript fla
 test('POST /api/voice/parse-intent: a plain single-request transcript never flags hasAdditionalRequest', async () => {
   const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
   assert.ok(location, 'seed data (location) must exist to run this test');
-  if (!process.env.GEMINI_API_KEY) {
-    // This test needs a real Gemini call; skip cleanly in environments with no key configured, same policy as the rest of this file's implicit dependency on GEMINI_API_KEY for /parse-intent coverage.
-    return;
-  }
+  scriptModel({ tool: 'MARK_AVAILABILITY', args: { day: await nextFriday(location!.id), availability: 'UNAVAILABLE' }, confidence: 0.9, summary: 'Mark me unavailable Friday.', hasAdditionalRequest: false });
 
   const staffer = await prisma.user.create({
     data: { locationId: location!.id, fullName: '__task9-test__ single-request staffer', systemRole: 'STAFF' },

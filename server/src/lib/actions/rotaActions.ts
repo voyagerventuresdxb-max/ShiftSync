@@ -26,7 +26,7 @@ interface TemplateEntry {
 export async function getRotaPublishPreview(
   locationId: string,
   weekStart: Date,
-): Promise<{ shiftCount: number; staffCount: number }> {
+): Promise<{ shiftCount: number; staffCount: number; shiftsChanging: number }> {
   const weekEnd = new Date(weekStart);
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
   const shiftGroups = await prisma.shift.groupBy({
@@ -35,8 +35,19 @@ export async function getRotaPublishPreview(
     _count: true,
   });
   const shiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
+  // `publishRota` notifies everyone with a shift that week, so that is who gets notified.
   const staffCount = shiftGroups.filter((g) => g.userId !== null).length;
-  return { shiftCount, staffCount };
+  // What this publish actually changes: shifts not yet published, or edited since the week's last
+  // publish (the same comparison GET /api/shifts/:locationId/publish-status makes).
+  const last = await prisma.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart } }, select: { publishedAt: true } });
+  const shiftsChanging = await prisma.shift.count({
+    where: {
+      locationId,
+      date: { gte: weekStart, lt: weekEnd },
+      OR: [{ status: { not: 'PUBLISHED' } }, ...(last ? [{ updatedAt: { gt: last.publishedAt } }] : [])],
+    },
+  });
+  return { shiftCount, staffCount, shiftsChanging };
 }
 
 export type PublishRotaResult =
