@@ -41,6 +41,23 @@ export interface PrintedSheet {
   pages: number;
 }
 
+/** A row's cells with its first `k` columns cut off (a cell spanning past the cut keeps the rest of its span). */
+function dropColumns(cells: PrintedCell[], k: number): PrintedCell[] {
+  const out = [...cells];
+  let left = k;
+  while (left > 0 && out.length) {
+    const first = out[0]!;
+    if (first.span <= left) {
+      left -= first.span;
+      out.shift();
+    } else {
+      out[0] = { ...first, span: first.span - left };
+      left = 0;
+    }
+  }
+  return out;
+}
+
 /** A cell's alignment as the renderer prints it (centred by default). */
 const align = (a: 'left' | 'center' | 'right' | undefined): Pick<PrintedCell, 'center' | 'right'> => (a === 'right' ? { right: true } : a === 'left' ? {} : { center: true });
 
@@ -166,7 +183,10 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
     const label = lineCount === 1 ? '' : /\d/.test(line[0]!) ? 'DATE' : 'DAY OF THE WEEK';
     // Column headings over the leading columns, in their printed order, on the first header row.
     const leadCells = labels && !spec.labelsRow ? order.map((k) => head(l === 0 ? labels[k] ?? '' : '', 1)) : [head(label, nLead)];
-    rows.push({ kind: 'header', page: 1, cells: [...leadCells, ...line.map((t) => dayHead(t))] });
+    const headerCells = [...leadCells, ...line.map((t) => dayHead(t))];
+    // A broken export: the header row printed `headerShift` columns left of its columns.
+    const shift = spec.headerShift ?? 0;
+    rows.push({ kind: 'header', page: 1, cells: shift ? [...dropColumns(headerCells, shift), ...Array.from({ length: shift }, () => head('', 1))] : headerCells });
   }
   if (labels && spec.labelsRow) {
     rows.push({ kind: 'subheader', page: 1, cells: [...order.map((k) => ({ ...head(labels[k] ?? '', 1), center: false })), ...roster.dates.map(() => head('', 1))] });
@@ -189,7 +209,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
     }
     index++;
     const combinedName = spec.combined === 'slash' ? `${p.name} / ${p.title ?? ''}` : `${p.name} (${p.title ?? ''})`;
-    const leadText: Record<'no' | 'name' | 'title', string> = { no: String(index), name: spec.combined && p.title ? combinedName : p.name, title: p.title ?? '' };
+    const leadText: Record<'no' | 'name' | 'title', string> = { no: spec.payrollIds ? String(104200 + index * 7) : String(index), name: spec.combined && p.title ? combinedName : p.name, title: p.title ?? '' };
     const cells: PrintedCell[] = order.map((k) => ({ text: leadText[k], span: 1, bold: k !== 'no', ...leadAlign }));
     const cellAlign = align(spec.dayAlign ?? (spec.narrowDays ? 'left' : 'center'));
     p.cells.forEach((c) => {
@@ -363,7 +383,7 @@ export async function imagePdf(pngs: Buffer[]): Promise<Buffer> {
  * the ff / fi / fl ligatures of a name come out as separate text items placed edge to edge
  * ("Sa" + "ffi" + "ya"), the way glyph-by-glyph exporters emit them. One page.
  */
-export async function renderSplitLigaturePdf(sheet: PrintedSheet): Promise<Buffer> {
+export async function renderSplitLigaturePdf(sheet: PrintedSheet, gap = 0): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const size = 8;
@@ -385,7 +405,7 @@ export async function renderSplitLigaturePdf(sheet: PrintedSheet): Promise<Buffe
       let x = cell.right ? x0 + w - 3 - total : cell.center ? x0 + (w - total) / 2 : x0 + 3;
       for (const piece of cell.text.split(/(ffi|ffl|ff|fi|fl)/).filter(Boolean)) {
         page.drawText(piece, { x, y, size, font });
-        x += font.widthOfTextAtSize(piece, size);
+        x += font.widthOfTextAtSize(piece, size) + (/^(ffi|ffl|ff|fi|fl)$/.test(piece) ? gap : 0);
       }
     }
   });

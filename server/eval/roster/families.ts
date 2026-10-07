@@ -131,6 +131,14 @@ export interface VariantSpec {
   aiNoise?: boolean;
   /** A low-contrast scan: both readings read a few cells the same wrong way; the row read marks some unsure (mock). */
   lowContrast?: boolean;
+  /** Family B: the header row is printed this many columns left of its columns (a broken export); the AI slips rows of it (mock). */
+  headerShift?: number;
+  /** Text PDF with split ligatures: the pieces sit this far apart (pt), so the text layer puts a space between them. */
+  ligatureGap?: number;
+  /** Family B: the index column holds payroll IDs ("104201") instead of row numbers. */
+  payrollIds?: boolean;
+  /** A clean scan whose row read marks some days it read like the other reading unsure (mock). */
+  unsureMarks?: boolean;
   seed: number;
 }
 
@@ -221,6 +229,10 @@ export interface FamilyTruth {
     aiNoise?: boolean;
     /** A low-contrast scan (the mock's readings share a few wrong cells and mark some unsure). */
     lowContrast?: boolean;
+    /** The header row printed off its columns (the mock's readings slip rows of it, each its own way). */
+    headerShift?: number;
+    /** A clean scan whose row read marks some days unsure (mock). */
+    unsureMarks?: boolean;
   };
   pageCount: number;
   people: TruthPerson[];
@@ -726,6 +738,13 @@ export const FAMILY_VARIANTS: VariantSpec[] = [
   B({ id: 'B38-signoff-ligatures-pdf', format: 'pdf-text', ligatures: true, lead: ['name', 'title'], signOffRows: [['Verified by: ____________', ['', 'Date: ____________']], ['Certified by', []], ['Officer in charge ........', ['', '', '', 'Page 1 of 1']]], tags: ['sign-off lines whose words the text layer splits at ligatures', 'with and without values beside them', 'text PDF'] }, 238),
   B({ id: 'B39-ai-noise-pdf', format: 'pdf-text', aiNoise: true, notation: 'colon24', tags: ['clean text PDF', 'an AI reading like a live one: other notations, a slipped row, a misread digit'] }, 239),
   B({ id: 'B40-low-contrast-photo', format: 'png', lowContrast: true, weekStart: APR20, tags: ['low-contrast photo', 'both readings read a few cells the same wrong way'] }, 240),
+  // Round 6: new forms of the classes the fifth holdout found.
+  B({ id: 'B41-header-shifted-sn-pdf', format: 'pdf-text', lead: ['no', 'name', 'title'], leadLabels: { no: 'S/N', name: 'NAME', title: 'POSITION' }, headerAlign: 'left', headerShift: 1, notation: 'colon24', tags: ['header row printed one column left of its columns (a broken export)', 'S/N column', 'left-aligned header text', 'an AI reading that slips rows of it'] }, 241),
+  B({ id: 'B42-header-shifted-two-pdf', format: 'pdf-text', lead: ['no', 'name', 'title'], headerShift: 2, overnight: true, notation: 'dot24', weekStart: APR20, tags: ['header row printed two columns left of its columns', 'overnight shifts', 'an AI reading that slips rows of it'] }, 242),
+  B({ id: 'B43-office-use-footer-pdf', format: 'pdf-text', ligatures: true, ligatureGap: 1.6, signOffRows: [['Office use only - final copy', []], ['Verified', ['', 'by', '', 'Date ________']], ['Internal - do not distribute', ['', '', '', 'Page 1 of 1']]], tags: ['footer and office lines whose words split at ligatures with a gap ("O ffi ce")', 'text PDF'] }, 243),
+  B({ id: 'B44-payroll-id-labels-row-xlsx', format: 'xlsx', lead: ['no', 'name', 'title'], leadLabels: { no: 'Payroll ID', name: 'Name', title: 'Pos' }, labelsRow: true, payrollIds: true, tags: ['Payroll ID | Name | Pos on a row of their own', 'six-digit payroll IDs', 'xlsx'] }, 244),
+  B({ id: 'B45-id-first-csv', format: 'csv', lead: ['no', 'title', 'name'], leadLabels: { no: 'Emp No.', title: 'Pos', name: 'Staff' }, labelsRow: true, payrollIds: true, tags: ['Emp No. | Pos | Staff on a row of their own', 'csv'] }, 245),
+  A({ id: 'A31-clean-scan-unsure', format: 'pdf-image', unsureMarks: true, weekStart: AUG24, tags: ['clean scan', 'the row read marks about one day in eight unsure (both readings agree)'] }, 131),
 ];
 
 export const FILE_EXT: Record<OutputFormat, string> = { 'pdf-text': 'pdf', 'pdf-image': 'pdf', png: 'png', xlsx: 'xlsx', csv: 'csv' };

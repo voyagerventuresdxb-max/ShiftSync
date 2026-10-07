@@ -78,7 +78,7 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
       data = renderCsv(sheet);
       break;
     case 'pdf-text':
-      data = spec.ligatures ? await renderSplitLigaturePdf(sheet) : await renderTextPdf(sheet, opts);
+      data = spec.ligatures ? await renderSplitLigaturePdf(sheet, spec.ligatureGap ?? 0) : await renderTextPdf(sheet, opts);
       break;
     case 'png':
       data = (await renderPngPages(sheet, opts))[0]!;
@@ -99,6 +99,8 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
   if (spec.signOffRows?.length) truth.printed.signOffs = spec.signOffRows.map(([label, cells]) => ({ label, cells: truth.week.dates.map((_, d) => cells[d] ?? '') }));
   if (spec.aiNoise) truth.printed.aiNoise = true;
   if (spec.lowContrast) truth.printed.lowContrast = true;
+  if (spec.headerShift) truth.printed.headerShift = spec.headerShift;
+  if (spec.unsureMarks) truth.printed.unsureMarks = true;
   return { file, data, truth };
 }
 

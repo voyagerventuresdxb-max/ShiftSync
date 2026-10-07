@@ -68,6 +68,8 @@ export interface Perturbations {
   noise: { slipped: { name: string; day: number } | null; digit: { name: string; day: number } | null };
   /** Low-contrast scan: cells both readings read the same wrong way, cells the column read reads differently, cells the row read marks unsure. */
   faded: { shared: { name: string; day: number }[]; colDiff: { name: string; day: number }[]; unsure: { name: string; day: number }[] };
+  /** A header printed off its columns: rows each reading slips by some days (its own way). */
+  slips: { rows: Map<string, number>; cols: Map<string, number> };
 }
 
 function hashSeed(id: string): number {
@@ -156,8 +158,28 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
     },
     noise: noiseCells(truth, used),
     faded: fadedCells(truth),
+    slips: slippedRows(truth),
   };
 }
+
+/**
+ * A header printed off its columns misleads the AI too: the row read slips about two rows in
+ * five by -2, -1, +1, +2 or +4 days; the column read slips about one row in five, its own way.
+ */
+function slippedRows(truth: FamilyTruth): Perturbations['slips'] {
+  const out: Perturbations['slips'] = { rows: new Map(), cols: new Map() };
+  if (!truth.printed.headerShift) return out;
+  const r = rng(hashSeed(`${truth.id}#slips`));
+  const by = [-2, -1, 1, 2, 4];
+  for (const p of truth.people) {
+    if (r() < 0.4) out.rows.set(p.name, by[Math.floor(r() * by.length)]!);
+    if (r() < 0.2) out.cols.set(p.name, by[Math.floor(r() * by.length)]!);
+  }
+  return out;
+}
+
+/** A row's cells moved `by` days (cells pushed past either end are lost; empty cells come in). */
+const slide = (cells: string[], by: number) => cells.map((_, d) => cells[d - by] ?? '');
 
 /** Live-like AI misreadings of a text PDF: one row slipped a day from an empty cell on, one digit misread. */
 function noiseCells(truth: FamilyTruth, used: Set<string>): Perturbations['noise'] {
@@ -313,7 +335,8 @@ function rowReadCells(truth: FamilyTruth, name: string, cells: string[], p: Pert
     if (p.noise.slipped?.name === name) out.splice(p.noise.slipped.day, 1).length && out.push('');
   }
   for (const f of p.faded.shared) if (f.name === name) out[f.day] = laterStart(out[f.day]!);
-  return out;
+  const slipped = p.slips.rows.get(name);
+  return slipped ? slide(out, slipped) : out;
 }
 
 const inRows = (i: number, rows?: { from: number; to: number | null }) => !rows || (i >= rows.from && (rows.to === null || i <= rows.to));
@@ -341,7 +364,8 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
           out[s.day] = '';
         }
         for (const f of [...p.faded.shared, ...p.faded.colDiff]) if (f.name === person.name) out[f.day] = laterStart(out[f.day]!);
-        return out;
+        const slipped = p.slips.cols.get(person.name);
+        return slipped ? slide(out, slipped) : out;
       };
       const cols = truth.week.dates.map((_, d) => ({
         d,
@@ -377,7 +401,8 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
         const copied = p.combinedCopied.includes(person.name) ? (truth.printed.combined === 'slash' ? `${person.name} / ${person.role}` : `${person.name} (${person.role})`) : null;
         const name = copied ?? (p.misread?.name === person.name ? p.misread.as : p.faint?.name === person.name ? p.faint.as : person.name);
         const title = copied ? null : truth.family === 'B' ? person.role || null : null;
-        const unsure = p.faded.unsure.filter((f) => f.name === person.name).map((f) => f.day);
+        const marked = truth.printed.unsureMarks ? (person.cells ?? []).map((c, d) => (hasTimes(c) && hashSeed(`${truth.id}|${person.name}|${d}`) % 8 === 0 ? d : -1)).filter((d) => d >= 0) : [];
+        const unsure = [...p.faded.unsure.filter((f) => f.name === person.name).map((f) => f.day), ...marked];
         const q = unsure.length ? { q: unsure } : {};
         sec.ppl.push(p.swapNameTitle && title ? { nm: title, t: name, i, c: cells, ...q } : { nm: name, t: title, i, c: cells, ...q });
       }

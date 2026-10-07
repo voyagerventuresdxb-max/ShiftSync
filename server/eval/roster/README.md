@@ -183,6 +183,29 @@ says so (A22, A23, A25, A30, B40); readable photos stay at 0.8–4.8%. The lower
 recall is those withheld pages, by design. Private DEV files: 21 / 21 people, 160 / 160 exact,
 0 extra; 18 / 18, 62 / 62.
 
+### Round 6 (after a fifth holdout): 76 rosters
+
+Six variants added, new forms of the classes the fifth holdout found: B41 / B42 (text PDFs whose
+header row is printed one or two columns left of its columns — a broken export — with an S/N
+column and left-aligned header text; the mock AI slips rows of it, each reading its own way), B43
+(office, internal and final-copy lines whose words the text layer splits at ligatures with a gap,
+"O ffi ce use only"), B44 / B45 (column labels on a row of their own, ID column first:
+"Payroll ID | Name | Pos", "Emp No. | Pos | Staff", six-digit payroll IDs; XLSX and CSV) and A31 (a
+clean scan whose row reading marks about one day in eight unsure while both readings agree).
+
+Per class, before → after (mock AI reader): the shifted header (B41, B42) 32 / 64 and 21 / 55
+exact, 23 and 24 shifts on the wrong day, 19 and 27 missed silently → 55 / 64 and 43 / 55, 0 on
+the wrong day, 0 silent (the rest shown to check). The table reader tries the header one and two
+columns either way and keeps the reading the body fits clearly better; a day read under a shifted
+or uncertain header is never saved on its own — such a file is read twice by the AI reader, like a
+photo, and a day is saved where two independent readers agree on it. Office and label lines (B43,
+B44, B45) precision 95.2% → 100%. The clean scan (A31): withheld whole → 130 / 157 imported, the 27
+days a reading was unsure of or the two read differently shown to check; only days the two
+readings read DIFFERENTLY count against a page now (limit unchanged at 6%). Known limit: a photo
+whose two readings agree, confidently, on a wrong value while disagreeing on under 6% of its days
+saves it (B40 here, a synthetic worst case: 4 such cells); before, its unsure marks withheld the
+page. Private DEV files unchanged: 21 / 21, 160 / 160, 0 extra; 18 / 18, 62 / 62.
+
 ## Corpus (`spec.ts` → `corpus/`)
 
 18 rosters, week of Monday 2026-08-17: day grid, per-row title column, long-format template,
