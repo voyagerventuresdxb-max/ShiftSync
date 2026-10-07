@@ -708,4 +708,42 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
       [fixed, 'EXECUTED'],
     ]);
   });
+
+  test('a command missing a part (seen live): "Almost there" asks for exactly that part; fixing the words and trying again gives the preview', async ({ page }) => {
+    await phone(page);
+    const { locationId, roleId } = await createVenue('incomplete');
+    const managerPhone = freshPhone();
+    await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
+    const alex = await createUser(locationId, 'STAFF', 'Alex Morgan');
+    const friday = addDays(nextMonday(), 4);
+
+    await logIn(page, managerPhone, '/');
+    const said = 'Create a bartender shift for Alex on Friday from 6 p.m.';
+    // The live answer's shape: no end, no role, no person.
+    await speak(page, said, {
+      intent: 'CREATE_SHIFT', summary: 'Create a Bartender shift for Alex Morgan on Friday.', confidence: 0.95,
+      date: friday, start: '18:00', templateId: null, templateName: null, weekStart: null,
+    });
+    const sheet = voiceSheet(page);
+    await expect(sheet.locator('.eyebrow')).toHaveText('Almost there');
+    const day = new Date(`${friday}T00:00:00.000Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+    await expect(sheet.getByRole('heading', { name: `I've got a new shift on ${day} from 18:00 — what time does it end, and which role?` })).toBeVisible();
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await expectPhoneFriendly(sheet);
+    await screenshot(page, '09-almost-there');
+
+    const fixed = 'Create a bartender shift for Alex on Friday from 6 p.m. to 2 a.m.';
+    await sheet.getByLabel(/I heard/).fill(fixed);
+    await scriptIntent({
+      intent: 'CREATE_SHIFT', roleId, date: friday, start: '18:00', end: '02:00', userId: alex.id, targetUserName: 'Alex',
+      confidence: 0.95, summary: `Create a Bartender shift for Alex Morgan on ${friday}, 18:00 to 02:00.`,
+    });
+    await sheet.getByRole('button', { name: 'Try again' }).click();
+    const again = sheetFor(page, fixed);
+    await expect(again.locator('.eyebrow')).toHaveText('New shift');
+    await expect(again.getByText('Alex Morgan', { exact: true })).toBeVisible();
+    expect(await prisma.shift.count({ where: { locationId } })).toBe(0);
+    await again.getByRole('button', { name: 'Cancel' }).click();
+    expect(await prisma.shift.count({ where: { locationId } })).toBe(0);
+  });
 });

@@ -169,6 +169,9 @@ until **Confirm**.
 | P9 | Anyone | "Order more limes." | **Didn't catch that**, a plain sentence and a hint, no Confirm. Note the exact words shown: they must read like a person, not a log line. |
 | P10 | Manager | Say "Give Alex a shout-out", then on the sheet tap **Edit**, change the words to "Give Alex a shout-out for the spotless bar", tap **Try again** | A new sheet for the edited words, with the new note in the preview; no new recording. **Back** (while editing) returns to the previous preview unchanged. |
 | P11 | Manager | Say something that isn't understood, then fix the words in the *I heard* box and tap **Try again** | The sheet for the fixed words. In the voice log both commands appear, the first as not understood. |
+| P12 | Manager | "Create a bartender shift for Alex on Friday from 6pm." (no end time) | Either the new-shift sheet with an end you can check, or label **Almost there** with *exact* wording like "I've got a new shift for Alex Morgan on Fri <date> from 18:00 — what time does it end?". Never "I didn't catch what you'd like to do." Add "to 2am" to *I heard* and **Try again**: the new-shift preview. |
+| P13 | Manager | "Put Alex on the bar tomorrow evening." | The section sheet (Bar, tomorrow, PM). If a part is ever dropped: **Almost there** naming Alex Morgan and asking only for the missing part(s). |
+| P14 | Manager | "Put Karim on the terrace tomorrow evening." | **Which Karim did you mean?** with both Karims (each previewing *Terrace · <date> · PM*); if section/day/period were dropped, **Almost there** asking "which Karim (…)" plus the missing parts. |
 
 ## Results log
 

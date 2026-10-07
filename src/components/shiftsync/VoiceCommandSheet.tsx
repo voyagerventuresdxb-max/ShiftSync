@@ -161,19 +161,23 @@ export function VoiceCommandSheet({
   const showEditor = editing || notUnderstood;
   const confirming = !isUnrecognized && !isAnswerOnly && !showFollowUp && !executed;
 
-  const eyebrow = person
-    ? person.status === 'missing'
+  // A recognised command missing a part: nearly there, not "didn't catch that".
+  const incomplete = isUnrecognized && !!intent.incomplete;
+  const eyebrow = incomplete
+    ? 'Almost there'
+    : person?.status === 'missing'
       ? 'Not on your team'
-      : 'Which person?'
-    : choices
-      ? 'Choose one'
-      : notUnderstood
-        ? "Didn't catch that"
-        : showFollowUp
-          ? 'Got it — one more thing?'
-          : isAnswerOnly
-            ? 'Your schedule'
-            : (KIND[intent.intent] ?? 'Voice command');
+      : person
+        ? 'Which person?'
+        : choices
+          ? 'Choose one'
+          : notUnderstood
+            ? "Didn't catch that"
+            : showFollowUp
+              ? 'Got it — one more thing?'
+              : isAnswerOnly
+                ? 'Your schedule'
+                : (KIND[intent.intent] ?? 'Voice command');
   const headline = executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary;
   const reparse = () => {
     const text = draft.trim();

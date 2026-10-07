@@ -53,7 +53,15 @@ export type ParsedIntent =
    * did you mean?"), or one per person when the name said fits nobody or more than one person at
    * the venue (`person`).
    */
-  | { intent: 'UNRECOGNIZED'; reason: string; summary: string; options?: ParsedIntent[]; person?: { heard: string; status: 'missing' | 'ambiguous' } };
+  /** `incomplete`: a recognised command missing parts it needs; `summary` asks for exactly those. */
+  | {
+      intent: 'UNRECOGNIZED';
+      reason: string;
+      summary: string;
+      options?: ParsedIntent[];
+      person?: { heard: string; status: 'missing' | 'ambiguous' };
+      incomplete?: { intent: string; missing: string[] };
+    };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(apiUrl(url), init);
