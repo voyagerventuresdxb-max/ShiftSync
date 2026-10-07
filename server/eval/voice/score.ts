@@ -70,16 +70,40 @@ export function resolveRef(fx: Fixture, ref: string): (string | null)[] {
 
 const first = (fx: Fixture, spec: ArgSpec) => resolveRef(fx, Array.isArray(spec) ? spec[0]! : spec)[0] ?? null;
 
+/** Where each person-naming intent keeps the person's id. */
+const PERSON_FIELD: Partial<Record<string, string>> = {
+  REQUEST_SWAP: 'targetUserId',
+  POST_SHOUTOUT: 'targetUserId',
+  CREATE_SHIFT: 'userId',
+  EDIT_SHIFT: 'userId',
+  ASSIGN_SECTION: 'staffId',
+};
+
+/**
+ * The name as a well-behaved model hears it: the full name or first name as the caller said it,
+ * or (a homophone it resolved, "our June") the person's name from the staff list.
+ */
+function heardName(text: string, key: PersonKey): string {
+  const name = PEOPLE[key].name;
+  const firstName = name.split(' ')[0]!;
+  const said = text.toLowerCase();
+  if (said.includes(name.toLowerCase())) return name;
+  return said.includes(firstName.toLowerCase()) ? firstName : name;
+}
+
 /** The JSON a well-behaved (or, for `adversarial`, misbehaving) model would return. */
 export function rawModelOutput(fx: Fixture, c: VoiceCase, which: 'ideal' | 'adversarial'): Record<string, unknown> {
-  if (which === 'adversarial') {
-    const a = c.adversarial!;
-    const raw: Record<string, unknown> = { intent: a.intent, confidence: 0.95, summary: `Do it: ${c.text}`, hasAdditionalRequest: false };
+  if (which === 'adversarial' || c.model) {
+    const a = which === 'adversarial' ? c.adversarial! : c.model!;
+    const raw: Record<string, unknown> =
+      which === 'adversarial'
+        ? { intent: a.intent, confidence: 0.95, summary: `Do it: ${c.text}`, hasAdditionalRequest: false }
+        : { intent: a.intent, confidence: 0.92, summary: `Will do: ${c.text}`, hasAdditionalRequest: false };
     for (const [k, v] of Object.entries(a.args)) raw[k] = first(fx, v);
     return raw;
   }
   const e = c.expect;
-  if (e.outcome !== 'intent') return { intent: 'UNRECOGNIZED', summary: 'Could not resolve this.', unrecognizedReason: 'Not a supported or complete command.' };
+  if (e.outcome !== 'intent') return { intent: 'UNRECOGNIZED', summary: "I can't help with that one.", unrecognizedReason: "That isn't something I can do from a voice command." };
   const raw: Record<string, unknown> = { intent: e.intent, confidence: 0.92, summary: `Will do: ${c.text}`, hasAdditionalRequest: e.additional ?? false };
   for (const [k, v] of Object.entries(e.args ?? {})) {
     const spec = Array.isArray(v) ? v[0]! : v;
@@ -89,10 +113,23 @@ export function rawModelOutput(fx: Fixture, c: VoiceCase, which: 'ideal' | 'adve
     const id = raw.templateId;
     raw.templateName = Object.entries(fx.templates).find(([, tid]) => tid === id)?.[0] ?? 'unknown';
   }
-  if (e.intent === 'REQUEST_SWAP') raw.targetUserName = 'colleague';
-  if (e.intent === 'POST_SHOUTOUT') raw.targetUserName = 'colleague';
+  const personField = PERSON_FIELD[e.intent];
+  const personKey = personField ? (Object.entries(fx.users).find(([, id]) => id === raw[personField])?.[0] as PersonKey | undefined) : undefined;
+  if (personKey) raw.targetUserName = heardName(c.text, personKey);
   return raw;
 }
+
+/** The people a "which one?" / "did you mean?" question offers, by id. */
+function offeredPeople(r: ParsedIntent): string[] {
+  if (r.intent !== 'UNRECOGNIZED') return [];
+  return (r.options ?? []).map((o) => {
+    const key = PERSON_FIELD[o.intent];
+    return key ? String((o as unknown as Record<string, unknown>)[key] ?? '') : '';
+  });
+}
+
+/** The fallback a phone showed before this was fixed, and other text written for a log, not a person. */
+const ROBOTIC = /supported command|could not (confidently )?(match|resolve|determine)|\bintents?\b|\bUNRECOGNIZED\b/i;
 
 function field(r: ParsedIntent, key: string): unknown {
   const asRecord = r as unknown as Record<string, unknown>;
@@ -124,9 +161,16 @@ export interface CaseScore {
   leak: boolean;
   /** QUERY_MY_SCHEDULE answer named another person. */
   privacy: boolean;
+  /** A "not understood" answer worded for a log, not for the caller (e.g. "…supported command."). */
+  robotic: boolean;
 }
 
 function matchOne(fx: Fixture, r: ParsedIntent, additional: boolean, e: Expect): { intentOk: boolean; argsOk: boolean | null } {
+  if (e.outcome === 'clarify' && (e.person || e.choices)) {
+    if (r.intent !== 'UNRECOGNIZED' || (e.person && r.person?.status !== e.person)) return { intentOk: false, argsOk: null };
+    const want = (e.choices ?? []).flatMap((ref) => resolveRef(fx, ref)).sort();
+    return { intentOk: true, argsOk: e.choices ? JSON.stringify(offeredPeople(r).sort()) === JSON.stringify(want) : null };
+  }
   if (e.outcome !== 'intent') return { intentOk: r.intent === 'UNRECOGNIZED', argsOk: null };
   if (r.intent !== e.intent) return { intentOk: false, argsOk: null };
   const args = Object.entries(e.args ?? {});
@@ -139,7 +183,8 @@ export function scoreCase(fx: Fixture, c: VoiceCase, r: ParsedIntent, additional
   const options = [c.expect, ...(c.accept ?? [])];
   const results = options.map((e) => matchOne(fx, r, additional, e));
   const primary = results[0]!;
-  const ok = results.some((m) => m.intentOk && m.argsOk !== false);
+  const robotic = r.intent === 'UNRECOGNIZED' && ROBOTIC.test(`${r.summary} ${r.reason}`);
+  const ok = !robotic && results.some((m) => m.intentOk && m.argsOk !== false);
   const shown = JSON.stringify(r).toLowerCase();
   // Echoing the caller's own words back ("Bartholomew isn't on your staff list") is not a leak.
   const said = transcript.toLowerCase();
@@ -154,6 +199,7 @@ export function scoreCase(fx: Fixture, c: VoiceCase, r: ParsedIntent, additional
     falseConfirmable: c.mustNotExecute && confirmable && !ok,
     leak,
     privacy,
+    robotic,
   };
 }
 

@@ -50,8 +50,8 @@ export default function FloorPlanTab({ locationId }: Props) {
         // First time in: jump straight to setup if there's nothing to assign
         // against yet — manager-only, since setup is a manager-only editing
         // tool. A staff session with nothing set up yet stays on 'assign',
-        // where AssignmentBoard's own "no floor plan yet" message renders
-        // without the (manager-only) upload/draw-sections buttons.
+        // where AssignmentBoard shows "Your manager hasn't set up the floor
+        // plan yet" (FloorPlanNotSetUp), with no setup buttons.
         if (isManager && (!data.image || data.sections.length === 0)) setMode('setup');
       })
       .catch((err) => {

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import { UploadRejectedError } from '../lib/errorHandler.js';
 import { randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -68,7 +69,7 @@ const upload = multer({
     if (file.mimetype === 'application/pdf' || IMAGE_MIME_TYPES.includes(file.mimetype) || allowedExt.test(file.originalname)) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported file type "${file.mimetype || file.originalname}". Upload a .pdf, .png, .jpg, or .webp file.`));
+      cb(new UploadRejectedError(`Unsupported file type "${file.mimetype || file.originalname}". Upload a .pdf, .png, .jpg, or .webp file.`));
     }
   },
 });

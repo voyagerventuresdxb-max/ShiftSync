@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation } from '../middleware/requireSession.js';
 import { VENUE_TYPES } from '../../../shared/venueTypes.js';
+import { VENUE_NAME_MAX_LENGTH } from '../../../shared/venueName.js';
 
 export const locationsRouter = Router();
 
@@ -24,8 +25,10 @@ locationsRouter.get('/:id', requireSession, async (req, res) => {
 
 /**
  * PATCH /api/locations/:id — body: { name?, venueType?, emirate? }
- * Used by the onboarding wizard's venue-setup step; any field may be sent
- * alone so a later edit doesn't clobber the others. Manager/owner-only,
+ * Used by the onboarding wizard's venue-setup step and the Venue panel on
+ * Profile (rename); any field may be sent alone so a later edit doesn't
+ * clobber the others. `name` is trimmed, non-empty and at most
+ * VENUE_NAME_MAX_LENGTH characters. Manager/owner-only,
  * own venue only. `emirate` is free-text (the Prisma column has no enum —
  * see its schema comment), same trim-only treatment as `name`; the onboarding
  * UI's city chips (Dubai/Abu Dhabi/Sharjah/Other) are a client-side
@@ -42,6 +45,9 @@ locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) =
     if (req.body?.name !== undefined) {
       const name = String(req.body.name).trim();
       if (!name) return res.status(400).json({ error: 'name cannot be empty.' });
+      if (name.length > VENUE_NAME_MAX_LENGTH) {
+        return res.status(400).json({ error: `name must be ${VENUE_NAME_MAX_LENGTH} characters or fewer.` });
+      }
       data.name = name;
     }
     if (req.body?.venueType !== undefined) {
@@ -59,6 +65,11 @@ locationsRouter.patch('/:id', requireSession, requireManager, async (req, res) =
       return res.status(400).json({ error: 'Nothing to update.' });
     }
 
+    // A rename touches Location.name only — the one name every screen shows.
+    // Organization.name keeps its signup-time value on purpose: nothing
+    // displays it, and test-venue cleanup (lib/testVenueCleanup.ts, e2e
+    // helpers) finds test orgs by its name prefix, so a rename must never
+    // move an org in or out of that cleanup's reach.
     const location = await prisma.location.update({
       where: { id },
       data,

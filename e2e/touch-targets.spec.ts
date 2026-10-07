@@ -260,6 +260,11 @@ test.describe('touch targets — every interactive element has a ≥44x44 effect
     await page.waitForURL('**/onboarding/roster**');
     await assertTouchTargets(page, 'Onboarding › Roster');
 
+    // Floor plan before anything is set up: the "Add your first section" empty state.
+    await gotoSettled(page, '/floor-plan');
+    await page.waitForSelector('text=Add your first section');
+    await assertTouchTargets(page, 'Floor plan › empty');
+
     await seedVenueContent(page);
 
     await gotoSettled(page, '/');

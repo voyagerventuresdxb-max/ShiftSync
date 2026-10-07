@@ -1,4 +1,4 @@
-import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
+import express, { type RequestHandler } from 'express';
 import cors from 'cors';
 import { schedulesRouter } from './routes/schedules.js';
 import { staffDirectoryRouter } from './routes/staffDirectory.js';
@@ -31,6 +31,7 @@ import { corsOptionsFromEnv } from './lib/corsOptions.js';
 import { requestIdMiddleware } from './lib/requestContext.js';
 import { checkReadiness } from './lib/readiness.js';
 import { isPushRecording, pushOutbox } from './lib/push.js';
+import { apiErrorHandler } from './lib/errorHandler.js';
 
 /**
  * Low-risk headers on every API response (no CSP here: the API serves JSON and files, the web
@@ -107,13 +108,8 @@ export function createApp() {
   // Unknown API paths answer JSON, not Express's default HTML page.
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found.' }));
 
-  // Multer errors (bad file type, size limit) surface via next(err); normalize them to JSON.
-  const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
-    console.error('[app] unhandled error', err);
-    const message = err instanceof Error ? err.message : 'Unexpected server error.';
-    res.status(400).json({ error: message });
-  };
-  app.use(errorHandler);
+  // Multer errors (bad file type, size limit) and anything else passed to next(err) end here, as JSON.
+  app.use(apiErrorHandler);
 
   return app;
 }

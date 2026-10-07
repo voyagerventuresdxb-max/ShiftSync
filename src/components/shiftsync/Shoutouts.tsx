@@ -7,10 +7,7 @@ import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
 import { StaleDataNotice, OfflineEmptyState } from '@/components/shiftsync/OfflineNotice';
 import { weekdayOf } from '@/engine/rosterView';
-
-function initials(name: string): string {
-  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? '').join('');
-}
+import { ShoutoutCard } from '@/components/shiftsync/FeedCards';
 
 function timeAgo(iso: string): string {
   const hours = Math.floor((Date.now() - new Date(iso).getTime()) / 3600000);
@@ -209,19 +206,15 @@ export function Shoutouts() {
       ) : (
         <ul className="mt-4 space-y-3">
           {items.map((s) => (
-            <li key={s.id} className="rounded-xl border border-border bg-background/40 p-3">
-              <div className="flex min-w-0 items-start gap-3">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent">
-                  {initials(s.employeeName)}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{s.employeeName}</p>
-                  <p className="text-sm text-muted-foreground">{s.note}</p>
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">
-                    {s.shiftSnapshot ?? 'Shift no longer on the rota'} · {s.authorName ?? 'Manager'} · {timeAgo(s.createdAt)}
-                  </p>
-                </div>
-                {canModerate && (
+            <ShoutoutCard
+              key={s.id}
+              name={s.employeeName}
+              note={s.note}
+              // A shout-out given by voice has no shift attached (null), which is not a shift that
+              // has since left the rota: nothing is shown for it.
+              meta={[s.shiftSnapshot, s.authorName ?? 'Manager', timeAgo(s.createdAt)].filter(Boolean).join(' · ')}
+              action={
+                canModerate && (
                   <button
                     onClick={() => void remove(s.id)}
                     aria-label="Delete shoutout"
@@ -229,9 +222,9 @@ export function Shoutouts() {
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
-                )}
-              </div>
-            </li>
+                )
+              }
+            />
           ))}
         </ul>
       )}

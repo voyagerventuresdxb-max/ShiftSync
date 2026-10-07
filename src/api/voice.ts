@@ -21,22 +21,53 @@ import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
 export { ApiError };
 
-export type ParsedIntent =
+/** Names for the confirm sheet's preview, written by the server from the caller's own venue (never by the model). */
+export interface ReadingDetails {
+  person?: string | null;
+  /** That person's own role at the venue, shown next to their name. */
+  personRole?: string | null;
+  cover?: string | null;
+  role?: string;
+  section?: string;
+  shift?: { date: string; start: string; end: string; role?: string; person?: string | null };
+}
+
+type Action =
   | { intent: 'MARK_AVAILABILITY'; date: string; type: 'UNAVAILABLE' | 'PREFERRED_OFF'; confidence: number; summary: string }
   | { intent: 'REQUEST_SWAP'; shiftId: string; targetUserId: string; targetUserName: string; reason: string | null; confidence: number; summary: string }
   | { intent: 'APPROVE_SWAP'; swapRequestId: string; confidence: number; summary: string }
   | { intent: 'DECLINE_SWAP'; swapRequestId: string; confidence: number; summary: string }
   | { intent: 'APPROVE_JOIN'; joinRequestId: string; confidence: number; summary: string }
   | { intent: 'DECLINE_JOIN'; joinRequestId: string; confidence: number; summary: string }
-  | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; confidence: number; summary: string }
-  | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; confidence: number; summary: string }
-  | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; confidence: number; summary: string }
+  | { intent: 'CREATE_SHIFT'; roleId: string; date: string; start: string; end: string; userId: string | null; targetUserName?: string; confidence: number; summary: string }
+  | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; targetUserName?: string; confidence: number; summary: string }
+  | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; targetUserName?: string; confidence: number; summary: string }
   | { intent: 'PUBLISH_ROTA'; weekStart: string; confidence: number; summary: string }
   | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
   | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
   | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
-  | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string }
-  | { intent: 'UNRECOGNIZED'; reason: string; summary: string };
+  | { intent: 'QUERY_MY_SCHEDULE'; confidence: number; summary: string };
+
+export type ParsedIntent =
+  | (Action & { details?: ReadingDetails })
+  /**
+   * `options`: complete, checked readings to choose from — below the confidence threshold ("which
+   * did you mean?"), or one per person when the name said fits nobody or more than one person at
+   * the venue (`person`).
+   */
+  /** `incomplete`: a recognised command missing parts it needs; `summary` asks for exactly those. */
+  | {
+      intent: 'UNRECOGNIZED';
+      reason: string;
+      summary: string;
+      options?: ParsedIntent[];
+      person?: { heard: string; status: 'missing' | 'ambiguous' };
+      incomplete?: { intent: string; missing: string[] };
+      /** Nobody by the name said, but close names: the same words with each name, to read again. */
+      retry?: { person: string; text: string }[];
+      /** Nobody at the venue sounds like the name said: one complete reading per teammate, to pick from. */
+      team?: ParsedIntent[];
+    };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(apiUrl(url), init);

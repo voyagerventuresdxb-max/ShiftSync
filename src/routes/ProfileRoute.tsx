@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { ACCOUNT_DELETED_REASON, deleteAccount } from '../api/identity';
 import { hasVoiceConsent, withdrawVoiceConsent } from '../lib/voiceConsent';
+import VenueSettingsPanel from '../components/VenueSettingsPanel';
 
 // Owner-only, so staff never download it.
 const AiConnectionPanel = lazy(() => import('../components/AiConnectionPanel'));
@@ -43,6 +44,10 @@ export default function ProfileContent() {
           Sign out
         </button>
       </section>
+
+      {(session.user.systemRole === 'OWNER' || session.user.systemRole === 'MANAGER') && (
+        <VenueSettingsPanel token={session.token} locationId={session.user.locationId} />
+      )}
 
       {session.user.systemRole === 'OWNER' && (
         <Suspense fallback={null}>

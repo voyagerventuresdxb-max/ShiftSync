@@ -25,6 +25,12 @@ export async function scriptUtterance(transcript: string, intent: Record<string,
   if (!res.ok) throw new Error(`fake Gemini /__script failed: ${res.status}`);
 }
 
+/** Queues only an intent answer: a parse of typed text (the sheet's "Try again"), with no recording to transcribe. */
+export async function scriptIntent(intent: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${FAKE_GEMINI_URL}/__script`, { method: 'POST', body: JSON.stringify({ intent }) });
+  if (!res.ok) throw new Error(`fake Gemini /__script failed: ${res.status}`);
+}
+
 export async function resetFakeGemini(): Promise<void> {
   await fetch(`${FAKE_GEMINI_URL}/__reset`, { method: 'POST' });
 }
@@ -57,8 +63,8 @@ function serve(): void {
         return json(200, { ok: true });
       }
       if (req.method === 'POST' && url === '/__script') {
-        const { transcript, intent } = JSON.parse(raw) as { transcript: string; intent: Record<string, unknown> };
-        transcripts.push(transcript);
+        const { transcript, intent } = JSON.parse(raw) as { transcript?: string; intent: Record<string, unknown> };
+        if (transcript !== undefined) transcripts.push(transcript);
         intents.push(intent);
         return json(200, { ok: true });
       }
