@@ -45,7 +45,6 @@ export const TOUCH_TARGET_EXCEPTIONS: TouchTargetException[] = [
   { label: /^Section \d+,/, route: '/floor-plan', category: 'b', reason: 'section pins (~57x44 at 390px) overlap their neighbours in dense clusters at 1x; zoom separates them (e2e/floor-plan-pins.spec.ts crowding test)' },
   { label: /^[A-Z]{2} /, route: '/floor-plan', category: 'b', reason: 'roster-strip staff chips (38px): the strip is overflow-x:auto so a vertical expansion is clipped; needs strip padding (layout)' },
   { label: /^(Fine Dining|Bar \/ Lounge|Nightclub|Rooftop \/ Beach Club|Hotel F&B Outlet|Café \/ Bakery)$/, route: '/onboarding', category: 'b', reason: 'venue-type chips (35px) wrap into rows 8px apart: expansions overlap; locked prototype spacing' },
-  { label: /^(Fewer|More) sections$/, route: '/onboarding', category: 'b', reason: 'stepper pair 36x36 with a 6px gap: expansions overlap' },
   { label: /^Skip intro$/, route: '/onboarding', category: 'b', reason: '14px text link 14px under the carousel CTA' },
   { label: /^(Remove|Looks right|Done|\+ Custom|[A-Za-z ]+)$/, route: '/onboarding/review', category: 'b', reason: 'Review row editor: 27px role chips wrap 6px apart inside an overflow:hidden panel; Remove/Looks right sit within 14px of them' },
   { label: /^Cancel$/, route: '/scheduling', category: 'b', reason: 'PersonalRota cover-request Cancel wraps under the substitute <select> at 390px' },

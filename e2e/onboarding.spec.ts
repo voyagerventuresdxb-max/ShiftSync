@@ -103,6 +103,10 @@ test.describe('onboarding — full real gate', () => {
     await expect(page.getByPlaceholder('e.g. Sefarina, DIFC')).toHaveValue(venueName);
     // Keeps the test prefix, like every venue name an e2e spec creates.
     await page.getByPlaceholder('e.g. Sefarina, DIFC').fill(testVenueName('onboarding-full-renamed'));
+    // Floor sections are not set up here any more (the old stepper saved
+    // nothing — docs/floor-sections.md): just a pointer to the Floor Plan page.
+    await expect(page.getByRole('main').getByText('Later, on the Floor Plan page')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^(Fewer sections|More sections|Set up later)$/ })).toHaveCount(0);
     await continueThroughVenue(page);
     await uploadRoster(page);
     await resolveReviewRows(page);

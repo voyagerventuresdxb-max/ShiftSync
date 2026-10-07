@@ -13,8 +13,11 @@ import { computeCanContinue } from './venueValidation';
  * Café, Beach club`) doesn't match this app's real `VENUE_TYPES` — the
  * server (`locations.ts` PATCH) rejects any value outside that canonical
  * 6-item list, so the chips here use the real values instead of the
- * prototype's mismatched ones. Everything else (copy, layout, chip/stepper
- * visuals, motion) is ported as-is.
+ * prototype's mismatched ones. Everything else (copy, layout, chip visuals,
+ * motion) is ported as-is, except the prototype's "Floor sections" stepper:
+ * it saved nothing (Location has no section count, and a section needs an
+ * uploaded plan), so it was removed for a one-line pointer to the Floor
+ * Plan page, where sections are actually set up — see docs/floor-sections.md.
  */
 const CITY_OPTIONS = ['Dubai', 'Abu Dhabi', 'Sharjah', 'Other'] as const;
 
@@ -55,8 +58,6 @@ export default function VenueScreen({
   const [city, setCity] = useState<string>('Dubai');
   const [cityTouched, setCityTouched] = useState(false);
   const [venueType, setVenueType] = useState<string | null>(null);
-  const [sections, setSections] = useState(3);
-  const [later, setLater] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -249,108 +250,12 @@ export default function VenueScreen({
         </div>
       </div>
 
-      {/* Floor sections */}
+      {/* Floor sections — not set up here (see the header comment). */}
       <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div style={{ font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Floor sections</div>
-          <div style={{ font: "400 10.5px/1 'Manrope'", color: 'var(--ob-dim-2)' }}>Shapes your Floor Plan</div>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginTop: 12,
-            padding: '10px 10px 10px 16px',
-            borderRadius: 14,
-            border: '1px solid rgba(239,234,224,.08)',
-            background: 'rgba(239,234,224,.025)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span
-              className="ob-serif"
-              style={{ fontSize: 26, lineHeight: 1, color: later ? 'var(--ob-bronze)' : 'var(--ob-champagne)', minWidth: 26, transition: 'color var(--ob-t)' }}
-            >
-              {later ? 'Later' : sections}
-            </span>
-            {!later && (
-              <span style={{ font: "500 11px/1 'Manrope'", letterSpacing: '.06em', color: 'var(--ob-bronze)', whiteSpace: 'nowrap' }}>
-                {sections === 1 ? 'section' : 'sections'}
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <button
-              aria-label="Fewer sections"
-              disabled={disabled}
-              onClick={() => {
-                setLater(false);
-                setSections((s) => Math.max(1, s - 1));
-              }}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                border: '1px solid rgba(239,234,224,.10)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: later ? 'var(--ob-dim-2)' : 'var(--ob-champagne)',
-                background: 'rgba(239,234,224,.03)',
-                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
-              }}
-            >
-              <svg width={14} height={14} viewBox="0 0 14 14" stroke="currentColor" strokeWidth={1.1} strokeLinecap="round">
-                <path d="M3 7h8" />
-              </svg>
-            </button>
-            <button
-              aria-label="More sections"
-              disabled={disabled}
-              onClick={() => {
-                setLater(false);
-                setSections((s) => Math.min(12, s + 1));
-              }}
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                border: '1px solid rgba(239,234,224,.10)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: later ? 'var(--ob-dim-2)' : 'var(--ob-champagne)',
-                background: 'rgba(239,234,224,.03)',
-                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
-              }}
-            >
-              <svg width={14} height={14} viewBox="0 0 14 14" stroke="currentColor" strokeWidth={1.1} strokeLinecap="round">
-                <path d="M3 7h8M7 3v8" />
-              </svg>
-            </button>
-            <button
-              className="hit-44"
-              disabled={disabled}
-              onClick={() => setLater((v) => !v)}
-              style={{
-                marginLeft: 4,
-                padding: '0 10px',
-                height: 36,
-                whiteSpace: 'nowrap',
-                borderRadius: 10,
-                border: `1px solid ${later ? 'rgba(201,166,107,.6)' : 'rgba(239,234,224,.10)'}`,
-                color: later ? 'var(--ob-champagne)' : 'var(--ob-bronze)',
-                font: "500 11px/1 'Manrope'",
-                letterSpacing: '.04em',
-                background: 'transparent',
-                transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
-              }}
-            >
-              Set up later
-            </button>
-          </div>
-        </div>
+        <div style={{ font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Floor sections</div>
+        <p style={{ margin: '10px 0 0', font: "400 13px/1.55 'Manrope'", color: 'var(--ob-stone)' }}>
+          Later, on the Floor Plan page — upload your plan and name each section there.
+        </p>
       </div>
     </OnboardingScreenShell>
   );
