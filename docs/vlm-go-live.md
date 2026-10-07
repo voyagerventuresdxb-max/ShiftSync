@@ -149,6 +149,27 @@ It never shows a key, project id or provider message. Owners only; 3 runs per 5 
 - **Off:** delete `GEMINI_VERTEX_PROJECT` (and `GOOGLE_SERVICE_ACCOUNT_JSON`) in Railway, redeploy. Image uploads go back to the clear 422; spreadsheets are unaffected.
 - **Rotate:** in Google Cloud, create a new JSON key for `shiftsync-vision`, replace the Railway value, redeploy, run `vlm:check`, then delete the old key under **Keys**.
 
+## Voice: what is sent with a recording, and who decides who a name is
+
+- **Transcription** (`POST /api/voice/transcribe`) sends the audio plus a bounded spelling hint built by
+  `buildVocabularyHint` (`server/src/voice/transcribe.ts`) from the caller's **own venue only**: the
+  display names of its **active** team members, its section names and its role names, and six fixed
+  scheduling words. Never sent: phone numbers, email addresses, applicants (join requests), inactive
+  staff, or anything from another venue. Any term that looks like contact data (an `@`, or six or more
+  digits) is dropped even if it was typed into a name; the list is de-duplicated and capped at 150 terms
+  and 4,000 characters. The model is told to use it only to spell words that were actually spoken.
+- **Intent** (`POST /api/voice/parse-intent`) sends the transcript and the caller's own venue context
+  (team names with ids; for managers also roles, sections, templates, the next week's shifts, pending
+  swap requests and pending applicants' names — never their phone numbers).
+- **The server decides who a person is**, never the model: `server/src/voice/people.ts` looks the
+  spoken name up in the caller's venue (exact name, spelling variants such as Yousef/Yusuf, short
+  forms such as Jim/James, then sound-alike names) and settles on one person only when exactly one
+  fits strongly. Two or more → "Which one?" with each person's role; close names → "did you mean";
+  nothing close → the caller picks from their team. Sections, roles and "closing"/"lunch"-style
+  service words are checked against the venue's own lists the same way (`vocabulary.ts`). Every
+  reading still needs the caller's Confirm, and the confirm sheet spells out the full name, role, day,
+  date and times. Nobody is ever created from a voice command.
+
 ## Cost
 
 `vlm:check` and every production read log the input/output token counts, and the spend cap keeps a

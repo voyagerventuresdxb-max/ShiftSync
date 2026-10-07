@@ -40,3 +40,13 @@ export function canConfirmVoiceIntent(systemRole: string, intent: string): boole
 }
 
 export const VOICE_ROLE_REFUSAL = 'That command needs a manager or owner account.';
+
+/**
+ * True when two sentences on a voice sheet say the same thing — equal, or one inside the other,
+ * ignoring case, spacing and punctuation — so the sheet shows it once, not twice.
+ */
+export function repeatsSentence(a: string, b: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const [x, y] = [norm(a), norm(b)];
+  return x !== '' && y !== '' && (x.includes(y) || y.includes(x));
+}

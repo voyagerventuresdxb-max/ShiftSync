@@ -7,9 +7,9 @@ export interface PromptContext {
   /** The caller's own upcoming shifts — only relevant/populated for REQUEST_SWAP. */
   callerShifts: { id: string; date: string; startTime: string; endTime: string }[];
   /** Every active staff member at this location, for name resolution. */
-  staffDirectory: { id: string; fullName: string }[];
+  staffDirectory: { id: string; fullName: string; role?: string | null }[];
   /** Only populated for manager-tier callers — the pending decisions they could be asked to act on. */
-  pendingSwapRequests?: { id: string; requesterName: string; coverName?: string | null; shiftLabel: string }[];
+  pendingSwapRequests?: { id: string; requesterName: string; coverName?: string | null; shiftLabel: string; shift?: { date: string; start: string; end: string } }[];
   pendingJoinRequests?: { id: string; fullName: string; phone: string }[];
   /** Manager-tier only — every role at this venue, for CREATE_SHIFT/EDIT_SHIFT. */
   roles?: { id: string; name: string }[];
@@ -48,6 +48,10 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
     ``,
     `Known staff at this venue (name → id, use these ids, never invent one):`,
     ...ctx.staffDirectory.map((s) => `- ${s.fullName} → ${s.id}`),
+    ``,
+    // The app looks the spoken name up itself (parseIntent.ts), so a missing or shared name is a
+    // question for the caller, not a reason to give up or to guess.
+    `People: whenever the caller names a person, put the name exactly as you heard it in "targetUserName" ("me" or "myself" means the caller, ${ctx.callerName}). Fill in that person's id only when exactly one person in the staff list above has that name. When nobody in the list has it, or two or more people share it (for example two people called Omar), still answer with the intent the caller asked for, leave the id null, and keep "targetUserName" — the app will ask the caller who they meant. Never choose between people who share a name, and never answer UNRECOGNIZED only because of a person's name.`,
   ];
 
   // Both REQUEST_SWAP and QUERY_MY_SCHEDULE depend on this block for their
@@ -114,6 +118,12 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
     );
   }
 
+  if (allowed.includes('POST_SHOUTOUT')) {
+    lines.push(
+      `For POST_SHOUTOUT: the recipient is the person being thanked or praised ("give Sam a shout-out saying great job" → recipient Sam, content "Great job"). Put their name as you heard it in "targetUserName" and, only when exactly one listed person has that name, their id in "targetUserId".`,
+    );
+  }
+
   if (allowed.includes('QUERY_MY_SCHEDULE')) {
     lines.push(
       ``,
@@ -123,7 +133,8 @@ export function buildSystemPrompt(systemRole: SystemRole, ctx: PromptContext): s
 
   lines.push(
     ``,
-    `If a name, date, time, role, shift, or section is ambiguous or you cannot find a confident match in the lists above, respond with intent=UNRECOGNIZED and explain why in unrecognizedReason — never guess an id that isn't listed above, and never invent a date or time.`,
+    `If a date, time, role, shift, section, request or template is ambiguous or you cannot find a confident match in the lists above, respond with intent=UNRECOGNIZED and always say why in unrecognizedReason, as one short, friendly sentence to the caller (e.g. "I didn't catch which day you meant.") — never mention intents, ids or lists. A person's name is the exception, handled as described under People above. Never guess an id that isn't listed above, and never invent a date or time.`,
+    `Every key in the response is required: fill in each one the intent uses (for CREATE_SHIFT that is the role, date, start AND end; for ASSIGN_SECTION the section, date AND period), and null for every key it doesn't use. If the caller left one out, still answer with their intent and leave that key null — the app asks them for it.`,
     `Always fill in "summary" with one plain-English sentence describing exactly what will happen if this is confirmed (except for QUERY_MY_SCHEDULE, where summary is the direct answer itself, as described above) — e.g. "Mark you unavailable on Friday, August 29th", "Approve Sarah's swap request for her Tuesday shift", "Create a Bartender shift for Ahmed, Friday 6pm-2am", or "Move Ahmed to the Bar section, Friday PM."`,
     `Always fill in "confidence" (0 to 1) with how certain you are that this exactly matches what the caller asked for and that every id/date/time you filled in is correct — lower it whenever a name, date, or time was even slightly ambiguous before you resolved it. A clear request whose people, dates and times all match the lists and the calendar above exactly deserves at least 0.8; keep low confidence for when you actually had to choose between possibilities.`,
     `When your confidence is low only because the words fit two or three different actions with ids from the lists above (for example approving or declining the same swap request), give your best reading as the main answer and the other one or two in "alternatives", each complete with its own ids, confidence and summary. The caller picks one and confirms it. Leave "alternatives" empty otherwise, and never put an id there that isn't listed above.`,

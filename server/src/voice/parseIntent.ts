@@ -1,9 +1,11 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent } from './intentSchema.js';
+import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type PersonQuestion, type ReadingDetails } from './intentSchema.js';
+import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
+import { mentionedIn, periodSaid, type Term } from './vocabulary.js';
 import { combineDateAndTime } from '../parsing/normalize.js';
-import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
+import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt, type PromptContext } from './prompts.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
@@ -64,14 +66,15 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
   const today = venueToday(timezone);
   const staff = await prisma.user.findMany({
     where: { locationId: user.locationId, isActive: true },
-    select: { id: true, fullName: true },
+    select: { id: true, fullName: true, role: { select: { name: true } } },
   });
 
   const ctx: PromptContext = {
     today,
     callerName: user.fullName,
     callerShifts: [],
-    staffDirectory: staff,
+    // The role is for the confirm sheet ("Omar Haddad · Bartender"); the prompt lists name → id only.
+    staffDirectory: staff.map((s) => ({ id: s.id, fullName: s.fullName, role: s.role?.name ?? null })),
   };
 
   const startOfToday = new Date(`${today}T00:00:00.000Z`);
@@ -100,12 +103,16 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
       include: { requestedBy: { select: { fullName: true } }, targetUser: { select: { fullName: true } }, shift: { select: { date: true, startTime: true, endTime: true } } },
       take: 20,
     });
-    ctx.pendingSwapRequests = pendingSwaps.map((r) => ({
-      id: r.id,
-      requesterName: r.requestedBy.fullName,
-      coverName: r.targetUser?.fullName ?? null,
-      shiftLabel: `${r.shift.date.toISOString().slice(0, 10)} ${formatVenueTime(r.shift.startTime, timezone)}-${formatVenueTime(r.shift.endTime, timezone)}`,
-    }));
+    ctx.pendingSwapRequests = pendingSwaps.map((r) => {
+      const shift = { date: r.shift.date.toISOString().slice(0, 10), start: formatVenueTime(r.shift.startTime, timezone), end: formatVenueTime(r.shift.endTime, timezone) };
+      return {
+        id: r.id,
+        requesterName: r.requestedBy.fullName,
+        coverName: r.targetUser?.fullName ?? null,
+        shiftLabel: `${shift.date} ${shift.start}-${shift.end}`,
+        shift,
+      };
+    });
 
     const pendingJoins = await prisma.joinRequest.findMany({
       where: { locationId: user.locationId, status: 'PENDING' },
@@ -199,6 +206,8 @@ export async function parseVoiceIntent(
             responseMimeType: 'application/json',
             responseSchema: schema,
             maxOutputTokens: MAX_OUTPUT_TOKENS.voice_intent,
+            // The same words should get the same answer: no sampling variety (seen live run to run).
+            temperature: 0,
             thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
           },
         });
@@ -210,14 +219,10 @@ export async function parseVoiceIntent(
     // Computed independently of confidence/the gate below — this line must
     // never move inside either branch of that gate.
     const hasAdditionalRequest = normalizeHasAdditionalRequest(raw);
-    let clientResponse: ParsedIntent =
-      attempted.intent === 'UNRECOGNIZED' || attempted.confidence >= CONFIDENCE_THRESHOLD
-        ? attempted
-        : {
-            intent: 'UNRECOGNIZED',
-            reason: `I understood this as "${attempted.summary}" but wasn't confident enough to act on it without you rephrasing.`,
-            summary: 'Could not confidently resolve this command.',
-          };
+    const lowConfidence = attempted.intent !== 'UNRECOGNIZED' && attempted.confidence < CONFIDENCE_THRESHOLD;
+    let clientResponse: ParsedIntent = lowConfidence ? lowConfidenceResponse(attempted.summary) : attempted;
+    // A recognised command missing something it needs: ask for exactly that, not "didn't catch that".
+    if (attempted.intent === 'UNRECOGNIZED') clientResponse = askForMissing(raw, context, user, transcript) ?? clientResponse;
 
     // PUBLISH_ROTA/APPLY_ROTA_TEMPLATE get a further, deterministic
     // refinement pass on top of the confidence gate above — see spec
@@ -231,12 +236,20 @@ export async function parseVoiceIntent(
     }
     const timezone = await venueTimezoneFor(user.locationId);
     clientResponse = await checkAgainstContext(clientResponse, context, user, timezone, transcript);
-    // Below the confidence gate, but the model named two or three concrete readings (approve or
-    // decline?): offer the ones that pass every check a confident answer must pass as choices,
-    // instead of asking to rephrase. Picking one only opens the normal confirm sheet.
-    if (clientResponse.intent === 'UNRECOGNIZED' && attempted.intent !== 'UNRECOGNIZED' && attempted.confidence < CONFIDENCE_THRESHOLD) {
-      const options = await offerableReadings([attempted, ...normalizeAlternatives(raw)], context, user, timezone, transcript);
-      if (options.length >= 2) clientResponse = { ...clientResponse, summary: WHICH_DID_YOU_MEAN, options };
+    if (lowConfidence) {
+      // A person the server couldn't pin down (nobody by that name, or more than one) is asked
+      // about directly, whatever the model's confidence: often that is exactly why it was unsure.
+      // Every choice is still a complete, checked reading that runs only after its own Confirm.
+      const own = await checkAgainstContext(attempted, context, user, timezone, transcript);
+      if (own.intent === 'UNRECOGNIZED' && own.person) {
+        clientResponse = own;
+      } else {
+        // The model named two or three concrete readings (approve or decline?): offer the ones that
+        // pass every check a confident answer must pass as choices, instead of asking to rephrase.
+        // Picking one only opens the normal confirm sheet.
+        const options = await offerableReadings([attempted, ...normalizeAlternatives(raw)], context, user, timezone, transcript);
+        if (options.length >= 2) clientResponse = { intent: 'UNRECOGNIZED', summary: WHICH_DID_YOU_MEAN, reason: PICK_ONE, options };
+      }
     }
 
     return { response: clientResponse, attempted, hasAdditionalRequest };
@@ -279,7 +292,7 @@ export async function refinePublishRotaResponse(
 ): Promise<ParsedIntent> {
   const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
   if (Number.isNaN(weekStart.getTime())) {
-    return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to publish.' };
+    return { intent: 'UNRECOGNIZED', reason: WHICH_WEEK_HINT, summary: 'Which week should I publish?' };
   }
   const { shiftCount, staffCount } = await getRotaPublishPreview(locationId, weekStart);
   if (shiftCount === 0) {
@@ -312,7 +325,7 @@ export async function refineApplyRotaTemplateResponse(
 ): Promise<ParsedIntent> {
   const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
   if (Number.isNaN(weekStart.getTime())) {
-    return { intent: 'UNRECOGNIZED', reason: 'Could not resolve a valid week for this request.', summary: 'Could not determine which week to apply the template to.' };
+    return { intent: 'UNRECOGNIZED', reason: WHICH_WEEK_HINT, summary: 'Which week should I use the template for?' };
   }
   const { best, runnerUp } = bestMatch(response.templateName, templates);
   const confidentMatch =
@@ -325,8 +338,8 @@ export async function refineApplyRotaTemplateResponse(
     const candidates = [best, runnerUp].filter((c): c is NonNullable<typeof c> => c !== null).map((c) => `"${c.name}"`);
     const reason =
       candidates.length > 0
-        ? `Not confident which saved template "${response.templateName}" refers to — closest matches: ${candidates.join(', ')}.`
-        : `No saved template resembling "${response.templateName}" was found.`;
+        ? `I'm not sure which saved template "${response.templateName}" is — closest matches: ${candidates.join(', ')}.`
+        : `There's no saved template like "${response.templateName}" at your venue.`;
     return {
       intent: 'UNRECOGNIZED',
       reason,
@@ -344,6 +357,36 @@ export async function refineApplyRotaTemplateResponse(
 /** At most this many choices on a "which did you mean?" sheet. */
 export const MAX_VOICE_OPTIONS = 3;
 export const WHICH_DID_YOU_MEAN = 'Which did you mean?';
+const PICK_ONE = 'Pick one to see exactly what will happen. Nothing changes until you confirm.';
+
+/**
+ * Everything the caller reads on a "not understood" sheet is written for them, never for us:
+ * no "intent", "supported command" or other internals (the old fallback, "Could not confidently
+ * match this to a supported command.", was what a phone showed for a shout-out to someone the
+ * venue didn't have).
+ */
+export const VOICE_DIDNT_CATCH = "I didn't catch what you'd like to do.";
+export const VOICE_TRY_AGAIN = 'Try again with who, what and when — for example "Mark me unavailable on Friday".';
+const WHICH_WEEK_HINT = 'Say the week, for example "this week" or "next week".';
+/** Model text that reads like a log line, not a sentence for the caller. */
+const JARGON = /\bintents?\b|supported command|\bschema\b|\bjson\b|\bunrecognized\b|\bids?\b|could not (confidently )?(match|resolve|determine)/i;
+
+/** The model's own sentence for the caller, if it wrote one that reads like one. */
+function forCaller(text: unknown): string | null {
+  return typeof text === 'string' && text.trim() && !JARGON.test(text) ? text.trim() : null;
+}
+
+/** Below the confidence gate: say what it sounded like, and how to fix it. */
+function lowConfidenceResponse(summary: string): ParsedIntent {
+  const heard = summary.trim().replace(/[.!?]+$/, '');
+  return {
+    intent: 'UNRECOGNIZED',
+    reason: heard
+      ? `It sounded like "${heard}", but I'd rather check than guess. Say it again, or fix what I heard and try again.`
+      : 'Say it again, or fix what I heard and try again.',
+    summary: "I'm not sure I got that right.",
+  };
+}
 
 /** The model's other readings (`alternatives`), normalized like the main answer. */
 function normalizeAlternatives(raw: Record<string, unknown>): ParsedIntent[] {
@@ -408,13 +451,13 @@ export function weekdayMismatch(transcript: string, response: ParsedIntent): Par
   const actual = new Date(`${date}T00:00:00.000Z`).getUTCDay();
   if (Number.isNaN(actual) || actual === said[0]) return null;
   return clarify(
-    `The caller said ${WEEKDAY_NAMES[said[0]!]}, but ${date} is a ${WEEKDAY_NAMES[actual]}.`,
+    `Say the day again, or fix what I heard and try again.`,
     `You said ${WEEKDAY_NAMES[said[0]!]}, but that date is a ${WEEKDAY_NAMES[actual]}. Which day did you mean?`,
   );
 }
 
-const NOT_FOUND = (what: string) => clarify(`The ${what} wasn't one this venue has.`, `I couldn't find that ${what} at your venue. Please say it again.`);
-const PAST_DATE = clarify('The date resolved to a day that has already passed.', 'That day has already passed. Which day did you mean?');
+const NOT_FOUND = (what: string) => clarify('Say it again, or fix what I heard and try again.', `I couldn't find that ${what} at your venue.`);
+const PAST_DATE = clarify('Pick a day from today onwards.', 'That day has already passed. Which day did you mean?');
 
 /**
  * Propose-time backstop, after the model and the refinements above: the
@@ -442,6 +485,81 @@ export async function checkAgainstContext(
   }
   const mismatch = weekdayMismatch(transcript, response);
   if (mismatch) return mismatch;
+  // The person a command names is looked up in the caller's own venue, never taken on the model's
+  // word: nobody by that name, or more than one, is put to the caller as a question.
+  // "Move Alex's shift to 7pm": a name that is whose shift it already is names no new person.
+  if (response.intent === 'EDIT_SHIFT' && response.userId === null && response.targetUserName?.trim()) {
+    const { shiftId } = response;
+    const current = (ctx.weekShifts ?? []).find((s) => s.id === shiftId)?.assigneeName;
+    if (current && nameFits(response.targetUserName, current)) response = { ...response, userId: undefined, targetUserName: undefined };
+  }
+  const slot = personSlot(response);
+  if (slot) {
+    const found = resolvePerson(slot.heard, slot.id, ctx.staffDirectory, transcript, caller.id);
+    if (found.kind === 'one') response = withPerson(response, found.person);
+    else if (found.kind !== 'unknown') return askWhichPerson(response, found, ctx, caller, timezone, transcript);
+    // 'unknown' (no name, and an id from nowhere) is refused by the checks below.
+  }
+  const term = await askWhichTerm(response, ctx, caller, timezone, transcript);
+  if (term) return term;
+  const checked = await checkIds(response, ctx, caller, timezone);
+  return checked.intent === 'UNRECOGNIZED' ? checked : withDetails(checked, ctx);
+}
+
+/**
+ * The section, role or service period the caller said, against the one the model picked: the
+ * venue's own sections/roles named in the transcript ("the bar" → Main Bar and Pool Bar) must
+ * include the model's pick and be only that one, and "closing"/"dinner" must not be a morning
+ * (or "opening"/"lunch" an evening). Otherwise one checked reading per candidate is put to the
+ * caller. Null when the words agree with the pick, or name none of the venue's items.
+ */
+async function askWhichTerm(
+  r: Reading,
+  ctx: PromptContext,
+  caller: { id: string; locationId: string },
+  timezone: string,
+  transcript: string,
+): Promise<ParsedIntent | null> {
+  if (!transcript.trim()) return null;
+  const readings: Reading[] = [];
+  let summary = WHICH_DID_YOU_MEAN;
+  if (r.intent === 'ASSIGN_SECTION' || r.intent === 'CREATE_SHIFT' || (r.intent === 'EDIT_SHIFT' && r.roleId)) {
+    const isSection = r.intent === 'ASSIGN_SECTION';
+    const items: Term[] = isSection ? (ctx.floorSections ?? []) : (ctx.roles ?? []).map((x) => ({ id: x.id, label: x.name }));
+    const current = isSection ? r.sectionId : (r as { roleId: string }).roleId;
+    const named = mentionedIn(transcript, items);
+    if (named.length && !(named.length === 1 && named[0]!.id === current)) {
+      const ids = [...new Set([...named.map((i) => i.id), ...(items.some((i) => i.id === current) ? [current] : [])])].slice(0, MAX_VOICE_OPTIONS + 1);
+      for (const id of ids) readings.push((isSection ? { ...r, sectionId: id } : { ...r, roleId: id }) as Reading);
+      summary = isSection ? 'Which section did you mean?' : 'Which role did you mean?';
+    }
+  }
+  if (!readings.length && r.intent === 'ASSIGN_SECTION') {
+    const said = periodSaid(transcript);
+    if (said && said !== r.period) {
+      readings.push({ ...r, period: said }, r);
+      summary = said === 'PM' ? 'You said an evening service — morning or evening?' : 'You said a daytime service — morning or evening?';
+    }
+  }
+  if (!readings.length) return null;
+  const options: ChoosableIntent[] = [];
+  for (const reading of readings) {
+    const checked = await checkIds(reading, ctx, caller, timezone);
+    if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+    const described = withDetails(checked, ctx);
+    options.push({ ...described, summary: personSummary(described) } as ChoosableIntent);
+  }
+  if (options.length < 2) return options.length ? null : NOT_FOUND(r.intent === 'ASSIGN_SECTION' ? 'section' : 'role');
+  return { intent: 'UNRECOGNIZED', summary, reason: PICK_ONE, options };
+}
+
+/** The id, date and overlap checks behind `checkAgainstContext`, for a reading whose person is settled. */
+async function checkIds(
+  response: Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' }>,
+  ctx: PromptContext,
+  caller: { id: string; locationId: string },
+  timezone: string,
+): Promise<ParsedIntent> {
   const staff = new Set(ctx.staffDirectory.map((s) => s.id));
   const isPast = (date: string | undefined) => date !== undefined && date < ctx.today;
   switch (response.intent) {
@@ -492,6 +610,212 @@ export async function checkAgainstContext(
   }
 }
 
+type Reading = Exclude<ParsedIntent, { intent: 'UNRECOGNIZED' }>;
+
+/**
+ * The person a reading names, if it names one: the name as said and the id the model picked.
+ * CREATE_SHIFT/EDIT_SHIFT with no one named are an open shift, or (EDIT_SHIFT) a shift whose
+ * person stays the same or is taken off; there is nobody to look up.
+ */
+function personSlot(r: Reading): { heard: string; id: string | null } | null {
+  switch (r.intent) {
+    case 'REQUEST_SWAP':
+    case 'POST_SHOUTOUT':
+      return { heard: r.targetUserName, id: r.targetUserId || null };
+    case 'ASSIGN_SECTION':
+      return { heard: r.targetUserName ?? '', id: r.staffId || null };
+    case 'CREATE_SHIFT':
+    case 'EDIT_SHIFT':
+      if (r.userId === undefined || (r.userId === null && !r.targetUserName?.trim())) return null;
+      return { heard: r.targetUserName ?? '', id: r.userId };
+    default:
+      return null;
+  }
+}
+
+/** The reading with this person in it, named as the venue's staff list names them. */
+function withPerson(r: Reading, p: StaffEntry): Reading {
+  switch (r.intent) {
+    case 'REQUEST_SWAP':
+    case 'POST_SHOUTOUT':
+      return { ...r, targetUserId: p.id, targetUserName: p.fullName };
+    case 'ASSIGN_SECTION':
+      return { ...r, staffId: p.id, targetUserName: p.fullName };
+    case 'CREATE_SHIFT':
+    case 'EDIT_SHIFT':
+      return { ...r, userId: p.id, targetUserName: p.fullName };
+    default:
+      return r;
+  }
+}
+
+/** "Sat 10 Oct" for a YYYY-MM-DD venue day. */
+export function dayLabel(iso: string): string {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+/** Names for the confirm sheet's preview, from the caller's own venue lists only (never a phone number). */
+function describeReading(r: Reading, ctx: PromptContext): ReadingDetails | undefined {
+  const nameOf = (id: string) => ctx.staffDirectory.find((s) => s.id === id)?.fullName ?? null;
+  // The person's own role, next to their name, when the venue has one for them.
+  const personRole = (id: string | null | undefined) => {
+    const role = id ? ctx.staffDirectory.find((s) => s.id === id)?.role : null;
+    return role ? { personRole: role } : {};
+  };
+  const roleOf = (id: string) => (ctx.roles ?? []).find((x) => x.id === id)?.name;
+  switch (r.intent) {
+    case 'POST_SHOUTOUT':
+      return { person: nameOf(r.targetUserId), ...personRole(r.targetUserId) };
+    case 'REQUEST_SWAP': {
+      const s = ctx.callerShifts.find((x) => x.id === r.shiftId);
+      return { person: nameOf(r.targetUserId), ...personRole(r.targetUserId), ...(s ? { shift: { date: s.date, start: s.startTime, end: s.endTime } } : {}) };
+    }
+    case 'APPROVE_SWAP':
+    case 'DECLINE_SWAP': {
+      const q = (ctx.pendingSwapRequests ?? []).find((x) => x.id === r.swapRequestId);
+      return q ? { person: q.requesterName, cover: q.coverName ?? null, ...(q.shift ? { shift: q.shift } : {}) } : undefined;
+    }
+    case 'APPROVE_JOIN':
+    case 'DECLINE_JOIN': {
+      const j = (ctx.pendingJoinRequests ?? []).find((x) => x.id === r.joinRequestId);
+      return j ? { person: j.fullName } : undefined;
+    }
+    case 'CREATE_SHIFT':
+      return { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId), role: roleOf(r.roleId) };
+    case 'EDIT_SHIFT': {
+      const s = (ctx.weekShifts ?? []).find((x) => x.id === r.shiftId);
+      return {
+        ...(r.userId !== undefined ? { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId) } : {}),
+        ...(r.roleId ? { role: roleOf(r.roleId) } : {}),
+        ...(s ? { shift: { date: s.date, start: s.start, end: s.end, role: s.roleName, person: s.assigneeName } } : {}),
+      };
+    }
+    case 'ASSIGN_SECTION':
+      return { person: nameOf(r.staffId), ...personRole(r.staffId), section: (ctx.floorSections ?? []).find((x) => x.id === r.sectionId)?.label };
+    default:
+      return undefined;
+  }
+}
+
+function withDetails(r: Reading, ctx: PromptContext): Reading {
+  const details = describeReading(r, ctx);
+  return details ? { ...r, details } : r;
+}
+
+/** A person choice's own sentence: the model's summary named whoever it picked, not this person. */
+function personSummary(r: Reading): string {
+  const d = r.details ?? {};
+  const name = d.person ?? 'them';
+  switch (r.intent) {
+    case 'POST_SHOUTOUT':
+      return `Give ${name} a shout-out.`;
+    case 'REQUEST_SWAP':
+      return d.shift ? `Ask ${name} to cover your ${dayLabel(d.shift.date)} shift.` : `Ask ${name} to cover your shift.`;
+    case 'CREATE_SHIFT':
+      return `Create a ${d.role ? `${d.role} ` : ''}shift for ${name}, ${dayLabel(r.date)} ${r.start}–${r.end}.`;
+    case 'EDIT_SHIFT':
+      return d.shift ? `Give the ${dayLabel(d.shift.date)} ${d.shift.start}–${d.shift.end} shift to ${name}.` : `Give that shift to ${name}.`;
+    case 'ASSIGN_SECTION':
+      return `Put ${name} on ${d.section ?? 'that section'}, ${dayLabel(r.shiftDate)} ${r.period}.`;
+    default:
+      return r.summary;
+  }
+}
+
+/** "Rana" appears in what the caller said (word for word, ignoring case and punctuation). */
+function saidAloud(name: string, transcript: string): boolean {
+  const n = normalizeName(name);
+  return n.length > 0 && ` ${normalizeName(transcript)} `.includes(` ${n} `);
+}
+
+/**
+ * Nobody, or more than one person, at the caller's venue fits the name: a question for the
+ * caller, with one complete reading per candidate (each checked like any other answer) to pick
+ * from. Only the caller's own words are echoed back — never a name they didn't say, and never
+ * anyone outside their venue (the candidates come from its staff list alone).
+ */
+async function askWhichPerson(
+  reading: Reading,
+  found: Extract<PersonResolution, { kind: 'ambiguous' | 'missing' }>,
+  ctx: PromptContext,
+  caller: { id: string; systemRole: SystemRole; locationId: string },
+  timezone: string,
+  transcript: string,
+): Promise<ParsedIntent> {
+  const candidates = found.kind === 'ambiguous' ? found.people : found.near;
+  const options: ChoosableIntent[] = [];
+  if (candidates.length <= MAX_PEOPLE_CHOICES) {
+    for (const person of candidates) {
+      const checked = await checkIds(withPerson(reading, person), ctx, caller, timezone);
+      if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+      const described = withDetails(checked, ctx);
+      options.push({ ...described, summary: personSummary(described) } as ChoosableIntent);
+    }
+  }
+  const choices = options.length ? { options } : {};
+
+  if (found.kind === 'ambiguous') {
+    const heard = found.heard;
+    const sameName = candidates.every((p) => normalizeName(heard).split(' ').every((w) => normalizeName(p.fullName).split(' ').includes(w)));
+    const summary = sameName ? `Which ${heard} did you mean?` : 'Who did you mean?';
+    const reason =
+      candidates.length > MAX_PEOPLE_CHOICES
+        ? `${candidates.length} people on your team are called ${heard}. Say their full name and try again.`
+        : options.length
+          ? PICK_ONE
+          : 'Say their full name and try again.';
+    return { intent: 'UNRECOGNIZED', summary, reason, person: { heard, status: 'ambiguous' }, ...choices };
+  }
+
+  // Nobody sounds like the name said: the whole team, each as a complete checked reading, to pick from.
+  const team: ChoosableIntent[] = [];
+  if (!candidates.length) {
+    for (const person of [...ctx.staffDirectory].sort((a, b) => a.fullName.localeCompare(b.fullName)).slice(0, MAX_TEAM_PICKS)) {
+      const checked = await checkIds(withPerson(reading, person), ctx, caller, timezone);
+      if (checked.intent === 'UNRECOGNIZED' || checked.intent === 'QUERY_MY_SCHEDULE') continue;
+      const described = withDetails(checked, ctx);
+      team.push({ ...described, summary: personSummary(described) } as ChoosableIntent);
+    }
+  }
+  const result = missingPerson(found, caller, transcript, options);
+  return team.length && result.intent === 'UNRECOGNIZED' ? { ...result, team } : result;
+}
+
+/** At most this many teammates in the "pick from your team" list. */
+export const MAX_TEAM_PICKS = 80;
+
+/** "I couldn't find Rana on your team.", with any close names as choices and, for managers, where to add them. */
+function missingPerson(
+  found: Extract<PersonResolution, { kind: 'missing' }>,
+  caller: { systemRole: SystemRole },
+  transcript: string,
+  options: ChoosableIntent[],
+): ParsedIntent {
+  const heard = saidAloud(found.heard, transcript) ? found.heard : '';
+  const who = heard || 'that person';
+  const canAddStaff = caller.systemRole !== 'STAFF';
+  const addHint = canAddStaff ? `If ${heard || 'they'} ${heard ? 'is' : 'are'} new, add them in People first, then try again.` : 'Check the name and try again.';
+  if (options.length) {
+    const reason = `Did you mean ${options.length === 1 ? 'this person' : 'one of these'}? ${addHint}`;
+    return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, options };
+  }
+  // Close names, but no complete reading to offer (the command still lacks a part, e.g. the note):
+  // name them, and offer the same words with the right name to read again.
+  const near = found.near.map((p) => p.fullName);
+  const reason = near.length ? `Did you mean ${near.join(' or ')}? ${addHint}` : addHint;
+  const retry = heard
+    ? near.map((person) => ({ person, text: withName(transcript, heard, person) })).filter((r) => r.text !== transcript)
+    : [];
+  return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...(retry.length ? { retry } : {}) };
+}
+
+/** The transcript with the name as said swapped for a staff member's full name ("Give Alix…" → "Give Alex Morgan…"). */
+function withName(transcript: string, heard: string, fullName: string): string {
+  const escaped = heard.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return transcript.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu'), fullName);
+}
+
 /**
  * Narrows Gemini's loosely-typed JSON object into the real ParsedIntent
  * union, defaulting to UNRECOGNIZED on any shape mismatch rather than
@@ -501,126 +825,245 @@ export async function checkAgainstContext(
  */
 export function normalizeParsedIntent(raw: Record<string, unknown>): ParsedIntent {
   const intent = typeof raw.intent === 'string' ? raw.intent : 'UNRECOGNIZED';
-  const summary = typeof raw.summary === 'string' ? raw.summary : 'Could not determine what to do.';
+  const summary = typeof raw.summary === 'string' ? raw.summary : '';
+  // The name as said. A reading that names someone the model couldn't (or shouldn't) pick an id
+  // for is kept, with an empty id, so checkAgainstContext can look the name up and ask the caller;
+  // an empty id is never executable (/execute requires a non-empty one).
+  const heardName = typeof raw.targetUserName === 'string' ? raw.targetUserName : '';
+  const named = heardName.trim() !== '';
   // A missing/non-numeric/out-of-range confidence fails CLOSED to 0 — an
   // absent score must never be treated as "the model was certain."
   const rawConfidence = raw.confidence;
   const confidence = typeof rawConfidence === 'number' && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : 0;
+  // Every key is required by the schema, so "not given" arrives as null — or, from a model that
+  // ignores it, as "" or not at all. All three are the same here: missing.
+  const missing = missingFields(raw);
+  const value = (key: string) => text(raw[key]);
 
-  switch (intent) {
-    case 'MARK_AVAILABILITY':
-      if (typeof raw.date === 'string' && (raw.availabilityType === 'UNAVAILABLE' || raw.availabilityType === 'PREFERRED_OFF')) {
-        return { intent: 'MARK_AVAILABILITY', date: raw.date, type: raw.availabilityType, confidence, summary };
-      }
-      break;
-    case 'REQUEST_SWAP':
-      if (typeof raw.shiftId === 'string' && typeof raw.targetUserId === 'string') {
+  if (!missing?.length) {
+    switch (intent) {
+      case 'MARK_AVAILABILITY':
+        return { intent: 'MARK_AVAILABILITY', date: value('date')!, type: raw.availabilityType as 'UNAVAILABLE' | 'PREFERRED_OFF', confidence, summary };
+      case 'REQUEST_SWAP':
         return {
           intent: 'REQUEST_SWAP',
-          shiftId: raw.shiftId,
-          targetUserId: raw.targetUserId,
-          targetUserName: typeof raw.targetUserName === 'string' ? raw.targetUserName : '',
-          reason: typeof raw.reason === 'string' ? raw.reason : null,
+          shiftId: value('shiftId')!,
+          targetUserId: value('targetUserId') ?? '',
+          targetUserName: heardName,
+          reason: value('reason') ?? null,
           confidence,
           summary,
         };
-      }
-      break;
-    case 'APPROVE_SWAP':
-    case 'DECLINE_SWAP':
-      if (typeof raw.swapRequestId === 'string') {
-        return { intent, swapRequestId: raw.swapRequestId, confidence, summary };
-      }
-      break;
-    case 'APPROVE_JOIN':
-    case 'DECLINE_JOIN':
-      if (typeof raw.joinRequestId === 'string') {
-        return { intent, joinRequestId: raw.joinRequestId, confidence, summary };
-      }
-      break;
-    case 'CREATE_SHIFT':
-      if (typeof raw.roleId === 'string' && typeof raw.date === 'string' && typeof raw.start === 'string' && typeof raw.end === 'string') {
+      case 'APPROVE_SWAP':
+      case 'DECLINE_SWAP':
+        return { intent, swapRequestId: value('swapRequestId')!, confidence, summary };
+      case 'APPROVE_JOIN':
+      case 'DECLINE_JOIN':
+        return { intent, joinRequestId: value('joinRequestId')!, confidence, summary };
+      case 'CREATE_SHIFT':
         return {
           intent: 'CREATE_SHIFT',
-          roleId: raw.roleId,
-          date: raw.date,
-          start: raw.start,
-          end: raw.end,
-          userId: typeof raw.userId === 'string' ? raw.userId : null,
+          roleId: value('roleId')!,
+          date: value('date')!,
+          start: value('start')!,
+          end: value('end')!,
+          userId: value('userId') ?? null,
+          ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
-      }
-      break;
-    case 'EDIT_SHIFT':
-      if (typeof raw.shiftId === 'string') {
+      case 'EDIT_SHIFT': {
+        // The person on the shift: a new one (an id, or a name to look up), taken off (clearAssignee),
+        // or — null, with no name — unchanged. Every key is always sent, so a bare null can't mean "off".
+        const userId = value('userId') ?? (raw.clearAssignee === true ? null : named ? null : undefined);
         return {
           intent: 'EDIT_SHIFT',
-          shiftId: raw.shiftId,
-          roleId: typeof raw.roleId === 'string' ? raw.roleId : undefined,
-          date: typeof raw.date === 'string' ? raw.date : undefined,
-          start: typeof raw.start === 'string' ? raw.start : undefined,
-          end: typeof raw.end === 'string' ? raw.end : undefined,
-          userId: typeof raw.userId === 'string' || raw.userId === null ? raw.userId : undefined,
+          shiftId: value('shiftId')!,
+          roleId: value('roleId'),
+          date: value('date'),
+          start: value('start'),
+          end: value('end'),
+          userId,
+          ...(named && raw.clearAssignee !== true ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
       }
-      break;
-    case 'PUBLISH_ROTA':
-      if (typeof raw.weekStart === 'string') {
-        return { intent: 'PUBLISH_ROTA', weekStart: raw.weekStart, confidence, summary };
-      }
-      break;
-    case 'APPLY_ROTA_TEMPLATE':
-      if (typeof raw.weekStart === 'string' && typeof raw.templateName === 'string') {
+      case 'PUBLISH_ROTA':
+        return { intent: 'PUBLISH_ROTA', weekStart: value('weekStart')!, confidence, summary };
+      case 'APPLY_ROTA_TEMPLATE':
         return {
           intent: 'APPLY_ROTA_TEMPLATE',
-          templateId: typeof raw.templateId === 'string' ? raw.templateId : null,
-          templateName: raw.templateName,
-          weekStart: raw.weekStart,
+          templateId: value('templateId') ?? null,
+          templateName: value('templateName')!,
+          weekStart: value('weekStart')!,
           confidence,
           summary,
         };
-      }
-      break;
-    case 'POST_ANNOUNCEMENT':
-      if (typeof raw.content === 'string') {
-        return { intent: 'POST_ANNOUNCEMENT', content: raw.content, confidence, summary };
-      }
-      break;
-    case 'POST_SHOUTOUT':
-      if (typeof raw.targetUserId === 'string' && typeof raw.content === 'string') {
+      case 'POST_ANNOUNCEMENT':
+        return { intent: 'POST_ANNOUNCEMENT', content: raw.content as string, confidence, summary };
+      case 'POST_SHOUTOUT':
         return {
           intent: 'POST_SHOUTOUT',
-          targetUserId: raw.targetUserId,
-          targetUserName: typeof raw.targetUserName === 'string' ? raw.targetUserName : '',
-          content: raw.content,
+          targetUserId: value('targetUserId') ?? '',
+          targetUserName: heardName,
+          content: raw.content as string,
           confidence,
           summary,
         };
-      }
-      break;
-    case 'QUERY_MY_SCHEDULE':
-      return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
-    case 'ASSIGN_SECTION':
-      if (typeof raw.sectionId === 'string' && typeof raw.staffId === 'string' && typeof raw.shiftDate === 'string' && (raw.period === 'AM' || raw.period === 'PM')) {
+      case 'QUERY_MY_SCHEDULE':
+        return { intent: 'QUERY_MY_SCHEDULE', confidence, summary };
+      case 'ASSIGN_SECTION':
         return {
           intent: 'ASSIGN_SECTION',
-          sectionId: raw.sectionId,
-          staffId: raw.staffId,
-          shiftDate: raw.shiftDate,
-          period: raw.period,
-          dutyLabel: typeof raw.dutyLabel === 'string' ? raw.dutyLabel : null,
+          sectionId: value('sectionId')!,
+          staffId: value('staffId') ?? '',
+          shiftDate: value('shiftDate')!,
+          period: raw.period as 'AM' | 'PM',
+          dutyLabel: value('dutyLabel') ?? null,
+          ...(named ? { targetUserName: heardName } : {}),
           confidence,
           summary,
         };
-      }
-      break;
+    }
   }
+  // Not understood, or an answer missing what it needs (parseVoiceIntent turns the latter into a
+  // question about exactly what's missing): the caller is told so in plain words. The model's own
+  // sentences are kept only when they read like one (see forCaller).
+  const said = (intent === 'UNRECOGNIZED' ? forCaller(raw.summary) : null) ?? VOICE_DIDNT_CATCH;
+  const why = forCaller(raw.unrecognizedReason);
+  // Seen live: the model often writes the same sentence in both. Say it once (the fuller of the
+  // two), and the standard hint underneath.
+  if (why && repeatsSentence(said, why)) return { intent: 'UNRECOGNIZED', summary: why.length > said.length ? why : said, reason: VOICE_TRY_AGAIN };
+  return { intent: 'UNRECOGNIZED', reason: why ?? VOICE_TRY_AGAIN, summary: said };
+}
+
+/** A non-empty string, or undefined: null, "", whitespace and anything else count as not given. */
+function text(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() !== '' ? v : undefined;
+}
+
+/**
+ * What each action needs before it can be offered, in the order the caller is asked for it. "person"
+ * is an id or a name as said (looked up later). CREATE_SHIFT's person is optional (an open shift).
+ */
+const NEEDS: Record<string, (raw: Record<string, unknown>) => Record<string, boolean>> = {
+  MARK_AVAILABILITY: (r) => ({ date: !!text(r.date), availabilityType: r.availabilityType === 'UNAVAILABLE' || r.availabilityType === 'PREFERRED_OFF' }),
+  REQUEST_SWAP: (r) => ({ person: !!(text(r.targetUserId) || text(r.targetUserName)), shiftId: !!text(r.shiftId) }),
+  APPROVE_SWAP: (r) => ({ swapRequestId: !!text(r.swapRequestId) }),
+  DECLINE_SWAP: (r) => ({ swapRequestId: !!text(r.swapRequestId) }),
+  APPROVE_JOIN: (r) => ({ joinRequestId: !!text(r.joinRequestId) }),
+  DECLINE_JOIN: (r) => ({ joinRequestId: !!text(r.joinRequestId) }),
+  CREATE_SHIFT: (r) => ({ date: !!text(r.date), start: !!text(r.start), end: !!text(r.end), roleId: !!text(r.roleId) }),
+  EDIT_SHIFT: (r) => ({ shiftId: !!text(r.shiftId) }),
+  ASSIGN_SECTION: (r) => ({
+    person: !!(text(r.staffId) || text(r.targetUserName)),
+    sectionId: !!text(r.sectionId),
+    shiftDate: !!text(r.shiftDate),
+    period: r.period === 'AM' || r.period === 'PM',
+  }),
+  PUBLISH_ROTA: (r) => ({ weekStart: !!text(r.weekStart) }),
+  APPLY_ROTA_TEMPLATE: (r) => ({ templateName: !!text(r.templateName), weekStart: !!text(r.weekStart) }),
+  POST_ANNOUNCEMENT: (r) => ({ content: !!text(r.content) }),
+  POST_SHOUTOUT: (r) => ({ person: !!(text(r.targetUserId) || text(r.targetUserName)), content: !!text(r.content) }),
+  QUERY_MY_SCHEDULE: () => ({}),
+};
+
+/** For a known intent: what its answer lacks ([] when complete). Null for UNRECOGNIZED or anything unknown. */
+export function missingFields(raw: Record<string, unknown>): string[] | null {
+  const needs = typeof raw.intent === 'string' ? NEEDS[raw.intent] : undefined;
+  if (!needs) return null;
+  return Object.entries(needs(raw))
+    .filter(([, ok]) => !ok)
+    .map(([key]) => key);
+}
+
+/** How the caller is asked for each missing part, by intent (default: by key). */
+const ASK: Record<string, string> = {
+  date: 'which day',
+  availabilityType: 'are you unavailable, or would you just prefer it off',
+  shiftId: 'which shift',
+  swapRequestId: 'which one',
+  joinRequestId: 'whose request',
+  roleId: 'which role',
+  start: 'what time does it start',
+  end: 'what time does it end',
+  sectionId: 'which section',
+  shiftDate: 'which day',
+  period: 'morning or evening',
+  weekStart: 'which week',
+  templateName: 'which template',
+  content: 'what should it say',
+};
+const ASK_PERSON: Record<string, string> = { REQUEST_SWAP: 'who should cover it', ASSIGN_SECTION: 'who', POST_SHOUTOUT: 'who is it for' };
+
+/** "a, b, and c" — the questions as one. */
+function joinAsks(asks: string[]): string {
+  return asks.length < 2 ? (asks[0] ?? '') : `${asks.slice(0, -1).join(', ')}, and ${asks[asks.length - 1]}`;
+}
+
+/**
+ * A recognised command missing something it needs (seen live: a new shift with no end or role, a
+ * section move with no section, day or period): say what was understood and ask for exactly what
+ * is missing, instead of "I didn't catch that". The person named is still looked up — nobody by
+ * that name is said so; a shared first name is part of the question. Nothing is offered to
+ * confirm: the caller adds the missing part and tries again. Null when the answer isn't one.
+ */
+export function askForMissing(
+  raw: Record<string, unknown>,
+  ctx: PromptContext,
+  caller: { id: string; systemRole: SystemRole },
+  transcript: string,
+): ParsedIntent | null {
+  const missing = missingFields(raw);
+  const intent = raw.intent as string;
+  if (!missing?.length) return null;
+  if (!allowedIntentsFor(caller.systemRole).includes(intent)) return clarify(VOICE_ROLE_REFUSAL, VOICE_ROLE_REFUSAL);
+
+  // Who it's about, looked up exactly as for a complete answer.
+  const personKey = intent === 'ASSIGN_SECTION' ? 'staffId' : intent === 'CREATE_SHIFT' || intent === 'EDIT_SHIFT' ? 'userId' : intent === 'REQUEST_SWAP' || intent === 'POST_SHOUTOUT' ? 'targetUserId' : null;
+  const heard = text(raw.targetUserName) ?? '';
+  const modelId = personKey ? (text(raw[personKey]) ?? null) : null;
+  let person: string | null = null;
+  const asks: string[] = [];
+  let personQuestion: PersonQuestion | undefined;
+  if (personKey && (heard || modelId)) {
+    const found = resolvePerson(heard, modelId, ctx.staffDirectory, transcript, caller.id);
+    if (found.kind === 'missing') return missingPerson(found, caller, transcript, []);
+    if (found.kind === 'one') person = found.person.fullName;
+    if (found.kind === 'ambiguous') {
+      person = found.heard;
+      personQuestion = { heard: found.heard, status: 'ambiguous' };
+      asks.push(found.people.length <= MAX_PEOPLE_CHOICES ? `which ${found.heard} (${found.people.map((p) => p.fullName).join(' or ')})` : `which ${found.heard} (say their full name)`);
+    }
+    if (found.kind === 'unknown' && !missing.includes('person') && intent !== 'CREATE_SHIFT' && intent !== 'EDIT_SHIFT') asks.push(ASK_PERSON[intent] ?? 'who');
+  }
+  for (const key of missing) asks.push(key === 'person' ? (ASK_PERSON[intent] ?? 'who') : (ASK[key] ?? `which ${key}`));
+
+  const day = (key: string) => (text(raw[key]) ? dayLabel(raw[key] as string) : null);
+  const role = text(raw.roleId) ? (ctx.roles ?? []).find((r) => r.id === raw.roleId)?.name : undefined;
+  const section = text(raw.sectionId) ? (ctx.floorSections ?? []).find((s) => s.id === raw.sectionId)?.label : undefined;
+  const bit = (cond: unknown, s: string) => (cond ? s : '');
+  const what: Record<string, string> = {
+    MARK_AVAILABILITY: `time off for you${bit(day('date'), ` on ${day('date')}`)}`,
+    REQUEST_SWAP: `a swap request${bit(person, ` for ${person} to cover`)}`,
+    APPROVE_SWAP: 'a swap request to approve',
+    DECLINE_SWAP: 'a swap request to decline',
+    APPROVE_JOIN: 'a join request to approve',
+    DECLINE_JOIN: 'a join request to decline',
+    CREATE_SHIFT: `a new ${bit(role, `${role} `)}shift${bit(person, ` for ${person}`)}${bit(day('date'), ` on ${day('date')}`)}${bit(text(raw.start), ` from ${raw.start}`)}${bit(text(raw.end), ` until ${raw.end}`)}`,
+    EDIT_SHIFT: 'a shift change',
+    ASSIGN_SECTION: `a section move${bit(person, ` for ${person}`)}${bit(section, ` to the ${section}`)}${bit(day('shiftDate'), ` on ${day('shiftDate')}`)}${bit(raw.period === 'AM' || raw.period === 'PM', `, ${raw.period}`)}`,
+    PUBLISH_ROTA: 'the rota to publish',
+    APPLY_ROTA_TEMPLATE: `a rota template${bit(text(raw.templateName), ` (“${raw.templateName}”)`)}${bit(day('weekStart'), ` for the week of ${day('weekStart')}`)}`,
+    POST_ANNOUNCEMENT: 'an announcement',
+    POST_SHOUTOUT: `a shout-out${bit(person, ` for ${person}`)}${bit(text(raw.content), ` saying “${raw.content}”`)}`,
+  };
   return {
     intent: 'UNRECOGNIZED',
-    reason: typeof raw.unrecognizedReason === 'string' ? raw.unrecognizedReason : 'Could not confidently match this to a supported command.',
-    summary,
+    summary: `I've got ${what[intent] ?? 'that'} — ${joinAsks(asks)}?`,
+    reason: 'Add it to what I heard and tap Try again, or say the whole thing again.',
+    incomplete: { intent, missing },
+    ...(personQuestion ? { person: personQuestion } : {}),
   };
 }
