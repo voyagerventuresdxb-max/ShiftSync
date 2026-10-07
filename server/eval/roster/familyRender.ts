@@ -132,6 +132,7 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
         ],
       });
     }
+    for (const text of spec.footerLines ?? []) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text, span: columns }] });
     if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: `Prepared by: Duty Manager    Printed ${roster.dates[0]}    Page ${spec.pages} of ${spec.pages}`, span: columns }] });
     // The colour key sits to the right of the grid, one entry per row from the COVERS row on.
     const firstSide = rows.findIndex((x) => x.kind === 'caption') + 1;
@@ -144,26 +145,42 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
   }
 
   // Family B
-  const columns = 9;
-  const lead = (a: PrintedCell, b: PrintedCell) => (spec.nameFirst ? [b, a] : [a, b]);
-  rows.push({ kind: 'title', page: 1, cells: [{ text: '', span: 2, fill: NAVY }, { text: roster.title ?? '', span: 7, fill: NAVY, color: GOLD, bold: true, center: true }] });
+  const order = spec.lead ?? (spec.nameFirst ? ['name', 'title'] : ['title', 'name']);
+  const nLead = order.length;
+  const columns = nLead + 7;
+  const labels = spec.leadLabels ?? (spec.leadHeaders ? { name: 'NAME', title: 'TITLE' } : null);
+  const leadAlign = spec.tightLead ? {} : { center: true };
+  rows.push({ kind: 'title', page: 1, cells: [{ text: '', span: nLead, fill: NAVY }, { text: roster.title ?? '', span: 7, fill: NAVY, color: GOLD, bold: true, center: true }] });
+  const head = (text: string, span: number): PrintedCell => ({ text, span, fill: '#fbe9b7', bold: true, center: true });
   for (let l = 0; l < lineCount; l++) {
     const line = headerLines.map((h) => h[l]!);
     const label = lineCount === 1 ? '' : /\d/.test(line[0]!) ? 'DATE' : 'DAY OF THE WEEK';
-    const head = (text: string, span: number): PrintedCell => ({ text, span, fill: '#fbe9b7', bold: true, center: true });
-    // NAME / TITLE labels over the two leading columns, in their printed order, on the first header row.
-    const leadCells = spec.leadHeaders ? (l === 0 ? (spec.nameFirst ? [head('NAME', 1), head('TITLE', 1)] : [head('TITLE', 1), head('NAME', 1)]) : [head('', 1), head('', 1)]) : [head(label, 2)];
+    // Column headings over the leading columns, in their printed order, on the first header row.
+    const leadCells = labels && !spec.labelsRow ? order.map((k) => head(l === 0 ? labels[k] ?? '' : '', 1)) : [head(label, nLead)];
     rows.push({ kind: 'header', page: 1, cells: [...leadCells, ...line.map((t) => head(t, 1))] });
   }
-  rows.push({ kind: 'caption', page: 1, tall: true, cells: [{ text: 'Events', span: 2, center: true }, ...roster.dates.map((_, d) => ({ text: roster.events[d] ?? '', span: 1, center: true, bold: true }))] });
+  if (labels && spec.labelsRow) {
+    rows.push({ kind: 'subheader', page: 1, cells: [...order.map((k) => ({ ...head(labels[k] ?? '', 1), center: false })), ...roster.dates.map(() => head('', 1))] });
+  }
+  rows.push({ kind: 'caption', page: 1, tall: true, cells: [{ text: 'Events', span: nLead, center: true }, ...roster.dates.map((_, d) => ({ text: roster.events[d] ?? '', span: 1, center: true, bold: true }))] });
   rows.push({ kind: 'spacer', page: 1, cells: [{ text: '', span: columns }] });
-  let groupIndex = 0;
+  let groupIndex = spec.departments || spec.areas ? -1 : 0;
+  let index = 0;
   for (const p of roster.people) {
     if (p.group !== groupIndex) {
-      rows.push({ kind: 'banner', page: p.page, cells: [{ text: p.section ?? '', span: columns, fill: ORANGE, color: '#ffffff', bold: true }] });
+      const banner = p.section ?? '';
+      rows.push({
+        kind: 'banner',
+        page: p.page,
+        cells: spec.bannerInName
+          ? [...order.map((k) => ({ text: k === 'name' ? banner : '', span: 1, bold: true })), ...roster.dates.map(() => ({ text: '', span: 1 }))]
+          : [{ text: banner, span: columns, fill: ORANGE, color: '#ffffff', bold: true }],
+      });
       groupIndex = p.group;
     }
-    const cells: PrintedCell[] = lead({ text: p.title ?? '', span: 1, bold: true, center: true }, { text: p.name, span: 1, bold: true, center: true });
+    index++;
+    const leadText: Record<'no' | 'name' | 'title', string> = { no: String(index), name: p.name, title: p.title ?? '' };
+    const cells: PrintedCell[] = order.map((k) => ({ text: leadText[k], span: 1, bold: k !== 'no', ...leadAlign }));
     p.cells.forEach((c) => {
       if (c.kind === 'shift') {
         const idx = Math.floor(r() * B_SHIFT_FILLS.length);
@@ -177,11 +194,13 @@ export function printedSheet(roster: SemanticRoster): PrintedSheet {
   }
   if (spec.totalsFooter) {
     const count = (d: number) => roster.people.filter((p) => p.cells[d]!.kind === 'shift').length;
-    rows.push({ kind: 'total', page: spec.pages, cells: [{ text: `Total staff on rota: ${roster.people.length}`, span: 2, bold: true }, ...roster.dates.map((_, d) => ({ text: String(count(d)), span: 1, bold: true, center: true, num: count(d) }))] });
+    rows.push({ kind: 'total', page: spec.pages, cells: [{ text: `Total staff on rota: ${roster.people.length}`, span: nLead, bold: true }, ...roster.dates.map((_, d) => ({ text: String(count(d)), span: 1, bold: true, center: true, num: count(d) }))] });
   }
+  for (const text of spec.footerLines ?? []) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text, span: columns }] });
   if (spec.footer) rows.push({ kind: 'footer', page: spec.pages, cells: [{ text: 'Notes: UL = unpaid leave, AL = annual leave, CL = until close, IN = start time only', span: columns }] });
   assignPages(rows);
-  return { columns, colWidths: spec.nameFirst ? [150, 110, ...Array(7).fill(150)] : [110, 150, ...Array(7).fill(150)], rows, pages: spec.pages };
+  const width: Record<'no' | 'name' | 'title', number> = spec.tightLead ? { no: 28, name: 128, title: 96 } : { no: 40, name: 150, title: 110 };
+  return { columns, colWidths: [...order.map((k) => width[k]), ...Array(7).fill(150)], rows, pages: spec.pages };
 }
 
 // --- spreadsheets ----------------------------------------------------------------------------

@@ -21,7 +21,7 @@ export interface ReadingUnderTest {
   leaveRecords: { employeeName: string; date: string; leaveCode: string }[];
   anomalies: { employeeName: string | null; date: string | null; rawText: string }[];
   /** People the reader reports, or null when it has no people list (derived from rows + leave). */
-  people: { name: string }[] | null;
+  people: { name: string; nameAlternatives?: { name: string }[] }[] | null;
   unreadRows: { text: string }[];
   /** The week the reader dated the roster in (Monday), or null to derive it from the rows. */
   weekStart: string | null;
@@ -38,7 +38,13 @@ export interface FamilyScore {
   flagged: Tally;
   silentPeople: number;
   silentShifts: number;
+  /** Shifts not imported but shown to the manager as a cell to look at on that day (not silent). */
+  surfacedShifts: number;
   silentTimeErrors: number;
+  /** People kept under a misspelt name with no other spelling offered for the manager to check. */
+  silentNameErrors: number;
+  /** Shifts saved with a wrong start or end (flagged or not). */
+  wrongSaved: number;
   extraShifts: number;
 }
 
@@ -110,7 +116,10 @@ export function scoreFamily(reading: ReadingUnderTest | null, truth: FamilyTruth
     flagged: { ok: 0, of: truth.flagged.length },
     silentPeople: truth.people.filter((p) => !match.has(p.name) && !mentioned(p.name)).length,
     silentShifts: 0,
+    surfacedShifts: 0,
     silentTimeErrors: 0,
+    wrongSaved: 0,
+    silentNameErrors: [...match.values()].filter((m) => !m.exact && !(reading?.people?.find((p) => normName(p.name) === m.pred)?.nameAlternatives?.length)).length,
     extraShifts: 0,
   };
 
@@ -142,11 +151,15 @@ export function scoreFamily(reading: ReadingUnderTest | null, truth: FamilyTruth
         (!match.has(t.name) && mentioned(t.name)) ||
         unread.some((u) => u.includes(normName(t.name)));
       if (!covered) s.silentShifts++;
+      else if (anomalies.some((a) => a.employeeName && truthOfPred.get(normName(a.employeeName)) === t.name && a.date === t.date)) s.surfacedShifts++;
       continue;
     }
     s.shiftRecall.ok++;
     if (hit.r.startTime === t.start && hit.r.endTime === t.end) s.exactTime.ok++;
-    else if (!(hit.r.flags ?? []).length) s.silentTimeErrors++;
+    else {
+      s.wrongSaved++;
+      if (!(hit.r.flags ?? []).length) s.silentTimeErrors++;
+    }
     s.role.of++;
     if (normRole(hit.r.roleName ?? '') === normRole(t.role)) s.role.ok++;
   }
@@ -179,10 +192,13 @@ export function familyTotals(scores: FamilyScore[]): FamilyScore {
       flagged: add(a.flagged, s.flagged),
       silentPeople: a.silentPeople + s.silentPeople,
       silentShifts: a.silentShifts + s.silentShifts,
+      surfacedShifts: a.surfacedShifts + s.surfacedShifts,
       silentTimeErrors: a.silentTimeErrors + s.silentTimeErrors,
+      silentNameErrors: a.silentNameErrors + s.silentNameErrors,
+      wrongSaved: a.wrongSaved + s.wrongSaved,
       extraShifts: a.extraShifts + s.extraShifts,
     }),
-    { staffRecall: zero(), staffExact: zero(), staffPrecision: zero(), shiftRecall: zero(), exactTime: zero(), role: zero(), week: zero(), flagged: zero(), silentPeople: 0, silentShifts: 0, silentTimeErrors: 0, extraShifts: 0 },
+    { staffRecall: zero(), staffExact: zero(), staffPrecision: zero(), shiftRecall: zero(), exactTime: zero(), role: zero(), week: zero(), flagged: zero(), silentPeople: 0, silentShifts: 0, surfacedShifts: 0, silentTimeErrors: 0, silentNameErrors: 0, wrongSaved: 0, extraShifts: 0 },
   );
 }
 

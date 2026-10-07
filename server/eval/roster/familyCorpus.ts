@@ -36,7 +36,7 @@ function personRows(sheet: PrintedSheet, repeatHeader: boolean, legend: { fill: 
         fills.push(text ? fill : null);
       }
     } else {
-      for (const c of row.cells.slice(2)) {
+      for (const c of row.cells.slice(sheet.columns - 7)) {
         days.push(c.text || (c.fill === '#000000' ? '[?]' : ''));
         fills.push(null);
       }
@@ -91,6 +91,9 @@ export async function renderVariant(spec: VariantSpec): Promise<{ file: string; 
   const totals = totalRows(sheet);
   if (totals.length) truth.printed.totals = totals;
   if (spec.nameFirst) truth.printed.nameFirst = true;
+  if (spec.footerLines?.length) truth.printed.footers = spec.footerLines;
+  if (spec.hardToRead) truth.printed.hardToRead = true;
+  if (spec.faintNames) truth.printed.faintNames = true;
   return { file, data, truth };
 }
 

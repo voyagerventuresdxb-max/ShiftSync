@@ -91,6 +91,33 @@ kept and flagged; the 18 / 18.5 cell keeps the first reading's value with both a
 largest mock answer is now ≈ 1,600 output tokens (a column read; it writes about 1.6× the row
 read), far under the 16,384 cap.
 
+### Round 3 (after a fresh holdout): 52 rosters
+
+Nine variants added, each a new form of a failure class a fresh holdout found: B23 (STAFF NAME |
+POSITION set tight, with issued-by and signature lines), B24 (# | EMPLOYEE | ROLE on a row of
+their own, a generated-by footer), B29 (title column right before the name, no headings), B25 / B26
+/ B28 (No. | NAME | POSITION, Position | S/N | Staff and Employee Full Name | Emp ID | Designation;
+one-word department and area banners in the name column, AGM / HOD / Senior Server titles), B27 (a
+faint scan whose two readings spell one name differently), A22 / A23 (a 42-person photo and an
+angled scan with many half days, where the two readings disagree on many cells). "Saved exact" is
+exact times out of the shifts imported; "exact or shown" counts a shift not imported but shown to
+the manager as a cell to look at (both readings) as covered.
+
+| | staff recall | precision | shift recall | exact time | saved exact | week | silent drops | wrong times saved | shown to check |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A before (23 rosters) | 100.0% | 100.0% | 100.0% | 99.6% | 99.6% | 23/23 | 0 | 15 | 0 |
+| A after | 100.0% | 100.0% | 96.9% | 96.9% | 100.0% | 23/23 | 0 | 0 | 118 |
+| B before (29 rosters) | 98.0% | 93.2% | 98.1% | 97.7% | 99.6% | 29/29 | 12 people, 44 shifts | 9 | 0 |
+| B after | 100.0% | 100.0% | 99.3% | 99.3% | 100.0% | 29/29 | 0 | 0 | 16 |
+
+Per class, before → after: tight name | title columns (B23, B24) 19 and 12 of 20 people, precision
+47.5% and 42.8%, 9 silent people → 20 / 20 each, 100%, 0 silent; department and area banners and
+index columns (B25, B26, B28) precision 83.3%, 90.9% and 94.4%, 3 silent people → 100%, 0 silent;
+photos the two readings disagree on (A22, A23) 5 wrong times saved → 0 (79 cells shown to check
+with both readings instead); a name spelled two ways (B27 and the mock's misread names) 3 kept
+silently → 0 (both spellings kept, "check the spelling"). The lower shift recall on photos is by
+design: a cell the two readings read differently is never imported, it is shown.
+
 ## Corpus (`spec.ts` → `corpus/`)
 
 18 rosters, week of Monday 2026-08-17: day grid, per-row title column, long-format template,

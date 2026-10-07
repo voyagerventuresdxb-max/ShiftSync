@@ -83,6 +83,26 @@ export interface VariantSpec {
   totalsFooter?: boolean;
   /** Text-layer PDF whose ff / fi / fl ligatures come out as separate text items (names chosen to contain them). */
   ligatures?: boolean;
+  /** Family B: the leading columns and their order (default title, name — or name, title with nameFirst). */
+  lead?: ('no' | 'name' | 'title')[];
+  /** Family B: the heading printed over each leading column ('' = none). */
+  leadLabels?: Partial<Record<'no' | 'name' | 'title', string>>;
+  /** Family B: the column headings sit on a row of their own, under the day header rows. */
+  labelsRow?: boolean;
+  /** Family B: leading cells left-aligned in tight columns (a long name ends close to the next column). */
+  tightLead?: boolean;
+  /** Family B: section banners printed in the name column only (not merged across the row). */
+  bannerInName?: boolean;
+  /** Family B: departments with one-word banners and position titles ("AGM", "Senior Server"). */
+  departments?: boolean;
+  /** Family B: like departments, but the banners name areas of the venue ("TERRACE", "POOL DECK"). */
+  areas?: boolean;
+  /** Free-text lines printed under the grid (footers, sign-offs): never people. */
+  footerLines?: string[];
+  /** A dense, hard-to-read photo: the two AI readings disagree on many cells (mock). */
+  hardToRead?: boolean;
+  /** A faint scan: the two AI readings spell one name differently (mock). */
+  faintNames?: boolean;
   seed: number;
 }
 
@@ -157,6 +177,12 @@ export interface FamilyTruth {
     totals?: { label: string; cells: string[] }[];
     /** The name column is printed before the title column. */
     nameFirst?: boolean;
+    /** Free-text lines under the grid (footers, sign-offs). */
+    footers?: string[];
+    /** A dense, hard-to-read photo (the mock's two readings disagree on many cells). */
+    hardToRead?: boolean;
+    /** A faint scan (the mock's two readings spell one name differently). */
+    faintNames?: boolean;
   };
   pageCount: number;
   people: TruthPerson[];
@@ -368,6 +394,23 @@ const B_GROUPS: { banner: string | null; titles: string[]; abbr: string[] }[] = 
 /** Made-up names with ff / fi / fl / ffi (ligature glyphs in many fonts). */
 const LIGATURE_NAMES = ['Saffiya Okonkwo', 'Griffin Oduya', 'Fiifi Asante', 'Tiffany Moffat', 'Wilfrid Kofler', 'Flavia Duffy', 'Effie Laflamme', 'Joffrey Fielding'];
 
+/** Department-style groups: one-word banners, position titles and abbreviations. */
+const B_DEPARTMENTS: { banner: string | null; titles: string[]; abbr: string[] }[] = [
+  { banner: 'MANAGEMENT', titles: ['GM', 'AGM', 'HOD', 'Ops Manager'], abbr: ['GM', 'AGM', 'HOD', 'Ops Manager'] },
+  { banner: 'BAR', titles: ['Senior Bartender', 'Bartender'], abbr: ['Senior Bartender', 'Bartender'] },
+  { banner: 'HOSTS', titles: ['Host'], abbr: ['Host'] },
+  { banner: 'FLOOR', titles: ['Senior Server', 'Server'], abbr: ['Senior Server', 'Server'] },
+  { banner: 'RUNNERS', titles: ['Runner'], abbr: ['Runner'] },
+];
+
+/** Area-style groups: banners naming parts of the venue, some no vocabulary knows ("POOL DECK"). */
+const B_AREAS: { banner: string | null; titles: string[]; abbr: string[] }[] = [
+  { banner: 'MANAGEMENT', titles: ['Outlet Manager', 'AGM'], abbr: ['Outlet Manager', 'AGM'] },
+  { banner: 'TERRACE', titles: ['Captain', 'Server'], abbr: ['Captain', 'Server'] },
+  { banner: 'POOL DECK', titles: ['Server', 'Runner'], abbr: ['Server', 'Runner'] },
+  { banner: 'LOUNGE', titles: ['Bartender', 'Host'], abbr: ['Bartender', 'Host'] },
+];
+
 const VENUES = ['Le Petit Comptoir', 'Casa Lumiere', 'The Copper Fig', 'Saffron Terrace', 'Maison Verte'];
 
 /** Splits `n` people into group sizes, first group small (management). */
@@ -430,7 +473,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
     };
   }
 
-  const groups = spec.people >= 35 ? B_GROUPS : B_GROUPS.slice(0, 4);
+  const groups = spec.areas ? B_AREAS : spec.departments ? B_DEPARTMENTS : spec.people >= 35 ? B_GROUPS : B_GROUPS.slice(0, 4);
   const ordered = spec.reverseSections ? [groups[0]!, ...groups.slice(1).reverse()] : groups;
   const sizes = groupSizes(r, spec.people, ordered.length);
   let i = 0;
@@ -439,7 +482,7 @@ export function buildRoster(spec: VariantSpec): SemanticRoster {
     const titles = spec.abbreviations ? group.abbr : group.titles;
     for (let k = 0; k < size; k++, i++) {
       let title: string;
-      if (g === 0) title = titles[Math.min(k, titles.length - 1)]!;
+      if (g === 0 || spec.departments || spec.areas) title = titles[Math.min(k, titles.length - 1)]!;
       else if (titles.length > 1 && k === 0) title = titles[0]!;
       else title = `${titles[titles.length - 1]} ${titles.length > 1 ? k : k + 1}`;
       const allLeave = r() < 0.12;
@@ -574,6 +617,17 @@ export const FAMILY_VARIANTS: VariantSpec[] = [
   B({ id: 'B20-ligatures-totals', format: 'pdf-text', ligatures: true, totalsFooter: true, tags: ['ff / fi / fl split in the text layer', '"Total staff on rota" line'] }, 220),
   B({ id: 'B21-name-first-headed-xlsx', format: 'xlsx', nameFirst: true, leadHeaders: true, tags: ['name column before title column', 'NAME / TITLE header labels', 'xlsx'] }, 221),
   B({ id: 'B22-png-last-row', format: 'png', people: 16, tags: ['photo', 'last row at the page edge'] }, 222),
+
+  // Round 3: new forms of the same failure classes (a fresh holdout found them).
+  B({ id: 'B23-staffname-position-tight', format: 'pdf-text', lead: ['name', 'title'], leadLabels: { name: 'STAFF NAME', title: 'POSITION' }, tightLead: true, footerLines: ['Rota issued 10/04/2026 by Operations', 'Signature: ____________'], tags: ['name column right before a position column, tight', 'STAFF NAME / POSITION headings', 'issued-by and signature lines'] }, 223),
+  B({ id: 'B24-labels-own-row', format: 'pdf-text', lead: ['no', 'name', 'title'], leadLabels: { no: '#', name: 'EMPLOYEE', title: 'ROLE' }, labelsRow: true, tightLead: true, footerLines: ['Generated by RotaPlanner 3.2 - confidential'], tags: ['# / EMPLOYEE / ROLE on a row of their own', 'index column', 'generated-by footer'] }, 224),
+  B({ id: 'B25-no-name-position-xlsx', format: 'xlsx', lead: ['no', 'name', 'title'], leadLabels: { no: 'No.', name: 'NAME', title: 'POSITION' }, departments: true, bannerInName: true, tags: ['No. / NAME / POSITION', 'one-word banners in the name column', 'AGM / HOD / Senior Server titles'] }, 225),
+  B({ id: 'B26-position-no-name-csv', format: 'csv', lead: ['title', 'no', 'name'], leadLabels: { title: 'Position', no: 'S/N', name: 'Staff' }, departments: true, bannerInName: true, footerLines: ['Total on duty this week 21'], tags: ['Position / S/N / Staff order', 'one-word banners', 'csv'] }, 226),
+  B({ id: 'B27-faint-scan', format: 'pdf-image', faintNames: true, weekStart: APR20, tags: ['image-only PDF', 'a name the two readings spell differently'] }, 227),
+  B({ id: 'B28-area-banners-name-id-designation-xlsx', format: 'xlsx', lead: ['name', 'no', 'title'], leadLabels: { name: 'Employee Full Name', no: 'Emp ID', title: 'Designation' }, areas: true, bannerInName: true, footerLines: ['Approved: Outlet Manager'], tags: ['Employee Full Name / Emp ID / Designation', 'area banners, one no vocabulary knows (POOL DECK)', 'xlsx'] }, 228),
+  B({ id: 'B29-title-first-tight-unlabelled-pdf', format: 'pdf-text', lead: ['title', 'name'], tightLead: true, footerLines: ['Any changes must be agreed with the duty manager'], tags: ['title column right before the name, tight, no headings', 'free-text footer'] }, 229),
+  A({ id: 'A22-dense-photo', format: 'png', people: 42, hardToRead: true, tags: ['42-person photo', 'many PM-only and half days', 'the two readings disagree on many cells'] }, 122),
+  A({ id: 'A23-angled-scan-half-days', format: 'pdf-image', hardToRead: true, weekStart: AUG24, tags: ['scan', 'half days', 'the two readings disagree on many cells'] }, 123),
 ];
 
 export const FILE_EXT: Record<OutputFormat, string> = { 'pdf-text': 'pdf', 'pdf-image': 'pdf', png: 'png', xlsx: 'xlsx', csv: 'csv' };

@@ -43,6 +43,10 @@ export interface Perturbations {
   droppedZeroShift: string | null;
   /** The row read reports the page's last row as cut off instead of listing it. */
   cutOffLast: boolean;
+  /** Dense photo: cells the row read slides into the next (empty) day, and cells the column read reads ".5" as a whole hour. */
+  hard: { slidRows: { name: string; day: number }[]; halfDropped: { name: string; day: number }[] };
+  /** Faint scan: a name the row read spells differently (a doubled or dropped letter). */
+  faint: { name: string; as: string } | null;
   /** The column read's own mistakes: a different misread name, and one cell it misses. */
   columns: { misread: { name: string; as: string } | null; missedCell: { name: string; day: number } | null };
 }
@@ -118,17 +122,45 @@ export function perturbationsFor(truth: FamilyTruth): Perturbations {
     misread: misreadPerson ? { name: misreadPerson.name, as: misreadName(misreadPerson.name, r) } : null,
     missingPage: truth.pageCount > 1 ? truth.pageCount : null,
     swapNameTitle: !!truth.printed.nameFirst && truth.family === 'B',
-    footerAsPerson: truth.printed.totals?.[0] ?? null,
+    footerAsPerson: truth.printed.totals?.[0] ?? (truth.printed.footers?.length ? { label: truth.printed.footers[0]!, cells: [] } : null),
     colourOverText,
     slid,
     misread18,
     droppedZeroShift,
     cutOffLast: isImage(truth) && truth.family === 'B',
+    hard: hardCells(truth),
+    faint: faintName(truth, used),
     columns: {
       misread: colMisread ? { name: colMisread.name, as: misreadName(colMisread.name, r2) } : null,
       missedCell: colMissed ? { name: colMissed.name, day: (colMissed.cells ?? []).findIndex(hasTimes) } : null,
     },
   };
+}
+
+/** Dense photo: about two cells in five of the half-day kind read differently by one of the two readings. */
+function hardCells(truth: FamilyTruth): Perturbations['hard'] {
+  const out: Perturbations['hard'] = { slidRows: [], halfDropped: [] };
+  if (!truth.printed.hardToRead) return out;
+  const r = rng(hashSeed(`${truth.id}#hard`));
+  for (const p of truth.people) {
+    const cells = p.cells ?? [];
+    cells.forEach((c, d) => {
+      if (!hasTimes(c)) return;
+      if (c.split(' ').length === 2 && d < 6 && !hasTimes(cells[d + 1]) && !(cells[d + 1] ?? '').startsWith('[') && r() < 0.4) out.slidRows.push({ name: p.name, day: d });
+      else if (/\.5\b/.test(c) && r() < 0.4) out.halfDropped.push({ name: p.name, day: d });
+    });
+  }
+  return out;
+}
+
+/** Faint scan: a person with no times this week whose name the row read gets wrong at a double letter. */
+function faintName(truth: FamilyTruth, used: Set<string>): Perturbations['faint'] {
+  if (!truth.printed.faintNames) return null;
+  const pool = truth.people.filter((p) => !used.has(p.name) && !(p.cells ?? []).some(hasTimes));
+  const person = pool.find((p) => /([a-z])\1/.test(p.name)) ?? pool[0] ?? truth.people.find((p) => !used.has(p.name));
+  if (!person) return null;
+  const as = /([a-z])\1/.test(person.name) ? person.name.replace(/([a-z])\1/, '$1$1ai') : person.name.replace(/([a-z])$/, '$1$1');
+  return { name: person.name, as };
 }
 
 const leaveInterpretation = (code: string) => (code === 'OFF' || code === 'DO' ? 'day_off' : code === 'PH' ? 'public_holiday' : 'leave');
@@ -180,6 +212,11 @@ function rowReadCells(truth: FamilyTruth, name: string, cells: string[], p: Pert
     out[p.slid.day + 1] = out[p.slid.day]!;
     out[p.slid.day] = '';
   }
+  for (const s of p.hard.slidRows) {
+    if (s.name !== name) continue;
+    out[s.day + 1] = out[s.day]!;
+    out[s.day] = '';
+  }
   if (p.misread18?.name === name) out[p.misread18.day] = out[p.misread18.day]!.split(' ').map((t, k, all) => (t === '18' && all.indexOf('18') === k ? '18.5' : t)).join(' ');
   return out;
 }
@@ -198,10 +235,11 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
     const out = pages.map((page) => {
       const onPage = truth.people.filter((x) => x.page === page).map((person, idx) => ({ person, i: idx + 1 }));
       const ppl = onPage.map(({ person, i }) => ({ i, nm: p.columns.misread?.name === person.name ? p.columns.misread.as : person.name, t: truth.family === 'B' ? person.role || null : null, h: person.section }));
+      const halfDropped = (name: string, d: number, x: string) => (p.hard.halfDropped.some((h) => h.name === name && h.day === d) ? x.replace(/(\d+)\.5\b/, '$1') : x);
       const cols = truth.week.dates.map((_, d) => ({
         d,
         c: onPage
-          .map(({ person, i }) => ({ i, x: p.columns.missedCell?.name === person.name && p.columns.missedCell.day === d ? '' : (person.cells ?? [])[d] ?? '' }))
+          .map(({ person, i }) => ({ i, x: p.columns.missedCell?.name === person.name && p.columns.missedCell.day === d ? '' : halfDropped(person.name, d, (person.cells ?? [])[d] ?? '') }))
           .filter((cell) => cell.x),
       }));
       return { p: page, rows: onPage.length, ppl, cols, unread: [] };
@@ -229,7 +267,7 @@ export function transcriptionAnswer(truth: FamilyTruth, request: MockRequest, p:
           unread.push({ r: i, x: [person.name, ...cells].join(' | '), w: 'cut off at the bottom of the page' });
           continue;
         }
-        const name = p.misread?.name === person.name ? p.misread.as : person.name;
+        const name = p.misread?.name === person.name ? p.misread.as : p.faint?.name === person.name ? p.faint.as : person.name;
         const title = truth.family === 'B' ? person.role || null : null;
         sec.ppl.push(p.swapNameTitle && title ? { nm: title, t: name, i, c: cells } : { nm: name, t: title, i, c: cells });
       }
