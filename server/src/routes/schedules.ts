@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { createHash } from 'node:crypto';
+import { Router, type Request, type RequestHandler } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
 import { visionWeeklyLimit } from '../lib/aiBudget.js';
@@ -9,12 +10,14 @@ import { venueTimezoneFor } from '../lib/venueTime.js';
 import { AI_READ_BUDGET_MS } from '../parsing/parseVision.js';
 import { getVisionProvider } from '../parsing/visionProvider.js';
 import { readUploadedRoster, withManualPath } from '../parsing/readUpload.js';
+import type { ReadProgressEvent } from '../parsing/readProgress.js';
 import { prismaReadingCache, type ReadingCache } from '../parsing/readingCache.js';
 import { resolveRowsAgainstDatabase, nameKey, canonicalRoleName, buildPeoplePreview, loadVenueMatchContext } from '../parsing/resolveRows.js';
 import { persistRosterImport, RosterImportError, mondayOfIso } from '../parsing/persistShifts.js';
 import type { AddedPerson, ConfirmPersonDecision, PersonPreview } from '../parsing/rosterContract.js';
 import { uploadCache } from '../store/uploadCache.js';
-import { requireSession, requireManager, ownedOrNotFound } from '../middleware/requireSession.js';
+import { uploadProgress, type UploadOwner } from '../store/uploadProgress.js';
+import { requireSession, requireManager, ownedOrNotFound, bearerToken } from '../middleware/requireSession.js';
 import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished, mondayOfWeek } from '../lib/scheduleNotifications.js';
@@ -114,6 +117,40 @@ function aiBudgetMs(): number {
   return Number.isFinite(n) && n > 0 ? n : AI_READ_BUDGET_MS;
 }
 
+/** Who may follow an upload's progress: its venue and its session (a hash of the token; the token itself is never kept). */
+function progressOwner(req: Request): UploadOwner {
+  return { locationId: req.user!.locationId, sessionKey: createHash('sha256').update(bearerToken(req) ?? '').digest('hex') };
+}
+
+/**
+ * Starts following an upload sent with `X-Upload-Id` (a UUID the client picked), before its body
+ * is read — so "Uploading" is the server's word too — and marks it done or failed when the
+ * response is sent (or the client goes away). An upload without the header is simply not followed.
+ */
+const trackUploadProgress: RequestHandler = (req, res, next) => {
+  const id = String(req.get('x-upload-id') ?? '').trim();
+  if (id && uploadProgress.start(id, progressOwner(req))) {
+    res.locals.uploadId = id;
+    res.on('close', () => uploadProgress.advance(id, res.writableFinished && res.statusCode < 400 ? 'done' : 'failed'));
+  }
+  next();
+};
+
+/**
+ * GET /api/schedules/upload-progress/:uploadId — where an upload sent with `X-Upload-Id` is:
+ * `{ stage, passed, pages, secondRead }` (store/uploadProgress.ts). Only the venue and session that
+ * started it: another venue's id (or an unknown one) is a 404 `upload_progress_unknown`, another
+ * session's a 403. Polled about once a second while the upload request is open; stages and page
+ * counts only, never a name. In memory on this instance (see the store for what that means).
+ */
+schedulesRouter.get('/upload-progress/:uploadId', requireSession, requireManager, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const found = uploadProgress.read(req.params.uploadId, progressOwner(req));
+  if (found.status === 'not_found') return res.status(404).json({ error: 'No upload with that id is being read.', errorCode: 'upload_progress_unknown' });
+  if (found.status === 'forbidden') return res.status(403).json({ error: 'That upload was started from another session.' });
+  return res.status(200).json(found.view);
+});
+
 /**
  * POST /api/schedules/upload
  * multipart/form-data: file=<xlsx|xls|csv|pdf|image>, weekStart?=YYYY-MM-DD (a Monday),
@@ -132,9 +169,10 @@ function aiBudgetMs(): number {
  * rows that couldn't be read (`unreadRows`), the detected `week` and a `reading` report.
  * Manager/owner sessions only (like confirm): an AI read costs the venue money and allowance.
  */
-schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRateLimiter, upload.single('file'), async (req, res) => {
+schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRateLimiter, trackUploadProgress, upload.single('file'), async (req, res) => {
   try {
     const locationId = req.user!.locationId;
+    const uploadId = res.locals.uploadId as string | undefined;
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded. Attach it under the "file" field.' });
     }
@@ -160,6 +198,7 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       cache: readingCache,
       deadline: Date.now() + aiBudgetMs(),
       gridParser,
+      ...(uploadId ? { onProgress: (event: ReadProgressEvent) => uploadProgress.report(uploadId, event) } : {}),
     });
     if (!outcome.ok) return res.status(outcome.status).json(outcome.body);
     const { result, reading, escalation } = outcome;
@@ -189,6 +228,7 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       });
     }
 
+    if (uploadId) uploadProgress.advance(uploadId, 'matching');
     const { previewRows, summary, people } = await resolveRowsAgainstDatabase(prisma, locationId, result.rows, { readPeople: result.people });
     const batchId = uploadCache.put(locationId, null, previewRows, { people });
 

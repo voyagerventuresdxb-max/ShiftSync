@@ -296,19 +296,55 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * POST /api/schedules/upload — parse + preview a roster. `aiConsent`: the manager agreed to send
  * THIS file to the third-party AI reader (the server asks with `ai_consent_required` first).
  */
-export async function uploadRoster(token: string, file: File, options: { aiConsent?: boolean } = {}): Promise<UploadResponse> {
+export async function uploadRoster(token: string, file: File, options: { aiConsent?: boolean; uploadId?: string } = {}): Promise<UploadResponse> {
   const form = new FormData();
   form.append('file', file);
   if (options.aiConsent) form.append('aiConsent', 'true');
   try {
     return await request<UploadResponse>('/api/schedules/upload', {
       method: 'POST',
-      headers: withAuth(token),
+      // `X-Upload-Id`: lets fetchUploadProgress follow this upload while it is read.
+      headers: { ...withAuth(token), ...(options.uploadId ? { 'X-Upload-Id': options.uploadId } : {}) },
       body: form,
     });
   } catch (err) {
     throw uploadFailure(err);
   }
+}
+
+/** Where a roster read is (server/src/store/uploadProgress.ts); a skipped step never appears. */
+export type UploadStage = 'uploading' | 'reading_text' | 'reading_pages' | 'cross_checking' | 'matching' | 'done' | 'failed';
+
+export interface UploadProgress {
+  stage: UploadStage;
+  /** Stages already finished, in the order they ran. */
+  passed: UploadStage[];
+  /** The AI reader's pages once it started: how many, how many answered, and any read again. */
+  pages: { total: number; done: number; again: number; againDone: number } | null;
+  /** A photo or scan's second reading, which runs alongside the first. */
+  secondRead: 'running' | 'done' | null;
+}
+
+/**
+ * One poll of an upload's progress: its state; `not_yet` (the server hasn't seen the upload
+ * yet); `unavailable` (this API has no progress endpoint, or can't follow this upload); or
+ * `error` (a failed poll, worth trying again).
+ */
+export type UploadProgressPoll = { kind: 'progress'; progress: UploadProgress } | { kind: 'not_yet' } | { kind: 'unavailable' } | { kind: 'error' };
+
+/** GET /api/schedules/upload-progress/:uploadId — the venue and session that started the upload only. */
+export async function fetchUploadProgress(token: string, uploadId: string): Promise<UploadProgressPoll> {
+  let res: Response;
+  try {
+    res = await apiFetch(apiUrl(`/api/schedules/upload-progress/${encodeURIComponent(uploadId)}`), { headers: withAuth(token) });
+  } catch {
+    return { kind: 'error' };
+  }
+  const body = (await res.json().catch(() => null)) as (UploadProgress & { errorCode?: string }) | null;
+  if (res.ok && body?.stage) return { kind: 'progress', progress: body };
+  // An older API answers its generic 404 here: there is nothing to follow.
+  if (res.status === 404) return body?.errorCode === 'upload_progress_unknown' ? { kind: 'not_yet' } : { kind: 'unavailable' };
+  return { kind: 'error' };
 }
 
 export const UPLOAD_TIMED_OUT_MESSAGE =

@@ -19,6 +19,7 @@ import { isUnreadableName, nonPersonReason, personKeyOf, UNREADABLE_NAME } from 
 import { isRoleTitle } from './resolveRows.js';
 import { VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
 import { isReadingAnswer, type ReadingAnswer, type ReadingAnswerPage } from './vlmPrompt.js';
+import { emitReadProgress, type OnReadProgress } from './readProgress.js';
 import type { ReadPerson, RowFlag, ShiftAlternative, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult } from './types.js';
 
@@ -37,6 +38,8 @@ export interface AiReadOptions {
   deadline: number;
   /** People the table reader found on each page, when there is a table reader. */
   tablePeoplePerPage?: Map<number, number>;
+  /** Told when each call on a page starts and answers (page numbers only). */
+  onProgress?: OnReadProgress;
 }
 
 export interface AiReadOutcome {
@@ -164,6 +167,8 @@ export async function aiReadRoster(source: AiReadSource, o: AiReadOptions): Prom
         ? { ...base, kind: 'file', data: source.data, mimeType: source.mimeType, ...(source.pageTexts ? { pageTexts: source.pageTexts } : {}) }
         : { ...base, kind: 'grid', text: source.text };
     calls++;
+    const page = { kind: 'page' as const, page: focus?.page ?? 1, of: pageCount, ...(strict ? { again: true } : {}) };
+    emitReadProgress(o.onProgress, { ...page, state: 'started' });
     try {
       const output = await o.provider.readRoster(input);
       tokensIn += output.usage.promptTokens ?? 0;
@@ -174,6 +179,8 @@ export async function aiReadRoster(source: AiReadSource, o: AiReadOptions): Prom
       if (!(err instanceof VisionProviderError)) throw err;
       firstError ??= err;
       return null;
+    } finally {
+      emitReadProgress(o.onProgress, { ...page, state: 'finished' });
     }
   };
 
