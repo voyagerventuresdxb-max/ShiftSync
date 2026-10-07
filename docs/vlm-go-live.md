@@ -150,16 +150,21 @@ It never shows a key, project id or provider message. Owners only; 3 runs per 5 
   reader's result stands on its own.
 - **Photos and image-only (scanned) PDFs** have no text layer, so the AI reader reads them
   **twice at the same time**: person by person, and day column by day column (a differently framed
-  prompt and schema in `vlmPrompt.ts`). The two readings are compared like the table cross-check
-  (`aiCrossCheck.ts`); anything only one of them saw is kept and flagged for the manager, never
-  dropped. That makes a photo or scan two model calls per page (plus at most one re-read of a page
-  that came back short), all in parallel, so the wait is that of the slowest call.
+  prompt and schema in `vlmPrompt.ts`). The two readings are compared cell by cell
+  (`aiCrossCheck.ts`): what both read is imported; a day the two read differently is **not**
+  imported at all — it is shown to the manager as a cell to look at, with both readings — so a
+  misread is never saved as a shift. A name the two spelled differently is kept with both
+  spellings and marked "check the spelling". When many cells differ, the review says the photo was
+  hard to read and suggests uploading the original PDF or spreadsheet. That makes a photo or scan
+  two model calls per page (plus at most one re-read of a page that came back short), all in
+  parallel, so the wait is that of the slowest call.
 - The model only **transcribes** what is printed. Dates come from the printed day headers, times
   from the cell text, by the same rules as the table reader; titles, headings, totals and footer
   lines are never imported as people. Each call has `GEMINI_VISION_TIMEOUT_MS` (75 s), and the
   whole upload `ROSTER_AI_BUDGET_MS` (95 s, inside the ~120 s the web proxy waits); whatever isn't
   read in time is listed as unread rows.
-- **Cache:** a complete AI reading (for a photo or scan, both readings) is stored per venue in
+- **Cache:** a complete AI reading (for a photo or scan, both readings) — or one still short after
+  its re-read, whose rows it couldn't read stay listed — is stored per venue in
   the `roster_reading_cache` table, keyed by the sha256 of the file's bytes and the prompt/schema
   version. Uploading the same file again at that venue reuses it: no model call, no spend, no
   weekly allowance, no consent prompt. Only the reading is stored (what the model transcribed —
@@ -171,7 +176,7 @@ It never shows a key, project id or provider message. Owners only; 3 runs per 5 
 1. On a phone, sign in as a manager of a **test venue** (AI reading is limited to `AI_VISION_WEEKLY_LIMIT` reads per venue in any 7 days, so don't spend a real venue's allowance). Open **Scheduling** → the roster upload panel. It states that image and scanned-PDF rosters are read by a third-party AI service outside the UAE.
 2. Take a photo of a printed roster with **made-up names** (or the sample image from `server/scripts/fixtures/vlm-check-roster.png` shown on another screen).
 3. The **review screen** must show the shifts read from the photo; nothing is saved until you confirm.
-4. Railway logs for that request: `[roster-reading] AI read: N call(s), …`, `[roster-reading] AI cross-check read: …`, `[roster-reading] AI cross-check: N people, N disagreement(s).` and `[schedules.upload] read: N shifts, N people, …`. The logs carry counts only, never the names. Upload the same photo again: `AI reading reused from this venue's cache … no model call`.
+4. Railway logs for that request: `[roster-reading] AI read: N call(s), …`, `[roster-reading] AI cross-check read: …`, `[roster-reading] AI cross-check: N people, N disagreement(s), N/N cell(s) left to check.` and `[schedules.upload] read: N shifts, N people, …`. The logs carry counts only, never the names. Upload the same photo again: `AI reading reused from this venue's cache … no model call`.
 
 ## 7. Turning it off, rotating the key
 

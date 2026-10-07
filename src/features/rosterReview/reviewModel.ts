@@ -161,6 +161,9 @@ export function personNotes(person: PersonPreview, rows: PreviewRow[]): PersonNo
     if (flag.kind === 'ai_only') notes.push({ key: 'ai_only', tone: 'check', text: 'Found by the AI reader only — check it' });
     if (flag.kind === 'table_only') notes.push({ key: 'table_only', tone: 'info', text: 'Found by the table reader only' });
     if (flag.kind === 'two_sections') notes.push({ key: 'two_sections', tone: 'check', text: `Listed in two sections: ${flag.sections.join(' and ')}` });
+    if (flag.kind === 'name_differs') {
+      notes.push({ key: 'name_differs', tone: 'check', text: `The name was read two ways: ${flag.spellings.map((s) => `“${s}”`).join(' or ')} — check the spelling` });
+    }
     if (flag.kind === 'duplicate_name' && !person.flags.some((f) => f.kind === 'two_sections')) {
       notes.push({ key: 'duplicate_name', tone: 'check', text: flag.personKeys.length > 2 ? `Listed ${flag.personKeys.length} times` : 'Listed twice' });
     }

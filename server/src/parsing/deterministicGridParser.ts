@@ -27,10 +27,10 @@
  */
 import { isAllCapsLabel } from './escalation.js';
 import { isOvernight, cellToText } from './normalize.js';
-import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
+import { canonicalRoleName, isRecognizedRoleAlias, isRoleTitle } from './resolveRows.js';
 import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
 import { parseShiftText, parseSingleTime, sheetDotStyle, type ShiftTextOptions } from './shiftText.js';
-import { columnHeading, isFooterTotalOrNote, looksLikePersonName, nonPersonReason, personKeyOf } from './personKey.js';
+import { columnHeading, isFooterTotalOrNote, isSectionLabel, looksLikePersonName, nonPersonReason, personKeyOf } from './personKey.js';
 import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -561,7 +561,8 @@ function isDayHeaderRow(row: unknown[], labels: Map<number, DayLabel>): boolean 
   const runs = distinctRuns(labels);
   if (runs.length < 2) return false;
   let nonBlank = 0;
-  for (let c = 1; c < row.length; c++) if (normalizeCell(row[c])) nonBlank++;
+  // Column labels before the days ("NAME", "POSITION", "S/N") are not other text on the row.
+  for (let c = 1; c < row.length; c++) if (normalizeCell(row[c]) && (labels.has(c) || !columnHeading(normalizeCell(row[c])))) nonBlank++;
   if (labels.size / Math.max(1, nonBlank) < 0.6) return false;
   if (runs.some((l) => !l.numericOnly)) return true;
   return isConsecutiveDayRun(runs);
@@ -694,21 +695,57 @@ function buildDayColumns(
   return { columns, week };
 }
 
+/** A title cell: a role word or abbreviation, or a word with a position number ("Waiter 3"). A number alone ("1042") is an ID, not a title. */
+const roleishCell = (v: string) =>
+  isRecognizedRoleAlias(v) || isRecognizedRoleAlias(v.replace(/\s*\d+$/, '')) || /[A-Za-z].*\d/.test(v) || /^[A-Z]{2,4}$/.test(v) || canonicalRoleName(v) !== v || isRoleTitle(v);
+/** A name cell: words of letters that are not a title. */
+const nameishCell = (v: string) => looksLikePersonName(v) && !roleishCell(v);
+/** An index or row-number cell ("1", "12.", "#7"). */
+const indexCell = (v: string) => /^#?\d{1,4}[.)]?$/.test(v);
+
 /**
  * Two leading columns before the days: which is the per-row title ("RM", "Head waiter 1",
  * "Sup") and which the person's name? Titles repeat a role word, carry numbers or short
  * capital abbreviations; names are words of letters. Returns null when neither column leans.
  */
 function titleColumnByContent(pairs: { col0: string; col1: string }[]): 0 | 1 | null {
-  const roleish = (v: string) =>
-    // A number alone ("1042") is an ID, not a title; a word with a number ("Waiter 3") is one.
-    isRecognizedRoleAlias(v) || isRecognizedRoleAlias(v.replace(/\s*\d+$/, '')) || /[A-Za-z].*\d/.test(v) || /^[A-Z]{2,4}$/.test(v) || canonicalRoleName(v) !== v;
-  const nameish = (v: string) => looksLikePersonName(v) && !roleish(v);
-  const score = (vals: string[]) => vals.filter(roleish).length - vals.filter(nameish).length;
+  const score = (vals: string[]) => vals.filter(roleishCell).length - vals.filter(nameishCell).length;
   const s0 = score(pairs.map((p) => p.col0));
   const s1 = score(pairs.map((p) => p.col1));
   if (s0 === s1) return null;
   return s0 > s1 ? 0 : 1;
+}
+
+/**
+ * Three or more leading columns before the days ("No. | NAME | POSITION", "Position | S/N |
+ * Staff", "# | Employee | Role | Dept"): which one holds the person's name and which the
+ * per-row title. Headings printed over the columns say it outright; otherwise content decides
+ * — an index column holds numbers, a title column repeats role words and abbreviations, a
+ * name column holds words of letters. An index column is never the name column. Null when no
+ * column reads as names.
+ */
+function leadColumnsByHeadingAndContent(headings: (ReturnType<typeof columnHeading>)[], values: string[][]): { name: number; title: number } | null {
+  const cols = values.map((vals, c) => {
+    const filled = vals.filter(Boolean);
+    const share = (f: (v: string) => boolean) => (filled.length ? filled.filter(f).length / filled.length : 0);
+    return { c, heading: headings[c] ?? null, index: headings[c] === 'index' || share(indexCell) >= 0.6, names: share(nameishCell), roles: share(roleishCell) };
+  });
+  const candidates = cols.filter((k) => !k.index && k.heading !== 'title' && k.heading !== 'other');
+  const name = candidates.find((k) => k.heading === 'name') ?? [...candidates].filter((k) => k.names > 0).sort((a, b) => b.names - b.roles - (a.names - a.roles))[0];
+  if (!name) return null;
+  const rest = cols.filter((k) => k.c !== name.c);
+  const title =
+    rest.find((k) => k.heading === 'title') ??
+    [...rest].filter((k) => !k.index && k.heading !== 'other' && k.roles > 0).sort((a, b) => b.roles - b.names - (a.roles - a.names))[0] ??
+    rest.find((k) => k.index) ??
+    rest[0]!;
+  return { name: name.c, title: title.c };
+}
+
+/** A row number printed in front of a name in the same cell ("1 Marites Horvat", "12. Ana Silva"): the name alone. */
+function withoutLeadingIndex(label: string): string {
+  const rest = label.replace(/^#?\d{1,3}[.)]?\s+(?=\p{L})/u, '');
+  return rest !== label && looksLikePersonName(rest) ? rest : label;
 }
 
 /**
@@ -794,6 +831,16 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
   // way the sheet is genuinely ambiguous and gets flagged for manual review
   // below instead of silently resolved on a guess either way.
   let columnOrderAmbiguous = false;
+  /** The heading printed over a leading column on the day-header rows or the row of labels just under them. */
+  const headingOf = (c: number) =>
+    [...header.dayRowIdxs, header.dataStartIdx]
+      .map((r) => {
+        const row = grid[r] ?? [];
+        // The row of labels under the days counts only when its days are blank and it holds labels alone.
+        if (r === header.dataStartIdx && !(daysBlank(row) && row.slice(0, firstDayColIndex).every((v) => !normalizeCell(v) || columnHeading(normalizeCell(v))))) return null;
+        return columnHeading(normalizeCell(row[c]));
+      })
+      .find(Boolean) ?? null;
   if (hasTitleColumn && firstDayColIndex === 2) {
     const pairs: { col0: string; col1: string }[] = [];
     for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
@@ -802,7 +849,6 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       if (v0 && v1 && v0 !== v1 && !CAPTION_WORDS.test(v0) && !CAPTION_WORDS.test(v1)) pairs.push({ col0: v0, col1: v1 });
     }
     // Headings printed over the two columns ("NAME" | "TITLE", in either order) say it outright.
-    const headingOf = (c: number) => header.dayRowIdxs.map((r) => columnHeading(normalizeCell(grid[r]?.[c]))).find(Boolean) ?? null;
     const [h0, h1] = [headingOf(0), headingOf(1)];
     const byHeading = h0 === 'title' || h1 === 'name' ? 0 : h0 === 'name' || h1 === 'title' ? 1 : null;
     const titleCol = byHeading ?? titleColumnByContent(pairs);
@@ -811,6 +857,26 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       nameColIndex = 0;
     } else if (titleCol === null) {
       columnOrderAmbiguous = pairs.length > 0;
+    }
+  } else if (hasTitleColumn) {
+    const values: string[][] = [];
+    for (let c = 0; c < firstDayColIndex; c++) {
+      const vals: string[] = [];
+      for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+        const row = grid[r] ?? [];
+        const v = normalizeCell(row[c]);
+        // A banner merged across the leading columns says nothing about any one of them.
+        if (v && !CAPTION_WORDS.test(v) && !isMergedBanner(row) && !row.slice(0, firstDayColIndex).every((o) => normalizeCell(o) === v)) vals.push(v);
+      }
+      values.push(vals);
+    }
+    const lead = leadColumnsByHeadingAndContent(
+      values.map((_, c) => headingOf(c)),
+      values,
+    );
+    if (lead) {
+      nameColIndex = lead.name;
+      titleColIndex = lead.title;
     }
   }
 
@@ -839,6 +905,18 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
   }
   const allCapsVenue = !columnOrderAmbiguous && dataLabels.length >= 2 && dataLabels.every(isAllCapsLabel);
   const mixedCaseVenue = dataLabels.some((l) => !isAllCapsLabel(l));
+  // Where people carry their own title (the title-column shape), the share of rows with shifts that print one.
+  let titledRows = 0;
+  let dataRows = 0;
+  if (hasTitleColumn && !columnOrderAmbiguous) {
+    for (let r = header.dataStartIdx; r < dataEndIdx; r++) {
+      const row = grid[r] ?? [];
+      if (!normalizeCell(row[nameColIndex]) || !hasData(row)) continue;
+      dataRows++;
+      if (normalizeCell(row[titleColIndex!]) && !/^\d+$/.test(normalizeCell(row[titleColIndex!]))) titledRows++;
+    }
+  }
+  const peopleCarryTitles = dataRows >= 3 && titledRows / dataRows >= 0.8;
   /** A header that only the ALL-CAPS pattern recognised, in a sheet where that pattern proves nothing. */
   const isPatternOnlyHeaderInCapsVenue = (label: string) => allCapsVenue && canonicalRoleName(label) === label;
 
@@ -1052,7 +1130,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // Single-label-column shape: the name column IS where a role/section
       // header also appears (e.g. Gattopardo's "SUPERVISORS"), so header
       // vs. real name is discriminated by content, not position.
-      const firstCell = normalizeCell(row[0]);
+      const firstCell = withoutLeadingIndex(normalizeCell(row[0]));
       if (SUMMARY_ROW_LABELS.has(firstCell.toLowerCase()) || (firstCell && isFooterOrNote(firstCell))) continue; // footer/summary/totals line, never a staff row or a real section header
 
       // Every distinct non-blank value in this row (name column + day
@@ -1156,6 +1234,11 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
         continue; // no employee name in this row — can't emit a staff row either way
       }
 
+      // A department or section word alone on a blank row ("BAR", "HOSTS") heads the rows below it.
+      if (!rowHasData && daysBlank(row) && isSectionLabel(firstCell)) {
+        setSection(firstCell, false);
+        continue;
+      }
       // A title, column heading or caption in the name column is never a person, whatever is
       // beside it ("Waiter 3" with shifts is a position nobody's name is on): its shifts are
       // shown as an unread row, never imported under a title.
@@ -1244,15 +1327,26 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     // Two-leading-column shape: column 0 is a per-row title, column
     // nameColIndex is the actual staff name — no content-based ambiguity,
     // an empty name column always means "not a real staff row."
-    const nameCell = normalizeCell(row[nameColIndex]);
+    const nameCell = withoutLeadingIndex(normalizeCell(row[nameColIndex]));
     const titleCell = normalizeCell(row[titleColIndex!]);
     const lead = nameCell || titleCell;
     if (lead && (CAPTION_WORDS.test(lead) || isFooterOrNote(lead)) && !hasData(row)) continue; // caption / note line
 
-    // A banner merged across the row (the same text in every filled cell), or a role word alone in
-    // the name column with no title and no days, heads a section; it is nobody's name.
-    if (nameCell && (isMergedBanner(row) || (daysBlank(row) && (nameCell === titleCell || (!titleCell && canonicalRoleName(nameCell) !== nameCell))))) {
-      setSection(nameCell, canonicalRoleName(nameCell) === nameCell);
+    // A banner merged across the row (the same text in every filled cell), or a role or department
+    // word alone in the name column with no title and no days ("BAR", "HOSTS"), heads a section;
+    // it is nobody's name.
+    if (nameCell && (isMergedBanner(row) || (daysBlank(row) && (nameCell === titleCell || (!titleCell && (canonicalRoleName(nameCell) !== nameCell || isSectionLabel(nameCell))))))) {
+      setSection(nameCell, canonicalRoleName(nameCell) === nameCell && !isSectionLabel(nameCell));
+      continue;
+    }
+    // A label alone in the name column — no title, no days — in capitals on a sheet whose names
+    // are not and whose people carry their own titles: a banner the vocabulary doesn't know
+    // ("TERRACE"). It groups the rows below provisionally, and is listed to check in case it is
+    // a person with a blank week.
+    if (nameCell && !titleCell && daysBlank(row) && peopleCarryTitles && mixedCaseVenue && isAllCapsLabel(nameCell)) {
+      setSection(nameCell, true);
+      unrecognizedHeaderTexts.add(nameCell);
+      addUnread(r, nameCell, HEADING_NOTE);
       continue;
     }
 

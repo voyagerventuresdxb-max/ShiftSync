@@ -127,6 +127,7 @@ export type PersonFlag =
   | { kind: 'possible_match'; candidates: { userId: string; fullName: string }[] }
   | { kind: 'duplicate_name'; personKeys: string[] }
   | { kind: 'two_sections'; sections: string[] }
+  | { kind: 'name_differs'; spellings: string[] }
   | { kind: 'ai_only' }
   | { kind: 'table_only' }
   | { kind: 'role_unresolved' };

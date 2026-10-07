@@ -113,6 +113,11 @@ test('flags read in human words', () => {
   assert.ok(!texts.includes('Listed twice'), 'two sections already says it');
   assert.ok(personNotes(person({ flags: [{ kind: 'duplicate_name', personKeys: ['a', 'b'] }] }), []).some((n) => n.text === 'Listed twice'));
   assert.ok(personNotes(person({ flags: [{ kind: 'table_only' }] }), []).some((n) => n.text === 'Found by the table reader only'));
+  assert.ok(
+    personNotes(person({ flags: [{ kind: 'name_differs', spellings: ['Saffaiya Okafor', 'Saffiya Okafor'] }] }), []).some(
+      (n) => n.tone === 'check' && n.text === 'The name was read two ways: “Saffaiya Okafor” or “Saffiya Okafor” — check the spelling',
+    ),
+  );
   const q = possibleMatchQuestion(person({ flags: [{ kind: 'possible_match', candidates: [{ userId: 'u1', fullName: 'Maria Lopez' }] }] }));
   assert.equal(q?.text, 'Possibly the same person as Maria Lopez — same person?');
 });

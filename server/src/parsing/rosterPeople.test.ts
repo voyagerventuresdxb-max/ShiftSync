@@ -155,6 +155,14 @@ test('numbered titles and common abbreviations resolve; unknown ones stay non-bl
     ['JAM', 'Management'],
     ['Chef de pass', 'Chef'],
     ['Sous Chef 2', 'Chef'],
+    ['AGM', 'Management'],
+    ['HOD', 'Management'],
+    ['CDP', 'Chef'],
+    ['Senior Waiter', 'Head Waiter'],
+    ['Senior Runner', 'Runner'],
+    ['Jr Waiter 2', 'Waiter'],
+    ['MANAGEMENT', 'Management'],
+    ['RUNNERS', 'Runner'],
     ['Pot Wash', null],
   ];
   const { people } = await resolveRowsAgainstDatabase(
@@ -172,8 +180,9 @@ test('unrelated names are not suggested', async () => {
   const users = [{ id: 'u-1', fullName: 'Maria Lopez', roleId: null }];
   const { people } = await resolveRowsAgainstDatabase(fakePrisma([], users), 'loc-1', [
     row({ rowNumber: 1, employeeName: 'Maria Santos' }),
-    row({ rowNumber: 2, employeeName: 'M. Lopez' }),
+    row({ rowNumber: 2, employeeName: 'K. Lopez' }),
     row({ rowNumber: 3, employeeName: 'Omar' }),
+    row({ rowNumber: 4, employeeName: 'T.K.' }),
   ]);
   for (const person of people) {
     assert.equal(person.status, 'new', person.name);
@@ -254,4 +263,56 @@ test('the resolve-only abbreviations leave the readers alias table alone ("AM" i
   assert.equal(isRecognizedRoleAlias('AM'), false);
   assert.equal(isRecognizedRoleAlias('JAM'), false);
   assert.equal(isRecognizedRoleAlias('Waiter 3'), false);
+});
+
+test('an initial with the surname, in either order, or initials alone, is a possible match — never linked', async () => {
+  const users = [
+    { id: 'u-1', fullName: 'Tomas Valdez', roleId: null },
+    { id: 'u-2', fullName: 'Amara Obi', roleId: null },
+  ];
+  const { people } = await resolveRowsAgainstDatabase(fakePrisma([], users), 'loc-1', [
+    row({ rowNumber: 1, sourceRowIndex: 1, employeeName: 'T. Valdez' }),
+    row({ rowNumber: 2, sourceRowIndex: 2, employeeName: 'Valdez T.' }),
+    row({ rowNumber: 3, sourceRowIndex: 3, employeeName: 'A. Obi' }),
+    row({ rowNumber: 4, sourceRowIndex: 4, employeeName: 'OBI, Amara' }),
+    row({ rowNumber: 5, sourceRowIndex: 5, employeeName: 'T.V.' }),
+  ]);
+  const expected = ['u-1', 'u-1', 'u-2', 'u-2', 'u-1'];
+  people.forEach((person, i) => {
+    assert.equal(person.status, 'needs_decision', person.name);
+    assert.equal(person.matchedUserId, null, person.name);
+    assert.equal(person.suggestedAction, 'create', `${person.name}: never preselected`);
+    const flag = person.flags.find((f) => f.kind === 'possible_match');
+    assert.ok(flag && flag.kind === 'possible_match' && flag.candidates[0]!.userId === expected[i], person.name);
+  });
+});
+
+test('nameCloseness: initials and reordered names', () => {
+  assert.equal(nameCloseness('T. Valdez', 'Tomas Valdez'), 'strong');
+  assert.equal(nameCloseness('Valdez T.', 'Tomas Valdez'), 'strong');
+  assert.equal(nameCloseness('Valdez Tomas', 'Tomas Valdez'), 'strong');
+  assert.equal(nameCloseness('T. Valdezz', 'Tomas Valdez'), 'weak');
+  assert.equal(nameCloseness('TV', 'Tomas Valdez'), 'weak');
+  assert.equal(nameCloseness('Tomas Valdez', 'T. Valdez'), 'strong', 'either side may be the short one');
+  assert.equal(nameCloseness('K. Valdez', 'Tomas Valdez'), null);
+  assert.equal(nameCloseness('T. Lopez', 'Tomas Valdez'), null);
+  assert.equal(nameCloseness('To', 'Tomas Valdez'), null);
+});
+
+test('two AI readings that spelled a name differently: "check the spelling", never settled silently; a spelling that is someone on staff is offered', async () => {
+  const users = [{ id: 'u-1', fullName: 'Saffiya Okafor', roleId: null }];
+  const readPeople = [
+    { personKey: 'k1', name: 'Saffaiya Okafor', roleLabel: null, section: null, sourcePage: 1, sourceRow: 1, readerSource: 'ai' as const, nameAlternatives: [{ reader: 'ai' as const, name: 'Saffiya Okafor' }] },
+    { personKey: 'k2', name: 'Test Alpha', roleLabel: null, section: null, sourcePage: 1, sourceRow: 2, readerSource: 'ai' as const, nameAlternatives: [{ reader: 'ai' as const, name: 'TEST  ALPHA' }] },
+    { personKey: 'k3', name: 'Test Okonkwo', roleLabel: null, section: null, sourcePage: 1, sourceRow: 3, readerSource: 'both' as const, nameAlternatives: [{ reader: 'ai' as const, name: 'Test Okonkow' }] },
+  ];
+  const { people } = await resolveRowsAgainstDatabase(fakePrisma([], users), 'loc-1', [], { readPeople });
+  const [saffaiya, alpha, okonkwo] = people;
+  assert.equal(saffaiya!.status, 'needs_decision');
+  assert.deepEqual(saffaiya!.flags.find((f) => f.kind === 'name_differs'), { kind: 'name_differs', spellings: ['Saffaiya Okafor', 'Saffiya Okafor'] });
+  const match = saffaiya!.flags.find((f) => f.kind === 'possible_match');
+  assert.ok(match && match.kind === 'possible_match' && match.candidates[0]!.userId === 'u-1');
+  assert.equal(saffaiya!.suggestedAction, 'create', 'never linked without the manager');
+  assert.equal(alpha!.flags.some((f) => f.kind === 'name_differs'), false, 'case and spacing are not a different spelling');
+  assert.equal(okonkwo!.flags.some((f) => f.kind === 'name_differs'), false, "with the file's own text read, its spelling stands");
 });

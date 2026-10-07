@@ -553,3 +553,52 @@ test('a name whose ff / fi / fl ligatures come out of the text layer as separate
   const result = parseExcelGrid(await extractPdfGrid(Buffer.from(await doc.save())), WEEK_START);
   assert.deepEqual(result.people?.map((p) => p.name), ['Saffiya Okonkwo', 'Effie Laflamme']);
 });
+
+/** A tight name | title layout whose gap two banners run across: the text channels alone merge the two columns. */
+async function tightLeadPdf(labels: { text: string; x: number; y: number }[], index: boolean): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([700, 400]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const draw = (text: string, x: number, y: number) => page.drawText(text, { x, y, size: 9, font });
+  const nameX = index ? 34 : 20;
+  draw('Mon 13/04', 200, 380);
+  draw('Tue 14/04', 300, 380);
+  for (const l of labels) draw(l.text, l.x, l.y);
+  const people = [
+    ['Test Alpha', 'RM', '9-17', ''],
+    ['Test Beta', 'AGM', '', '10-18'],
+    ['Test Gamma', 'Head waiter 1', '11-19', ''],
+    ['Test Delta', 'Supervisor', '', '12-20'],
+  ];
+  let y = 345;
+  people.forEach(([name, title, mon, tue], i) => {
+    if (i % 2 === 0) {
+      draw('FLOOR AND BAR SERVICE TEAM', 30, y); // a banner across both columns
+      y -= 15;
+    }
+    if (index) draw(String(i + 1), 20, y);
+    draw(name!, nameX, y);
+    draw(title!, 118, y);
+    if (mon) draw(mon, 200, y);
+    if (tue) draw(tue, 300, y);
+    y -= 15;
+  });
+  draw('Rota issued 10/04/2026 by Operations', 20, y - 10);
+  return Buffer.from(await doc.save());
+}
+
+test('a name column set tight against a title column is split by the column labels printed on the day header — in either order', async () => {
+  const pdf = await tightLeadPdf([{ text: 'STAFF NAME', x: 20, y: 380 }, { text: 'POSITION', x: 118, y: 380 }], false);
+  const table = await extractPdfTable(pdf);
+  assert.ok(table.grid.some((r) => r[0] === 'Test Alpha' && r[1] === 'RM'), JSON.stringify(table.grid.slice(0, 6)));
+  const result = parseExcelGrid(table.grid, '2026-04-13');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|AGM', 'Test Gamma|Head waiter 1', 'Test Delta|Supervisor']);
+});
+
+test('labels on their own row under the days ("#" | "EMPLOYEE" | "ROLE") split a row number, the name and the title; the label row and a footer are never people', async () => {
+  const pdf = await tightLeadPdf([{ text: '#', x: 20, y: 365 }, { text: 'EMPLOYEE', x: 34, y: 365 }, { text: 'ROLE', x: 118, y: 365 }], true);
+  const table = await extractPdfTable(pdf);
+  const result = parseExcelGrid(table.grid, '2026-04-13');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|AGM', 'Test Gamma|Head waiter 1', 'Test Delta|Supervisor']);
+  assert.equal(result.rows.length, 4);
+});

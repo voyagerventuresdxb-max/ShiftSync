@@ -255,11 +255,29 @@ test('upload: the same file again is answered from the venue\'s cache — both r
   assert.equal(mock.calls.length, 4);
 });
 
-test('upload: an incomplete AI reading is not cached (the next upload tries again)', async () => {
-  const mock = new MockVisionProvider(() => out(answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', ''])] }])));
+test('upload: a reading still short after its re-read is cached — the same file again makes no call and still lists the rows it could not read', async () => {
+  const short = answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]);
+  const mock = twoFramings(short);
   const cache = memoryReadingCache();
-  const outcome = await readUploadedRoster({ buffer: Buffer.from('png'), mimetype: 'image/png', originalname: 'r.png', size: 3 }, ctx({ provider: mock, cache }));
+  const photo = { buffer: Buffer.from('png short'), mimetype: 'image/png', originalname: 'r.png', size: 9 };
+  const outcome = await readUploadedRoster(photo, ctx({ provider: mock, cache }));
   assert.ok(outcome.ok);
+  assert.deepEqual(outcome.reading.rereadPages, [1], 'the short page was read a second time');
+  assert.equal(cache.size(), 1);
+  const calls = mock.calls.length;
+  const again = await readUploadedRoster(photo, ctx({ provider: mock, cache }));
+  assert.ok(again.ok);
+  assert.equal(again.reading.fromCache, true);
+  assert.equal(mock.calls.length, calls, 'no billed call');
+  for (const o of [outcome, again]) assert.ok(o.result.unreadRows?.some((u) => /2 person row\(s\) on page 1 could not be read/.test(u.reason)));
+});
+
+test('upload: a short reading that could not be read a second time is not cached (the next upload tries again)', async () => {
+  const mock = twoFramings(answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]));
+  const cache = memoryReadingCache();
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png'), mimetype: 'image/png', originalname: 'r.png', size: 3 }, ctx({ provider: mock, cache, deadline: Date.now() + 5_000 }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(outcome.reading.rereadPages, []);
   assert.equal(cache.size(), 0);
   assert.ok(outcome.result.unreadRows?.some((u) => /2 person row\(s\) on page 1 could not be read/.test(u.reason)));
 });
@@ -396,28 +414,49 @@ test('reconcileReadings: a title, heading or totals line only one reader took fo
   assert.deepEqual(result.unreadRows?.map((u) => u.text).sort(), ['Total staff on rota', 'Waiter 3']);
 });
 
-test('photo cross-check: a value one reading slid into the next day, an 18 read as 18.5, a coloured cell read as colour only and a person one reading missed — all kept or flagged, none silent', async () => {
+test('photo cross-check: a cell the two readings read differently writes nothing — it is a cell to look at with both readings; what both read is written', async () => {
   const first = answer([{ p: 1, rows: 2, ppl: [person('Test Alpha', 1, ['', '18 26']), person('Test Beta', 2, ['[Closing]', '16 18.5 18.5 26'])] }]);
   const second = answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['18 26', '']), person('Test Beta', 2, ['16 18 18.5 26', '16 18 18.5 26']), person('Test Gamma', 3, ['[Holiday]', ''])] }]);
   const mock = twoFramings(first, second);
   const outcome = await readUploadedRoster({ buffer: Buffer.from('png 2'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: mock }));
   assert.ok(outcome.ok);
   assert.deepEqual(mock.calls.map((c) => c.framing ?? 'rows').sort(), ['columns', 'rows'], 'both readings, at the same time');
-  const rows = outcome.result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}|${(r.flags ?? []).join(',')}`);
-  // The slipped value: both days kept, each flagged as seen by one reading only.
-  assert.ok(rows.includes('Test Alpha|2026-08-24|18:00-02:00|low_confidence'), rows.join('\n'));
-  assert.ok(rows.includes('Test Alpha|2026-08-25|18:00-02:00|low_confidence'));
-  // Times read from a cell one reading saw as colour only: kept (text wins), flagged.
-  assert.ok(rows.includes('Test Beta|2026-08-24|16:00-18:00|low_confidence'));
-  // 18 vs 18.5: the first reading's value with both readings attached.
-  const differ = outcome.result.rows.find((r) => r.employeeName === 'Test Beta' && r.date === '2026-08-25' && r.flags?.includes('times_differ'))!;
-  assert.deepEqual(differ.alternatives?.map((x) => `${x.startTime}-${x.endTime}`), ['16:00-18:30', '16:00-18:00']);
+  const rows = outcome.result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}`);
+  // Only the segment both readings saw is written.
+  assert.deepEqual(rows, ['Test Beta|2026-08-25|18:30-02:00']);
+  const cell = (name: string, date: string) => outcome.result.anomalies.find((x) => x.employeeName === name && x.date === date && /disagree on this day, so neither was imported/.test(x.reason));
+  // The slipped value: neither day is written; both are cells to look at, with both readings.
+  assert.equal(cell('Test Alpha', '2026-08-24')?.rawText, 'First reading: nothing · second reading: 18:00–02:00');
+  assert.equal(cell('Test Alpha', '2026-08-25')?.rawText, 'First reading: 18:00–02:00 · second reading: nothing');
+  // Times one reading saw where the other saw colour only: not written, shown.
+  assert.equal(cell('Test Beta', '2026-08-24')?.rawText, 'First reading: Closing · second reading: 16:00–18:00 · 18:30–02:00');
+  // 18 vs 18.5: not written; both readings shown.
+  assert.equal(cell('Test Beta', '2026-08-25')?.rawText, 'First reading: 16:00–18:30 · 18:30–02:00 · second reading: 16:00–18:00 · 18:30–02:00');
   // The person only the second reading listed is kept, flagged.
   assert.deepEqual(outcome.result.people?.map((p) => p.name), ['Test Alpha', 'Test Beta', 'Test Gamma']);
   assert.ok(outcome.result.anomalies.some((x) => x.employeeName === 'Test Gamma' && /Only one of the two AI readings listed/.test(x.reason)));
-  assert.ok(outcome.result.anomalies.some((x) => x.employeeName === 'Test Beta' && x.date === '2026-08-24' && /code or colour/.test(x.reason)));
   assert.ok(outcome.reading.disagreements >= 5);
   assert.match(outcome.reading.note!, /read it twice/);
+  assert.match(outcome.reading.note!, /^This photo was hard to read — 4 cells need checking/, 'every compared cell differed');
+});
+
+test('photo cross-check: many cells read two ways — the reading says the photo was hard to read and how many cells need checking', async () => {
+  const names = ['Test Alpha', 'Test Beta', 'Test Gamma', 'Test Delta', 'Test Echo', 'Test Foxtrot'];
+  const first = answer([{ p: 1, rows: 6, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 5 ? '18 23.5' : '9 17'])) }]);
+  const second = answer([{ p: 1, rows: 6, ppl: names.map((n, i) => person(n, i + 1, ['10 15', i < 5 ? '18 23' : '9 17'])) }]);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 4'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  assert.ok(outcome.ok);
+  assert.match(outcome.reading.note!, /^This photo was hard to read — 5 cells need checking; for best results upload the original PDF or spreadsheet\./);
+  assert.equal(outcome.result.rows.length, 7, 'the six agreed Mondays and the one agreed Tuesday are written');
+  assert.ok(outcome.result.rows.every((r) => r.date === '2026-08-24' || r.employeeName === 'Test Foxtrot'));
+});
+
+test('photo cross-check: a name the two readings spelled differently keeps one spelling and carries the other — never settled silently', async () => {
+  const first = answer([{ p: 1, rows: 1, ppl: [person('Saffaiya Okafor', 1, ['', ''])] }]);
+  const second = answer([{ p: 1, rows: 1, ppl: [person('Saffiya Okafor', 1, ['', ''])] }]);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 5'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(outcome.result.people?.map((p) => [p.name, p.nameAlternatives?.map((a) => a.name)]), [['Saffaiya Okafor', ['Saffiya Okafor']]]);
 });
 
 test('photo cross-check: when the second reading fails the first stands, the report says so, and nothing is cached', async () => {
@@ -449,4 +488,42 @@ test('photo cross-check: a multi-page scan is read day by day per page, all page
   assert.equal(maxInFlight, 2, 'the two pages at the same time');
   assert.deepEqual(read?.pages.map((p) => `${p.p}:${p.sec[0]!.ppl[0]!.nm}`), ['1:Test Page1', '2:Test Page2']);
   assert.ok(mock.calls.every((c) => c.framing === 'columns'));
+});
+
+test('reconcileReadings: a title or row number one reader glued onto the name is folded onto the other reader\'s name, not a second person', () => {
+  const ai = mapReadingAnswer(
+    answer([{ p: 1, rows: 4, ppl: [person('Test Alpha', 1, ['9-17', ''], 'RM'), person('Test Beta', 2, ['', '10-18'], 'Waiter 3'), person('Test Gamma', 3, ['11-19', ''], 'Cook'), person('Test Delta', 4, ['12-20', ''])] }]),
+    { today: TODAY, clientWeekStart: null },
+  );
+  const table = parseExcelGrid(
+    [
+      ['', '24-Aug', '25-Aug'],
+      ['Test Alpha RM', '9-17', ''],
+      ['1 Test Beta', '', '10-18'],
+      ['Test Gamma Cook', '11-19', ''],
+      ['Test Delta Cook', '12-20', ''],
+      ['NAME TITLE', '', ''],
+    ],
+    TODAY,
+    { today: TODAY, clientWeekStart: null },
+  );
+  const { result } = reconcileReadings(ai, table);
+  const people = result.people!.map((p) => `${p.name}|${p.roleLabel}|${p.readerSource}|${p.nameAlternatives?.length ?? 0}`);
+  assert.ok(people.includes('Test Alpha|RM|both|0'), people.join('\n'));
+  assert.ok(people.includes('Test Beta|Waiter 3|both|0'));
+  // A plain word counts only when the other reader read it as this person's title ("Cook" can be a surname).
+  assert.ok(people.includes('Test Gamma|Cook|both|0'));
+  assert.ok(people.some((p) => p.startsWith('Test Delta|') && p.includes('|ai|')));
+  assert.ok(people.some((p) => p.startsWith('Test Delta Cook|')));
+  assert.ok(!people.some((p) => p.startsWith('NAME TITLE')));
+  assert.equal(result.rows.filter((r) => r.employeeName === 'Test Alpha').length, 1, 'one shift, read by both');
+});
+
+test('photo cross-check: a name read very differently on the same row of both readings is one person with both spellings, never two', async () => {
+  const first = answer([{ p: 1, rows: 2, ppl: [person('Jo Biffai', 1, ['9-17', '']), person('Test Beta', 2, ['', '10-18'])] }]);
+  const second = answer([{ p: 1, rows: 2, ppl: [person('Jo Biff', 1, ['9-17', '']), person('Test Beta', 2, ['', '10-18'])] }]);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 6'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: twoFramings(first, second) }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(outcome.result.people?.map((p) => [p.name, p.nameAlternatives?.map((a) => a.name) ?? []]), [['Jo Biffai', ['Jo Biff']], ['Test Beta', []]]);
+  assert.equal(outcome.result.rows.length, 2, 'the cells both read are written');
 });

@@ -22,7 +22,9 @@
  *  3. Left of the first day band (name / title columns) and right of the
  *     last (notes, a colour key), columns are the vertical channels of text
  *     shared by the body rows — a banner or caption crossing the gap in one
- *     row doesn't merge them.
+ *     row doesn't merge them. Column labels printed near the day header
+ *     ("NAME" | "POSITION", "#" | "EMPLOYEE") part columns set too close
+ *     for a gap of their own, in whatever order they are printed.
  *  4. A row with content in exactly one column, sitting unusually close
  *     beneath the previous row, is a wrapped continuation line of that cell.
  * A page without its own header reuses the geometry of the last page that
@@ -30,6 +32,7 @@
  */
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { isConsecutiveDayRun, parseDayLabel, type DayLabel } from './weekDetection.js';
+import { columnHeading } from './personKey.js';
 
 // Points pdfjs at its bundled standard-font metrics so it can measure
 // non-embedded standard fonts (Helvetica, etc.) without a network fetch or a
@@ -167,7 +170,9 @@ function headerDaysOf(parts: Phrase[]): { phrase: Phrase; label: DayLabel }[] | 
   const days = parts.map((phrase) => ({ phrase, label: parseDayLabel(phrase.text) })).filter((d): d is { phrase: Phrase; label: DayLabel } => d.label !== null);
   if (days.length < 2) return null;
   // A leading label ("Name", "DATE", "DAY OF THE WEEK") may sit before the days.
-  if (parts.length - days.length > Math.max(1, Math.floor(parts.length * 0.4))) return null;
+  // Column labels ("STAFF NAME", "POSITION", "#") don't count against it.
+  const others = parts.filter((p) => !parseDayLabel(p.text) && !columnHeading(p.text)).length;
+  if (others > Math.max(1, Math.floor(parts.length * 0.4))) return null;
   if (days.every((d) => d.label.numericOnly) && !isConsecutiveDayRun(days.map((d) => d.label))) return null;
   return days.sort((a, b) => cx(a.phrase) - cx(b.phrase));
 }
@@ -188,10 +193,10 @@ interface Geometry {
   dayColumnIndexes: number[][];
 }
 
-/** Vertical channels of text shared by the body rows inside [lo, hi): the columns of that region. */
-function textChannels(rows: RowCluster[], lo: number, hi: number): Band[] {
+/** How many of the rows have text covering each x inside [lo, hi) (the rows' items whose centre is inside). */
+function coverage(rows: RowCluster[], lo: number, hi: number): { start: number; counts: number[]; rowCount: number } | null {
   const inside = rows.map((r) => r.items.filter((p) => cx(p) >= lo && cx(p) < hi)).filter((ps) => ps.length > 0);
-  if (inside.length === 0) return [];
+  if (inside.length === 0) return null;
   const start = Math.floor(Math.min(...inside.flat().map((p) => p.x0)));
   const end = Math.ceil(Math.max(...inside.flat().map((p) => p.x1)));
   const counts = new Array(end - start + 1).fill(0) as number[];
@@ -200,8 +205,16 @@ function textChannels(rows: RowCluster[], lo: number, hi: number): Band[] {
     for (const p of phrases) for (let x = Math.floor(p.x0); x <= Math.ceil(p.x1); x++) covered.add(x - start);
     for (const x of covered) if (x >= 0 && x < counts.length) counts[x]!++;
   }
+  return { start, counts, rowCount: inside.length };
+}
+
+/** Vertical channels of text shared by the body rows inside [lo, hi): the columns of that region. */
+function textChannels(rows: RowCluster[], lo: number, hi: number): Band[] {
+  const cov = coverage(rows, lo, hi);
+  if (!cov) return [];
+  const { start, counts, rowCount } = cov;
   // A channel is text most rows share; a gap crossed by one banner or caption is still a gap.
-  const minCount = inside.length >= 4 ? Math.max(2, Math.ceil(inside.length * 0.08)) : 1;
+  const minCount = rowCount >= 4 ? Math.max(2, Math.ceil(rowCount * 0.08)) : 1;
   const bands: Band[] = [];
   let open: number | null = null;
   for (let i = 0; i <= counts.length; i++) {
@@ -212,7 +225,75 @@ function textChannels(rows: RowCluster[], lo: number, hi: number): Band[] {
       open = null;
     }
   }
-  return bands.length ? bands : [{ x0: start, x1: end }];
+  return bands.length ? bands : [{ x0: start, x1: start + counts.length - 1 }];
+}
+
+/**
+ * The column labels printed left of the days ("STAFF NAME" | "POSITION", "#" | "EMPLOYEE" |
+ * "ROLE", "Position" | "S/N" | "Staff"), from the first row near the day header that holds two
+ * or more of them and nothing else there: one centre per labelled column, in order. Two
+ * neighbouring labels of the same kind ("FIRST NAME" | "LAST NAME") are one column.
+ */
+function leadingLabels(rows: RowCluster[], from: number, to: number, left: number): { x: number; kind: string }[] {
+  for (let r = Math.max(0, from); r < Math.min(rows.length, to); r++) {
+    const phrases = rows[r]!.phrases.filter((p) => cx(p) < left);
+    const labels: { x: number; kind: string }[] = [];
+    let onlyLabels = phrases.length > 0;
+    for (const phrase of phrases) {
+      const kind = columnHeading(phrase.text);
+      if (kind) {
+        labels.push({ x: cx(phrase), kind });
+        continue;
+      }
+      // Labels printed closer than a space ("#EMPLOYEE") joined into one phrase: read item by item.
+      const items = rows[r]!.items.filter((i) => i.x0 >= phrase.x0 - 0.5 && i.x1 <= phrase.x1 + 0.5);
+      const kinds = items.map((i) => columnHeading(i.text));
+      if (items.length > 1 && kinds.every(Boolean)) items.forEach((i, k) => labels.push({ x: cx(i), kind: kinds[k]! }));
+      else onlyLabels = false;
+    }
+    if (!onlyLabels) continue;
+    const merged = labels.sort((a, b) => a.x - b.x).filter((l, k, all) => k === 0 || l.kind !== all[k - 1]!.kind);
+    if (merged.length >= 2) return merged;
+  }
+  return [];
+}
+
+/**
+ * Splits leading channels that hold two labelled columns: between two neighbouring labels with
+ * no column edge between them, the columns part where the body rows' text is thinnest. A name
+ * column left-aligned against a title column (or a row number against a name) prints too close
+ * for a gap of its own once a few long names or banners run across it.
+ */
+function splitByLabels(leading: Band[], labels: { x: number }[], body: RowCluster[], left: number): Band[] {
+  let bands = [...leading];
+  for (let k = 1; k < labels.length; k++) {
+    const a = labels[k - 1]!.x;
+    const b = labels[k]!.x;
+    const separated = bands.some((band, i) => i > 0 && band.x0 > a && bands[i - 1]!.x1 < b);
+    if (separated) continue;
+    const cov = coverage(body, -Infinity, left);
+    if (!cov) continue;
+    // The widest run of x where the fewest rows have text.
+    const xs: number[] = [];
+    for (let x = Math.ceil(a) + 1; x < Math.floor(b); x++) xs.push(x);
+    if (xs.length === 0) continue;
+    const countAt = (x: number) => cov.counts[x - cov.start] ?? 0;
+    const least = Math.min(...xs.map(countAt));
+    let best: { from: number; to: number } | null = null;
+    let run: { from: number; to: number } | null = null;
+    for (const x of xs) {
+      if (countAt(x) !== least) {
+        run = null;
+        continue;
+      }
+      run = run && run.to === x - 1 ? { from: run.from, to: x } : { from: x, to: x };
+      if (!best || run.to - run.from > best.to - best.from) best = run;
+    }
+    if (!best) continue;
+    const cut = (best.from + best.to) / 2;
+    bands = bands.flatMap((band) => (band.x0 < cut && band.x1 > cut ? [{ x0: band.x0, x1: cut - 0.5 }, { x0: cut + 0.5, x1: band.x1 }] : [band]));
+  }
+  return bands;
 }
 
 /** Column geometry from a page's header rows and body rows. */
@@ -233,7 +314,8 @@ function deriveGeometry(rows: RowCluster[], headerIdx: number, periodIdx: number
   const left = bands[0]!.x0;
   const right = bands[bands.length - 1]!.x1;
   const body = rows.slice(bodyStart);
-  const leading = textChannels(body, -Infinity, left);
+  // Column labels near the day header ("NAME" | "POSITION", "#" | "EMPLOYEE") part columns printed too close for a gap.
+  const leading = splitByLabels(textChannels(body, -Infinity, left), leadingLabels(rows, headerIdx - 3, bodyStart + 3, left), body, left);
   const trailing = textChannels(body, right, Infinity);
   const columns: Band[] = leading.length ? [...leading] : [{ x0: left - 1, x1: left - 1 }];
   const dayColumnIndexes: number[][] = [];

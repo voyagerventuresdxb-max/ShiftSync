@@ -37,14 +37,17 @@ const PEOPLE = `PEOPLE — LIST EVERY PERSON ROW
   Never skip a row, never merge two rows, never list a row twice.
 - A row whose name you can read is a person: list it, with "[?]" in any cell you can't read.
   A row is cut off only when the page edge actually cuts through it.
-- NOT people: section headings / banners (e.g. "SUPERVISORS", "WAITER"), column headings
-  ("NAME", "TITLE"), headcount, count or total lines (a number where the name would be, or
-  "Total staff …", "Headcount"), caption rows (covers, pax, events, notes), the title, the day
-  headers, the colour key / legend, footers, "Prepared by" / "Printed on" lines and signatures.
+- NOT people: section headings / banners (e.g. "SUPERVISORS", "WAITER", "BAR", "HOSTS",
+  "MANAGEMENT"), column headings ("NAME", "TITLE", "#", "No.", "POSITION"), headcount, count or
+  total lines (a number where the name would be, or "Total staff …", "Headcount"), caption rows
+  (covers, pax, events, notes), the title, the day headers, the colour key / legend, footers,
+  "Prepared by" / "Printed on" / "issued" / "generated" lines and signatures.
 - Before listing, count the person rows on the page ("rows").
 - "nm": the person's NAME exactly as printed (keep spelling, case and spaces). The name column
   and a title / role column can come in either order; job titles such as "Waiter 3", "Head
-  waiter 1", "RM", "Supervisor" or "Ops Manager" are titles, never names.
+  waiter 1", "RM", "AGM", "Supervisor" or "Ops Manager" are titles, never names. Never join the
+  title or a row number onto the name: "Ana Silva" with "RM" beside it is "nm": "Ana Silva",
+  "t": "RM". A "#" / "No." / "S/N" column holds row numbers, never names.
 - "t": the person's own title / role column as printed; null when the roster has no such column.
   Never copy the section heading into "t".
 - "i": the person's position among the person rows of that page, counting from 1 at the top.`;
@@ -101,6 +104,12 @@ CELLS — DAY COLUMN BY DAY COLUMN
   day's column from the top and, for every person row whose cell in that column is not empty,
   give {"i": the person's "i", "x": the cell exactly as printed}. Leave out empty cells.
 - Read each column under its own header: check the header above every value you write.
+- Half days: when a day is split into AM and PM sub-columns, go down that day's AM and PM
+  sub-columns before moving on to the next day, and write the day's values left to right in
+  one "x" ("10.5 15 18 23.5"). A person with only PM values that day ("18 23.5"), or only AM
+  values, keeps them on THAT day: never move a value into the next or the previous day.
+- Keep every half hour exactly: "10.5" stays "10.5" and "23.5" stays "23.5" — never drop,
+  round or shorten the ".5". Write every value in the cell, in the order printed.
 ${CELL_TEXT}
 
 ${UNREAD}`;

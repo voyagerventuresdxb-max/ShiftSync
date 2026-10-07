@@ -113,6 +113,8 @@ export type PersonFlag =
   | { kind: 'duplicate_name'; personKeys: string[] }
   /** The same name is listed under two or more sections. */
   | { kind: 'two_sections'; sections: string[] }
+  /** The readers spelled the name differently (a photo or scan read twice): which spelling is right? */
+  | { kind: 'name_differs'; spellings: string[] }
   | { kind: 'ai_only' }
   | { kind: 'table_only' }
   /** No role could be resolved; non-blocking (the manager can assign one in bulk). */

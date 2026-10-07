@@ -315,7 +315,26 @@ const RESOLVE_ONLY_ROLE_ALIASES: Record<string, string> = {
   busser: 'Runner',
   bussers: 'Runner',
   busboy: 'Runner',
+  agm: 'Management', // Assistant General Manager
+  hod: 'Management', // Head of Department
+  om: 'Management', // Operations Manager
+  dm: 'Management', // Duty Manager
+  fm: 'Management', // Floor Manager
+  tl: 'Supervisor', // Team Leader
+  hw: 'Head Waiter',
+  cdr: 'Head Waiter', // Chef de Rang
+  dcdr: 'Waiter', // Demi Chef de Rang
+  cdp: 'Chef', // Chef de Partie
+  dcdp: 'Chef', // Demi Chef de Partie
+  // Department banners, for the people listed under one without a title of their own.
+  bar: 'Bartender',
+  hosts: 'Host',
+  hostesses: 'Host',
+  kitchen: 'Chef',
 };
+
+/** A grade before a title ("Senior Server", "Jr Bartender", "Trainee Host"): the role is the title after it. */
+const SENIORITY_PREFIX = /^(senior|snr|sr|junior|jnr|jr|trainee|lead|chief|principal|deputy|assistant|asst)\s+(?=\S)/;
 
 /**
  * A role key without a trailing position number: "waiter 3", "head waiter 1", "runner 2nd",
@@ -333,7 +352,8 @@ export function stripRoleOrdinal(key: string): string {
  * Resolves a role label as printed to one of the venue's active roles: its own exact role
  * name first (a venue's own "GRO" beats the generic alias bucket), then a mapping the manager
  * asked to remember, then the canonical alias table, then the resolve-only abbreviations —
- * each tried on the label as printed and then without a trailing number ("Waiter 3").
+ * each tried on the label as printed, then without a trailing number ("Waiter 3"), then
+ * without a grade before the title ("Senior Server").
  * Null when none applies (non-blocking: the person is imported as "Team member").
  */
 export function resolveRoleLabel(label: string | null | undefined, ctx: VenueMatchContext): string | null {
@@ -355,7 +375,8 @@ export function resolveRoleLabel(label: string | null | undefined, ctx: VenueMat
   // Any other "… Manager" title ("Ops Manager", "Events Manager") is a manager, when the venue
   // has no closer role of its own (its own role name and remembered mappings are tried first).
   const manager = MANAGER_TITLE.test(stripped) ? ctx.roleByName.get(nameKey('Management')) ?? null : null;
-  return tryKey(key) ?? (stripped !== key ? tryKey(stripped) : null) ?? manager;
+  const plain = stripped.replace(SENIORITY_PREFIX, '');
+  return tryKey(key) ?? (stripped !== key ? tryKey(stripped) : null) ?? (plain !== stripped ? tryKey(plain) : null) ?? manager;
 }
 
 const MANAGER_TITLE = /\b(managers?|mgrs?)$/;
@@ -371,7 +392,8 @@ export function isRoleTitle(label: string): boolean {
   if (!key) return false;
   const known = (k: string) => Object.prototype.hasOwnProperty.call(ROLE_ALIASES, k) || Object.prototype.hasOwnProperty.call(RESOLVE_ONLY_ROLE_ALIASES, k);
   const stripped = stripRoleOrdinal(key);
-  return known(key) || (stripped !== key && known(stripped)) || MANAGER_TITLE.test(stripped);
+  const plain = stripped.replace(SENIORITY_PREFIX, '');
+  return known(key) || (stripped !== key && known(stripped)) || (plain !== stripped && known(plain)) || MANAGER_TITLE.test(stripped);
 }
 
 type TokenMatch = 'equal' | 'initial' | 'prefix' | 'spelling';
@@ -389,7 +411,9 @@ function tokenMatch(a: string, b: string): TokenMatch | null {
 /**
  * How close a printed name is to a staff member's name, when they are NOT the same key:
  * 'strong' (same letters without accents, first name only, a nickname that starts the name,
- * an initial for the surname) or 'weak' (a small spelling difference). Null = unrelated.
+ * an initial for the surname, the same words in another order, an initial with the surname
+ * in either order — "T. Valdez", "Valdez T.") or 'weak' (a small spelling difference, initials
+ * only — "T.V."). Null = unrelated. Only ever a suggestion: nothing here links anyone.
  */
 export function nameCloseness(printed: string, staffName: string): 'strong' | 'weak' | null {
   const fa = foldedNameKey(printed);
@@ -398,6 +422,11 @@ export function nameCloseness(printed: string, staffName: string): 'strong' | 'w
   if (fa === fb) return 'strong';
   const ta = fa.split(' ');
   const tb = fb.split(' ');
+  return positionalCloseness(ta, tb) ?? initialsCloseness(printed, ta, tb) ?? initialsCloseness(staffName, tb, ta);
+}
+
+/** Word by word, in order: the first name (or a nickname that starts it), then the rest. */
+function positionalCloseness(ta: string[], tb: string[]): 'strong' | 'weak' | null {
   const [short, long] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
   const kinds: TokenMatch[] = [];
   for (let i = 0; i < short.length; i++) {
@@ -405,10 +434,43 @@ export function nameCloseness(printed: string, staffName: string): 'strong' | 'w
     if (!kind) return null;
     kinds.push(kind);
   }
-  // A lone initial for the first name ("M. Lopez") says too little to suggest anyone.
+  // A lone initial for the first name ("M. Lopez") is left to initialsCloseness.
   if (kinds[0] === 'initial') return null;
   if (short.length < long.length) return kinds.every((k) => k === 'equal' || k === 'prefix') ? 'strong' : 'weak';
   return kinds.includes('spelling') ? 'weak' : 'strong';
+}
+
+/**
+ * A shortened form of `full`, whatever the order: the same words reordered ("Valdez Tomas"),
+ * an initial with the surname ("T. Valdez", "Valdez T.", "A. Obi"), or initials alone ("T.V.",
+ * "TV"). Every written word must be one of the full name's words and every initial must start
+ * a different one of them.
+ */
+function initialsCloseness(raw: string, short: string[], full: string[]): 'strong' | 'weak' | null {
+  if ([...short].sort().join(' ') === [...full].sort().join(' ')) return 'strong';
+  const firstLetters = full.map((t) => t[0]).join('');
+  // Initials alone, in capitals or with dots: "T.V.", "T V", "TV".
+  if (/^\s*(\p{Lu}\.?\s*){2,3}$/u.test(raw)) {
+    const letters = short.join('');
+    return letters.length >= 2 && (letters === firstLetters || letters === `${full[0]![0]}${full[full.length - 1]![0]}`) ? 'weak' : null;
+  }
+  const initials = short.filter((t) => t.length === 1);
+  const words = short.filter((t) => t.length > 1);
+  if (initials.length === 0 || words.length === 0 || short.length > full.length) return null;
+  const left = [...full];
+  let spelling = false;
+  for (const w of words) {
+    const i = left.findIndex((t) => t === w || tokenMatch(w, t) === 'spelling' || tokenMatch(w, t) === 'prefix');
+    if (i < 0) return null;
+    if (left[i] !== w) spelling = true;
+    left.splice(i, 1);
+  }
+  for (const c of initials) {
+    const i = left.findIndex((t) => t[0] === c);
+    if (i < 0) return null;
+    left.splice(i, 1);
+  }
+  return spelling ? 'weak' : 'strong';
 }
 
 interface NameMatch {
@@ -475,7 +537,19 @@ export function buildPeoplePreview(rows: ReadingRow[], readPeople: ReadPerson[] 
     if (!name) return [];
     const roleLabel = read?.roleLabel?.trim() || personRows.find((r) => r.roleName.trim())?.roleName.trim() || null;
     const section = read?.section ?? personRows.find((r) => r.section)?.section ?? null;
+    // Two AI readings of a photo or scan that spelled the name differently: never settled silently.
+    // (With a table reader, its spelling is the file's own text and is kept.)
+    const spellings = read && read.readerSource !== 'both' ? [...new Set([name, ...(read.nameAlternatives ?? []).map((n) => n.name.trim())])].filter(Boolean) : [];
+    const nameDiffers = new Set(spellings.map((s) => foldedNameKey(s).replace(/ /g, ''))).size > 1;
     const match = matchPersonName(name, ctx);
+    // Another spelling that is exactly someone on staff is offered as a possible match.
+    if (nameDiffers && !match.userId) {
+      for (const other of spellings.slice(1)) {
+        const id = matchPersonName(other, ctx).userId;
+        const user = id ? ctx.users.find((u) => u.id === id) : undefined;
+        if (user && !match.candidates.some((c) => c.userId === user.id)) match.candidates.unshift({ userId: user.id, fullName: user.fullName, strength: 'strong' });
+      }
+    }
     const matchedUser = match.userId ? ctx.users.find((u) => u.id === match.userId) : undefined;
     // The role their shifts get if the manager assigns none: the printed label, else a row's
     // own label, else (already on staff) their current role. Null = role_unresolved.
@@ -485,6 +559,7 @@ export function buildPeoplePreview(rows: ReadingRow[], readPeople: ReadPerson[] 
     const flags: PersonFlag[] = [];
     if (match.candidates.length > 0) flags.push({ kind: 'possible_match', candidates: match.candidates.map(({ userId, fullName }) => ({ userId, fullName })) });
     const reader = read?.readerSource ?? combinedReader(personRows.map((r) => r.readerSource));
+    if (nameDiffers) flags.push({ kind: 'name_differs', spellings });
     if (reader === 'ai') flags.push({ kind: 'ai_only' });
     if (reader === 'table') flags.push({ kind: 'table_only' });
     if (!resolvedRoleId) flags.push({ kind: 'role_unresolved' });
@@ -500,7 +575,7 @@ export function buildPeoplePreview(rows: ReadingRow[], readPeople: ReadPerson[] 
       roleLabel,
       resolvedRoleId,
       section,
-      status: match.userId ? 'matched' : match.candidates.length > 0 ? 'needs_decision' : 'new',
+      status: match.userId && !nameDiffers ? 'matched' : match.candidates.length > 0 || nameDiffers ? 'needs_decision' : 'new',
       matchedUserId: match.userId,
       flags,
       shiftCount: personRows.length,

@@ -23,7 +23,7 @@ import { VISION_ERROR_MESSAGES, visionErrorMessage, type VisionErrorCode } from 
 import { VisionProviderError, type VisionProvider } from './visionProvider.js';
 import { deterministicEscalationReason, ESCALATION_REASON_TEXT, type EscalationReason } from './escalation.js';
 import { parseScannedPdfViaDocling, DoclingUnavailableError } from './doclingClient.js';
-import { aiReadRoster, aiResult, peopleFromRows, reconcileReadings, withPersonKeys, type AiReadOutcome, type AiReadSource } from './rosterReading.js';
+import { aiReadRoster, aiResult, peopleFromRows, reconcileReadings, shortPagesOf, withPersonKeys, type AiReadOutcome, type AiReadSource } from './rosterReading.js';
 import { mapReadingAnswer } from './aiReading.js';
 import { aiCrossRead, crossCheckAiReadings } from './aiCrossCheck.js';
 import type { ReadingAnswer } from './vlmPrompt.js';
@@ -115,9 +115,18 @@ function complete(result: ParsedVisionResult, reader: 'ai' | 'table', ctx: Uploa
 
 function report(
   result: ParsedVisionResult,
-  parts: { ai: ReadingReport['ai']; table: ReadingReport['table']; tableResult: ParsedVisionResult | null; ai_?: AiReadOutcome | null; disagreements?: number; fromCache?: boolean; crossChecked?: CrossChecked },
+  parts: {
+    ai: ReadingReport['ai'];
+    table: ReadingReport['table'];
+    tableResult: ParsedVisionResult | null;
+    ai_?: AiReadOutcome | null;
+    disagreements?: number;
+    fromCache?: boolean;
+    crossChecked?: CrossChecked;
+    cells?: CellsToCheck;
+  },
 ): ReadingReport {
-  const note = readingNote(parts.ai, parts.table, parts.crossChecked ?? 'no');
+  const note = [hardToReadNote(parts.cells), readingNote(parts.ai, parts.table, parts.crossChecked ?? 'no')].filter(Boolean).join(' ') || null;
   return {
     ai: parts.ai,
     table: parts.table,
@@ -133,11 +142,22 @@ function report(
 /** Whether a photo or scan got its second, column-by-column AI reading. */
 type CrossChecked = 'yes' | 'failed' | 'no';
 
+/** Cells (person and day) the two readings of a photo or scan compared, and those they read differently. */
+type CellsToCheck = { toCheck: number; compared: number };
+
+/** Said first when many cells of a photo or scan were read two ways (none of them was imported). */
+function hardToReadNote(cells: CellsToCheck | undefined): string | null {
+  if (!cells || cells.toCheck === 0) return null;
+  const many = cells.toCheck >= 5 || cells.toCheck / Math.max(1, cells.compared) >= 0.1;
+  if (!many) return null;
+  return `This photo was hard to read — ${cells.toCheck} ${cells.toCheck === 1 ? 'cell needs' : 'cells need'} checking; for best results upload the original PDF or spreadsheet.`;
+}
+
 /** How the reading was checked, in plain words for the review screen. */
 function readingNote(ai: ReadingReport['ai'], table: ReadingReport['table'], crossChecked: CrossChecked): string | null {
   const aiRead = ai === 'used' || ai === 'cached';
   if (aiRead && table === 'used') return 'Read by the AI reader and cross-checked, row by row, against the file\'s own text by the built-in reader.';
-  if (aiRead && crossChecked === 'yes') return 'A photo or scan has no text for the built-in reader, so the AI reader read it twice — person by person and day by day — and the two readings were compared. Anything only one of them saw is flagged.';
+  if (aiRead && crossChecked === 'yes') return 'A photo or scan has no text for the built-in reader, so the AI reader read it twice — person by person and day by day — and the two readings were compared. Only what both saw was imported; a day they read differently is shown to check.';
   if (aiRead && crossChecked === 'failed') return 'A photo or scan has no text for the built-in reader, and the second AI reading could not be made: only the AI reader\'s own row counts were the check. Check every row.';
   if (aiRead) return 'Read by the AI reader; its own row counts and a second, page-by-page read were the check.';
   if (table === 'used') return 'Read by the built-in reader only.';
@@ -157,13 +177,13 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
    * allowance gates pass. Returns the reading, or why there is none (never throws for a
    * provider failure).
    */
-  type AiRead = { outcome: AiReadOutcome; result: ParsedVisionResult; fromCache: boolean; crossChecked: CrossChecked; disagreements: number };
+  type AiRead = { outcome: AiReadOutcome; result: ParsedVisionResult; fromCache: boolean; crossChecked: CrossChecked; disagreements: number; cells?: CellsToCheck };
   /** The second reading of a photo or scan compared with the first (aiCrossCheck.ts). */
-  const withCrossCheck = (first: ParsedVisionResult, crossAnswer: ReadingAnswer | null | undefined, wanted: boolean): Pick<AiRead, 'result' | 'crossChecked' | 'disagreements'> => {
+  const withCrossCheck = (first: ParsedVisionResult, crossAnswer: ReadingAnswer | null | undefined, wanted: boolean): Pick<AiRead, 'result' | 'crossChecked' | 'disagreements' | 'cells'> => {
     if (!wanted) return { result: first, crossChecked: 'no', disagreements: 0 };
     if (!crossAnswer) return { result: first, crossChecked: 'failed', disagreements: 0 };
     const checked = crossCheckAiReadings(first, mapReadingAnswer(crossAnswer, week));
-    return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements };
+    return { result: checked.result, crossChecked: 'yes', disagreements: checked.disagreements, cells: { toCheck: checked.cellsToCheck, compared: checked.cellsCompared } };
   };
 
   /**
@@ -181,9 +201,11 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     const cached = ctx.cache ? await ctx.cache.get(ctx.locationId ?? 'local', sha).catch(() => null) : null;
     if (cached) {
       const { cross, ...answer } = cached;
-      const outcome: AiReadOutcome = { answer, calls: 0, rereadPages: [], missingPages: [], shortPages: [], complete: true, model: 'cache', tokensIn: 0, tokensOut: 0 };
+      // A page the reading still came up short on stays reported as rows to check.
+      const shortPages = shortPagesOf(answer, tablePeoplePerPage);
+      const outcome: AiReadOutcome = { answer, calls: 0, rereadPages: [], missingPages: [], shortPages, complete: !shortPages.length, cacheable: true, model: 'cache', tokensIn: 0, tokensOut: 0 };
       console.log(`[roster-reading] AI reading reused from this venue's cache (${answer.pages.length} page(s)); no model call.`);
-      return { outcome, fromCache: true, ...withCrossCheck(mapReadingAnswer(answer, week), cross, crossCheck) };
+      return { outcome, fromCache: true, ...withCrossCheck(aiResult(outcome, week), cross, crossCheck) };
     }
     if (!ctx.provider) return { ai: 'unavailable', message: VISION_ERROR_MESSAGES.vision_unconfigured, code: 'vision_unconfigured', status: 422 };
     if (!ctx.aiConsent) return { ai: 'declined', message: `${ESCALATION_REASON_TEXT[reason]} ${AI_CONSENT_MESSAGE}`, code: 'ai_consent_required', status: 422 };
@@ -203,7 +225,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
       if (crossAnswer) {
         // The first reading failed but the second answered: it is the reading, unchecked.
         await ctx.markAiUsed();
-        const outcome: AiReadOutcome = { answer: crossAnswer, calls: cross.value!.calls, rereadPages: [], missingPages: [], shortPages: [], complete: false, model: ctx.provider.model, tokensIn: 0, tokensOut: 0 };
+        const outcome: AiReadOutcome = { answer: crossAnswer, calls: cross.value!.calls, rereadPages: [], missingPages: [], shortPages: [], complete: false, cacheable: false, model: ctx.provider.model, tokensIn: 0, tokensOut: 0 };
         return { outcome, result: aiResult(outcome, week), fromCache: false, crossChecked: 'failed', disagreements: 0 };
       }
       const code = PROVIDER_CODE[err.kind];
@@ -211,8 +233,9 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     }
     const outcome = primary.value;
     await ctx.markAiUsed();
-    // Only a complete reading is cached — for a photo or scan, with its cross-check too.
-    if (outcome.complete && ctx.cache && (!crossCheck || crossAnswer)) {
+    // A complete reading is cached (one still short after its re-read too: asking again gives the
+    // same answer) — for a photo or scan, with its cross-check.
+    if (outcome.cacheable && ctx.cache && (!crossCheck || crossAnswer)) {
       await ctx.cache.put(ctx.locationId ?? 'local', sha, crossAnswer ? { ...outcome.answer, cross: crossAnswer } : outcome.answer).catch(() => undefined);
     }
     return { outcome, fromCache: false, ...withCrossCheck(aiResult(outcome, week), crossAnswer, crossCheck) };
@@ -242,7 +265,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
     return {
       ok: true,
       result,
-      reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: 'not_applicable', tableResult: null, ai_: read.outcome, fromCache: read.fromCache, disagreements: read.disagreements, crossChecked: read.crossChecked }),
+      reading: report(result, { ai: read.fromCache ? 'cached' : 'used', table: 'not_applicable', tableResult: null, ai_: read.outcome, fromCache: read.fromCache, disagreements: read.disagreements, crossChecked: read.crossChecked, cells: read.cells }),
     };
   }
 
@@ -275,6 +298,7 @@ export async function readUploadedRoster(file: UploadFile, ctx: UploadReadContex
           disagreements: disagreements + read.disagreements,
           fromCache: read.fromCache,
           crossChecked: read.crossChecked,
+          cells: read.cells,
         }),
       };
     }

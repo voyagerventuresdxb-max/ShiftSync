@@ -16,6 +16,7 @@
  */
 import { mapReadingAnswer, type AiReadingContext } from './aiReading.js';
 import { nonPersonReason, personKeyOf } from './personKey.js';
+import { isRoleTitle } from './resolveRows.js';
 import { VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
 import { isReadingAnswer, type ReadingAnswer, type ReadingAnswerPage } from './vlmPrompt.js';
 import type { ReadPerson, RowFlag, ShiftAlternative, UnreadRow, WeekDetection } from './rosterContract.js';
@@ -47,8 +48,13 @@ export interface AiReadOutcome {
   missingPages: number[];
   /** Pages that still hold fewer people than were counted on them. */
   shortPages: { page: number; expected: number; read: number }[];
-  /** Every page read and none short: safe to cache. */
+  /** Every page read and none short. */
   complete: boolean;
+  /**
+   * Safe to keep for a re-import of the same file: every page read, and any page still short was
+   * already read a second time (asking again would give the same reading and bill again).
+   */
+  cacheable: boolean;
   model: string;
   tokensIn: number;
   tokensOut: number;
@@ -59,6 +65,30 @@ const normName = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLo
 const joinedKey = (s: string) => normName(s).replace(/ /g, '');
 /** The spelling kept when two readers read one person: the file's own text (the table reader's), unless it only differs by stray spaces inside words — then the joined one. */
 const keptSpelling = (table: string, ai: string) => (table !== ai && joinedKey(table) === joinedKey(ai) && ai.split(/\s+/).length < table.split(/\s+/).length ? ai : table);
+/**
+ * What one reader glued onto a name the other read alone, when it is the person's title or row
+ * number printed in the next column: "Lakshmi Shevchenko RM" vs "Lakshmi Shevchenko", "1 Marites
+ * Horvat" vs "Marites Horvat", "Head waiter 1 Dalia Gurung" vs "Dalia Gurung". A plain role
+ * word counts only when the other reader read it as this person's title ("Mark Cook" is a
+ * name); an abbreviation ("RM", "AGM") or a numbered title ("Waiter 3") always counts. Null
+ * when the longer name is not the shorter plus such a remainder.
+ */
+export function gluedTitle(longer: string, shorter: string, shorterRole: string | null): string | null {
+  const l = longer.trim().replace(/\s+/g, ' ');
+  const sh = shorter.trim().replace(/\s+/g, ' ');
+  if (!sh || l.length <= sh.length) return null;
+  const lower = l.toLowerCase();
+  const short = sh.toLowerCase();
+  const rest = lower.startsWith(short + ' ') ? l.slice(sh.length + 1) : lower.endsWith(' ' + short) ? l.slice(0, l.length - sh.length - 1) : null;
+  if (!rest) return null;
+  const r = rest.replace(/^[\s|/,\-–]+|[\s|/,\-–]+$/g, '');
+  if (!r) return null;
+  if (/^#?\d{1,4}[.)]?$/.test(r)) return r;
+  if (!isRoleTitle(r)) return null;
+  const sameAsRole = shorterRole !== null && normName(shorterRole) === normName(r);
+  return sameAsRole || /^[A-Z]{2,5}$/.test(r) || /\d/.test(r) || r.split(' ').length > 1 ? r : null;
+}
+
 const peopleOn = (page: ReadingAnswerPage) => (page.sec ?? []).reduce((n, s) => n + (s.ppl?.length ?? 0), 0);
 
 /** Union of two readings of one page: the fuller one, plus anyone only the other has. */
@@ -189,7 +219,31 @@ export async function aiReadRoster(source: AiReadSource, o: AiReadOptions): Prom
     `[roster-reading] AI read: ${calls} call(s), ${pages.size}/${pageCount} page(s), ${answer.pages.reduce((n, p) => n + peopleOn(p), 0)} people, ` +
       `re-read ${rereadPages.length} page(s), missing ${missingPages.length}, short ${shortPages.length}.`,
   );
-  return { answer, calls, rereadPages, missingPages, shortPages, complete: !missingPages.length && !shortPages.length, model, tokensIn, tokensOut };
+  const reread = new Set(rereadPages);
+  return {
+    answer,
+    calls,
+    rereadPages,
+    missingPages,
+    shortPages,
+    complete: !missingPages.length && !shortPages.length,
+    cacheable: !missingPages.length && shortPages.every((s) => reread.has(s.page)),
+    model,
+    tokensIn,
+    tokensOut,
+  };
+}
+
+/**
+ * Pages of a stored reading that hold fewer people than were counted on them (by the reading
+ * itself, or by the table reader): what a reading kept in the cache still owes the manager.
+ */
+export function shortPagesOf(answer: ReadingAnswer, tablePeoplePerPage?: Map<number, number>): AiReadOutcome['shortPages'] {
+  return answer.pages.flatMap((page) => {
+    const expected = Math.max(page.rows ?? 0, (page.sec ?? []).reduce((n, s) => n + (s.n ?? 0), 0), tablePeoplePerPage?.get(page.p) ?? 0);
+    const read = peopleOn(page);
+    return read < expected ? [{ page: page.p, expected, read }] : [];
+  });
 }
 
 /** The unread rows an incomplete AI read leaves behind (pages it never read, rows it never listed). */
@@ -290,6 +344,20 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
       usedTable.add(t);
     }
   }
+  // One reader glued the person's title or row number onto the name ("Lakshmi Shevchenko RM").
+  const glued = new Map<ReadPerson, string>(); // ai -> the remainder
+  for (const a of aiPeople) {
+    if (pairs.has(a)) continue;
+    for (const x of tablePeople) {
+      if (usedTable.has(x)) continue;
+      const rest = gluedTitle(x.name, a.name, a.roleLabel) ?? gluedTitle(a.name, x.name, x.roleLabel);
+      if (rest === null) continue;
+      pairs.set(a, x);
+      usedTable.add(x);
+      glued.set(a, rest);
+      break;
+    }
+  }
   for (const a of aiPeople) {
     if (pairs.has(a)) continue;
     const n = normName(a.name);
@@ -331,16 +399,18 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
       refuse(a, aiOnlyReason, 'AI reader');
       continue;
     }
-    const name = t ? keptSpelling(t.name, a.name) : a.name;
+    const gluedRest = glued.get(a);
+    const name = gluedRest !== undefined ? (a.name.length < t!.name.length ? a.name : t!.name) : t ? keptSpelling(t.name, a.name) : a.name;
+    const gluedRole = gluedRest !== undefined && !/^#?\d/.test(gluedRest) ? gluedRest : null;
     const person: ReadPerson = {
       personKey: t?.personKey ?? a.personKey,
       name,
-      roleLabel: a.roleLabel ?? t?.roleLabel ?? null,
+      roleLabel: a.roleLabel ?? t?.roleLabel ?? gluedRole,
       section: a.section ?? t?.section ?? null,
       sourcePage: t?.sourcePage ?? a.sourcePage,
       sourceRow: t?.sourceRow ?? a.sourceRow,
       readerSource: t ? 'both' : 'ai',
-      ...(t && t.name !== a.name ? { nameAlternatives: [name === t.name ? { reader: 'ai' as const, name: a.name } : { reader: 'table' as const, name: t.name }] } : {}),
+      ...(t && t.name !== a.name && gluedRest === undefined ? { nameAlternatives: [name === t.name ? { reader: 'ai' as const, name: a.name } : { reader: 'table' as const, name: t.name }] } : {}),
     };
     people.push(person);
     nameMap.set(a.name, name);

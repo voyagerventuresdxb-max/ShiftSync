@@ -1066,3 +1066,76 @@ test('a title where a name should be is never a person: its shifts are an unread
   );
   assert.deepEqual(twoCols.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|Waiter 2', 'Test Gamma|Runner 1']);
 });
+
+test('three leading columns: "No. | NAME | POSITION" reads the names from the name column — a number is never a name, a position never a person, a department banner heads a section', () => {
+  const grid = [
+    ['No.', 'NAME', 'POSITION', '13-Apr', '14-Apr'],
+    ['', 'MANAGEMENT', '', '', ''],
+    ['1', 'Test Alpha', 'GM', '9-17', ''],
+    ['2', 'Test Beta', 'AGM', '', '10-18'],
+    ['', 'BAR', '', '', ''],
+    ['3', 'Test Gamma', 'Senior Bartender', '16-24', ''],
+    ['4', 'Test Delta', '', '', '16-24'],
+    ['', 'HOSTS', '', '', ''],
+    ['5', 'Test Echo', 'Host', '', ''],
+  ];
+  const result = parseExcelGrid(grid, '2026-04-13');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}|${p.section}`), [
+    'Test Alpha|GM|MANAGEMENT',
+    'Test Beta|AGM|MANAGEMENT',
+    'Test Gamma|Senior Bartender|BAR',
+    'Test Delta|BAR|BAR',
+    'Test Echo|Host|HOSTS',
+  ]);
+  assert.deepEqual(keys(result.rows), ['Test Alpha|2026-04-13|09:00-17:00', 'Test Beta|2026-04-14|10:00-18:00', 'Test Delta|2026-04-14|16:00-00:00', 'Test Gamma|2026-04-13|16:00-00:00']);
+  assert.deepEqual(result.unreadRows, []);
+});
+
+test('three leading columns in another order ("Position | S/N | Staff") and with no headings at all: the name column is found by its content', () => {
+  const headed = parseExcelGrid(
+    [
+      ['Position', 'S/N', 'Staff', 'Mon 13/04', 'Tue 14/04'],
+      ['RM', '1', 'Test Alpha', '9-17', ''],
+      ['Waiter 2', '2', 'Test Beta', '', '10-18'],
+    ],
+    '2026-04-13',
+  );
+  assert.deepEqual(headed.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|Waiter 2']);
+  const bare = parseExcelGrid(
+    [
+      ['', '', '', 'Mon 13/04', 'Tue 14/04'],
+      ['1', 'Test Alpha', 'RM', '9-17', ''],
+      ['2', 'Test Beta', 'Waiter 2', '', '10-18'],
+      ['3', 'Test Gamma', 'Runner', '11-19', ''],
+    ],
+    '2026-04-13',
+  );
+  assert.deepEqual(bare.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|Waiter 2', 'Test Gamma|Runner']);
+});
+
+test('a row number printed in front of the name in the same cell is not part of the name', () => {
+  const result = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['1 Test Alpha', '9-17', ''], ['12. Test Beta', '', '10-18']], '2026-04-13');
+  assert.deepEqual(result.people?.map((p) => p.name), ['Test Alpha', 'Test Beta']);
+});
+
+test('a one-word department banner in the name column heads a section on a single-column sheet, never a person', () => {
+  const result = parseExcelGrid([['', 'Mon 13/04', 'Tue 14/04'], ['BAR', '', ''], ['Test Alpha', '9-17', ''], ['Hosts', '', ''], ['Test Beta', '', '10-18']], '2026-04-13');
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.section}`), ['Test Alpha|BAR', 'Test Beta|Hosts']);
+});
+
+test('a capitalised label alone in the name column, on a sheet whose people carry titles, heads a section even when no vocabulary knows it — and is listed to check', () => {
+  const result = parseExcelGrid(
+    [
+      ['Employee Full Name', 'Emp ID', 'Designation', 'Mon 13/04', 'Tue 14/04'],
+      ['TERRACE', '', '', '', ''],
+      ['Test Alpha', '1', 'Captain', '9-17', ''],
+      ['Test Beta', '2', 'Server', '', '10-18'],
+      ['POOL DECK', '', '', '', ''],
+      ['Test Gamma', '3', 'Runner', '11-19', ''],
+      ['Test Delta', '4', 'Server', '', '12-20'],
+    ],
+    '2026-04-13',
+  );
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}|${p.section}`), ['Test Alpha|Captain|TERRACE', 'Test Beta|Server|TERRACE', 'Test Gamma|Runner|POOL DECK', 'Test Delta|Server|POOL DECK']);
+  assert.deepEqual(result.unreadRows?.map((u) => u.text), ['POOL DECK']);
+});

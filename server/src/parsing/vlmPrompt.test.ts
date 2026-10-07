@@ -48,3 +48,13 @@ test('the column framing has its own schema; columnsToRows lays it out person by
   assert.equal(isColumnAnswer({ days: [], pages: [{ p: 1, rows: 0, sec: [], unread: [] }] }), false);
   assert.deepEqual(columnsToRows(col).pages[0]!.sec, [{ h: 'WAITERS', n: 2, ppl: [{ nm: 'Test Alpha', t: null, i: 1, c: ['', 'OFF'] }, { nm: 'Test Beta', t: null, i: 2, c: ['9-17', ''] }] }]);
 });
+
+test('the column framing spells out half days: AM and PM sub-columns of a day together, PM-only days stay put, ".5" is never dropped', () => {
+  assert.match(ROSTER_VLM_COLUMN_PROMPT, /go down that\s+day's AM and PM\s+sub-columns before moving on to the next day/);
+  assert.match(ROSTER_VLM_COLUMN_PROMPT, /only PM values that day/);
+  assert.match(ROSTER_VLM_COLUMN_PROMPT, /never drop,\s+round or shorten the "\.5"/);
+  for (const prompt of [ROSTER_VLM_SYSTEM_PROMPT, ROSTER_VLM_COLUMN_PROMPT]) {
+    assert.match(prompt, /"BAR", "HOSTS",\s+"MANAGEMENT"/);
+    assert.match(prompt, /Never join the\s+title or a row number onto the name/);
+  }
+});
