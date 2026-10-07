@@ -9,15 +9,20 @@ import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
-import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, ApiError, type ParsedIntent } from '@/api/voice';
-import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
+import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, canConfirmVoiceAction, isReadIntent, type ParsedIntent } from '@/api/voice';
+import { VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 import { choosableFor } from '@/lib/voiceChoices';
+import { NOTHING_HEARD, UNSUPPORTED, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
+import { voiceExamples } from '@/lib/voiceExamples';
+import type { VoiceOrigin } from '@/lib/voiceSteps';
+import { VoiceProgress } from '@/components/shiftsync/VoiceProgress';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
 const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
+const VoiceComposer = lazy(() => import('@/components/shiftsync/VoiceComposer').then((m) => ({ default: m.VoiceComposer })));
 
 /**
  * MediaRecorder mimetype candidates, most-preferred first.
@@ -142,12 +147,16 @@ export function AppShell() {
   // be seconds on first use. See `voiceStartingRef` below for why both a ref
   // and a state value exist.
   const [voiceStarting, setVoiceStarting] = useState(false);
-  const [voiceProcessing, setVoiceProcessing] = useState(false);
+  // Which half of the round trip is in flight, shown as its own step ("Transcribing…", "Understanding…").
+  const [voicePhase, setVoicePhase] = useState<'transcribing' | 'understanding' | null>(null);
+  const voiceProcessing = voicePhase !== null;
   const [voiceResult, setVoiceResult] = useState<{
     transcript: string;
     intent: ParsedIntent;
     voiceLogId: string | null;
     hasAdditionalRequest: boolean;
+    /** Spoken or typed: the sheet says "I heard" or "You typed". */
+    origin: VoiceOrigin;
     /** True once the primary MUTATING intent has actually executed — the sheet stays open in its follow-up state instead of closing. Irrelevant for QUERY_MY_SCHEDULE, which has no execute step. */
     executed?: boolean;
     /** The choices a picked reading came from, so the sheet can go back to them. */
@@ -161,6 +170,20 @@ export function AppShell() {
   if (voiceConsentOpen && !voiceConsentNeeded) setVoiceConsentNeeded(true);
   if (voiceResult && !voiceSheetNeeded) setVoiceSheetNeeded(true);
   const [voiceBanner, setVoiceBanner] = useState<{ kind: 'error' | 'success'; message: string } | null>(null);
+  // A Confirm that didn't get through for a passing reason (offline, timeout): shown on the sheet, which stays open.
+  const [voiceExecProblem, setVoiceExecProblem] = useState<VoiceProblem | null>(null);
+  // The typed command box: opened from the dock, and on every voice problem (with the problem shown above the box).
+  const [composer, setComposer] = useState<{ open: boolean; text: string; problem: VoiceProblem | null }>({ open: false, text: '', problem: null });
+  const [composerNeeded, setComposerNeeded] = useState(false);
+  if (composer.open && !composerNeeded) setComposerNeeded(true);
+  const [typedSending, setTypedSending] = useState(false);
+  const examples = voiceExamples(session?.user.systemRole ?? 'STAFF');
+
+  /** Opens the typed command box, with what went wrong (if anything) and the words so far. */
+  const openComposer = useCallback((problem: VoiceProblem | null, text = '') => {
+    setVoiceBanner(null);
+    setComposer({ open: true, text, problem });
+  }, []);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -201,15 +224,23 @@ export function AppShell() {
    * then only the choices this role may confirm.
    */
   const showParsed = useCallback(
-    (systemRole: string, transcript: string, parsed: { intent: ParsedIntent; voiceLogId: string | null; hasAdditionalRequest: boolean }) => {
+    (
+      systemRole: string,
+      transcript: string,
+      parsed: { intent: ParsedIntent; voiceLogId: string | null; hasAdditionalRequest: boolean },
+      origin: VoiceOrigin,
+    ) => {
       const { intent, voiceLogId, hasAdditionalRequest } = parsed;
       const refusedForRole = intent.intent === 'UNRECOGNIZED' && intent.reason === VOICE_ROLE_REFUSAL;
-      if (refusedForRole || (intent.intent !== 'UNRECOGNIZED' && !canConfirmVoiceIntent(systemRole, intent.intent))) {
+      // Answers and "not by voice" are never confirmed or executed, so there is no action to check.
+      const nothingToConfirm = intent.intent === 'UNRECOGNIZED' || intent.intent === 'DECLINED' || isReadIntent(intent);
+      setVoiceExecProblem(null);
+      if (refusedForRole || (!nothingToConfirm && !canConfirmVoiceAction(systemRole, intent.intent))) {
         setVoiceResult(null);
         setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
         return;
       }
-      setVoiceResult({ transcript, intent: choosableFor(systemRole, intent), voiceLogId, hasAdditionalRequest });
+      setVoiceResult({ transcript, intent: choosableFor(systemRole, intent), voiceLogId, hasAdditionalRequest, origin });
     },
     [],
   );
@@ -217,7 +248,7 @@ export function AppShell() {
   const handleRecordingComplete = useCallback(
     async (blob: Blob) => {
       if (blob.size === 0) {
-        setVoiceBanner({ kind: 'error', message: 'No audio captured — try again.' });
+        openComposer(NOTHING_HEARD);
         return;
       }
       if (!session) {
@@ -226,17 +257,20 @@ export function AppShell() {
         setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
         return;
       }
-      setVoiceProcessing(true);
+      setVoicePhase('transcribing');
+      let transcript = '';
       try {
-        const { transcript } = await transcribeAudio(session.token, blob);
-        showParsed(session.user.systemRole, transcript, await parseVoiceIntent(session.token, transcript));
+        ({ transcript } = await transcribeAudio(session.token, blob));
+        setVoicePhase('understanding');
+        showParsed(session.user.systemRole, transcript, await parseVoiceIntent(session.token, transcript, 'voice'), 'voice');
       } catch (err) {
-        setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
+        // Whatever was heard is kept in the box, so it can be sent again by typing.
+        openComposer(requestProblem(err, { stage: 'understand', online: navigator.onLine }), transcript);
       } finally {
-        setVoiceProcessing(false);
+        setVoicePhase(null);
       }
     },
-    [session, showParsed],
+    [session, showParsed, openComposer],
   );
 
   // "Try again" on the sheet with the words as edited: the same parse step as a recording, from
@@ -248,18 +282,46 @@ export function AppShell() {
         setVoiceResult(null);
         return;
       }
+      const origin = voiceResult?.origin ?? 'voice';
       setVoiceReparsing(true);
       try {
-        showParsed(session.user.systemRole, text, await parseVoiceIntent(session.token, text));
+        showParsed(session.user.systemRole, text, await parseVoiceIntent(session.token, text, 'typed'), origin);
       } catch (err) {
         setVoiceResult(null);
-        setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not process the voice command.' });
+        openComposer(requestProblem(err, { stage: 'understand', online: navigator.onLine }), text);
       } finally {
         setVoiceReparsing(false);
       }
     },
+    [session, showParsed, openComposer, voiceResult?.origin],
+  );
+
+  /** A typed command: the same reading, preview and Confirm as a spoken one, without recording anything. */
+  const handleTypedSend = useCallback(
+    async (text: string) => {
+      if (!session) {
+        setComposer((c) => ({ ...c, problem: { kind: 'failed', title: 'Sign in first', message: 'Sign in to use voice commands.' } }));
+        return;
+      }
+      setTypedSending(true);
+      setComposer((c) => ({ ...c, text, problem: null }));
+      try {
+        const parsed = await parseVoiceIntent(session.token, text, 'typed');
+        setComposer({ open: false, text: '', problem: null });
+        showParsed(session.user.systemRole, text, parsed, 'typed');
+      } catch (err) {
+        // Offline is refused before anything is sent (api/voice.ts); the words stay in the box either way.
+        setComposer({ open: true, text, problem: requestProblem(err, { stage: 'understand', online: navigator.onLine }) });
+      } finally {
+        setTypedSending(false);
+      }
+    },
     [session, showParsed],
   );
+
+  const handleComposerCancel = useCallback(() => setComposer({ open: false, text: '', problem: null }), []);
+  const handleComposerChange = useCallback((text: string) => setComposer((c) => ({ ...c, text })), []);
+  const handleOpenComposer = useCallback(() => openComposer(null), [openComposer]);
 
   /** The single stop-and-process path — a manual second tap and the max-duration timer both land here. */
   const stopVoiceRecording = useCallback(() => {
@@ -278,7 +340,7 @@ export function AppShell() {
       return;
     }
     if (!isVoiceCapable()) {
-      setVoiceBanner({ kind: 'error', message: 'Voice commands are not supported in this browser.' });
+      openComposer(UNSUPPORTED);
       return;
     }
     setVoiceBanner(null);
@@ -303,7 +365,7 @@ export function AppShell() {
         audioChunksRef.current = [];
         // A silent clip is never sent (see lib/audioLevel.ts).
         if (peak !== null && isSilent(peak)) {
-          setVoiceBanner({ kind: 'error', message: "I didn't hear anything. Hold the phone a little closer and try again." });
+          openComposer(NOTHING_HEARD);
           return;
         }
         void handleRecordingComplete(blob);
@@ -318,15 +380,16 @@ export function AppShell() {
         maxDurationTimerRef.current = null;
         stopVoiceRecording();
       }, MAX_RECORDING_MS);
-    } catch {
-      setVoiceBanner({ kind: 'error', message: 'Microphone access was denied or unavailable.' });
+    } catch (err) {
+      // Denied (with how to turn it back on), missing or busy: each said plainly, with the typed box.
+      openComposer(micProblem(err));
     } finally {
       // Cleared on BOTH paths — a denied/failed prompt must leave the button
       // tappable again, not permanently stuck in the "starting" state.
       voiceStartingRef.current = false;
       setVoiceStarting(false);
     }
-  }, [session, handleRecordingComplete, clearMaxDurationTimer, stopVoiceRecording]);
+  }, [session, handleRecordingComplete, clearMaxDurationTimer, stopVoiceRecording, openComposer]);
 
   const handleToggleVoice = useCallback(() => {
     // Both already disable the button itself; guarded here too against a stray
@@ -334,12 +397,15 @@ export function AppShell() {
     if (voiceProcessing || voiceStarting) return;
     if (voiceOn) {
       stopVoiceRecording();
+    } else if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      // Nothing recorded that couldn't be sent: say so straight away.
+      openComposer(offlineProblem('record'));
     } else if (session && !hasVoiceConsent(session.user.id)) {
       setVoiceConsentOpen(true);
     } else {
       void startVoiceRecording();
     }
-  }, [voiceOn, voiceProcessing, voiceStarting, session, startVoiceRecording, stopVoiceRecording]);
+  }, [voiceOn, voiceProcessing, voiceStarting, session, startVoiceRecording, stopVoiceRecording, openComposer]);
 
   const handleVoiceConsentAccept = useCallback(() => {
     setVoiceConsentOpen(false);
@@ -351,10 +417,12 @@ export function AppShell() {
 
   const handleVoiceCancel = useCallback(() => {
     setVoiceResult(null);
+    setVoiceExecProblem(null);
   }, []);
 
   // A "which did you mean?" choice only swaps in that reading; its own Confirm still executes it.
   const handleVoiceChoose = useCallback((option: ParsedIntent) => {
+    setVoiceExecProblem(null);
     setVoiceResult((prev) => (prev ? { ...prev, intent: option, asked: prev.asked ?? prev.intent } : prev));
   }, []);
 
@@ -370,6 +438,7 @@ export function AppShell() {
       return;
     }
     setVoiceExecuting(true);
+    setVoiceExecProblem(null);
     try {
       await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
       if (voiceResult.hasAdditionalRequest) {
@@ -379,12 +448,18 @@ export function AppShell() {
         // no separate success banner fires for this path.
         setVoiceResult({ ...voiceResult, executed: true });
       } else {
-        setVoiceBanner({ kind: 'success', message: voiceResult.intent.summary });
+        setVoiceBanner({ kind: 'success', message: `Done: ${voiceResult.intent.summary}` });
         setVoiceResult(null);
       }
     } catch (err) {
-      setVoiceBanner({ kind: 'error', message: err instanceof ApiError ? err.message : 'Could not execute the voice command.' });
-      setVoiceResult(null);
+      const problem = requestProblem(err, { stage: 'execute', online: navigator.onLine });
+      if (problem.kind === 'offline' || problem.kind === 'timeout') {
+        // Passing trouble: the sheet stays open with the reason, so Confirm can be tapped again.
+        setVoiceExecProblem(problem);
+      } else {
+        setVoiceBanner({ kind: 'error', message: `${problem.title}: ${problem.message}` });
+        setVoiceResult(null);
+      }
     } finally {
       setVoiceExecuting(false);
     }
@@ -449,6 +524,19 @@ export function AppShell() {
         </Suspense>
       </main>
 
+      {(voiceStarting || voiceOn || voicePhase) && !composer.open && (
+        // Where the command is up to, in words, just above the mic.
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-40 mx-auto w-full max-w-sm px-4">
+          <div className="panel px-4 py-3 shadow-lux motion-safe:animate-rise">
+            <VoiceProgress
+              origin="voice"
+              step={voicePhase ?? 'listening'}
+              label={voiceStarting ? 'Starting the microphone…' : undefined}
+            />
+          </div>
+        </div>
+      )}
+
       {voiceBanner && (
         <div className="fixed inset-x-0 bottom-24 z-40 mx-auto w-full max-w-sm px-4">
           <div className={voiceBanner.kind === 'error' ? 'error-block' : 'success-block'} role={voiceBanner.kind === 'error' ? 'alert' : 'status'}>
@@ -476,6 +564,24 @@ export function AppShell() {
             reparsing={voiceReparsing}
             viewerName={session?.user.fullName ?? 'You'}
             canManageStaff={session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER'}
+            origin={voiceResult?.origin ?? 'voice'}
+            examples={examples}
+            problem={voiceExecProblem}
+          />
+        </Suspense>
+      )}
+
+      {composerNeeded && (
+        <Suspense fallback={null}>
+          <VoiceComposer
+            open={composer.open}
+            value={composer.text}
+            onChange={handleComposerChange}
+            problem={composer.problem}
+            sending={typedSending}
+            examples={examples}
+            onSend={handleTypedSend}
+            onCancel={handleComposerCancel}
           />
         </Suspense>
       )}
@@ -486,7 +592,14 @@ export function AppShell() {
         </Suspense>
       )}
 
-      <RadialDock listening={voiceOn} starting={voiceStarting} processing={voiceProcessing} onToggleListening={handleToggleVoice} />
+      <RadialDock
+        listening={voiceOn}
+        starting={voiceStarting}
+        processing={voiceProcessing}
+        onToggleListening={handleToggleVoice}
+        onType={handleOpenComposer}
+        typeDisabled={voiceOn || voiceStarting || voiceProcessing}
+      />
     </div>
   );
 }
