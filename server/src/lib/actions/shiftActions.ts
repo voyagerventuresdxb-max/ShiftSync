@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
+import { writeAuditLog, withAuditedTransaction } from '../auditLog.js';
 
 /**
  * The Prisma `include` every shift read/write uses. Moved here from
@@ -35,4 +36,24 @@ export async function updateShift(
   client: Prisma.TransactionClient | typeof prisma = prisma,
 ): Promise<ShiftWithRelations> {
   return client.shift.update({ where: { id }, data, include: SHIFT_INCLUDE });
+}
+
+/**
+ * Removes a shift, audit row first — exactly what `routes/shifts.ts`'s `DELETE /:id` did inline
+ * before this extraction, now shared with voice's CANCEL_SHIFT. The audit row is written inside
+ * the same transaction, before the delete (its `shiftId` is null: the shift is gone after). Venue
+ * ownership and any other checks are the caller's, as for `createShift`.
+ */
+export async function deleteShift(
+  input: { id: string; locationId: string; actorId: string; note?: string | null },
+  client: typeof prisma = prisma,
+): Promise<void> {
+  await withAuditedTransaction(
+    client,
+    async (tx) => {
+      await writeAuditLog(tx, { locationId: input.locationId, actorId: input.actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: input.id, ...(input.note ? { note: input.note } : {}) });
+      await tx.shift.delete({ where: { id: input.id } });
+    },
+    () => null,
+  );
 }

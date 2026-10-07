@@ -5,9 +5,10 @@ import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize
 import { formatVenueTime } from '../lib/venueTime.js';
 import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
-import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
+import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
-import { createShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { createShift, deleteShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { findActiveVenueRole, findVenueUser, shiftInstants } from '../lib/shiftRules.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
 import { onBehalfUserId } from '../lib/onBehalf.js';
 import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
@@ -138,20 +139,14 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
       return res.status(400).json({ error: 'start/end are required, as HH:MM.' });
     }
 
-    const role = await prisma.role.findUnique({ where: { id: roleId } });
     // A removed role (roles.ts DELETE deactivates, never deletes, so existing
     // shifts keep theirs) can still be edited on an old shift, but no NEW
-    // shift can be created on it.
-    if (!role || role.locationId !== locationId || !role.isActive) return res.status(404).json({ error: `Role "${roleId}" not found or no longer active.` });
-    if (userId) {
-      const user = await prisma.user.findUnique({ where: { id: userId } });
-      if (!user || user.locationId !== locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
-    }
+    // shift can be created on it. Same check as voice's CREATE_SHIFT (lib/shiftRules.ts).
+    if (!(await findActiveVenueRole(roleId, locationId))) return res.status(404).json({ error: `Role "${roleId}" not found or no longer active.` });
+    if (userId && !(await findVenueUser(userId, locationId))) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
 
     const timezone = await venueTimezone(locationId);
-    const overnight = end <= start;
-    const startTime = combineDateAndTime(date, start, timezone);
-    const endTime = combineDateAndTime(date, end, timezone, overnight);
+    const { startTime, endTime } = shiftInstants(date, start, end, timezone);
 
     const created = await withAuditedTransaction(
       prisma,
@@ -238,17 +233,8 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
     if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
     const actorId = await onBehalfUserId(req, res, 'actorId');
     if (!actorId) return;
-    await withAuditedTransaction(
-      prisma,
-      async (tx) => {
-        // Audit-before-delete: writeAuditLog runs directly inside mutate (in
-        // this original order), and buildEntry below returns null so the
-        // helper doesn't also write a second row after the delete.
-        await writeAuditLog(tx, { locationId: existing.locationId, actorId, shiftId: null, action: 'SHIFT_DELETED', entityType: 'Shift', entityId: id });
-        await tx.shift.delete({ where: { id } });
-      },
-      () => null,
-    );
+    // Audit-before-delete, in one transaction (shared with voice's CANCEL_SHIFT).
+    await deleteShift({ id, locationId: existing.locationId, actorId });
     return res.status(204).send();
   } catch (err) {
     console.error('[shifts.delete] failed', err);
