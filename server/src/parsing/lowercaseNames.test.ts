@@ -82,3 +82,46 @@ test('AI reader: a lower-case name with shifts, or only OFF and leave, is a pers
   assert.deepEqual(outcome.result.people?.map((p) => p.name), ROWS.map(([n]) => title(n)));
   assert.deepEqual(keys(outcome.result.rows), truth());
 });
+
+test('AM | PM sub-columns, a legend and section banners: a lower-case person whose week is all leave words (Sick, Holiday, Request, PH) is listed, title-cased, with no shifts', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([1300, 300]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const draw = (text: string, x: number, y: number) => page.drawText(text, { x, y, size: 8, font });
+  const sub = 30;
+  const dayLeft = (d: number) => 200 + d * 4 * sub;
+  HEADERS.forEach((h, d) => {
+    draw(h, dayLeft(d) + 40, 270);
+    draw('AM', dayLeft(d) + 20, 258);
+    draw('PM', dayLeft(d) + 80, 258);
+  });
+  const rows: (string | [string, string[][]])[] = [
+    'SERVERS',
+    ['Test Orrin', [['9', '13.5', '17', '23'], [], ['11', '15', '', ''], [], ['', '', '18', '24'], [], ['10', '14', '', '']]],
+    ['wren calloway', [['Sick'], ['Sick'], ['Holiday'], ['Holiday'], ['Request'], ['PH'], ['Request']]],
+    'RUNNERS',
+    ['Test Pallas', [[], ['10', '14', '17', '23'], [], ['9', '13.5', '', ''], [], ['', '', '18', '24'], []]],
+    ['tobin ashgrove', [['Holiday'], ['Holiday'], ['PH'], ['Sick'], ['Sick'], ['Request'], ['Request']]],
+    ['Test Quill', [['OFF'], ['OFF'], ['OFF'], ['OFF'], ['OFF'], ['OFF'], ['OFF']]],
+  ];
+  let y = 244;
+  for (const row of rows) {
+    if (typeof row === 'string') draw(row, 20, y);
+    else {
+      draw(row[0], 20, y);
+      row[1].forEach((cells, d) => cells.forEach((c, k) => c && draw(c, dayLeft(d) + k * sub + 4, y)));
+    }
+    y -= 14;
+  }
+  draw('LEGEND: Sick = sick leave   Holiday = annual leave   Request = day off requested   PH = public holiday', 20, y - 10);
+  draw('kitchen closes early', 20, y - 24);
+  const pdf = Buffer.from(await doc.save());
+  const outcome = await readUploadedRoster({ buffer: pdf, mimetype: 'application/pdf', originalname: 'rota.pdf', size: pdf.length }, ctx());
+  assert.ok(outcome.ok);
+  if (!outcome.ok) return;
+  const names = outcome.result.people?.map((p) => p.name) ?? [];
+  assert.ok(names.includes('Wren Calloway') && names.includes('Tobin Ashgrove'), names.join(', '));
+  assert.ok(!outcome.result.rows.some((r) => r.employeeName === 'Wren Calloway' || r.employeeName === 'Tobin Ashgrove'), 'no shifts');
+  assert.ok(!names.some((n) => /kitchen/i.test(n)));
+  assert.ok(!(outcome.result.unreadRows ?? []).some((u) => /kitchen/.test(u.text)));
+});

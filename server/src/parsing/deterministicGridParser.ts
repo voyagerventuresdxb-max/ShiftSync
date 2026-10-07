@@ -1363,7 +1363,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // beside it ("Waiter 3" with shifts is a position nobody's name is on): its shifts are
       // shown as an unread row, never imported under a title.
       // A name typed in lower case with a shift beside it is a person, its name title-cased.
-      const lowerName = columns.some((col) => ['shifts', 'leave'].includes(interpretCell(dayCellText(row, col)).kind)) ? lowercaseName(firstCell) : null;
+      const lowerName = !daysBlank(row) ? lowercaseName(firstCell) : null;
       const notPerson = lowerName ? null : nonPersonReason(firstCell);
       if (notPerson) {
         if (notPerson === UNREADABLE_NAME) {
@@ -1526,7 +1526,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
     let employeeName = combinedName?.name ?? nameCell;
     let rowTitle = titleCell || combinedName?.title || '';
     // A name typed in lower case with a shift beside it is a person, its name title-cased.
-    const lowerName = columns.some((col) => ['shifts', 'leave'].includes(interpretCell(dayCellText(row, col)).kind)) ? lowercaseName(employeeName) : null;
+    const lowerName = !daysBlank(row) ? lowercaseName(employeeName) : null;
     if (lowerName) employeeName = lowerName;
     const notPerson = nonPersonReason(employeeName);
     if (notPerson) {

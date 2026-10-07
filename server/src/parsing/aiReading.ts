@@ -98,7 +98,7 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
         const cells = person.c ?? [];
         // A name typed in lower case with a shift beside it is a person, its name title-cased.
         const printed = (person.nm ?? '').trim();
-        const name = (cells.some((c) => (!!c && !!parseShiftText(c)) || isData(c)) && lowercaseName(printed)) || printed;
+        const name = (cells.some((c) => !!c && !!c.trim()) && lowercaseName(printed)) || printed;
         // A row whose name couldn't be read ("", "[?]", "?", "…"): never a person, always shown.
         if (!name || isUnreadableName(name)) {
           unreadRows.push({ page: page.p, row: person.i ?? null, text: cells.filter(Boolean).join(' | '), reason: "A row whose name couldn't be read. Add the person and their shifts by hand if it is one." });
