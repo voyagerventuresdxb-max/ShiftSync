@@ -15,7 +15,7 @@
  * Logs carry counts only — never names or cell text.
  */
 import { mapReadingAnswer, type AiReadingContext } from './aiReading.js';
-import { personKeyOf } from './personKey.js';
+import { nonPersonReason, personKeyOf } from './personKey.js';
 import { VisionProviderError, type VisionInput, type VisionOutput, type VisionProvider } from './visionProvider.js';
 import { isReadingAnswer, type ReadingAnswer, type ReadingAnswerPage } from './vlmPrompt.js';
 import type { ReadPerson, RowFlag, ShiftAlternative, UnreadRow, WeekDetection } from './rosterContract.js';
@@ -55,6 +55,10 @@ export interface AiReadOutcome {
 }
 
 const normName = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+/** A name with every space removed: "Sa ffi ya" (a text layer split at a ligature) and "Saffiya" are one name. */
+const joinedKey = (s: string) => normName(s).replace(/ /g, '');
+/** The spelling kept when two readers read one person: the file's own text (the table reader's), unless it only differs by stray spaces inside words — then the joined one. */
+const keptSpelling = (table: string, ai: string) => (table !== ai && joinedKey(table) === joinedKey(ai) && ai.split(/\s+/).length < table.split(/\s+/).length ? ai : table);
 const peopleOn = (page: ReadingAnswerPage) => (page.sec ?? []).reduce((n, s) => n + (s.ppl?.length ?? 0), 0);
 
 /** Union of two readings of one page: the fuller one, plus anyone only the other has. */
@@ -275,11 +279,12 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
   const aiPeople = ai.people ?? peopleFromRows(ai.rows, ai.leaveRecords, 'ai');
   const tablePeople = table.people ?? peopleFromRows(table.rows, table.leaveRecords, 'table');
 
-  // Pair people: the same name first; then a near-miss spelling (a misread letter or two).
+  // Pair people: the same name first (spaces aside: a text layer can split a name at a
+  // ligature, "Sa ffi ya"); then a near-miss spelling (a misread letter or two).
   const pairs = new Map<ReadPerson, ReadPerson>(); // ai -> table
   const usedTable = new Set<ReadPerson>();
   for (const a of aiPeople) {
-    const t = tablePeople.find((x) => !usedTable.has(x) && normName(x.name) === normName(a.name));
+    const t = tablePeople.find((x) => !usedTable.has(x) && normName(x.name) === normName(a.name)) ?? tablePeople.find((x) => !usedTable.has(x) && joinedKey(x.name) === joinedKey(a.name));
     if (t) {
       pairs.set(a, t);
       usedTable.add(t);
@@ -309,9 +314,24 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
     result.rows.filter((r) => (r.personKey ? r.personKey === p.personKey : normName(r.employeeName) === normName(p.name)));
   const leaveOf = (result: ParsedVisionResult, p: ReadPerson) => result.leaveRecords.filter((l) => normName(l.employeeName) === normName(p.name));
 
+  // A label only one reader took for a person, that reads as a title, heading, total or footer
+  // ("Waiter 3", "TITLE", "Total staff on rota"), is never imported: it's shown as an unread row.
+  const refused = new Set<string>();
+  const refuse = (p: ReadPerson, reason: string, reader: string) => {
+    disagreements++;
+    refused.add(normName(p.name));
+    refusedRows.push({ page: p.sourcePage, row: p.sourceRow, text: p.name, reason: `Only the ${reader} listed "${p.name}" as a person, and it reads as ${reason}. Not imported; add the person by hand if it is one.` });
+  };
+  const refusedRows: UnreadRow[] = [];
+
   for (const a of aiPeople) {
     const t = pairs.get(a);
-    const name = t?.name ?? a.name;
+    const aiOnlyReason = t ? null : nonPersonReason(a.name);
+    if (aiOnlyReason) {
+      refuse(a, aiOnlyReason, 'AI reader');
+      continue;
+    }
+    const name = t ? keptSpelling(t.name, a.name) : a.name;
     const person: ReadPerson = {
       personKey: t?.personKey ?? a.personKey,
       name,
@@ -320,7 +340,7 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
       sourcePage: t?.sourcePage ?? a.sourcePage,
       sourceRow: t?.sourceRow ?? a.sourceRow,
       readerSource: t ? 'both' : 'ai',
-      ...(t && t.name !== a.name ? { nameAlternatives: [{ reader: 'ai' as const, name: a.name }] } : {}),
+      ...(t && t.name !== a.name ? { nameAlternatives: [name === t.name ? { reader: 'ai' as const, name: a.name } : { reader: 'table' as const, name: t.name }] } : {}),
     };
     people.push(person);
     nameMap.set(a.name, name);
@@ -400,6 +420,11 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
   }
   for (const t of tablePeople) {
     if (usedTable.has(t)) continue;
+    const tableOnlyReason = nonPersonReason(t.name);
+    if (tableOnlyReason) {
+      refuse(t, tableOnlyReason, 'built-in reader');
+      continue;
+    }
     disagreements++;
     people.push({ ...t, readerSource: 'table' });
     nameMap.set(t.name, t.name);
@@ -416,6 +441,7 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
   const keyed = new Set<string>();
   for (const [source, result] of [['ai', ai], ['table', table]] as const) {
     for (const a of result.anomalies) {
+      if (a.employeeName && refused.has(normName(a.employeeName))) continue;
       const employeeName = a.employeeName ? nameMap.get(a.employeeName) ?? a.employeeName : null;
       const key = `${employeeName ?? ''}|${a.date ?? ''}|${a.rawText}`;
       if (keyed.has(key)) continue;
@@ -427,7 +453,7 @@ export function reconcileReadings(ai: ParsedVisionResult | null, table: ParsedVi
   for (const r of rows) r.sourceRowIndex = sourceIndex.get(r.personKey ?? '') ?? r.sourceRowIndex;
 
   const unread = new Map<string, UnreadRow>();
-  for (const u of [...(table.unreadRows ?? []), ...(ai.unreadRows ?? [])]) {
+  for (const u of [...(table.unreadRows ?? []), ...(ai.unreadRows ?? []), ...refusedRows]) {
     const key = `${u.page}|${u.row}|${normName(u.text)}|${u.reason}`;
     // A row the table could not read but the AI did read is no longer unread.
     if (u.text && people.some((p) => normName(u.text).includes(normName(p.name)))) continue;

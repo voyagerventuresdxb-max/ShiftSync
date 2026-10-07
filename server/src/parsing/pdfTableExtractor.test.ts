@@ -531,3 +531,25 @@ test('a header repeated at the top of page 2 is not read again as data; rows kee
   assert.deepEqual(result.people?.map((p) => `${p.name}@${p.sourcePage}`), ['Fatima@1', 'Yusuf@2']);
   assert.deepEqual(result.rows.map((r) => `${r.employeeName} ${r.date}`), ['Fatima 2026-08-17', 'Yusuf 2026-08-18']);
 });
+
+test('a name whose ff / fi / fl ligatures come out of the text layer as separate items edge to edge is read whole', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([700, 400]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const draw = (text: string, x: number, y: number) => {
+    // One text item per piece, each starting exactly where the last one ended.
+    for (const piece of text.split(/(ffi|ffl|ff|fi|fl)/).filter(Boolean)) {
+      page.drawText(piece, { x, y, size: 9, font });
+      x += font.widthOfTextAtSize(piece, 9);
+    }
+  };
+  draw('Mon 17/08', 200, 380);
+  draw('Tue 18/08', 300, 380);
+  draw('Saffiya Okonkwo', 20, 360);
+  draw('9-17', 200, 360);
+  draw('Effie Laflamme', 20, 345);
+  draw('10-18', 300, 345);
+  draw('Total staff on rota: 2', 20, 330);
+  const result = parseExcelGrid(await extractPdfGrid(Buffer.from(await doc.save())), WEEK_START);
+  assert.deepEqual(result.people?.map((p) => p.name), ['Saffiya Okonkwo', 'Effie Laflamme']);
+});

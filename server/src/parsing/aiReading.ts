@@ -6,9 +6,8 @@
  * times ("z"), the row is kept and flagged for a look.
  */
 import { interpretCell } from './deterministicGridParser.js';
-import { canonicalRoleName } from './resolveRows.js';
 import { isOvernight } from './normalize.js';
-import { looksLikePersonName, personKeyOf } from './personKey.js';
+import { looksLikePersonName, nonPersonReason, personKeyOf } from './personKey.js';
 import { parseShiftText, sheetDotStyle } from './shiftText.js';
 import { detectWeek, parseDayLabel } from './weekDetection.js';
 import type { ReadingAnswer } from './vlmPrompt.js';
@@ -25,8 +24,15 @@ export interface AiReadingContext {
   clientWeekStart: string | null;
 }
 
-/** Row labels that are never a person (the same closed caption vocabulary as the table reader). */
-const NOT_A_PERSON = /^(covers?|pax|events?|notes?|remarks?|comments?|totals?|sub ?total|grand total|total hours|headcount|date|day of the week)$/i;
+/**
+ * A cell's text with any colour meaning the model wrote beside its times removed: times win over
+ * colour ("[Closing] 16 18 18.5 26" and "[16 18 18.5 26]" are the times). A cell with no digits
+ * is left as it is ("[Holiday]" stays a colour-only cell).
+ */
+function textOverColour(text: string): string {
+  if (!/\d/.test(text)) return text;
+  return text.replace(/\[([^\]]*\d[^\]]*)\]/g, '$1').replace(/\[[^\]\d]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 /** A colour-only cell's meaning ("[Holiday]") as a leave category. */
 function colourCategory(meaning: string): LeaveRecord['category'] {
@@ -66,9 +72,13 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
   let sourceRowIndex = 0;
   const seen = new Set<string>();
   for (const page of [...(answer.pages ?? [])].sort((a, b) => a.p - b.p)) {
-    for (const u of page.unread ?? []) unreadRows.push({ page: page.p, row: u.r ?? null, text: u.x ?? '', reason: u.w || 'The AI reader could not read this row.' });
+    const pageNames: string[] = [];
     for (const section of page.sec ?? []) {
-      for (const person of section.ppl ?? []) {
+      for (const listed of section.ppl ?? []) {
+        // The title column taken for the names (name column printed first): a title such as
+        // "Waiter 3" in the name and a person's name in the title. Read the other way round.
+        const swapped = !!listed.t && !!nonPersonReason(listed.nm ?? '') && looksLikePersonName(listed.t) && !nonPersonReason(listed.t);
+        const person = swapped ? { ...listed, nm: listed.t!, t: listed.nm } : listed;
         const name = (person.nm ?? '').trim();
         const cells = person.c ?? [];
         if (!name) {
@@ -79,13 +89,14 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
         const dedupe = `${page.p}:${person.i}:${name.toLowerCase()}`;
         if (seen.has(dedupe)) continue;
         seen.add(dedupe);
-        // Listed despite the instructions: a headcount (a number), a caption, or a section
-        // banner with nothing in its days. Not a person — kept visible as an unread row.
-        const blankWeek = cells.every((c) => !(c ?? '').trim());
-        if (/^\d+(\.\d+)?$/.test(name) || NOT_A_PERSON.test(name) || (blankWeek && canonicalRoleName(name) !== name)) {
-          unreadRows.push({ page: page.p, row: person.i ?? null, text: name, reason: 'Listed by the AI reader but looks like a count, caption or section heading, not a person.' });
+        // Listed despite the instructions: a count, a heading, a title, a total or footer line,
+        // a caption. Never a person — kept visible as an unread row.
+        const notPerson = nonPersonReason(name);
+        if (notPerson) {
+          unreadRows.push({ page: page.p, row: person.i ?? null, text: name, reason: `Listed by the AI reader, but "${name}" reads as ${notPerson}. Not imported; add the person by hand if it is one.` });
           continue;
         }
+        pageNames.push(name);
 
         const personKey = personKeyOf(name, page.p, person.i ?? null);
         const heading = section.h?.trim() || null;
@@ -99,7 +110,7 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
         }
 
         cells.forEach((rawCell, d) => {
-          const text = (rawCell ?? '').trim();
+          const text = textOverColour((rawCell ?? '').trim());
           if (!text) return;
           const date = dates[d] ?? null;
           if (!date) {
@@ -171,6 +182,14 @@ export function mapReadingAnswer(answer: ReadingAnswer, ctx: AiReadingContext): 
           }
         });
       }
+    }
+    // Rows the model couldn't read, except one it listed anyway (a row it called "cut off" but
+    // also read in full is read).
+    const listed = pageNames.map((n) => n.toLowerCase());
+    for (const u of page.unread ?? []) {
+      const text = (u.x ?? '').toLowerCase();
+      if (text && listed.some((n) => text.includes(n))) continue;
+      unreadRows.push({ page: page.p, row: u.r ?? null, text: u.x ?? '', reason: u.w || 'The AI reader could not read this row.' });
     }
   }
 

@@ -1021,3 +1021,48 @@ test('an employee-ID column before the names is not a title column', () => {
   const result = parseExcelGrid(grid, '2026-08-17');
   assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|SUPERVISORS', 'Test Beta|SUPERVISORS']);
 });
+
+// --- round 2: column order, totals lines and titles in the name column -------------------------
+
+test('NAME / TITLE headings over the leading columns decide which is which, in either order', () => {
+  for (const nameFirst of [true, false]) {
+    const lead = (name: string, title: string) => (nameFirst ? [name, title] : [title, name]);
+    const grid = [
+      [...lead('NAME', 'TITLE'), 'Mon 13/04', 'Tue 14/04'],
+      [...lead('Test Alpha', 'Supervisor'), '9-17', 'OFF'],
+      [...lead('Test Beta', 'Head waiter 1'), 'OFF', '4pm to 2am'],
+      [...lead('Test Gamma', 'Bartender'), 'UL', 'UL'],
+    ];
+    const result = parseExcelGrid(grid, '2026-04-13', { today: '2026-10-07', clientWeekStart: null });
+    assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|Supervisor', 'Test Beta|Head waiter 1', 'Test Gamma|Bartender'], `name first: ${nameFirst}`);
+  }
+});
+
+test('a totals line under the grid ("Total staff on rota 22" with per-day counts) is never a person', () => {
+  const grid = [
+    ['', '17-Aug', '18-Aug'],
+    ['Test Alpha', '9-17', ''],
+    ['Test Beta', '', '10-18'],
+    ['Total staff on rota 2', '1', '1'],
+    ['Number of staff', '1', '1'],
+  ];
+  const result = parseExcelGrid(grid, '2026-08-17');
+  assert.deepEqual(result.people?.map((p) => p.name), ['Test Alpha', 'Test Beta']);
+  assert.deepEqual(result.anomalies, []);
+});
+
+test('a title where a name should be is never a person: its shifts are an unread row; a row with the two the other way round is read', () => {
+  const single = parseExcelGrid([['', 'Mon', 'Tue'], ['Test Alpha', '9-17', ''], ['Waiter 3', '10-18', '']], '2026-08-17');
+  assert.deepEqual(single.people?.map((p) => p.name), ['Test Alpha']);
+  assert.match(single.unreadRows![0]!.reason, /title or role/);
+  const twoCols = parseExcelGrid(
+    [
+      ['', '', 'Mon', 'Tue'],
+      ['RM', 'Test Alpha', '9-17', ''],
+      ['Test Beta', 'Waiter 2', '', '10-18'], // this one row has name and title the other way round
+      ['Runner 1', 'Test Gamma', '11-19', ''],
+    ],
+    '2026-08-17',
+  );
+  assert.deepEqual(twoCols.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|RM', 'Test Beta|Waiter 2', 'Test Gamma|Runner 1']);
+});

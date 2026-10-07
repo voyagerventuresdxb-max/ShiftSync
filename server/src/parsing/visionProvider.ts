@@ -6,7 +6,7 @@ import {
   visionConfig,
   type VisionConfig,
 } from '../lib/aiConfig.js';
-import { focusInstruction, ROSTER_VLM_GEMINI_SCHEMA, ROSTER_VLM_SYSTEM_PROMPT } from './vlmPrompt.js';
+import { focusInstruction, ROSTER_VLM_COLUMN_PROMPT, ROSTER_VLM_COLUMN_SCHEMA, ROSTER_VLM_GEMINI_SCHEMA, ROSTER_VLM_SYSTEM_PROMPT } from './vlmPrompt.js';
 import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, visionInputEstimate, withAiBudget } from '../lib/aiBudget.js';
 
 /**
@@ -32,6 +32,8 @@ export type VisionInput = {
   focus?: { page: number; rows?: { from: number; to: number | null } };
   /** The second, stricter read of a page that came back short. */
   strict?: boolean;
+  /** rows (default): person by person; columns: day column by day column (the independent second read). */
+  framing?: 'rows' | 'columns';
   /** The PDF's own text layer, one entry per page, for the model to check names and numbers against. */
   pageTexts?: string[];
   /** Latest moment (epoch ms) this read may still run: attempts and retries stop before it. */
@@ -203,10 +205,10 @@ export class GeminiVisionProvider implements VisionProvider {
               model: attempt.model,
               contents: [{ role: 'user', parts: userParts(input) }],
               config: {
-                systemInstruction: ROSTER_VLM_SYSTEM_PROMPT,
+                systemInstruction: input.framing === 'columns' ? ROSTER_VLM_COLUMN_PROMPT : ROSTER_VLM_SYSTEM_PROMPT,
                 temperature: 0,
                 responseMimeType: 'application/json',
-                responseSchema: ROSTER_VLM_GEMINI_SCHEMA,
+                responseSchema: input.framing === 'columns' ? ROSTER_VLM_COLUMN_SCHEMA : ROSTER_VLM_GEMINI_SCHEMA,
                 maxOutputTokens: MAX_OUTPUT_TOKENS.roster_vision,
                 thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
                 // Small print on a dense page: read it at the highest resolution offered.

@@ -12,6 +12,7 @@ import {
   __setVisionProviderForTests,
   type VisionInput,
 } from './visionProvider.js';
+import { ROSTER_VLM_COLUMN_PROMPT, ROSTER_VLM_COLUMN_SCHEMA, ROSTER_VLM_GEMINI_SCHEMA, ROSTER_VLM_SYSTEM_PROMPT } from './vlmPrompt.js';
 
 // These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
 // (lib/aiBudget.ts) has its own tests; its shared day/month counters must not throttle these.
@@ -183,4 +184,15 @@ test('getVisionProvider: null when not configured; a test override wins; the moc
     if (saved.p !== undefined) process.env.GEMINI_VERTEX_PROJECT = saved.p;
     if (saved.k !== undefined) process.env.GEMINI_API_KEY = saved.k;
   }
+});
+
+test('the second read of a photo uses the column-by-column prompt and schema', async () => {
+  const { client, calls } = fakeClient([{ text: '{}' }, { text: '{}' }]);
+  const provider = new GeminiVisionProvider(config, { client, wait: noWait });
+  await provider.readRoster(image);
+  await provider.readRoster({ ...image, framing: 'columns' });
+  assert.equal(calls[0]!.config?.systemInstruction, ROSTER_VLM_SYSTEM_PROMPT);
+  assert.equal(calls[0]!.config?.responseSchema, ROSTER_VLM_GEMINI_SCHEMA);
+  assert.equal(calls[1]!.config?.systemInstruction, ROSTER_VLM_COLUMN_PROMPT);
+  assert.equal(calls[1]!.config?.responseSchema, ROSTER_VLM_COLUMN_SCHEMA);
 });

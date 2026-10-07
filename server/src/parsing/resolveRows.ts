@@ -352,7 +352,26 @@ export function resolveRoleLabel(label: string | null | undefined, ctx: VenueMat
   };
   const key = nameKey(raw);
   const stripped = stripRoleOrdinal(key);
-  return tryKey(key) ?? (stripped !== key ? tryKey(stripped) : null);
+  // Any other "… Manager" title ("Ops Manager", "Events Manager") is a manager, when the venue
+  // has no closer role of its own (its own role name and remembered mappings are tried first).
+  const manager = MANAGER_TITLE.test(stripped) ? ctx.roleByName.get(nameKey('Management')) ?? null : null;
+  return tryKey(key) ?? (stripped !== key ? tryKey(stripped) : null) ?? manager;
+}
+
+const MANAGER_TITLE = /\b(managers?|mgrs?)$/;
+
+/**
+ * True when a label is a role or title rather than a person's name: a known role alias or
+ * abbreviation, with or without a position number ("Waiter 3", "Head waiter 1", "RM", "JAM"),
+ * or any "… Manager" title. Keeps titles, banners and header words from ever being imported
+ * as people.
+ */
+export function isRoleTitle(label: string): boolean {
+  const key = nameKey(label);
+  if (!key) return false;
+  const known = (k: string) => Object.prototype.hasOwnProperty.call(ROLE_ALIASES, k) || Object.prototype.hasOwnProperty.call(RESOLVE_ONLY_ROLE_ALIASES, k);
+  const stripped = stripRoleOrdinal(key);
+  return known(key) || (stripped !== key && known(stripped)) || MANAGER_TITLE.test(stripped);
 }
 
 type TokenMatch = 'equal' | 'initial' | 'prefix' | 'spelling';

@@ -30,7 +30,7 @@ import { isOvernight, cellToText } from './normalize.js';
 import { canonicalRoleName, isRecognizedRoleAlias } from './resolveRows.js';
 import { detectWeek, isConsecutiveDayRun, parseDayLabel, weekdayOf, type DayLabel } from './weekDetection.js';
 import { parseShiftText, parseSingleTime, sheetDotStyle, type ShiftTextOptions } from './shiftText.js';
-import { looksLikePersonName, personKeyOf } from './personKey.js';
+import { columnHeading, isFooterTotalOrNote, looksLikePersonName, nonPersonReason, personKeyOf } from './personKey.js';
 import type { ReadPerson, UnreadRow, WeekDetection } from './rosterContract.js';
 import type { ParsedShiftRow, ParsedVisionResult, RowIssue, AnomalyRecord, LeaveRecord } from './types.js';
 
@@ -80,10 +80,8 @@ const SUMMARY_ROW_LABELS = new Set(['total', 'totals', 'subtotal', 'sum', 'grand
  */
 const CAPTION_WORDS = /^(covers?|pax|events?|functions?|bookings?|reservations?|notes?|remarks?|comments?|forecast|occupancy|day of the week|date)\b/i;
 
-/** A footer or note line ("Prepared by: …", "Page 1 of 2", "Legend: …"): never a person or a section. */
-function isFooterOrNote(label: string): boolean {
-  return /^(prepared|approved|printed|signed|signature|checked|legend|key|page)\b/i.test(label) || /\bpage \d+ of \d+\b/i.test(label) || /:\s*\S/.test(label) || /_{3,}/.test(label);
-}
+/** A footer, totals or note line ("Prepared by: …", "Total staff on rota 22", "Page 1 of 2"): never a person or a section. */
+const isFooterOrNote = isFooterTotalOrNote;
 
 /** Words that name a group of staff, not a person ("Bar Team", "Night Crew"). */
 const GROUP_WORDS = /\b(team|staff|crew|squad|section|department|dept|group|shift|service|foh|boh|management)\b/i;
@@ -803,7 +801,11 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       const v1 = normalizeCell(grid[r]?.[1]);
       if (v0 && v1 && v0 !== v1 && !CAPTION_WORDS.test(v0) && !CAPTION_WORDS.test(v1)) pairs.push({ col0: v0, col1: v1 });
     }
-    const titleCol = titleColumnByContent(pairs);
+    // Headings printed over the two columns ("NAME" | "TITLE", in either order) say it outright.
+    const headingOf = (c: number) => header.dayRowIdxs.map((r) => columnHeading(normalizeCell(grid[r]?.[c]))).find(Boolean) ?? null;
+    const [h0, h1] = [headingOf(0), headingOf(1)];
+    const byHeading = h0 === 'title' || h1 === 'name' ? 0 : h0 === 'name' || h1 === 'title' ? 1 : null;
+    const titleCol = byHeading ?? titleColumnByContent(pairs);
     if (titleCol === 1) {
       titleColIndex = 1;
       nameColIndex = 0;
@@ -1051,7 +1053,7 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
       // header also appears (e.g. Gattopardo's "SUPERVISORS"), so header
       // vs. real name is discriminated by content, not position.
       const firstCell = normalizeCell(row[0]);
-      if (SUMMARY_ROW_LABELS.has(firstCell.toLowerCase())) continue; // footer/summary caption, never a staff row or a real section header
+      if (SUMMARY_ROW_LABELS.has(firstCell.toLowerCase()) || (firstCell && isFooterOrNote(firstCell))) continue; // footer/summary/totals line, never a staff row or a real section header
 
       // Every distinct non-blank value in this row (name column + day
       // columns). A role/section header doesn't always sit in the name
@@ -1152,6 +1154,18 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
           unrecognizedHeaderTexts.add(texts[0]!);
         }
         continue; // no employee name in this row — can't emit a staff row either way
+      }
+
+      // A title, column heading or caption in the name column is never a person, whatever is
+      // beside it ("Waiter 3" with shifts is a position nobody's name is on): its shifts are
+      // shown as an unread row, never imported under a title.
+      const notPerson = nonPersonReason(firstCell);
+      if (notPerson) {
+        if (rowHasData) {
+          addUnread(r, [firstCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), `"${firstCell}" reads as ${notPerson}; its shifts were not imported. Add them by hand if they belong to someone.`);
+          staffRowsWithRealDataProcessed++;
+        }
+        continue;
       }
 
       // A named row. With shift/leave data it is a person; with nothing in its days it is a
@@ -1284,13 +1298,30 @@ export function parseExcelGrid(grid: unknown[][], weekStart: string, options: Gr
 
     if (/^\d+(\.\d+)?$/.test(nameCell)) continue; // headcount/totals row
 
-    const employeeName = nameCell;
+    // A title or heading where the name should be is never a person. When the title cell holds
+    // a person's name instead, this row has the two the other way round; otherwise its shifts
+    // are shown as an unread row.
+    let employeeName = nameCell;
+    let rowTitle = titleCell;
+    const notPerson = nonPersonReason(nameCell);
+    if (notPerson) {
+      if (looksLikePersonName(titleCell) && !nonPersonReason(titleCell)) {
+        employeeName = titleCell;
+        rowTitle = nameCell;
+      } else {
+        if (hasData(row)) {
+          addUnread(r, [titleCell, nameCell, ...columns.map((col) => dayCellText(row, col))].filter(Boolean).join(' | '), `"${nameCell}" reads as ${notPerson}; its shifts were not imported. Add them by hand if they belong to someone.`);
+          staffRowsWithRealDataProcessed++;
+        }
+        continue;
+      }
+    }
     hasSeenAnyStaffRow = true;
     // A per-row title is more specific than whatever section header
     // preceded it and always takes precedence; falls back to the
     // section-derived role when this row's own title cell is blank (or
     // only a number, such as an employee ID, which is no title).
-    const roleName = (/^\d+$/.test(titleCell) ? '' : titleCell) || currentRole;
+    const roleName = (/^\d+$/.test(rowTitle) ? '' : rowTitle) || currentRole;
     const key = addPerson(r, employeeName, roleName);
     if (processStaffRow(r, row, employeeName, roleName, new Set([nameColIndex, titleColIndex!]), sourceRowCounter++, key)) staffRowsWithRealDataProcessed++;
   }

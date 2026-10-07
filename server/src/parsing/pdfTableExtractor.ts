@@ -115,6 +115,15 @@ async function extractPositionedItems(buffer: Buffer): Promise<PositionedItem[][
   return pages;
 }
 
+/**
+ * What goes between two neighbouring text items: nothing when they touch (an exporter that
+ * writes a word glyph run by glyph run splits "Saffiya" at its ligature into "Sa" + "ffi" +
+ * "ya", edge to edge), a space otherwise.
+ */
+function glue(prev: PositionedItem, next: PositionedItem): string {
+  return next.x0 - prev.x1 < Math.max(prev.height, next.height) * 0.12 ? '' : ' ';
+}
+
 type Phrase = PositionedItem;
 interface RowCluster {
   y: number;
@@ -141,7 +150,7 @@ function clusterRows(items: PositionedItem[]): RowCluster[] {
     for (const item of [...row.items].sort((a, b) => a.x0 - b.x0)) {
       const prev = phrases[phrases.length - 1];
       if (prev && item.x0 - prev.x1 < medianHeight * 0.6) {
-        prev.text = `${prev.text} ${item.text}`;
+        prev.text = `${prev.text}${glue(prev, item)}${item.text}`;
         prev.x1 = Math.max(prev.x1, item.x1);
         prev.y0 = Math.min(prev.y0, item.y0);
         prev.y1 = Math.max(prev.y1, item.y1);
@@ -344,16 +353,16 @@ export async function extractPdfTable(buffer: Buffer): Promise<PdfTable> {
     const refs: number[] = [];
     rows.forEach((row, r) => {
       if (r <= skipThrough) return;
-      const cells: string[][] = g.columns.map(() => []);
+      const cells: PositionedItem[][] = g.columns.map(() => []);
       const isHeader = headerIdx >= 0 && r >= headerIdx && r <= lastHeaderRow && headerDays(row) !== null;
       // Whole items, not phrases: neighbouring cells can sit closer than a space apart.
       for (const p of [...row.items].sort((a, b) => a.x0 - b.x0)) {
         const col = columnOf(p, g.columns);
         // A day header names the whole day: every half of a split day carries it.
         const day = isHeader ? g.dayColumnIndexes.find((idx) => idx.includes(col)) : undefined;
-        for (const c of day ?? [col]) cells[c]!.push(p.text);
+        for (const c of day ?? [col]) cells[c]!.push(p);
       }
-      pageGrid.push(cells.map((c) => c.join(' ').trim()));
+      pageGrid.push(cells.map((c) => c.reduce((text, item, k) => (k === 0 ? item.text : `${text}${glue(c[k - 1]!, item)}${item.text}`), '').trim()));
       ys.push(row.y);
       refs.push(r + 1);
     });

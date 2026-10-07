@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PrismaClient } from '@prisma/client';
-import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey } from './resolveRows.js';
+import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey, buildVenueMatchContext, resolveRoleLabel, isRoleTitle } from './resolveRows.js';
 import type { ParsedShiftRow } from './types.js';
 
 interface FakeRole {
@@ -359,4 +359,16 @@ test('an Arabic role label distinguishes correctly from a different Arabic role 
   ]);
 
   assert.equal(previewRows[0].resolvedRoleId, 'role-a', 'must resolve to the matching Arabic role, not the other one');
+});
+
+test('any "… Manager" title resolves to Management, unless the venue has a closer role of its own', () => {
+  const roles = [{ id: 'r-mgmt', name: 'Management' }, { id: 'r-events', name: 'Events Manager' }];
+  const ctx = buildVenueMatchContext(roles, [], [], []);
+  assert.equal(resolveRoleLabel('Ops Manager', ctx), 'r-mgmt');
+  assert.equal(resolveRoleLabel('Night Managers', ctx), 'r-mgmt');
+  assert.equal(resolveRoleLabel('Events Manager', ctx), 'r-events', "the venue's own role wins");
+  assert.equal(resolveRoleLabel('Bar Back', ctx), null);
+  assert.equal(isRoleTitle('Ops Manager'), true);
+  assert.equal(isRoleTitle('Waiter 3'), true);
+  assert.equal(isRoleTitle('Test Alpha'), false);
 });

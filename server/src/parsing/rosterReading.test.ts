@@ -5,6 +5,7 @@ import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { aiReadRoster, reconcileReadings } from './rosterReading.js';
 import { readUploadedRoster, type UploadReadContext } from './readUpload.js';
 import { memoryReadingCache } from './readingCache.js';
+import { aiCrossRead } from './aiCrossCheck.js';
 import { MockVisionProvider, VisionProviderError, type VisionInput, type VisionOutput } from './visionProvider.js';
 import { parseExcelGrid } from './deterministicGridParser.js';
 import { mapReadingAnswer } from './aiReading.js';
@@ -23,6 +24,23 @@ const answer = (pages: { p: number; rows: number; ppl: ReadingAnswerPerson[] }[]
 });
 const out = (a: ReadingAnswer | string, extra: Partial<VisionOutput> = {}): VisionOutput => ({ raw: typeof a === 'string' ? a : JSON.stringify(a), model: 'mock', usage: { promptTokens: 10, outputTokens: 20 }, ...extra });
 const far = () => Date.now() + 60_000;
+
+/** The same reading in the column framing (the second read of a photo or scan). */
+function columnsOf(a: ReadingAnswer): unknown {
+  return {
+    title: a.title,
+    days: a.days,
+    key: a.key,
+    pages: a.pages.map((pg) => {
+      const ppl = pg.sec.flatMap((s) => s.ppl.map((x) => ({ i: x.i, nm: x.nm, t: x.t, h: s.h })));
+      const all = pg.sec.flatMap((s) => s.ppl);
+      return { p: pg.p, rows: pg.rows, ppl, cols: a.days.map((_, d) => ({ d, c: all.filter((x) => x.c[d]).map((x) => ({ i: x.i, x: x.c[d]! })) })), unread: [] };
+    }),
+  };
+}
+/** A provider answering the row framing with `rows` and the column framing with `columns` (default: the same reading). */
+const twoFramings = (rows: ReadingAnswer, columns: ReadingAnswer = rows) =>
+  new MockVisionProvider((input: VisionInput) => out(input.framing === 'columns' ? JSON.stringify(columnsOf(columns)) : rows));
 
 test('mapReadingAnswer: dates from the printed day headers, times read by the table reader\'s rules, every person kept', () => {
   const result = mapReadingAnswer(
@@ -216,23 +234,25 @@ test('upload: AI paused by the spend cap — the table result stands and the rep
   assert.equal(photo.body.errorCode, 'vision_paused');
 });
 
-test('upload: the same file again is answered from the venue\'s cache — no model call, no allowance, "cached"', async () => {
-  const mock = new MockVisionProvider(out(answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['9-17', ''])] }])).raw);
+test('upload: the same file again is answered from the venue\'s cache — both readings, no model call, no allowance, "cached"', async () => {
+  const mock = twoFramings(answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]));
   const cache = memoryReadingCache();
   let used = 0;
   const photo = { buffer: Buffer.from('the same png bytes'), mimetype: 'image/png', originalname: 'r.png', size: 18 };
   const first = await readUploadedRoster(photo, ctx({ provider: mock, cache, markAiUsed: async () => void used++ }));
   assert.ok(first.ok && first.reading.ai === 'used' && !first.reading.fromCache);
+  assert.equal(mock.calls.length, 2, 'a photo is read twice: person by person and day by day');
   const again = await readUploadedRoster(photo, ctx({ provider: mock, cache, aiConsent: false, markAiUsed: async () => void used++ }));
   assert.ok(again.ok);
   assert.equal(again.reading.ai, 'cached');
   assert.equal(again.reading.fromCache, true);
-  assert.equal(mock.calls.length, 1, 'no second call');
+  assert.match(again.reading.note!, /read it twice/, 'the cached reading carries its cross-check');
+  assert.equal(mock.calls.length, 2, 'no further call');
   assert.equal(used, 1, 'no second allowance');
   assert.deepEqual(again.result.rows.map((r) => r.date), ['2026-08-24']);
   // Another venue's upload of the same file is read afresh.
   await readUploadedRoster(photo, ctx({ provider: mock, cache, locationId: 'loc-2' }));
-  assert.equal(mock.calls.length, 2);
+  assert.equal(mock.calls.length, 4);
 });
 
 test('upload: an incomplete AI reading is not cached (the next upload tries again)', async () => {
@@ -321,4 +341,112 @@ test('reconcileReadings: a day only the AI read, for a person the table reader r
   assert.ok(cell, 'the AI-only day is shown to the manager');
   assert.match(cell!.rawText, /09:00–17:00/);
   assert.equal(disagreements, 2);
+});
+
+// --- round 2: what must never become a person, and the cross-check of photos and scans --------
+
+test('mapReadingAnswer: the title column taken for the names is read the other way round; titles, headings and totals listed as people are set aside', () => {
+  const result = mapReadingAnswer(
+    answer([{
+      p: 1,
+      rows: 3,
+      ppl: [
+        person('Waiter 3', 1, ['9-17', ''], 'Test Alpha'),
+        person('RM', 2, ['', '4pm to 2am'], 'Test Beta'),
+        person('TITLE', 3, ['', '']),
+        person('Total staff on rota: 2', 4, ['1', '1']),
+        person('Ops Manager', 5, ['9-17', '']),
+      ],
+    }]),
+    { today: TODAY, clientWeekStart: null },
+  );
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.roleLabel}`), ['Test Alpha|Waiter 3', 'Test Beta|RM']);
+  assert.deepEqual(result.rows.map((r) => r.employeeName), ['Test Alpha', 'Test Beta']);
+  assert.deepEqual(result.unreadRows?.map((u) => u.text), ['TITLE', 'Total staff on rota: 2', 'Ops Manager']);
+});
+
+test('mapReadingAnswer: a coloured cell holding times is the times; colour alone is a colour; a row the model listed and also called cut off is read', () => {
+  const a = answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['[Closing] 16 18 18.5 26', '[16 20.5 21 26]'])] }]);
+  a.pages[0]!.unread.push({ r: 1, x: 'Test Alpha | 16 18 18.5 26', w: 'cut off at the bottom of the page' }, { r: 2, x: '???', w: 'illegible' });
+  const result = mapReadingAnswer(a, { today: TODAY, clientWeekStart: null });
+  assert.deepEqual(result.rows.map((r) => `${r.date} ${r.startTime}-${r.endTime}`), ['2026-08-24 16:00-18:00', '2026-08-24 18:30-02:00', '2026-08-25 16:00-20:30', '2026-08-25 21:00-02:00']);
+  assert.deepEqual(result.leaveRecords, []);
+  assert.deepEqual(result.unreadRows?.map((u) => u.text), ['???']);
+});
+
+test('reconcileReadings: a title, heading or totals line only one reader took for a person is not imported; a name split at a ligature keeps the joined spelling', () => {
+  const ai = mapReadingAnswer(answer([{ p: 1, rows: 2, ppl: [person('Saffiya Okonkwo', 1, ['9-17', '']), person('Test Beta', 2, ['', '10-18'])] }]), { today: TODAY, clientWeekStart: null });
+  // The table reader's text layer split the name at "ffi"; a title and a totals line slipped in.
+  const table = parseExcelGrid(
+    [
+      ['', '24-Aug', '25-Aug'],
+      ['', 'MONDAY', 'TUESDAY'],
+      ['Sa ffi ya Okonkwo', '9-17', ''],
+      ['Test Beta', '', '10-18'],
+    ],
+    TODAY,
+    { today: TODAY, clientWeekStart: null },
+  );
+  table.people!.push({ personKey: 'x@1:9', name: 'Waiter 3', roleLabel: null, section: null, sourcePage: 1, sourceRow: 9, readerSource: 'table' });
+  ai.people!.push({ personKey: 'y@1:10', name: 'Total staff on rota', roleLabel: null, section: null, sourcePage: 1, sourceRow: 10, readerSource: 'ai' });
+  const { result } = reconcileReadings(ai, table);
+  assert.deepEqual(result.people?.map((p) => `${p.name}|${p.readerSource}`), ['Saffiya Okonkwo|both', 'Test Beta|both']);
+  assert.deepEqual(result.people?.[0]?.nameAlternatives, [{ reader: 'table', name: 'Sa ffi ya Okonkwo' }]);
+  assert.ok(result.rows.every((r) => r.employeeName !== 'Sa ffi ya Okonkwo'));
+  assert.deepEqual(result.unreadRows?.map((u) => u.text).sort(), ['Total staff on rota', 'Waiter 3']);
+});
+
+test('photo cross-check: a value one reading slid into the next day, an 18 read as 18.5, a coloured cell read as colour only and a person one reading missed — all kept or flagged, none silent', async () => {
+  const first = answer([{ p: 1, rows: 2, ppl: [person('Test Alpha', 1, ['', '18 26']), person('Test Beta', 2, ['[Closing]', '16 18.5 18.5 26'])] }]);
+  const second = answer([{ p: 1, rows: 3, ppl: [person('Test Alpha', 1, ['18 26', '']), person('Test Beta', 2, ['16 18 18.5 26', '16 18 18.5 26']), person('Test Gamma', 3, ['[Holiday]', ''])] }]);
+  const mock = twoFramings(first, second);
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 2'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: mock }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(mock.calls.map((c) => c.framing ?? 'rows').sort(), ['columns', 'rows'], 'both readings, at the same time');
+  const rows = outcome.result.rows.map((r) => `${r.employeeName}|${r.date}|${r.startTime}-${r.endTime}|${(r.flags ?? []).join(',')}`);
+  // The slipped value: both days kept, each flagged as seen by one reading only.
+  assert.ok(rows.includes('Test Alpha|2026-08-24|18:00-02:00|low_confidence'), rows.join('\n'));
+  assert.ok(rows.includes('Test Alpha|2026-08-25|18:00-02:00|low_confidence'));
+  // Times read from a cell one reading saw as colour only: kept (text wins), flagged.
+  assert.ok(rows.includes('Test Beta|2026-08-24|16:00-18:00|low_confidence'));
+  // 18 vs 18.5: the first reading's value with both readings attached.
+  const differ = outcome.result.rows.find((r) => r.employeeName === 'Test Beta' && r.date === '2026-08-25' && r.flags?.includes('times_differ'))!;
+  assert.deepEqual(differ.alternatives?.map((x) => `${x.startTime}-${x.endTime}`), ['16:00-18:30', '16:00-18:00']);
+  // The person only the second reading listed is kept, flagged.
+  assert.deepEqual(outcome.result.people?.map((p) => p.name), ['Test Alpha', 'Test Beta', 'Test Gamma']);
+  assert.ok(outcome.result.anomalies.some((x) => x.employeeName === 'Test Gamma' && /Only one of the two AI readings listed/.test(x.reason)));
+  assert.ok(outcome.result.anomalies.some((x) => x.employeeName === 'Test Beta' && x.date === '2026-08-24' && /code or colour/.test(x.reason)));
+  assert.ok(outcome.reading.disagreements >= 5);
+  assert.match(outcome.reading.note!, /read it twice/);
+});
+
+test('photo cross-check: when the second reading fails the first stands, the report says so, and nothing is cached', async () => {
+  const mock = new MockVisionProvider((input: VisionInput) => {
+    if (input.framing === 'columns') throw new VisionProviderError('busy', 'busy');
+    return out(answer([{ p: 1, rows: 1, ppl: [person('Test Alpha', 1, ['9-17', ''])] }]));
+  });
+  const cache = memoryReadingCache();
+  const outcome = await readUploadedRoster({ buffer: Buffer.from('png 3'), mimetype: 'image/png', originalname: 'r.png', size: 5 }, ctx({ provider: mock, cache }));
+  assert.ok(outcome.ok);
+  assert.deepEqual(outcome.result.people?.map((p) => p.name), ['Test Alpha']);
+  assert.match(outcome.reading.note!, /second AI reading could not be made/);
+  assert.equal(cache.size(), 0);
+});
+
+test('photo cross-check: a multi-page scan is read day by day per page, all pages at once', async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const mock = new MockVisionProvider(async (input: VisionInput) => {
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((r) => setTimeout(r, 15));
+    inFlight--;
+    const page = input.focus!.page;
+    const a = answer([{ p: page, rows: 1, ppl: [person(`Test Page${page}`, 1, ['9-17', ''])] }]);
+    return out(input.framing === 'columns' ? JSON.stringify(columnsOf(a)) : a);
+  });
+  const { answer: read } = await aiCrossRead({ kind: 'file', data: Buffer.from('%PDF'), mimeType: 'application/pdf', name: 's.pdf', pageCount: 2 }, { provider: mock, locationId: null, userId: null, deadline: far() });
+  assert.equal(maxInFlight, 2, 'the two pages at the same time');
+  assert.deepEqual(read?.pages.map((p) => `${p.p}:${p.sec[0]!.ppl[0]!.nm}`), ['1:Test Page1', '2:Test Page2']);
+  assert.ok(mock.calls.every((c) => c.framing === 'columns'));
 });
