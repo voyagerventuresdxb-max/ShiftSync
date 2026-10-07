@@ -200,20 +200,20 @@ export function VoiceCommandSheet({
   const eyebrow = declined
     ? 'Not by voice'
     : incomplete
-    ? 'Almost there'
-    : person?.status === 'missing'
-      ? 'Not on your team'
-      : person
-        ? 'Which person?'
-        : choices
-          ? 'Choose one'
-          : notUnderstood
-            ? "Didn't catch that"
-            : showFollowUp
-              ? 'Got it — one more thing?'
-              : isAnswerOnly
-                ? (ANSWER_KIND[intent.intent] ?? 'Answer')
-                : (KIND[intent.intent] ?? 'Voice command');
+      ? 'Almost there'
+      : person?.status === 'missing'
+        ? 'Not on your team'
+        : person
+          ? 'Which person?'
+          : choices
+            ? 'Choose one'
+            : notUnderstood
+              ? "Didn't catch that"
+              : showFollowUp
+                ? 'Got it — one more thing?'
+                : isAnswerOnly
+                  ? (ANSWER_KIND[intent.intent] ?? 'Answer')
+                  : (KIND[intent.intent] ?? 'Voice command');
   const headline = declined ? declined.message : answer ? answer.title : executed && !isAnswerOnly ? `Done: ${intent.summary}` : intent.summary;
   const screen = declined?.screen && isAppPath(declined.screen.path) ? declined.screen : null;
   const reparse = () => {
