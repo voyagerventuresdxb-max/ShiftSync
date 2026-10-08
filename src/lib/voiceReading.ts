@@ -1,4 +1,5 @@
 import { READ_VOICE_INTENTS, type ParsedIntent } from '@/api/voice';
+import type { VoiceProblem } from '@/lib/voiceErrors';
 
 /**
  * Whether a reading from /api/voice/parse-intent has every field the confirm sheet draws. A reading
@@ -49,3 +50,17 @@ export function isWellFormedReading(reading: unknown): reading is ParsedIntent {
   const fields = FIELDS[reading.intent];
   return !!fields && fields(reading);
 }
+
+/** A reading the sheet can't draw: nothing is shown, the words go back in the box. */
+export const UNREADABLE: VoiceProblem = {
+  kind: 'failed',
+  title: "Couldn't read that",
+  message: "The assistant's answer couldn't be read, so nothing is shown and nothing changed. Try again, or type it below.",
+};
+
+/** The sheet threw while drawing (after a Confirm, something may have changed). */
+export const SHEET_ERROR: VoiceProblem = {
+  kind: 'failed',
+  title: 'Something went wrong',
+  message: 'Something went wrong showing that. Check the screen before trying again.',
+};
