@@ -218,6 +218,9 @@ const handles = {
  * toggle and the notification state all persist across route changes.
  */
 export const router = createBrowserRouter([
+  // Development only: the voice sheet's states side by side (src/dev/VoicePreviewRoute.tsx).
+  // `import.meta.env.DEV` is false in production builds, so the route and its module are left out.
+  ...(import.meta.env.DEV ? [{ path: '/dev/voice', lazy: async () => ({ Component: (await import('./dev/VoicePreviewRoute')).default }) }] : []),
   {
     element: <AppShell />,
     children: [

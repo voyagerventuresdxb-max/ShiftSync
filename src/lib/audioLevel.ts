@@ -27,9 +27,10 @@ export const METER_WINDOW_SAMPLES = 4096;
 
 /**
  * Samples the stream's level every `METER_INTERVAL_MS`. `stop()` returns the loudest moment's
- * RMS, or null when the browser can't measure (then nothing is blocked).
+ * RMS, or null when the browser can't measure (then nothing is blocked). `onLevel` hears each
+ * reading as it is taken (the voice sheet's orb follows it); it changes nothing about the check.
  */
-export function startLevelMeter(stream: MediaStream): { stop: () => number | null } {
+export function startLevelMeter(stream: MediaStream, onLevel?: (rms: number) => void): { stop: () => number | null } {
   try {
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return { stop: () => null };
@@ -44,8 +45,10 @@ export function startLevelMeter(stream: MediaStream): { stop: () => number | nul
       // A suspended context (some browsers wait for a user gesture) reads only zeros: not silence.
       if (ctx.state !== 'running') return;
       analyser.getFloatTimeDomainData(buf);
-      peak = Math.max(peak, rms(buf));
+      const level = rms(buf);
+      peak = Math.max(peak, level);
       measured = true;
+      onLevel?.(level);
     }, METER_INTERVAL_MS);
     return {
       stop: () => {
