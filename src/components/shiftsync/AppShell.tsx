@@ -21,6 +21,7 @@ import { voiceContextLine, voiceStageMode, type VoiceCloseAction, type VoiceStag
 // Not lazy: it is what opens when the phone is offline, when a lazy chunk could not be fetched (only its orb loads lazily).
 import { VoiceStage } from '@/components/shiftsync/VoiceStage';
 import { loadVoiceOrb } from '@/components/shiftsync/voiceOrbChunk';
+import { voiceVariant } from '@/voiceVariant';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
@@ -624,6 +625,7 @@ export function AppShell() {
       {stageOpen && (
         <VoiceStage
           state={stageState}
+          variant={voiceVariant()}
           context={voiceContextLine(venueName, session?.user.systemRole)}
           heard={voiceHeard}
           level={voiceLevelRef}
