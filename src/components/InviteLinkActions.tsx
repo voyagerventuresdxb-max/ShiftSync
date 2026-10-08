@@ -118,7 +118,13 @@ export default function InviteLinkActions({
               <span className={s.label.className} style={s.label.style}>
                 Expires after
               </span>
-              <select className={s.field.className} style={fieldStyle} value={expiresInDays} onChange={(e) => setExpiresInDays(Number(e.target.value))}>
+              <select
+                className={`${s.field.className} app-select`.trim()}
+                // The background as a colour only, so the select's chevron (global.css) isn't wiped by the shorthand.
+                style={{ ...fieldStyle, background: undefined, backgroundColor: fieldStyle.background as string | undefined }}
+                value={expiresInDays}
+                onChange={(e) => setExpiresInDays(Number(e.target.value))}
+              >
                 {EXPIRY_DAYS.map((d) => (
                   <option key={d} value={d}>
                     {d} days
