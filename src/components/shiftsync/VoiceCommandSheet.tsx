@@ -260,7 +260,7 @@ export function VoiceCommandSheet({
         aria-labelledby={headingId}
         aria-busy={busy}
         tabIndex={-1}
-        className="panel max-h-[calc(100dvh-9rem-env(safe-area-inset-top))] w-full max-w-md overflow-y-auto overscroll-contain rounded-b-none border-b-0 pb-[env(safe-area-inset-bottom)] shadow-lux focus:outline-none motion-safe:animate-rise"
+        className="panel max-h-[calc(100dvh-9rem-env(safe-area-inset-top))] w-full [@media(max-height:720px)]:max-h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] max-w-md overflow-y-auto overscroll-contain rounded-b-none border-b-0 pb-[env(safe-area-inset-bottom)] shadow-lux focus:outline-none motion-safe:animate-rise"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="gold-rule h-px opacity-40" aria-hidden />
