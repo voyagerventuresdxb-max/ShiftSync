@@ -19,6 +19,7 @@ and its pointer "gravity" feature are not.
 | Source | https://github.com/Jakubantalik/Libraries.dev (`packages/thinking-orbs`) |
 | Runtime dependencies | none (peer: `react >= 18`) |
 | Loaded | only with the voice sheet (a lazy chunk), never on screens that don't open voice |
+| Notice shipped | `public/third-party-licenses.txt`, served at `/third-party-licenses.txt` (the minifier drops source comments) |
 
 Checked before adding (2026-10-08):
 

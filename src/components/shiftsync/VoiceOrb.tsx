@@ -1,4 +1,4 @@
-/*! @license thinking-orbs 0.3.2 (dot geometry) — MIT © 2026 Jakub Antalik — full notice: docs/THIRD_PARTY.md */
+/*! @license thinking-orbs 0.3.2 (dot geometry) — MIT © 2026 Jakub Antalik — full notice: docs/THIRD_PARTY.md, shipped as /third-party-licenses.txt */
 import { useEffect, useRef, type RefObject } from 'react';
 import { MODE_FRAMES, resolvePreset, type ModeOpts, type OrbFrame, type OrbState } from 'thinking-orbs/engine';
 import { scaleCounts, scaleRadii } from 'thinking-orbs';
