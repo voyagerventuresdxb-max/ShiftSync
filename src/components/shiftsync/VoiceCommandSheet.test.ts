@@ -153,8 +153,8 @@ test('no examples when the question is about a name or a missing part', () => {
   assert.doesNotMatch(incomplete, /Examples to try/);
 });
 
-test('the typed command box: plain heading, the examples, Show preview; a problem shows above it with how to fix it', () => {
-  // Inside the voice sheet (VoiceStage), which carries the step ("Understanding…") and Cancel.
+test('the typed command box: plain heading and the examples; a problem shows above it with how to fix it', () => {
+  // Inside the voice sheet (VoiceStage), which carries the step ("Understanding…") and, pinned, Show preview and Cancel.
   const render = (props: Partial<ComponentProps<typeof VoiceComposer>>) =>
     renderToStaticMarkup(
       createElement(
@@ -166,9 +166,9 @@ test('the typed command box: plain heading, the examples, Show preview; a proble
   const plain = render({});
   assert.match(text(plain), /^Type a command What would you like to do\? Type what you'd say Or try When am I working this week\?/);
   assert.match(plain, /<h2 id="h"/);
-  assert.deepEqual(buttons(plain), ['When am I working this week?', 'Show preview']);
+  assert.deepEqual(buttons(plain), ['When am I working this week?']);
   // The phrases are for an empty box only: once there are words, they are the command.
-  assert.deepEqual(buttons(render({ value: 'Book Friday off' })), ['Show preview']);
+  assert.deepEqual(buttons(render({ value: 'Book Friday off' })), []);
 
   const denied = render({ problem: micProblem(new DOMException('no', 'NotAllowedError')), value: 'Book Friday off' });
   assert.match(text(denied), /Microphone is off ShiftSync isn't allowed to use the microphone/);
@@ -176,5 +176,5 @@ test('the typed command box: plain heading, the examples, Show preview; a proble
   assert.match(text(denied), /Type it instead/);
   assert.match(denied, /role="alert"/);
 
-  assert.match(text(render({ sending: true, value: 'x' })), /Checking…/);
+  assert.match(render({ sending: true, value: 'x' }), /<textarea[^>]*disabled/);
 });

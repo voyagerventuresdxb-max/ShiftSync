@@ -155,9 +155,10 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     const sheet = page.getByRole('dialog', { name: 'Taking too long' });
     await expect(sheet.getByRole('alert')).toContainText("The assistant didn't answer within 1 second");
     await expect(sheet.getByLabel('Type it instead')).toHaveValue(heard);
-    // The same sheet: the mic is still there to try again by voice, and the keyboard is on.
+    // The same sheet: the mic is still there to try again by voice.
     await expect(sheet.getByRole('button', { name: 'Start recording a voice command' })).toBeEnabled();
-    await expect(sheet.getByRole('button', { name: 'Type instead' })).toHaveAttribute('aria-pressed', 'true');
+    // Typed: Show preview sits in the pinned bottom row, between the mic and Cancel.
+    await expect(sheet.getByRole('button', { name: 'Show preview' })).toBeEnabled();
     await sheet.getByRole('button', { name: 'Show preview' }).click();
 
     const confirm = confirmSheet(page, 'You typed');
