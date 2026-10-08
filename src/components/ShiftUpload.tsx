@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { FileUp } from 'lucide-react';
+import { cn } from '../lib/utils';
 import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import {
@@ -17,8 +19,7 @@ import { reviewPeople } from '../features/rosterReview/reviewModel';
 import { btnPrimary } from '../features/rosterReview/styles';
 import { ReadingProgress } from '../features/rosterReview/ReadingProgress';
 import { newUploadId, rosterFileKind, type RosterFileKind } from '../features/rosterReview/uploadProgress';
-
-const ACCEPTED = '.xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp';
+import { ROSTER_ACCEPT, ROSTER_OFFLINE_MESSAGE, rosterFileProblem } from '../features/rosterReview/rosterFileCheck';
 
 type Phase = 'idle' | 'uploading' | 'consent' | 'preview' | 'confirming' | 'done' | 'error';
 
@@ -49,9 +50,15 @@ interface Props {
    * everywhere else this component is embedded (e.g. Scheduling).
    */
   uploadingLabel?: string;
+  /**
+   * `card` (default): the Scheduling page's titled card with a drop zone. `staff`: the Staff
+   * Directory's "Import staff from a roster" button, which opens the file picker straight away;
+   * everything after the pick (reading, review, confirm, result) is the same.
+   */
+  variant?: 'card' | 'staff';
 }
 
-export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }: Props) {
+export default function ShiftUpload({ createdById, onCommitted, uploadingLabel, variant = 'card' }: Props) {
   const { session } = useIdentity();
   const { online } = useConnectivity();
   const [phase, setPhase] = useState<Phase>('idle');
@@ -78,6 +85,13 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
       setConfirmResult(null);
       setConfirmError(null);
       setFileName(file.name);
+      // Checked here first, so a file the server would refuse (or no connection) says why at once, with nothing sent.
+      const problem = rosterFileProblem(file) ?? (online ? null : ROSTER_OFFLINE_MESSAGE);
+      if (problem) {
+        setError(problem);
+        setPhase('error');
+        return;
+      }
       const uploadId = newUploadId();
       setReading({ uploadId, kind: rosterFileKind(file) });
       setPhase('uploading');
@@ -96,7 +110,7 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
         setPhase('error');
       }
     },
-    [session],
+    [session, online],
   );
 
   const sendToAiReader = useCallback(() => {
@@ -172,19 +186,58 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
     if (inputRef.current) inputRef.current.value = '';
   }, []);
 
+  const readingNow = phase === 'uploading';
   return (
-    <section className="upload-card">
-      <header className="upload-header">
-        <h2 className="section-title">Upload Roster</h2>
-        <p className="hint">
-          Drop your roster. ShiftSync reads everyone on it and shows you each
-          person before anything is saved. Confirming adds new people to your
-          staff and their shifts to the rota; importing the same roster again
-          adds nothing twice.
-        </p>
-      </header>
+    <section className={variant === 'staff' ? 'space-y-3' : 'upload-card'} aria-label={variant === 'staff' ? 'Import staff from a roster' : undefined}>
+      {variant === 'card' && (
+        <header className="upload-header">
+          <h2 className="section-title">Upload Roster</h2>
+          <p className="hint">
+            Drop your roster. ShiftSync reads everyone on it and shows you each
+            person before anything is saved. Confirming adds new people to your
+            staff and their shifts to the rota; importing the same roster again
+            adds nothing twice.
+          </p>
+        </header>
+      )}
 
-      {phase === 'idle' || phase === 'error' ? (
+      {variant === 'staff' && (phase === 'idle' || phase === 'error' || phase === 'uploading' || phase === 'consent') && (
+        <div className="space-y-1.5">
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ROSTER_ACCEPT}
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            data-testid="staff-import-file"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // Cleared so picking the same file again (after an error, or to re-import) is noticed.
+              e.target.value = '';
+              if (file) void handleFile(file);
+            }}
+          />
+          <button
+            type="button"
+            className={cn(btnPrimary, 'w-full sm:w-auto')}
+            onClick={() => inputRef.current?.click()}
+            disabled={!online || !session || readingNow}
+            aria-busy={readingNow || undefined}
+            aria-label={readingNow ? undefined : 'Import staff from a roster: PDF, photo, Excel or CSV'}
+          >
+            <FileUp className="h-5 w-5 shrink-0" aria-hidden />
+            {readingNow ? 'Reading the roster…' : 'Import staff from a roster'}
+          </button>
+          <p className="hint">
+            {online
+              ? 'PDF, photo, Excel or CSV, up to 10 MB. You check everyone before anything is saved, and importing the same roster again adds nobody twice.'
+              : "You're offline. Importing staff needs a connection."}
+          </p>
+        </div>
+      )}
+
+      {variant === 'card' && (phase === 'idle' || phase === 'error') ? (
         <div
           className={`dropzone${dragOver ? ' dropzone-active' : ''}`}
           onDragOver={(e) => {
@@ -203,7 +256,7 @@ export default function ShiftUpload({ createdById, onCommitted, uploadingLabel }
           <input
             ref={inputRef}
             type="file"
-            accept={ACCEPTED}
+            accept={ROSTER_ACCEPT}
             hidden
             onChange={(e) => {
               const file = e.target.files?.[0];
