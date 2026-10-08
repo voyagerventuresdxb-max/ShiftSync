@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { PersonPreview, PreviewRow } from '../../api/schedules';
 import { cn } from '../../lib/utils';
-import { aiOnlyWithoutShifts, formatDay, personNotes, possibleMatchQuestion, shiftSummary, timeQuestions, type PersonChoice } from './reviewModel';
+import { formatDay, oneReadingOnly, personNotes, possibleMatchQuestion, shiftSummary, timeQuestions, type PersonChoice } from './reviewModel';
 import { RolePicker, SelectBox } from './ui';
 import { btnGhost, inputClass, segmentClass } from './styles';
 
@@ -32,7 +32,7 @@ function StatusPill({ person, choice }: { person: PersonPreview; choice: PersonC
     choice.action === 'skip'
       ? ['Not importing', 'border-border text-foreground/45']
       : choice.undecided
-        ? [aiOnlyWithoutShifts(person) && !person.flags.some((f) => f.kind === 'possible_match') ? 'Import?' : 'Same person?', 'border-accent/50 bg-accent/10 text-accent']
+        ? [oneReadingOnly(person) && !person.flags.some((f) => f.kind === 'possible_match') ? 'Import?' : 'Same person?', 'border-accent/50 bg-accent/10 text-accent']
         : person.status === 'needs_decision'
           ? ['Check', 'border-accent/50 bg-accent/10 text-accent']
           : choice.action === 'link'
@@ -61,8 +61,8 @@ export function PersonCard({
   const [open, setOpen] = useState(false);
   const skipped = choice.action === 'skip';
   const match = possibleMatchQuestion(person);
-  // Only the AI reader saw this person and they have no shifts: possibly a misread line, so ask.
-  const askImport = !match && aiOnlyWithoutShifts(person);
+  // Only one of the two AI readings listed this person: possibly a misread line, so ask.
+  const askImport = !match && oneReadingOnly(person);
   const notes = personNotes(person, rows);
   const questions = timeQuestions(rows);
   const detailsId = `rr-details-${person.personKey}`;
@@ -113,7 +113,7 @@ export function PersonCard({
         <div className="space-y-3 border-t border-border/70 px-3 py-3">
           {askImport && (
             <div>
-              <p className="text-sm text-foreground/85">Only the AI reader found this person, with no shifts this week. Import them?</p>
+              <p className="text-sm text-foreground/85">Only one of the two AI readings listed this person. Check the original roster: import them?</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"

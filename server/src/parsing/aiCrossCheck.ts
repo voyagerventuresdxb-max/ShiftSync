@@ -190,7 +190,7 @@ export function crossCheckAiReadings(
    */
   const addAlone = (p: ReadPerson, result: ParsedVisionResult) => {
     disagreements++;
-    people.push({ ...p, readerSource: 'ai' });
+    people.push({ ...p, readerSource: 'ai', oneReading: true });
     nameMap.set(p.name, p.name);
     const own = rowsOf(result, p);
     leaveRecords.push(...leaveOf(result, p));

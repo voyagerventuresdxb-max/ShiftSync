@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PrismaClient } from '@prisma/client';
-import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey, buildVenueMatchContext, resolveRoleLabel, isRoleTitle } from './resolveRows.js';
+import { resolveRowsAgainstDatabase, canonicalRoleName, isRecognizedRoleAlias, nameKey, buildVenueMatchContext, resolveRoleLabel, isRoleTitle, buildPeoplePreview } from './resolveRows.js';
 import type { ParsedShiftRow } from './types.js';
 
 interface FakeRole {
@@ -371,4 +371,13 @@ test('any "… Manager" title resolves to Management, unless the venue has a clo
   assert.equal(isRoleTitle('Ops Manager'), true);
   assert.equal(isRoleTitle('Waiter 3'), true);
   assert.equal(isRoleTitle('Test Alpha'), false);
+});
+
+test('a person only one of the two AI readings listed carries the one_reading flag; one both listed does not', () => {
+  const ctx = buildVenueMatchContext([], [], [], []);
+  const read = (name: string, row: number, oneReading?: boolean) => ({ personKey: `p${row}`, name, roleLabel: null, section: null, sourcePage: 1, sourceRow: row, readerSource: 'ai' as const, ...(oneReading ? { oneReading } : {}) });
+  const people = buildPeoplePreview([], [read('Wren Calloway', 1), read('Tobin Ashgrove', 2, true)], ctx);
+  const flags = (n: string) => people.find((p) => p.name === n)?.flags.map((f) => f.kind) ?? [];
+  assert.ok(flags('Tobin Ashgrove').includes('one_reading'));
+  assert.ok(!flags('Wren Calloway').includes('one_reading'));
 });

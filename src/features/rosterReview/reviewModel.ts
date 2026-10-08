@@ -146,26 +146,26 @@ export interface PersonChoice {
   name: string;
   /** Assigned on the review screen (one person or in bulk); null = keep what the roster said. */
   roleName: string | null;
-  /** A question the manager hasn't answered yet ("same person as …?", or "import them?" for a person only the AI reader found with no shifts): blocks Confirm. */
+  /** A question the manager hasn't answered yet ("same person as …?", or "import them?" for a person only one AI reading listed): blocks Confirm. */
   undecided?: boolean;
 }
 
 /**
- * Found only by the AI reader and with no shift all week: it may be a misread line rather than a
- * person, so it is never imported without the manager saying so.
+ * Only one of the two AI readings of a photo or scan listed this person: it may be a misread line
+ * rather than a person, so it is never imported without the manager saying so.
  */
-export function aiOnlyWithoutShifts(person: PersonPreview): boolean {
-  return person.shiftCount === 0 && person.flags.some((f) => f.kind === 'ai_only');
+export function oneReadingOnly(person: PersonPreview): boolean {
+  return person.flags.some((f) => f.kind === 'one_reading');
 }
 
 /**
  * The preselection: the server's suggestion, else an exact match links and everyone else is
  * new. A close name is never preselected either way: it stays undecided until answered, and so
- * does a person only the AI reader found with no shifts.
+ * does a person only one AI reading listed.
  */
 export function initialChoice(person: PersonPreview): PersonChoice {
   const userId = person.suggestedAction ? (person.suggestedAction === 'link' ? (person.suggestedUserId ?? null) : null) : person.matchedUserId;
-  const undecided = !userId && (person.flags.some((f) => f.kind === 'possible_match') || aiOnlyWithoutShifts(person));
+  const undecided = !userId && (person.flags.some((f) => f.kind === 'possible_match') || oneReadingOnly(person));
   return { action: userId ? 'link' : 'create', userId, name: person.name, roleName: null, ...(undecided ? { undecided: true } : {}) };
 }
 
@@ -298,7 +298,7 @@ export function reviewBlockers(people: PersonPreview[], week: WeekDetection | nu
   const unanswered = open.filter((p) => p.flags.some((f) => f.kind === 'possible_match')).length;
   const aiOnly = open.length - unanswered;
   if (unanswered > 0) blockers.push(`Answer “same person?” for ${unanswered} ${unanswered === 1 ? 'person' : 'people'}`);
-  if (aiOnly > 0) blockers.push(`Decide whether to import ${aiOnly} ${aiOnly === 1 ? 'person' : 'people'} only the AI reader found`);
+  if (aiOnly > 0) blockers.push(`Decide whether to import ${aiOnly} ${aiOnly === 1 ? 'person' : 'people'} only one AI reading listed`);
   const groups = duplicateGroups(people);
   const nameOf = (key: string) => {
     const choice = state.choices[key];

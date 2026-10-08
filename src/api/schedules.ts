@@ -138,6 +138,7 @@ export type PersonFlag =
   | { kind: 'name_differs'; spellings: string[] }
   | { kind: 'ai_only' }
   | { kind: 'table_only' }
+  | { kind: 'one_reading' }
   | { kind: 'role_unresolved' };
 
 /** One entry per person on the roster: the review screen's unit. */

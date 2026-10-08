@@ -655,6 +655,7 @@ export function buildPeoplePreview(rows: ReadingRow[], readPeople: ReadPerson[] 
     const reader = read?.readerSource ?? combinedReader(personRows.map((r) => r.readerSource));
     if (nameDiffers) flags.push({ kind: 'name_differs', spellings });
     if (reader === 'ai') flags.push({ kind: 'ai_only' });
+    if (read?.oneReading) flags.push({ kind: 'one_reading' });
     if (reader === 'table') flags.push({ kind: 'table_only' });
     if (!resolvedRoleId) flags.push({ kind: 'role_unresolved' });
 

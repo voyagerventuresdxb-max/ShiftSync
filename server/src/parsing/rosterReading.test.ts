@@ -510,6 +510,8 @@ test('photo cross-check: a cell the two readings read differently writes nothing
   // The person only the second reading listed is kept, flagged.
   assert.deepEqual(outcome.result.people?.map((p) => p.name), ['Test Alpha', 'Test Beta', 'Test Gamma']);
   assert.ok(outcome.result.anomalies.some((x) => x.employeeName === 'Test Gamma' && /Only one of the two AI readings listed/.test(x.reason)));
+  // …and marked, so the review asks before importing them (a misread line is not a person).
+  assert.deepEqual(outcome.result.people?.filter((p) => p.oneReading).map((p) => p.name), ['Test Gamma']);
   assert.ok(outcome.reading.disagreements >= 5);
   assert.match(outcome.reading.note!, /read it twice/);
   assert.match(outcome.reading.note!, /^This photo was hard to read — 4 cells need checking/, 'every compared cell differed');
