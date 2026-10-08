@@ -19,7 +19,7 @@ export type OrbPhase =
   | 'confirm'
   /** "Which one?": people or readings to pick from. */
   | 'choose'
-  /** Edited words being read again ("Run it") while the sheet stays up. */
+  /** Edited words being read again ("Update preview") while the sheet stays up. */
   | 'rereading'
   /** Confirm was tapped and the change is being made. */
   | 'sending'

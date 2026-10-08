@@ -289,7 +289,7 @@ export function AppShell() {
     [session, showParsed, openComposer],
   );
 
-  // "Try again" on the sheet with the words as edited: the same parse step as a recording, from
+  // "Update preview" on the sheet with the words as edited: the same parse step as a recording, from
   // the text alone (nothing is recorded or transcribed). Nothing runs until its own Confirm.
   const handleVoiceReparse = useCallback(
     async (text: string) => {

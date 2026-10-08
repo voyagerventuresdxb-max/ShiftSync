@@ -23,7 +23,7 @@ export interface VoiceStageState {
   result: { intent: ParsedIntent; executed: boolean; hasAdditionalRequest: boolean } | null;
   /** Confirm tapped, the change is being made. */
   executing: boolean;
-  /** "Run it" with edited words: the same reading again, no recording. */
+  /** "Update preview" with edited words: the same reading again, no recording. */
   reparsing: boolean;
 }
 

@@ -89,7 +89,7 @@ const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foregr
  * centred card from `sm` up (same overlay conventions as RotaBuilder.tsx's `SheetShell`).
  *
  * One layout for every state: what kind of command it is, one plain sentence, what was heard
- * (editable — "Run it" re-reads the edited words, no new recording), then either a preview of
+ * (editable — "Update preview" re-reads the edited words, no new recording), then either a preview of
  * the result exactly as the app will show it, or the choices to pick from. Confirm is the one big
  * button; Edit and Cancel are small. Nothing runs without Confirm.
  */
@@ -123,7 +123,7 @@ export function VoiceCommandSheet({
   onChoose: (option: ParsedIntent) => void;
   /** Set after a choice was picked: back to the list it came from. */
   onBackToChoices?: () => void;
-  /** "Run it" with the edited words: a fresh read of the text (no recording). Never executes anything itself. */
+  /** "Update preview" with the edited words: a fresh read of the text (no recording). Never executes anything itself. */
   onReparse: (text: string) => void;
   onCancel: () => void;
   executing: boolean;
@@ -286,7 +286,7 @@ export function VoiceCommandSheet({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold text-foreground/87">{r.person}</span>
-                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Try again with this name</span>
+                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Update the preview with this name</span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
                 </button>
@@ -321,7 +321,7 @@ export function VoiceCommandSheet({
               {showEditor ? (
                 <>
                   <label htmlFor={heardId} className={caption}>
-                    {typed ? 'You typed' : 'I heard'} — fix it and try again
+                    {typed ? 'You typed' : 'I heard'} — fix it, then update the preview
                   </label>
                   <textarea
                     ref={heardRef}
@@ -428,7 +428,7 @@ export function VoiceCommandSheet({
             {showEditor ? (
               <>
                 <button type="button" className="btn btn-primary h-12 w-full text-base font-semibold" onClick={reparse} disabled={busy || !draft.trim()}>
-                  {reparsing ? 'Checking…' : 'Run it'}
+                  {reparsing ? 'Checking…' : 'Update preview'}
                 </button>
                 <div className={cn('grid gap-2', editing ? 'grid-cols-2' : 'grid-cols-1')}>
                   {editing && (
