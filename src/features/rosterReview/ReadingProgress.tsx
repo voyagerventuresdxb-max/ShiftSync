@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { fetchUploadProgress, type UploadProgress } from '../../api/schedules';
+import { fetchUploadProgress, type UploadProgress, type UploadStage } from '../../api/schedules';
 import { readingMessage } from './readingMessage';
 import { progressSteps, type RosterFileKind, type StepState } from './uploadProgress';
 
@@ -75,11 +75,14 @@ export function ReadingProgress({
   token,
   uploadId,
   fileKind = 'sheet',
+  onStage,
 }: {
   className?: string;
   token?: string | null;
   uploadId?: string | null;
   fileKind?: RosterFileKind;
+  /** Told each new stage the server reports (the onboarding orb follows it). */
+  onStage?: (stage: UploadStage) => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -88,6 +91,10 @@ export function ReadingProgress({
     return () => clearInterval(id);
   }, []);
   const { progress, unavailable } = useUploadProgress(token, uploadId);
+  const stage = progress?.stage;
+  useEffect(() => {
+    if (stage) onStage?.(stage);
+  }, [stage, onStage]);
 
   if (!progress && (unavailable || elapsed >= NO_PROGRESS_FALLBACK_S)) {
     return (
