@@ -21,8 +21,8 @@ function Avatar({ name }: { name: string | null | undefined }) {
   return (
     <span
       className={cn(
-        'grid h-9 w-9 shrink-0 place-items-center rounded-full border text-[11px] font-semibold',
-        name ? 'border-accent/30 bg-accent/10 text-accent' : 'border-dashed border-border text-foreground/38',
+        'grid h-10 w-10 shrink-0 place-items-center rounded-full border text-xs font-semibold',
+        name ? 'border-accent/30 bg-accent/10 text-accent' : 'border-dashed border-border text-foreground/60',
       )}
       aria-hidden
     >
@@ -68,27 +68,27 @@ function Line({
   danger?: boolean;
 }) {
   return (
-    <div className={cn('flex min-w-0 items-center gap-3 rounded-xl border p-3', danger ? 'border-destructive/45 bg-destructive/[0.06]' : 'border-border bg-background/40')}>
+    <div className={cn('flex min-w-0 items-start gap-3.5 rounded-2xl border p-3.5', danger ? 'border-destructive/45 bg-destructive/[0.06]' : 'border-border bg-background/50')}>
       {lead}
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <p className="truncate text-sm font-semibold text-foreground/87">{title}</p>
+          <p className="truncate text-[15px] font-semibold text-foreground/87">{title}</p>
           {tag}
         </div>
-        {role && <p className="text-[11px] font-medium text-foreground/60">{role}</p>}
+        {role && <p className="mt-0.5 text-xs font-medium text-accent">{role}</p>}
         {(Array.isArray(detail) ? detail : [detail]).map((line) => (
-          <p key={line} className="mt-0.5 text-xs text-foreground/60">
+          <p key={line} className="mt-1 text-[13px] leading-snug text-foreground/87">
             {line}
           </p>
         ))}
-        {was && <p className="mt-0.5 text-[11px] text-foreground/38">Was: {was}</p>}
+        {was && <p className="mt-1 text-xs text-foreground/60">Was: {was}</p>}
       </div>
     </div>
   );
 }
 
 const iconLead = (icon: ReactNode) => (
-  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-accent" aria-hidden>
+  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-accent" aria-hidden>
     {icon}
   </span>
 );
@@ -113,7 +113,7 @@ export function VoicePreview({ intent, viewerName }: { intent: ParsedIntent; vie
         : 'What will change';
   return (
     <div className="mt-4">
-      <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/38">{caption}</p>
+      <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/60">{caption}</p>
       {card}
     </div>
   );
@@ -132,7 +132,7 @@ function CancelCard({ details }: { details: CancelShiftIntent['details'] }) {
         tag={<Tag tone="danger">Cancel</Tag>}
         danger
       />
-      <p className="mt-1.5 text-[11px] text-foreground/60">
+      <p className="mt-2 text-xs text-foreground/60">
         {person ? `This shift comes off the rota, and ${person} is no longer working it.` : 'This open shift comes off the rota.'}
       </p>
     </>
@@ -142,20 +142,20 @@ function CancelCard({ details }: { details: CancelShiftIntent['details'] }) {
 /** The publish card when the server sent its counts: the two numbers that matter, large, and one plain sentence. */
 function PublishCard({ weekStart, counts }: { weekStart: string; counts: { shiftsChanging: number; peopleNotified: number } }) {
   return (
-    <div className="rounded-xl border border-accent/50 bg-accent/[0.06] p-3">
+    <div className="rounded-2xl border border-accent/50 bg-accent/[0.06] p-3.5">
       <div className="flex min-w-0 items-center gap-3">
         {iconLead(<CalendarCheck className="h-4 w-4" />)}
-        <p className="min-w-0 flex-1 text-sm font-semibold text-foreground/87">Week of {day(weekStart)}</p>
+        <p className="min-w-0 flex-1 text-[15px] font-semibold text-foreground/87">Week of {day(weekStart)}</p>
         <Tag tone="gold">Publish</Tag>
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-2">
-        <div className="rounded-lg border border-border bg-background/50 px-3 py-2">
+        <div className="rounded-xl border border-border bg-background/50 px-3 py-2.5">
           <dt className="text-[11px] font-medium text-foreground/60">Shifts changing</dt>
-          <dd className="text-2xl font-semibold tabular-nums text-accent">{counts.shiftsChanging}</dd>
+          <dd className="mt-0.5 font-['Instrument_Serif',ui-serif,Georgia,serif] text-[34px] leading-none tabular-nums text-accent">{counts.shiftsChanging}</dd>
         </div>
-        <div className="rounded-lg border border-border bg-background/50 px-3 py-2">
+        <div className="rounded-xl border border-border bg-background/50 px-3 py-2.5">
           <dt className="text-[11px] font-medium text-foreground/60">People notified</dt>
-          <dd className="text-2xl font-semibold tabular-nums text-accent">{counts.peopleNotified}</dd>
+          <dd className="mt-0.5 font-['Instrument_Serif',ui-serif,Georgia,serif] text-[34px] leading-none tabular-nums text-accent">{counts.peopleNotified}</dd>
         </div>
       </dl>
       <p className="mt-2.5 text-sm text-foreground/87">{publishSentence(counts)}</p>
@@ -171,7 +171,7 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         <>
           <ShoutoutCard as="div" name={d?.person ?? intent.targetUserName} note={intent.content} meta={`${viewerName} · just now`} />
           {d?.person && d.personRole && (
-            <p className="mt-1.5 text-[11px] text-foreground/60">
+            <p className="mt-2 text-xs text-foreground/60">
               For {d.person} · {d.personRole}
             </p>
           )}

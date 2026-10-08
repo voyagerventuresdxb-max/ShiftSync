@@ -143,6 +143,21 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     expect(calls.execute.map((c) => c.intent.content)).toEqual(['Spotless bar and great service']);
   });
 
+  test('tapping the heard words opens them for editing, exactly like Edit (and Back returns to the same preview)', async ({ page }) => {
+    await signIn(page, 'MANAGER');
+    const heard = 'Give Alex a shout-out for the spotless bar';
+    const calls = await stubVoice(page, { transcript: heard, parse: [alexShoutout('Spotless bar')] });
+    await record(page);
+    const sheet = confirmSheet(page);
+    await sheet.getByText(`“${heard}”`).click();
+    await expect(sheet.getByLabel(/I heard/)).toHaveValue(heard);
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await sheet.getByRole('button', { name: 'Back' }).click();
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toBeVisible();
+    expect(calls.parse).toHaveLength(1);
+    expect(calls.execute).toEqual([]);
+  });
+
   test('typed fallback inside the sheet: a reading that timed out keeps the heard words in the box; Send goes on to the same Confirm', async ({ page }) => {
     await page.addInitScript(() => {
       (window as { __shiftsyncVoiceTimeoutMs?: number }).__shiftsyncVoiceTimeoutMs = 1000;

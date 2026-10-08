@@ -82,14 +82,25 @@ function choiceDetail(option: ParsedIntent): string {
   return option.intent === 'POST_SHOUTOUT' ? `“${option.content}”` : option.summary;
 }
 
-const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/38';
+const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/60';
+
+/** The big gold Confirm (and Run it): the one action that does something. Utilities, not .btn, so its size and radius hold. */
+const primaryAction =
+  'inline-flex h-14 w-full items-center justify-center rounded-2xl bg-accent text-[17px] font-semibold text-accent-foreground hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60 motion-safe:transition';
+/** Edit, Cancel, Back, Done: quiet, smaller, still 48 px tall. */
+const quietAction =
+  'inline-flex min-h-12 items-center justify-center gap-1.5 rounded-2xl border border-border px-4 text-sm font-medium text-foreground/60 hover:border-foreground/30 hover:text-foreground/87 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors';
+/** A tappable card: a person, a reading, a name to try. */
+const choiceCard =
+  'flex min-h-16 w-full items-center gap-3.5 rounded-2xl border border-border bg-background/50 px-3.5 py-3 text-left hover:border-accent/50 hover:bg-accent/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors';
+const initialsDisc = 'grid h-10 w-10 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-xs font-semibold text-accent';
 
 /**
- * Confirm-before-execute sheet for the voice command pipeline: a bottom sheet on phones, a
- * centred card from `sm` up (same overlay conventions as RotaBuilder.tsx's `SheetShell`).
+ * Confirm-before-execute sheet for the voice command pipeline: it rises from the bottom of the
+ * voice sheet (VoiceStage), whose orb stays above it as a small ring.
  *
  * One layout for every state: what kind of command it is, one plain sentence, what was heard
- * (editable — "Run it" re-reads the edited words, no new recording), then either a preview of
+ * (tap the words or Edit — "Run it" re-reads the edited words, no new recording), then either a preview of
  * the result exactly as the app will show it, or the choices to pick from. Confirm is the one big
  * button; Edit and Cancel are small. Nothing runs without Confirm.
  */
@@ -196,6 +207,8 @@ export function VoiceCommandSheet({
   const team = isUnrecognized && !choices ? (intent.team ?? []) : [];
   const showEditor = editing || notUnderstood;
   const confirming = !isUnrecognized && !isAnswerOnly && !declined && !showFollowUp && !executed;
+  // The same states that offer Edit.
+  const canEdit = (confirming || !!choices) && !busy;
 
   // A recognised command missing a part: nearly there, not "didn't catch that".
   const incomplete = isUnrecognized && !!intent.incomplete;
@@ -250,8 +263,8 @@ export function VoiceCommandSheet({
         className="panel max-h-[calc(100dvh-9rem-env(safe-area-inset-top))] w-full max-w-md overflow-y-auto overscroll-contain rounded-b-none border-b-0 pb-[env(safe-area-inset-bottom)] shadow-lux focus:outline-none motion-safe:animate-rise"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="gold-rule h-px opacity-50" aria-hidden />
-        <div className="p-5">
+        <div className="gold-rule h-px opacity-40" aria-hidden />
+        <div className="px-5 pb-5 pt-6">
           <div className="flex min-h-6 items-center justify-between gap-3">
             <p className="eyebrow">{eyebrow}</p>
             {onBackToChoices && confirming && (
@@ -266,7 +279,7 @@ export function VoiceCommandSheet({
               </button>
             )}
           </div>
-          <h2 id={headingId} className="mt-2 text-[17px] font-semibold leading-snug tracking-tight text-foreground/87">
+          <h2 id={headingId} className="mt-2 text-[19px] font-semibold leading-snug tracking-tight text-foreground/87">
             {headline}
           </h2>
           {reason && <p className="mt-1.5 text-sm leading-relaxed text-foreground/60">{reason}</p>}
@@ -279,16 +292,16 @@ export function VoiceCommandSheet({
                   type="button"
                   onClick={() => onReparse(r.text)}
                   disabled={busy}
-                  className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-border bg-background/40 px-3 py-2.5 text-left hover:border-accent/50 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors"
+                  className={choiceCard}
                 >
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent" aria-hidden>
+                  <span className={initialsDisc} aria-hidden>
                     {initials(r.person)}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-foreground/87">{r.person}</span>
+                    <span className="block truncate text-[15px] font-semibold text-foreground/87">{r.person}</span>
                     <span className="mt-0.5 block truncate text-xs text-foreground/60">Try again with this name</span>
                   </span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
+                  <ChevronRight className="h-4 w-4 shrink-0 text-foreground/60" aria-hidden />
                 </button>
               ))}
             </div>
@@ -334,10 +347,10 @@ export function VoiceCommandSheet({
                         reparse();
                       }
                     }}
-                    rows={2}
+                    rows={3}
                     maxLength={300}
                     disabled={busy}
-                    className="mt-1.5 block min-h-11 w-full resize-none rounded-lg border border-input bg-background/60 p-3 text-sm text-foreground/87 placeholder:text-foreground/38 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+                    className="mt-2 block min-h-11 w-full resize-none rounded-2xl border border-input bg-background/50 px-4 py-3 text-[17px] leading-relaxed text-foreground/87 placeholder:text-foreground/50 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
                   />
                   {showExamples && (
                     <ExamplePhrases
@@ -351,10 +364,22 @@ export function VoiceCommandSheet({
                   )}
                 </>
               ) : (
-                <>
-                  <p className={caption}>{typed ? 'You typed' : 'I heard'}</p>
-                  <p className="mt-1 text-sm leading-relaxed text-foreground/60">“{transcript.trim()}”</p>
-                </>
+                <div
+                  // Tapping the words is a shortcut to Edit (the Edit button below is the keyboard way).
+                  onClick={canEdit ? () => setEditing(true) : undefined}
+                  className={cn(canEdit && '-mx-2 cursor-text rounded-2xl px-2 py-1.5 hover:bg-foreground/[0.03]')}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className={caption}>{typed ? 'You typed' : 'I heard'}</p>
+                    {canEdit && (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-foreground/60" aria-hidden>
+                        <Pencil className="h-3 w-3" />
+                        Tap to edit
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1.5 font-['Instrument_Serif',ui-serif,Georgia,serif] text-[22px] leading-snug text-foreground/87">“{transcript.trim()}”</p>
+                </div>
               )}
             </div>
           )}
@@ -377,21 +402,21 @@ export function VoiceCommandSheet({
                     type="button"
                     onClick={() => onChoose(option)}
                     disabled={busy}
-                    className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-border bg-background/40 px-3 py-2.5 text-left hover:border-accent/50 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors"
+                    className={choiceCard}
                   >
                     {name && (
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent" aria-hidden>
+                      <span className={initialsDisc} aria-hidden>
                         {initials(name)}
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-foreground/87">
+                      <span className="block truncate text-[15px] font-semibold text-foreground/87">
                         {name ?? option.summary}
                         {role && <span className="font-normal text-foreground/60"> · {role}</span>}
                       </span>
                       {name && <span className="mt-0.5 block truncate text-xs text-foreground/60">{choiceDetail(option)}</span>}
                     </span>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
+                    <ChevronRight className="h-4 w-4 shrink-0 text-foreground/60" aria-hidden />
                   </button>
                 );
               })}
@@ -418,7 +443,7 @@ export function VoiceCommandSheet({
           )}
 
           {problem && confirming && (
-            <div role="alert" className="mt-4 rounded-xl border border-warning/35 bg-warning/10 p-3">
+            <div role="alert" className="mt-4 rounded-2xl border border-warning/35 bg-warning/10 p-3.5">
               <p className="text-sm font-semibold text-foreground/87">{problem.title}</p>
               <p className="mt-0.5 text-sm leading-relaxed text-foreground/60">{problem.message}</p>
             </div>
@@ -427,48 +452,48 @@ export function VoiceCommandSheet({
           <div className="mt-5 space-y-2">
             {showEditor ? (
               <>
-                <button type="button" className="btn btn-primary h-12 w-full text-base font-semibold" onClick={reparse} disabled={busy || !draft.trim()}>
+                <button type="button" className={primaryAction} onClick={reparse} disabled={busy || !draft.trim()}>
                   {reparsing ? 'Checking…' : 'Run it'}
                 </button>
                 <div className={cn('grid gap-2', editing ? 'grid-cols-2' : 'grid-cols-1')}>
                   {editing && (
-                    <button type="button" className="btn btn-ghost min-h-11" onClick={() => setEditing(false)} disabled={busy}>
+                    <button type="button" className={quietAction} onClick={() => setEditing(false)} disabled={busy}>
                       Back
                     </button>
                   )}
-                  <button type="button" className="btn btn-ghost min-h-11" onClick={onCancel} disabled={busy}>
+                  <button type="button" className={quietAction} onClick={onCancel} disabled={busy}>
                     Cancel
                   </button>
                 </div>
               </>
             ) : confirming ? (
               <>
-                <button type="button" className="btn btn-primary h-12 w-full text-base font-semibold" onClick={onConfirm} disabled={busy}>
+                <button type="button" className={primaryAction} onClick={onConfirm} disabled={busy}>
                   {executing ? 'Confirming…' : confirmLabel(intent)}
                 </button>
                 <div className="grid grid-cols-2 gap-2">
-                  <button type="button" className="btn btn-ghost inline-flex min-h-11 items-center justify-center gap-1.5" onClick={() => setEditing(true)} disabled={busy}>
+                  <button type="button" className={quietAction} onClick={() => setEditing(true)} disabled={busy}>
                     <Pencil className="h-3.5 w-3.5" aria-hidden />
                     Edit
                   </button>
                   {/* "Cancel" beside "cancel this shift" would read as the same thing: this one keeps it. */}
-                  <button type="button" className="btn btn-ghost min-h-11" onClick={onCancel} disabled={busy}>
+                  <button type="button" className={quietAction} onClick={onCancel} disabled={busy}>
                     {intent.intent === 'CANCEL_SHIFT' ? 'Keep shift' : 'Cancel'}
                   </button>
                 </div>
               </>
             ) : choices ? (
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" className="btn btn-ghost inline-flex min-h-11 items-center justify-center gap-1.5" onClick={() => setEditing(true)} disabled={busy}>
+                <button type="button" className={quietAction} onClick={() => setEditing(true)} disabled={busy}>
                   <Pencil className="h-3.5 w-3.5" aria-hidden />
                   Edit
                 </button>
-                <button type="button" className="btn btn-ghost min-h-11" onClick={onCancel} disabled={busy}>
+                <button type="button" className={quietAction} onClick={onCancel} disabled={busy}>
                   Cancel
                 </button>
               </div>
             ) : (
-              <button type="button" className="btn btn-ghost min-h-11 w-full" onClick={onCancel} disabled={busy}>
+              <button type="button" className={cn(quietAction, 'w-full')} onClick={onCancel} disabled={busy}>
                 {answer ? 'Done' : 'Got it'}
               </button>
             )}
@@ -490,10 +515,10 @@ function AnswerList({ answer }: { answer: VoiceAnswer }) {
   return (
     <ul className="mt-4 flex flex-col gap-2" aria-label={answer.title}>
       {answer.items.map((item, i) => (
-        <li key={i} className="rounded-xl border border-border bg-background/40 px-3 py-2.5">
-          <p className="text-sm font-semibold text-foreground/87">{item.primary}</p>
-          {item.secondary && <p className="mt-0.5 text-xs text-foreground/60">{item.secondary}</p>}
-          {item.tertiary && <p className="mt-0.5 text-[11px] text-foreground/38">{item.tertiary}</p>}
+        <li key={i} className="rounded-2xl border border-border bg-background/50 px-3.5 py-3">
+          <p className="text-[15px] font-semibold text-foreground/87">{item.primary}</p>
+          {item.secondary && <p className="mt-0.5 text-xs font-medium text-accent">{item.secondary}</p>}
+          {item.tertiary && <p className="mt-0.5 text-xs text-foreground/60">{item.tertiary}</p>}
         </li>
       ))}
     </ul>
@@ -522,7 +547,7 @@ function TeamPicker({ heard, team, onChoose, busy }: { heard: string; team: Pars
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search your team"
         disabled={busy}
-        className="mt-1.5 block min-h-11 w-full rounded-lg border border-input bg-background/60 px-3 text-sm text-foreground/87 placeholder:text-foreground/38 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+        className="mt-2 block min-h-12 w-full rounded-2xl border border-input bg-background/50 px-4 text-[17px] text-foreground/87 placeholder:text-foreground/50 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
       />
       <div className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto overscroll-contain" role="group" aria-label="Your team">
         {shown.map(({ option, name, role }) => (
@@ -531,16 +556,16 @@ function TeamPicker({ heard, team, onChoose, busy }: { heard: string; team: Pars
             type="button"
             onClick={() => onChoose(option)}
             disabled={busy}
-            className="flex min-h-14 w-full shrink-0 items-center gap-3 rounded-xl border border-border bg-background/40 px-3 py-2.5 text-left hover:border-accent/50 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors"
+            className={cn(choiceCard, 'shrink-0')}
           >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/10 text-[11px] font-semibold text-accent" aria-hidden>
+            <span className={initialsDisc} aria-hidden>
               {initials(name)}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold text-foreground/87">{name}</span>
+              <span className="block truncate text-[15px] font-semibold text-foreground/87">{name}</span>
               {role && <span className="mt-0.5 block truncate text-xs text-foreground/60">{role}</span>}
             </span>
-            <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
+            <ChevronRight className="h-4 w-4 shrink-0 text-foreground/60" aria-hidden />
           </button>
         ))}
         {!shown.length && <p className="py-2 text-sm text-foreground/60">Nobody on your team matches “{query.trim()}”.</p>}
