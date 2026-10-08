@@ -241,8 +241,9 @@ export function VoiceCommandSheet({
 
   return (
     <div
-      // Rises from the bottom of the voice sheet (VoiceStage), which stays behind it with the orb.
-      className="fixed inset-0 z-50 flex items-end justify-center"
+      // Rises from the bottom of the voice sheet (VoiceStage), which stays behind it with the orb;
+      // it fills the sheet's box, so it too stays above an on-screen keyboard.
+      className="absolute inset-0 z-50 flex items-end justify-center"
       // Once execution is in flight the mutation lands regardless — offering a
       // backdrop dismiss here would be a cancel button that cancels nothing.
       onClick={busy ? undefined : onCancel}

@@ -31,7 +31,7 @@ export function ExamplePhrases({ examples, onPick, disabled }: { examples: strin
  * sheet), and on every voice problem (microphone off, offline, timeout, assistant unavailable,
  * limit reached), which it shows above the box in plain words. What is typed goes through the
  * same reading, preview and Confirm as a spoken command. The sheet around it carries the step
- * (its live region) and the way out (its Cancel).
+ * (its live region) and, in its pinned bottom row, Show preview and Cancel; Enter here sends too.
  */
 export function VoiceComposer({
   value,
@@ -117,14 +117,6 @@ export function VoiceComposer({
       <p className="mt-4 text-[12px] leading-relaxed text-foreground/60">
         What you type goes to Google's Gemini AI service, outside the UAE, to work out what you mean. Nothing changes until you confirm.
       </p>
-      <button
-        type="button"
-        className="btn btn-primary mt-4 inline-flex h-12 w-full items-center justify-center gap-2 text-base font-semibold"
-        onClick={send}
-        disabled={sending || !value.trim()}
-      >
-        {sending ? 'Checking…' : 'Show preview'}
-      </button>
     </div>
   );
 }
