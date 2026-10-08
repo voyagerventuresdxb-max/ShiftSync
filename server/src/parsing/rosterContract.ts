@@ -61,6 +61,8 @@ export interface ReadPerson {
    * text says "Okafor"); `name` is the one kept. Absent when the readers agree.
    */
   nameAlternatives?: { reader: 'ai' | 'table'; name: string }[];
+  /** Only one of a photo's two AI readings listed this person: possibly a misread line. */
+  oneReading?: boolean;
 }
 
 /** A row that looks like it belongs to the roster but could not be read into a person or shifts. */
@@ -130,6 +132,8 @@ export type PersonFlag =
   | { kind: 'name_differs'; spellings: string[] }
   | { kind: 'ai_only' }
   | { kind: 'table_only' }
+  /** Only one of the two AI readings of a photo or scan listed this person: never imported without the manager's answer. */
+  | { kind: 'one_reading' }
   /** No role could be resolved; non-blocking (the manager can assign one in bulk). */
   | { kind: 'role_unresolved' };
 
