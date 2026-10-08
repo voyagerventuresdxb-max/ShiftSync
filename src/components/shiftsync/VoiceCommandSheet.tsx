@@ -90,6 +90,11 @@ const primaryAction =
 /** Edit, Cancel, Back, Done: quiet, smaller, still 48 px tall. */
 const quietAction =
   'inline-flex min-h-12 items-center justify-center gap-1.5 rounded-2xl border border-border px-4 text-sm font-medium text-foreground/60 hover:border-foreground/30 hover:text-foreground/87 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors';
+/** Editing a preview: the action that applies is gold, the other is quiet (and disabled). */
+const editAction =
+  'inline-flex h-12 w-full items-center justify-center rounded-2xl bg-accent px-4 text-base font-semibold text-accent-foreground hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60 motion-safe:transition';
+const quietEditAction =
+  'inline-flex h-12 w-full items-center justify-center rounded-2xl border border-border px-4 text-base font-medium text-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 motion-safe:transition';
 /** A tappable card: a person, a reading, a name to try. */
 const choiceCard =
   'flex min-h-16 w-full items-center gap-3.5 rounded-2xl border border-border bg-background/50 px-3.5 py-3 text-left hover:border-accent/50 hover:bg-accent/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 motion-safe:transition-colors';
@@ -209,6 +214,13 @@ export function VoiceCommandSheet({
   const confirming = !isUnrecognized && !isAnswerOnly && !declined && !showFollowUp && !executed;
   // The same states that offer Edit.
   const canEdit = (confirming || !!choices) && !busy;
+  // The preview on screen was made from `transcript`. Once the edited words differ, it is out of
+  // date: it stays visible but dimmed, and Confirm is disabled until Update preview has read the
+  // new words (or the words are put back exactly). Confirm only ever sends the previewed reading.
+  const stale = confirming && editing && draft.trim() !== transcript.trim();
+  const confirm = () => {
+    if (!stale && !busy) onConfirm();
+  };
 
   // A recognised command missing a part: nearly there, not "didn't catch that".
   const incomplete = isUnrecognized && !!intent.incomplete;
@@ -241,8 +253,9 @@ export function VoiceCommandSheet({
 
   return (
     <div
-      // Rises from the bottom of the voice sheet (VoiceStage), which stays behind it with the orb.
-      className="fixed inset-0 z-50 flex items-end justify-center"
+      // Rises from the bottom of the voice sheet (VoiceStage), which stays behind it with the orb;
+      // it fills the sheet's box, so it too stays above an on-screen keyboard.
+      className="absolute inset-0 z-50 flex items-end justify-center"
       // Once execution is in flight the mutation lands regardless — offering a
       // backdrop dismiss here would be a cancel button that cancels nothing.
       onClick={busy ? undefined : onCancel}
@@ -260,11 +273,13 @@ export function VoiceCommandSheet({
         aria-labelledby={headingId}
         aria-busy={busy}
         tabIndex={-1}
-        className="panel max-h-[calc(100dvh-9rem-env(safe-area-inset-top))] w-full [@media(max-height:720px)]:max-h-[calc(100dvh-3.5rem-env(safe-area-inset-top))] max-w-md overflow-y-auto overscroll-contain rounded-b-none border-b-0 pb-[env(safe-area-inset-bottom)] shadow-lux focus:outline-none motion-safe:animate-rise"
+        // Its height is a share of the voice sheet's visible box (above an on-screen keyboard); on a
+        // short screen it takes nearly all of it. Only the body scrolls: the buttons stay pinned.
+        className="panel flex max-h-[calc(100%-9rem)] w-full max-w-md flex-col overflow-hidden rounded-b-none border-b-0 shadow-lux focus:outline-none group-data-[short=true]/stage:max-h-[calc(100%-3.5rem)] motion-safe:animate-rise"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="gold-rule h-px opacity-40" aria-hidden />
-        <div className="px-5 pb-5 pt-6">
+        <div className="gold-rule h-px shrink-0 opacity-40" aria-hidden />
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-4 pt-6" data-voice-scroll>
           <div className="flex min-h-6 items-center justify-between gap-3">
             <p className="eyebrow">{eyebrow}</p>
             {onBackToChoices && confirming && (
@@ -347,7 +362,7 @@ export function VoiceCommandSheet({
                         reparse();
                       }
                     }}
-                    rows={3}
+                    rows={confirming ? 2 : 3}
                     maxLength={300}
                     disabled={busy}
                     className="mt-2 block min-h-11 w-full resize-none rounded-2xl border border-input bg-background/50 px-4 py-3 text-[17px] leading-relaxed text-foreground/87 placeholder:text-foreground/50 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
@@ -388,7 +403,18 @@ export function VoiceCommandSheet({
 
           {team.length > 0 && <TeamPicker heard={person?.heard ?? ''} team={team} onChoose={onChoose} busy={busy} />}
 
-          {confirming && !showEditor && <VoicePreview intent={intent} viewerName={viewerName} />}
+          {confirming && (
+            <div className="relative">
+              {stale && (
+                <p className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-warning">
+                  Out of date
+                </p>
+              )}
+              <div className={cn('motion-safe:transition-opacity motion-safe:duration-200', stale && 'opacity-40 saturate-50')} data-preview-stale={stale || undefined}>
+                <VoicePreview intent={intent} viewerName={viewerName} />
+              </div>
+            </div>
+          )}
 
           {choices && !showEditor && (
             <div className="mt-4 flex flex-col gap-2" role="group" aria-label={person ? 'People to choose from' : 'Readings to choose from'}>
@@ -439,6 +465,9 @@ export function VoiceCommandSheet({
               origin={origin}
               kind={isAnswerOnly ? 'read' : 'change'}
               step={isAnswerOnly ? 'answered' : executing ? 'doing' : 'ready'}
+              label={stale ? 'Editing: tap Update preview' : undefined}
+              announce={stale ? 'Editing, preview out of date' : undefined}
+              warning={stale}
             />
           )}
 
@@ -449,8 +478,36 @@ export function VoiceCommandSheet({
             </div>
           )}
 
-          <div className="mt-5 space-y-2">
-            {showEditor ? (
+        </div>
+        <div className="shrink-0 space-y-2 border-t border-border/70 bg-surface px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3" data-voice-actions>
+            {confirming && editing ? (
+              <>
+                {/* Editing a preview: Update preview reads the new words; Confirm stays the previewed
+                    reading and is disabled while the words on screen differ from it. */}
+                <button type="button" className={stale || reparsing ? editAction : quietEditAction} onClick={reparse} disabled={busy || !stale}>
+                  {reparsing ? 'Checking…' : 'Update preview'}
+                </button>
+                <button type="button" className={stale ? quietEditAction : editAction} onClick={confirm} disabled={busy || stale}>
+                  {executing ? 'Confirming…' : confirmLabel(intent)}
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    className={quietAction}
+                    onClick={() => {
+                      setEditing(false);
+                      setDraft(transcript);
+                    }}
+                    disabled={busy}
+                  >
+                    Back
+                  </button>
+                  <button type="button" className={quietAction} onClick={onCancel} disabled={busy}>
+                    {intent.intent === 'CANCEL_SHIFT' ? 'Keep shift' : 'Cancel'}
+                  </button>
+                </div>
+              </>
+            ) : showEditor ? (
               <>
                 <button type="button" className={primaryAction} onClick={reparse} disabled={busy || !draft.trim()}>
                   {reparsing ? 'Checking…' : 'Update preview'}
@@ -468,7 +525,7 @@ export function VoiceCommandSheet({
               </>
             ) : confirming ? (
               <>
-                <button type="button" className={primaryAction} onClick={onConfirm} disabled={busy}>
+                <button type="button" className={primaryAction} onClick={confirm} disabled={busy}>
                   {executing ? 'Confirming…' : confirmLabel(intent)}
                 </button>
                 <div className="grid grid-cols-2 gap-2">
@@ -497,7 +554,6 @@ export function VoiceCommandSheet({
                 {answer ? 'Done' : 'Got it'}
               </button>
             )}
-          </div>
         </div>
       </div>
     </div>

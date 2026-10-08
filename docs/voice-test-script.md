@@ -277,10 +277,11 @@ month, year).
 | V1 | Tap the mic, say a command, tap the mic again | Orb: a slow ring (starting), a dotted sphere whose speed and fine outer ring follow your voice (listening), orbits (transcribing), a connected web (understanding); the heard words appear word by word, then the confirm sheet rises and the orb becomes a small calm ring above it. |
 | V2 | Tap the mic, then the top arrow (or **Cancel**) while still recording | The sheet closes, the phone's microphone indicator goes off, and nothing is sent (no transcript, nothing in the voice log). |
 | V3 | Say a command, then close the sheet while it shows *Transcribing* | The sheet steps aside, the dock's mic spins; the confirm sheet comes back on its own with the answer. |
-| V4 | On any preview, tap the heard words (or **Edit**), change them, **Update preview** | The same reading again from the edited words, no recording; a new preview; nothing changes before **Confirm**. |
+| V4 | On any preview, tap the heard words (or **Edit**) and change them | The preview dims and is marked **Out of date**, the line says *Editing: tap Update preview*, and **Confirm** is greyed out (it cannot be tapped). Put the words back exactly: the preview is normal and Confirm works again. Change them and tap **Update preview**: a new preview at full strength, *Ready to confirm*; Confirm then does exactly what that preview shows. No recording; nothing changes before **Confirm**. |
 | V5 | "Which one?" (two people with the same first name) | The orb is small and dim; each person is a card with full name and role; no Confirm until one is chosen. |
 | V6 | Microphone denied, airplane mode, or a timeout | A still, dim orb, the problem in plain words, and the typed box on the same sheet; **Show preview** goes on to the same Confirm. |
 | V7 | iPhone **Reduce Motion** on, then V1 | The orb is a still image in every step; the heard words appear at once; nothing slides. |
+| V8 | A short phone (667 px tall), or with the keyboard up, with a problem message showing (airplane mode, microphone off) | **Show preview**, the mic and **Cancel** stay at the bottom of the visible screen without scrolling; on a preview, **Confirm**, **Edit** and **Cancel** do too. Only the middle scrolls. |
 
 ## Results log
 

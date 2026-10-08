@@ -1,8 +1,9 @@
-import { Component, Fragment, Suspense, lazy, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Component, Fragment, Suspense, lazy, useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { ChevronDown, Keyboard, LoaderCircle, Mic, Square } from 'lucide-react';
 import { VoiceComposer } from '@/components/shiftsync/VoiceComposer';
 import { loadVoiceOrb } from '@/components/shiftsync/voiceOrbChunk';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useVisibleViewport } from '@/hooks/useVisibleViewport';
 import { useCloseOnBack } from '@/lib/backNavigation';
 import { cn } from '@/lib/utils';
 import { ORB_PERSONALITIES, orbLook, type OrbVariant } from '@/lib/voiceOrb';
@@ -40,8 +41,14 @@ class OrbBoundary extends Component<{ children: ReactNode }, { failed: boolean }
 /** How long one recording may run (AppShell's MAX_RECORDING_MS): the ring around the mic counts it down. */
 const RECORDING_MS = 10_000;
 
-/** Below this window height the orb is drawn smaller, so a 667 px-tall phone keeps the words and buttons in view. */
-const SHORT_SCREEN_PX = 720;
+/**
+ * The orb gives way first when the visible height is short (a small phone, or the keyboard up):
+ * the bottom row is pinned and the middle scrolls, so nothing pushes the buttons off screen.
+ */
+function orbSizeFor(visibleHeight: number, b: boolean): number {
+  if (b) return visibleHeight < 560 ? 64 : 104;
+  return visibleHeight >= 760 ? 184 : visibleHeight >= 640 ? 144 : visibleHeight >= 520 ? 112 : 72;
+}
 
 /**
  * "Heard" text appearing word by word once the transcript arrives (there are no live captions:
@@ -64,16 +71,6 @@ function RevealText({ text, animate }: { text: string; animate: boolean }) {
       ))}
     </>
   );
-}
-
-function useShortScreen(): boolean {
-  const [short, setShort] = useState(() => typeof window !== 'undefined' && window.innerHeight < SHORT_SCREEN_PX);
-  useEffect(() => {
-    const onResize = () => setShort(window.innerHeight < SHORT_SCREEN_PX);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-  return short;
 }
 
 const iconButton =
@@ -132,9 +129,11 @@ function MicButton({ mode, onMic, size, micRef }: { mode: VoiceStageMode; onMic:
 /**
  * The voice sheet: full height, near-black, the orb in the middle. Top: close and whose venue,
  * in which role. Middle: the orb, one word for the step, then what was heard (or the typed
- * box, with the problem when there is one). Bottom: the microphone, with the keyboard on one
- * side and Cancel on the other. The confirm sheet (`children`) rises over the lower part, and
- * the orb above it shrinks to a small ring.
+ * box, with the problem when there is one). Bottom, pinned: the microphone with the keyboard on
+ * one side and Cancel on the other — or, for a typed command, Show preview between the mic and
+ * Cancel. The sheet fills only the visible part of the screen (above an on-screen keyboard) and
+ * only its middle scrolls. The confirm sheet (`children`) rises over the lower part, and the
+ * orb above it shrinks to a small ring.
  *
  * Nothing here decides anything: every step and button maps to what AppShell already does
  * (lib/voiceStage.ts). Two compositions: `a` (recommended, centred and quiet) and `b` (the
@@ -174,7 +173,7 @@ export function VoiceStage({
 }) {
   const mode = voiceStageMode(state);
   const reduced = useReducedMotion();
-  const short = useShortScreen();
+  const visible = useVisibleViewport();
   const headingId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const micRef = useRef<HTMLButtonElement>(null);
@@ -192,7 +191,7 @@ export function VoiceStage({
   const announcement = voiceStageAnnouncement(state);
   const position = voiceStagePosition(state, mode === 'sending-typed' ? 'typed' : 'voice');
   const b = variant === 'b';
-  const orbSize = b ? 104 : short ? 144 : 184;
+  const orbSize = orbSizeFor(visible.height, b);
   // The orb gives way to the typed box and to the confirm sheet.
   const scale = b ? (hasSheet ? 0.7 : 1) : look.scale * (mode === 'problem' ? 0.45 : composerShown ? 0.6 : 1);
   // Starting, listening and reading: the orb, its word and what was heard sit together in the middle.
@@ -229,10 +228,41 @@ export function VoiceStage({
   // The typed box has its own heading; then the word is only a label.
   const Word = composerShown ? 'p' : 'h2';
   const mic = <MicButton mode={mode} onMic={onMic} size={b ? 60 : 76} micRef={micRef} />;
+  const sending = state.composer.sending;
+  const send = () => {
+    const text = composerText.trim();
+    if (text && !sending) onSend(text);
+  };
+  // Typed: the mic moves to the side (to switch back to voice) and Show preview takes the middle.
+  const micSide = (
+    <button
+      type="button"
+      onClick={voiceMicControl(mode).action === 'none' ? undefined : onMic}
+      disabled={voiceMicControl(mode).action === 'none'}
+      aria-label={voiceMicControl(mode).label}
+      className={cn(iconButton, 'border-accent/40 text-accent')}
+    >
+      <Mic className="h-5 w-5" aria-hidden />
+    </button>
+  );
+  const showPreview = (
+    <button
+      type="button"
+      onClick={send}
+      disabled={sending || !composerText.trim()}
+      className="inline-flex h-14 min-w-0 flex-1 items-center justify-center rounded-2xl bg-accent px-4 text-base font-semibold text-accent-foreground hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50 motion-safe:transition"
+    >
+      {sending ? 'Checking…' : 'Show preview'}
+    </button>
+  );
 
   return (
     <div
-      className="voice-stage fixed inset-0 z-50 overflow-hidden bg-background text-foreground"
+      className="voice-stage group/stage fixed inset-x-0 z-50 overflow-hidden bg-background text-foreground"
+      // The visible part of the screen: above an on-screen keyboard, the whole screen otherwise.
+      style={visible.height ? { top: visible.top, height: visible.height } : { top: 0, bottom: 0 }}
+      // A short visible area (a small phone, or the keyboard up): the confirm sheet takes nearly all of it.
+      data-short={visible.height > 0 && visible.height < 720}
       onKeyDown={(e) => {
         if (e.key === 'Escape' && !hasSheet) {
           e.stopPropagation();
@@ -268,7 +298,8 @@ export function VoiceStage({
           {!b && <span className="w-11 shrink-0" aria-hidden />}
         </div>
 
-        <div className={cn('flex min-h-0 flex-1 flex-col', voiceStep && !b && 'justify-center pb-4')}>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-voice-scroll>
+        <div className={cn('flex min-h-full flex-col', voiceStep && !b && 'justify-center pb-4')}>
           <div className={cn('flex shrink-0', b ? 'mt-4 items-center gap-4' : 'mt-2 flex-col items-center')}>
             <div
               className="shrink-0 motion-safe:transition-[height,width] motion-safe:duration-500 motion-safe:ease-out"
@@ -318,7 +349,7 @@ export function VoiceStage({
             </div>
           )}
           {composerShown && (
-            <div className="mt-5 min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+            <div className="mt-5 pb-2">
               <VoiceComposer
                 value={composerText}
                 onChange={onComposerChange}
@@ -331,9 +362,17 @@ export function VoiceStage({
             </div>
           )}
         </div>
+        </div>
 
-        <div className={cn('shrink-0', hasSheet && 'hidden')}>
-          {b ? (
+        {/* Pinned: never scrolls away, never pushed off by the orb or a problem message. */}
+        <div className={cn('shrink-0', hasSheet && 'hidden')} data-voice-actions>
+          {composerShown ? (
+            <div className={cn('flex items-center gap-3 pt-3', b && 'glass-bar rounded-full p-1.5')}>
+              {micSide}
+              {showPreview}
+              {cancel}
+            </div>
+          ) : b ? (
             <div className="glass-bar grid grid-cols-[1fr_auto_1fr] items-center rounded-full p-1.5">
               <div className="justify-self-start">{keyboard}</div>
               {mic}
@@ -346,9 +385,11 @@ export function VoiceStage({
               <div className="justify-self-end">{cancel}</div>
             </div>
           )}
-          <p className="mt-2 h-4 text-center text-[12px] text-foreground/60" aria-hidden>
-            {mode === 'listening' ? 'Tap to stop' : ''}
-          </p>
+          {!composerShown && (
+            <p className="mt-2 h-4 text-center text-[12px] text-foreground/60" aria-hidden>
+              {mode === 'listening' ? 'Tap to stop' : ''}
+            </p>
+          )}
         </div>
       </div>
       {children}

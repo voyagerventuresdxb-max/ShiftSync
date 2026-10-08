@@ -65,3 +65,9 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
     `AI_VOICE_USER_DAILY_LIMIT=100` and `AI_VOICE_VENUE_DAILY_LIMIT=300` voice model calls a day
     (before: unset, i.e. `40` / `100`; two calls per spoken command, one per typed command). Set
     all four back (unset / `5`) after the test week.
+21. [ ] **Unknown URLs in production show the router's raw 404 page:** add a friendly not-found
+    screen (with a way back home).
+22. [ ] **Swap and join approval sheets show no role:** the server must send the person's role with
+    those readings, so the voice confirm sheet can show it as it does for shifts and shout-outs.
+23. [ ] **Live captions on iPhone:** revisit when an iOS Capacitor project exists (in a Safari tab
+    they would need Apple's speech recognition, which is not available to Home Screen web apps).
