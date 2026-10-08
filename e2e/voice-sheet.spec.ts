@@ -151,11 +151,101 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     const sheet = confirmSheet(page);
     await sheet.getByText(`“${heard}”`).click();
     await expect(sheet.getByLabel(/I heard/)).toHaveValue(heard);
-    await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    // The words still match the preview on screen, so Confirm stays available while editing.
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toBeEnabled();
     await sheet.getByRole('button', { name: 'Back' }).click();
     await expect(sheet.getByRole('button', { name: 'Confirm' })).toBeVisible();
     expect(calls.parse).toHaveLength(1);
     expect(calls.execute).toEqual([]);
+  });
+
+  test('out-of-date preview: edited words dim the preview, mark it "Out of date" and disable Confirm until Update preview; words put back restore it', async ({ page }) => {
+    await signIn(page, 'MANAGER');
+    const heard = 'Give Alex a shout-out for the spotless bar';
+    const edited = `${heard} and great service`;
+    const calls = await stubVoice(page, { transcript: heard, parse: [alexShoutout('Spotless bar'), alexShoutout('Spotless bar and great service')] });
+    await record(page);
+    const sheet = confirmSheet(page);
+    const status = sheet.getByRole('status');
+    const confirm = sheet.getByRole('button', { name: 'Confirm' });
+    await expect(status).toHaveText('Ready to confirm');
+    const live = await status.elementHandle();
+
+    await sheet.getByRole('button', { name: 'Edit' }).click();
+    const box = sheet.getByLabel(/I heard/);
+    // Unchanged words: the preview on screen still matches them.
+    await expect(confirm).toBeEnabled();
+    await expect(sheet.getByText('Out of date', { exact: true })).toHaveCount(0);
+
+    await box.fill(edited);
+    await expect(status).toHaveText('Editing, preview out of date');
+    await expect(sheet.getByText('Editing: tap Update preview', { exact: true })).toBeVisible();
+    await expect(sheet.getByText('Out of date', { exact: true })).toBeVisible();
+    await expect(sheet.locator('[data-preview-stale]')).toHaveCSS('opacity', '0.4');
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toBeDisabled();
+    await expect(sheet.getByRole('button', { name: 'Update preview' })).toBeEnabled();
+    await expect(sheet.getByRole('button', { name: 'Back' })).toBeEnabled();
+    await expect(sheet.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    // Even a forced tap does nothing: no confirm request can leave with words that weren't read.
+    await confirm.click({ force: true });
+    await page.waitForTimeout(400);
+    expect(calls.execute).toEqual([]);
+
+    // Put back exactly: the preview is current again.
+    await box.fill(heard);
+    await expect(status).toHaveText('Ready to confirm');
+    await expect(sheet.getByText('Out of date', { exact: true })).toHaveCount(0);
+    await expect(confirm).toBeEnabled();
+
+    // Change again and press Enter (the same as Update preview): the new words are read, nothing is sent.
+    await box.fill(edited);
+    await expect(confirm).toBeDisabled();
+    await box.press('Enter');
+    await expect(sheet.getByText('Spotless bar and great service', { exact: true })).toBeVisible();
+    await expect(status).toHaveText('Ready to confirm');
+    await expect(sheet.locator('[data-preview-stale]')).toHaveCount(0);
+    expect(calls.execute).toEqual([]);
+    // One live region all along, so a screen reader hears each change.
+    expect(await status.evaluate((el, first) => el === first, live)).toBe(true);
+
+    // Confirm sends exactly the reading on screen, with the words it was read from.
+    await sheet.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.locator('.success-block')).toBeVisible();
+    expect(calls.parse.map((c) => c.transcript)).toEqual([heard, edited]);
+    expect(calls.execute).toHaveLength(1);
+    expect(calls.execute[0]!.intent.content).toBe('Spotless bar and great service');
+    expect((calls.execute[0] as unknown as { transcript: string }).transcript).toBe(edited);
+  });
+
+  test('out-of-date preview, typed command: the same rule — Confirm only ever sends the previewed reading', async ({ page }) => {
+    await signIn(page, 'MANAGER');
+    const typed = 'Give Alex a shout-out saying great job';
+    const calls = await stubVoice(page, { parse: [alexShoutout('Great job'), alexShoutout('Great job tonight')] });
+    await page.getByRole('button', { name: 'Type a command' }).click();
+    await stage(page).getByLabel("Type what you'd say").fill(typed);
+    await stage(page).getByRole('button', { name: 'Show preview' }).click();
+    const sheet = confirmSheet(page, 'You typed');
+    await expect(sheet.getByRole('status')).toHaveText('Ready to confirm');
+    await sheet.getByText(`“${typed}”`).click();
+    await sheet.getByLabel(/You typed/).fill(`${typed} tonight`);
+    await expect(sheet.getByRole('status')).toHaveText('Editing, preview out of date');
+    const confirm = sheet.getByRole('button', { name: 'Confirm' });
+    await expect(confirm).toBeDisabled();
+    await confirm.click({ force: true });
+    await page.waitForTimeout(400);
+    expect(calls.execute).toEqual([]);
+    await sheet.getByRole('button', { name: 'Update preview' }).click();
+    await expect(sheet.getByText('Great job tonight', { exact: true })).toBeVisible();
+    await expect(sheet.getByRole('status')).toHaveText('Ready to confirm');
+    await sheet.getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.locator('.success-block')).toBeVisible();
+    expect(calls.parse.map((c) => [c.transcript, c.source])).toEqual([
+      [typed, 'typed'],
+      [`${typed} tonight`, 'typed'],
+    ]);
+    expect(calls.execute.map((c) => c.intent.content)).toEqual(['Great job tonight']);
+    expect((calls.execute[0] as unknown as { transcript: string }).transcript).toBe(`${typed} tonight`);
   });
 
   test('typed fallback inside the sheet: a reading that timed out keeps the heard words in the box; Show preview goes on to the same Confirm', async ({ page }) => {

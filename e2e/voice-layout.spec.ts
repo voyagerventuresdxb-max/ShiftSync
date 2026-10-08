@@ -117,6 +117,51 @@ async function expectReachable(locator: Locator, visible: { width: number; heigh
 
 const stage = (page: Page) => page.locator('.voice-stage > [role="dialog"]');
 
+/** A made-up reading: a new shift for Alex Example, with name, role, date and times. */
+const TYPED = 'Add Alex on Friday from half six to one, bar';
+const SHIFT = {
+  intent: 'CREATE_SHIFT', roleId: 'r1', date: '2026-10-09', start: '18:30', end: '01:00', userId: 'u-alex', confidence: 0.94,
+  summary: 'Create a Bartender shift for Alex Example on Friday, 18:30 to 01:00.', details: { person: 'Alex Example', personRole: 'Bartender', role: 'Bartender' },
+};
+
+async function stubReading(page: Page, browserName: string) {
+  if (browserName === 'webkit') {
+    // Playwright's Windows WebKit sends these requests past page.route: answer them in the page.
+    await page.evaluate((intent) => {
+      const real = window.fetch.bind(window);
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('/api/voice/parse-intent')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as { transcript: string };
+          return new Response(JSON.stringify({ transcript: body.transcript, intent, voiceLogId: 'log-1', hasAdditionalRequest: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return real(input, init);
+      };
+    }, SHIFT);
+    return;
+  }
+  await page.route('**/api/voice/parse-intent', async (route) => {
+    const body = route.request().postDataJSON() as { transcript: string };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ transcript: body.transcript, intent: SHIFT, voiceLogId: 'log-1', hasAdditionalRequest: false }) });
+  });
+}
+
+/** The confirm sheet of a typed command. */
+const preview = (page: Page) => page.getByRole('dialog').filter({ hasText: 'You typed' });
+
+async function openPreview(page: Page) {
+  await page.getByRole('button', { name: 'Type a command' }).click();
+  await stage(page).getByLabel("Type what you'd say").fill(TYPED);
+  await stage(page).getByRole('button', { name: 'Show preview' }).click();
+  await expect(preview(page).getByRole('status')).toHaveText(/Ready to confirm|Editing/);
+}
+
+async function closePreview(page: Page) {
+  await preview(page).getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('.voice-stage')).toHaveCount(0);
+  await settleOverlayHistory(page);
+}
+
 async function closeStage(page: Page) {
   await stage(page).getByRole('button', { name: 'Cancel' }).click();
   await expect(page.locator('.voice-stage')).toHaveCount(0);
@@ -215,22 +260,82 @@ test.describe('voice sheet: the bottom row is always reachable', () => {
     );
   });
 
+  test('confirm sheet: Confirm, Edit and Cancel stay on screen', async ({ page, browserName }) => {
+    await signedIn(page);
+    await stubReading(page, browserName);
+    await everySize(
+      page,
+      () => openPreview(page),
+      async (visible, label) => {
+        await expectReachable(preview(page).getByRole('button', { name: 'Confirm' }), visible, `Confirm (${label})`);
+        await expectReachable(preview(page).getByRole('button', { name: 'Edit' }), visible, `Edit (${label})`);
+        await expectReachable(preview(page).getByRole('button', { name: 'Cancel' }), visible, `Cancel (${label})`);
+      },
+      () => closePreview(page),
+    );
+  });
+
+  test('editing an out-of-date preview: Update preview, the disabled Confirm, Back and Cancel stay on screen', async ({ page, browserName }) => {
+    await signedIn(page);
+    await stubReading(page, browserName);
+    await everySize(
+      page,
+      async () => {
+        await openPreview(page);
+        await preview(page).getByRole('button', { name: 'Edit' }).click();
+        await preview(page).getByLabel(/You typed/).fill(`${TYPED} and close up`);
+        await expect(preview(page).getByRole('button', { name: 'Confirm' })).toBeDisabled();
+      },
+      async (visible, label) => {
+        await expectReachable(preview(page).getByRole('button', { name: 'Update preview' }), visible, `Update preview (${label})`);
+        await expectReachable(preview(page).getByRole('button', { name: 'Confirm' }), visible, `disabled Confirm (${label})`);
+        await expectReachable(preview(page).getByRole('button', { name: 'Back' }), visible, `Back (${label})`);
+        await expectReachable(preview(page).getByRole('button', { name: 'Cancel' }), visible, `Cancel (${label})`);
+      },
+      () => closePreview(page),
+    );
+  });
+
+  test('a Confirm that went offline (a problem message in the sheet): Confirm stays on screen to tap again', async ({ page, context, browserName }) => {
+    await signedIn(page);
+    await stubReading(page, browserName);
+    await everySize(
+      page,
+      async () => {
+        await openPreview(page);
+        await context.setOffline(true);
+        await preview(page).getByRole('button', { name: 'Confirm' }).click();
+        await expect(preview(page).getByRole('alert')).toContainText("You're offline");
+      },
+      async (visible, label) => {
+        await expectReachable(preview(page).getByRole('button', { name: 'Confirm' }), visible, `Confirm (${label})`);
+        await expectReachable(preview(page).getByRole('button', { name: 'Cancel' }), visible, `Cancel (${label})`);
+      },
+      async () => {
+        await context.setOffline(false);
+        await closePreview(page);
+      },
+    );
+  });
+
   test('variant B (the alternative layout, in the development preview of the same sheet): the bottom row stays on screen', async ({ page }) => {
     for (const [state, buttons] of [
       ['typing', ['Show preview', 'Start recording a voice command', 'Cancel']],
       ['problem-mic', ['Show preview', 'Start recording a voice command', 'Cancel']],
       ['listening', ['Stop recording voice command', 'Type instead', 'Cancel']],
+      ['confirm-publish', ['Confirm: publish and notify 8 people', 'Edit', 'Cancel']],
     ] as const) {
       for (const size of SIZES) {
         for (const reduced of [false, true]) {
           await page.setViewportSize({ width: size.width, height: size.height });
           await page.emulateMedia({ reducedMotion: reduced ? 'reduce' : 'no-preference' });
           await page.goto(`/dev/voice?view=stage&variant=b&state=${state}`);
-          await expect(stage(page)).toBeVisible();
+          const scope = state.startsWith('confirm') ? page.getByRole('dialog').filter({ hasText: 'I heard' }) : stage(page);
+          await expect(scope).toBeVisible();
           await keyboard(page, size.keyboard);
           await page.waitForTimeout(reduced ? 150 : 700);
           for (const name of buttons) {
-            await expectReachable(stage(page).getByRole('button', { name }), { width: size.width, height: size.keyboard || size.height }, `B ${state}: ${name} (${size.name}${reduced ? ', reduced motion' : ''})`);
+            await expectReachable(scope.getByRole('button', { name }), { width: size.width, height: size.keyboard || size.height }, `B ${state}: ${name} (${size.name}${reduced ? ', reduced motion' : ''})`);
           }
         }
       }
