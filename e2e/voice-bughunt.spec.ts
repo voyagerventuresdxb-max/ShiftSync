@@ -158,3 +158,23 @@ test('a new command never shows the last command\'s "Which one?" choices or its 
   await expect(page.locator('.success-block')).toContainText('Done:');
   expect(calls.execute.map((c) => c.intent.content)).toEqual(['Closing up']);
 });
+
+test('a reading the sheet cannot draw never takes the app down: it says so, keeps the words, and nothing is sent', async ({ page }) => {
+  await signIn(page, 'MANAGER');
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  // A shout-out with no person and no note (a server bug, a cut-off answer).
+  const calls = await stubVoice(page, { parse: [{ body: { transcript: 'Give Alex a shout-out', intent: { intent: 'POST_SHOUTOUT', summary: 'x' }, voiceLogId: 'l', hasAdditionalRequest: false } }] });
+  await page.getByRole('button', { name: 'Type a command' }).click();
+  await stage(page).getByLabel("Type what you'd say").fill('Give Alex a shout-out');
+  await stage(page).getByRole('button', { name: 'Show preview' }).click();
+  await expect(stage(page).getByText("The assistant's answer couldn't be read, so nothing is shown and nothing changed.", { exact: false })).toBeVisible();
+  await expect(stage(page).getByLabel('Type it instead')).toHaveValue('Give Alex a shout-out');
+  await expect(page.getByText('Unexpected Application Error')).toHaveCount(0);
+  await stage(page).getByRole('button', { name: 'Cancel' }).click();
+  // The app is all there: the dock's mic and keyboard are back.
+  await expect(page.getByRole('button', { name: 'Start recording a voice command' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Type a command' })).toBeVisible();
+  expect(calls.execute).toEqual([]);
+  expect(errors).toEqual([]);
+});

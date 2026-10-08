@@ -109,3 +109,9 @@ test('names from the server are text, never markup', () => {
   assert.doesNotMatch(html, /<img/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
 });
+
+test('POST_ANNOUNCEMENT: the board card, and that everyone at the venue is notified', () => {
+  const text = render({ intent: 'POST_ANNOUNCEMENT', content: 'Staff meeting Monday at 3.', confidence: 0.9, summary: 'Post this announcement.' });
+  assert.match(text, /Staff meeting Monday at 3./);
+  assert.match(text, /Everyone at your venue gets this as a notification./);
+});

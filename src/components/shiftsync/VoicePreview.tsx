@@ -178,7 +178,13 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         </>
       );
     case 'POST_ANNOUNCEMENT':
-      return <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />;
+      // Posting notifies the whole team (the one full-roster fan-out): said before Confirm, as publish does.
+      return (
+        <>
+          <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />
+          <p className="mt-2 text-xs text-foreground/60">Everyone at your venue gets this as a notification.</p>
+        </>
+      );
     case 'CREATE_SHIFT': {
       const person = d?.person ?? null;
       // A split shift: both parts spelled out in full, each on its own line.

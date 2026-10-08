@@ -9,7 +9,9 @@ import { SessionGuard } from '@/components/shiftsync/SessionGuard';
 import { useAppState } from '@/state/AppStateContext';
 import { useIdentity } from '@/state/IdentityContext';
 import { useConnectivity } from '@/state/ConnectivityContext';
-import { transcribeAudio, parseVoiceIntent, executeVoiceIntent, isReadIntent, type ParsedIntent } from '@/api/voice';
+import { ApiError, transcribeAudio, parseVoiceIntent, executeVoiceIntent, isReadIntent, type ParsedIntent } from '@/api/voice';
+import { isWellFormedReading } from '@/lib/voiceReading';
+import { VoiceSheetBoundary } from '@/components/shiftsync/VoiceSheetBoundary';
 import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents';
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
@@ -245,6 +247,10 @@ export function AppShell() {
       parsed: { intent: ParsedIntent; voiceLogId: string | null; hasAdditionalRequest: boolean },
       origin: VoiceOrigin,
     ) => {
+      // A reading missing what the sheet draws is never shown (it would throw while drawing).
+      if (!isWellFormedReading(parsed?.intent)) {
+        throw new ApiError("The assistant's answer couldn't be read, so nothing is shown and nothing changed. Try again, or type it below.", 502, undefined, 'voice_malformed');
+      }
       const { intent, voiceLogId, hasAdditionalRequest } = parsed;
       const refusedForRole = intent.intent === 'UNRECOGNIZED' && intent.reason === VOICE_ROLE_REFUSAL;
       // Answers and "not by voice" are never confirmed or executed, so there is no action to check.
@@ -490,6 +496,13 @@ export function AppShell() {
     setVoiceExecProblem(null);
   }, []);
 
+  // The confirm sheet threw while drawing: it closes with a message; the app stays.
+  const handleVoiceSheetError = useCallback(() => {
+    setVoiceResult(null);
+    setVoiceExecProblem(null);
+    setVoiceBanner({ kind: 'error', message: 'Something went wrong showing that. Check the screen before trying again.' });
+  }, []);
+
   // A "which did you mean?" choice only swaps in that reading; its own Confirm still executes it.
   const handleVoiceChoose = useCallback((option: ParsedIntent) => {
     setVoiceExecProblem(null);
@@ -659,26 +672,28 @@ export function AppShell() {
           onClose={handleStageClose}
         >
           {voiceSheetNeeded && voiceResult && (
-            <Suspense fallback={null}>
-              <VoiceCommandSheet
-                intent={voiceResult.intent}
-                transcript={voiceResult.transcript}
-                hasAdditionalRequest={voiceResult.hasAdditionalRequest}
-                executed={voiceResult.executed ?? false}
-                onConfirm={handleVoiceConfirm}
-                onChoose={handleVoiceChoose}
-                onBackToChoices={voiceResult.asked ? handleVoiceBackToChoices : undefined}
-                onReparse={handleVoiceReparse}
-                onCancel={handleVoiceCancel}
-                executing={voiceExecuting}
-                reparsing={voiceReparsing}
-                viewerName={session?.user.fullName ?? 'You'}
-                canManageStaff={session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER'}
-                origin={voiceResult.origin}
-                examples={examples}
-                problem={voiceExecProblem}
-              />
-            </Suspense>
+            <VoiceSheetBoundary onError={handleVoiceSheetError}>
+              <Suspense fallback={null}>
+                <VoiceCommandSheet
+                  intent={voiceResult.intent}
+                  transcript={voiceResult.transcript}
+                  hasAdditionalRequest={voiceResult.hasAdditionalRequest}
+                  executed={voiceResult.executed ?? false}
+                  onConfirm={handleVoiceConfirm}
+                  onChoose={handleVoiceChoose}
+                  onBackToChoices={voiceResult.asked ? handleVoiceBackToChoices : undefined}
+                  onReparse={handleVoiceReparse}
+                  onCancel={handleVoiceCancel}
+                  executing={voiceExecuting}
+                  reparsing={voiceReparsing}
+                  viewerName={session?.user.fullName ?? 'You'}
+                  canManageStaff={session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER'}
+                  origin={voiceResult.origin}
+                  examples={examples}
+                  problem={voiceExecProblem}
+                />
+              </Suspense>
+            </VoiceSheetBoundary>
           )}
         </VoiceStage>
       )}

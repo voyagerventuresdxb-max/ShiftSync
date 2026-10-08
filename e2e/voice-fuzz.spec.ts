@@ -69,6 +69,8 @@ function install() {
     rafCalls: 0,
     intervals: new Set<number>(),
     longTimers: new Set<number>(),
+    /** Where each pending long timer was set (first app frame of the stack), to name a leak. */
+    timerFrom: new Map<number, string>(),
     listeners: new Map<string, number>(),
     log: [] as string[],
     steps: 0,
@@ -107,6 +109,7 @@ function install() {
         if (typeof h === 'function') (h as (...x: unknown[]) => void)(...a);
       }, ms);
       fz.longTimers.add(id);
+      fz.timerFrom.set(id, (new Error().stack ?? '').split('\n').slice(2).find((l) => /\/src\//.test(l))?.trim().slice(0, 140) ?? 'unknown');
       return id;
     }
     return st(h, ms, ...a);
@@ -214,7 +217,7 @@ function install() {
             : kind === 'choose'
               ? { intent: 'UNRECOGNIZED', confidence: 0.6, summary: 'Which Alex did you mean?', reason: 'Two people match.', options: [shout(n, 'Option one'), { ...shout(n, 'Option two'), targetUserId: `user-alex-b-${n}`, targetUserName: 'Alex Sample' }] }
               : kind === 'answer'
-                ? { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'Your schedule', answer: 'You are working Friday 6pm to close.' }
+                ? { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'Your schedule', answer: { title: 'Your shifts this week', items: [{ primary: 'Friday 18:00–02:00', secondary: 'Bartender' }], emptyText: 'No shifts this week.' } }
                 : kind === 'declined'
                   ? { intent: 'DECLINED', confidence: 0.95, summary: 'Not by voice', reason: 'That is done on the People screen.' }
                   : { intent: 'UNRECOGNIZED', confidence: 0.2, summary: '', reason: "I didn't catch what you'd like to do." };
@@ -425,6 +428,8 @@ function install() {
     return xs.length ? xs[Math.floor(fz.rnd() * xs.length)] : undefined;
   }
 
+  /** Set once the router error page replaced the app (reported once; the page is reloaded after the sequence). */
+  let crashed = false;
   /** Checks that hold after any step (1, 2, 6), with a short grace for a microphone being released. */
   const check = async () => {
     if (document.querySelectorAll('.voice-stage').length > 1) violate('two-voice-sheets', 'more than one voice sheet');
@@ -435,6 +440,11 @@ function install() {
       if ((!stageEl() || fz.hidden) && liveTracks() > 0) violate('mic-left-on', fz.hidden ? 'microphone on while the app is in the background' : 'microphone on with the sheet closed');
     }
     if (fz.errors.length) violate('page-error', fz.errors.splice(0).join(' / '));
+    // 6. The router's error page in place of the app (an error while drawing, caught by the router).
+    if (!crashed && /Unexpected Application Error/.test(document.body.innerText)) {
+      crashed = true;
+      violate('app-crashed', document.body.innerText.replace(/\s+/g, ' ').slice(0, 200));
+    }
   };
 
   /** Back to a closed, quiet sheet: visible, online, answers normal; then checks 5. */
@@ -473,7 +483,7 @@ function install() {
     const raf = fz.rafCalls - r0;
     if (raf > baseline.raf + 3) violate('frames-left-running', `${raf} animation frames in 0.5 s with the sheet closed (idle ${baseline.raf})`);
     if (fz.intervals.size > baseline.intervals) violate('interval-left', `${fz.intervals.size} intervals running (idle ${baseline.intervals})`);
-    if (fz.longTimers.size > baseline.longTimers) violate('timer-left', `${fz.longTimers.size} long timers pending (idle ${baseline.longTimers})`);
+    if (fz.longTimers.size > baseline.longTimers) violate('timer-left', `${fz.longTimers.size} long timers pending (idle ${baseline.longTimers}) from ${[...fz.longTimers].map((id) => fz.timerFrom.get(id)).join(' ; ')}`);
     for (const [k, n] of fz.listeners) if (n > (baseline.listeners[k] ?? 0)) violate('listener-left', `${k}: ${n} (idle ${baseline.listeners[k] ?? 0})`);
     if (liveTracks() > 0) violate('mic-left-on', 'microphone track live after closing');
     const open = fz.contexts.filter((c) => c.state !== 'closed').length;
@@ -521,6 +531,11 @@ function install() {
       executes: fz.executeCount - at.executes,
       parses: fz.parses.length - at.parses,
       actions: [...fz.log],
+      ended: mode(),
+      dock: [...document.querySelectorAll('button[aria-label]')]
+        .filter((b) => /recording a voice command|Processing voice command|Waiting for microphone|Type a command/.test(b.getAttribute('aria-label') ?? ''))
+        .map((b) => `${b.getAttribute('aria-label')}${(b as HTMLButtonElement).disabled ? ' [disabled]' : ''}${b.closest('[inert]') ? ' [inert]' : ''}${b.closest('[aria-hidden="true"]') ? ' [aria-hidden]' : ''}${(b as HTMLElement).getBoundingClientRect().width ? '' : ' [no box]'}`)
+        .join(' | ') || `NO DOCK at ${location.pathname}: ${document.body.innerText.replace(/s+/g, ' ').slice(0, 300)}`,
     };
   };
 }
@@ -534,6 +549,7 @@ test('voice sheet state-machine fuzz: invariants hold after every step', async (
     pages.push(await ctx.newPage());
   }
   const found: { seq: number; seed: number; kind: string; detail: string }[] = [];
+  const perSequence: { seq: number; steps: number; ended: string; dock: string }[] = [];
   const summary = { steps: 0, executes: 0, parses: 0, actions: {} as Record<string, number> };
   const started = Date.now();
   await Promise.all(
@@ -555,6 +571,7 @@ test('voice sheet state-machine fuzz: invariants hold after every step', async (
           summary.executes += r.executes;
           summary.parses += r.parses;
           for (const a of r.actions) summary.actions[a] = (summary.actions[a] ?? 0) + 1;
+          perSequence.push({ seq: i, steps: r.steps, ended: (r as unknown as { ended: string }).ended, dock: (r as unknown as { dock: string }).dock });
         } catch (err) {
           // The page itself went away (a navigation): reported, then back to the start for the next sequence.
           found.push({ seq: i, seed, kind: 'page-navigated', detail: String(err).slice(0, 200) });
@@ -568,13 +585,13 @@ test('voice sheet state-machine fuzz: invariants hold after every step', async (
             }
           }
         }
-        if (new URL(p.url()).pathname !== '/') await p.goto('/');
+        if (new URL(p.url()).pathname !== '/' || (await p.getByText('Unexpected Application Error').count())) await p.goto('/');
       }
     }),
   );
   for (const p of pages.slice(1)) await p.context().close();
   found.sort((a, b) => a.seq - b.seq);
-  const report = { sequences: SEQUENCES, parallel: PARALLEL, seed: SEED, stepsPerSequence: STEPS, seconds: Math.round((Date.now() - started) / 1000), ...summary, violations: found };
+  const report = { sequences: SEQUENCES, parallel: PARALLEL, seed: SEED, stepsPerSequence: STEPS, seconds: Math.round((Date.now() - started) / 1000), ...summary, violations: found, perSequence: perSequence.sort((a, b) => a.seq - b.seq) };
   if (process.env.VOICE_FUZZ_OUT) writeFileSync(process.env.VOICE_FUZZ_OUT, JSON.stringify(report, null, 2));
   console.log(`[voice-fuzz] ${SEQUENCES} sequences, ${summary.steps} steps, ${summary.parses} readings, ${summary.executes} confirms sent, ${found.length} violation(s) in ${report.seconds}s`);
   const kinds = [...new Set(found.map((f) => f.kind))];
