@@ -73,8 +73,9 @@ fails to boot. With #63 the API logs `[push] VAPID config rejected …` and runs
 and `npm run vapid:generate` prints a fresh pair to the terminal only.
 
 > **Temporary test-week values (applied with the run 14 API deploy, 2026-10-07):** for the owner's
-> real-phone test week, `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30` (before: unset / `5`).
-> They are temporary: set them back (unset / `5`) after the test week. See
+> real-phone test week, `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30` (before: unset / `5`),
+> and from the run 14B voice deploy `AI_VOICE_USER_DAILY_LIMIT=100` and `AI_VOICE_VENUE_DAILY_LIMIT=300`
+> (before: unset). They are temporary: set them back (unset / `5`) after the test week. See
 > [`owner-todo.md`](owner-todo.md) item 20.
 
 ## 2. Frontend build (`src/`, Vite, Vercel)

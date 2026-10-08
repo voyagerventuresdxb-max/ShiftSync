@@ -177,35 +177,43 @@ until **Confirm**.
 ## 12-minute demo flow (made-up names)
 
 Same structure as the owner's private demo script, with made-up names. Example venue: a roster
-PDF with 21 staff including **Alex Morgan** (Waiter), two people called **Karim** (Karim Saleh,
-Bartender; Karim Aziz, Runner), and an **Edwin** and an **Edwina**. Sections to create on the
-floor plan: **Terrace**, **Bar**, **Main floor**.
+PDF with 21 staff including **Alex Morgan** (Waiter), **Sam Okoye** (Runner), two people called
+**Karim** (Karim Saleh, Bartender; Karim Aziz, Runner), and an **Edwin** and an **Edwina**.
+Sections to create on the floor plan: **Terrace**, **Bar**, **Main floor**. Before the demo,
+have Sam ask for a swap from a staff phone for a shift in a week whose cover requests are still
+open, so there is a swap to approve.
 
 | Min | Step | Say / do | Expected on screen |
 |---|---|---|---|
 | 0–1 | Sign in, fresh venue | Owner sign-in; check the venue name in the header | The name you typed; a rename shows everywhere at once |
 | 1–3 | Import the roster | Schedule → Upload → the roster PDF, AI reading allowed | Progress: "Uploading", "Reading your roster with the AI reader", "Cross-checking the two readings", "Matched people to your staff"; then the review screen |
-| 3–4 | Check names and week | Scroll the review list | Every person listed as new, the printed week (not this week); any cell marked to check opens with the readings to pick from |
+| 3–4 | Check names and week | Scroll the review list | Every person listed as new, the printed week (not this week); a cell marked to check opens with the readings to pick from; a person only one AI reading listed asks "Import them?" |
 | 4 | Confirm | Tap Confirm | People lists everyone; the week is filled. Uploading the same file again adds 0 people and 0 shifts |
 | 4–5 | Floor plan | Floor Plan tab | Empty state with "Add your first section"; add Terrace, Bar, Main floor |
 | 5–6 | Section by voice | "Put Alex on the terrace tomorrow evening" | Alex Morgan (Waiter), Terrace, tomorrow's full date, PM. Confirm |
-| 6–7 | Shift by voice | "Create a waiter shift for Alex on Friday from 6 to 2" | Alex Morgan, Waiter, Friday's full date, 18:00–02:00 (ends next day). Confirm |
+| 6–7 | Shift by voice | "Create a waiter shift for Alex on Friday from 6 to 2" | Two readings, evening first: tap 18:00–02:00 (ends next day), then Confirm |
 | 7–8 | Shout-out | "Give Alex a shout-out for great service tonight" | Shout-out preview for Alex Morgan. Confirm |
-| 8–9 | Shared first name | "Give Karim a shout-out saying well done" | "Which Karim did you mean?" with both Karims and their roles; tap one, then Confirm |
-| 9–10 | Announcement | Announcements screen (typed) | The announcement on the board |
-| 10–11 | Swap approval | Swaps list → Approve | The swap approved; the rota updates |
-| 11–12 | Publish | Rota → Publish | Staff see the published week |
+| 8 | Shared first name | "Give Karim a shout-out saying well done" | "Which Karim did you mean?" with both Karims and their roles; tap one, then Confirm |
+| 8–9 | Announcement by voice | "Post an announcement: staff meeting Monday at 3pm in the bar" | The announcement text, word for word. Confirm |
+| 9–10 | Swap approval by voice | "Approve Sam's swap request" | The approve sheet for Sam's swap. Confirm |
+| 10–11 | A question | "Who is working tonight?" | A list of tonight's people with roles and times; just Done, no Confirm |
+| 11–12 | Publish by voice | "Publish next week's rota" | The stronger card: how many shifts change and how many people are notified. "Confirm: publish and notify N people" |
 
-**Phrases verified live (local stack, live model):** the section, shift and three shout-out
-phrases above, a shout-out naming someone not on the team, a full-name shout-out, a mangled
-long name (resolved to the right person), "Who is working tonight?" (polite decline: staff can
-ask about their own schedule only) and "Order more limes" (polite decline).
+**Phrases verified live (local stack, live model, typed):** every phrase in the table, plus
+"Who's on tomorrow?", "Who is on the terrace tonight?", "Are there any pending swap requests?",
+"What are the latest announcements?", "When am I working next?" (staff), "Cancel Sam's shift
+tomorrow", "Move Alex's Saturday shift to start at 7pm", "Add Alex on Sunday from 18:30 to 1",
+a split shift ("10am to 2pm and 6pm to 11pm"), "I need next Tuesday off for a doctor's
+appointment" (staff), "Ask Alex to cover my shift tomorrow" (staff), "Mark me unavailable next
+Wednesday" (staff), code-mixed phrasing ("Yalla, put Alex sa terrace bukas ng gabi"; "Sam ko kal
+shaam six to eleven ki shift do"; "Shukran Sam, give her a shout-out"), and every never-by-voice
+request (each declined with a link to the right screen).
 
 **Three recovery moves**
-1. Wrong or unclear person: "Which one?" or "Pick from your team" — tap the right person;
+1. Wrong or unclear person: "Which one?" or "Pick from your team". Tap the right person;
    nothing changes before Confirm.
-2. Misheard words: in "I heard — fix it and try again", correct the words and press Enter; no
-   new recording.
+2. Misheard words, or a noisy room: tap the keyboard next to the mic and type the command, or fix
+   the words in "I heard — fix it and try again"; the same preview and Confirm follow.
 3. Import says "Hard to read — not imported", or many cells to check: upload the original PDF
    export instead of a photo; a repeat import adds no duplicates.
 
@@ -213,10 +221,10 @@ ask about their own schedule only) and "Order more limes" (polite decline).
 close alternative at the same venue ("Edwin" when there is also an Edwina) asks, the exact
 match listed first; saying the full name settles it.
 
-**Not for a demo:** "Who is working tonight?"; anything outside rota and people; announcement
-and swap approval *by voice* (not verified live this round — use the screens); phone photos of
-dense or angled printed rosters; rosters whose day headings are shifted against the columns
-(everyone is imported, every day is shown to check).
+**Not for a demo:** anything outside rota and people (declined politely); phone photos of dense
+or angled printed rosters; rosters whose day headings are shifted against the columns (everyone
+is imported, every day is shown to check); staff swap requests for a week whose cover requests
+have closed (the app explains the cut-off).
 
 ## Typing, answers, declines and error states (voice tools v2, phone side)
 

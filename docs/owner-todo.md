@@ -61,4 +61,7 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
     passes a fresh holdout and is deployed.
 20. [ ] **Temporary test-week AI limits:** `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30`
     on Railway, **TEMPORARY test-week values**: applied with the run 14 API deploy on 2026-10-07
-    (before: unset / `5`). Set them back (unset / `5`) after the test week.
+    (before: unset / `5`). Also **TEMPORARY** from the run 14B voice deploy:
+    `AI_VOICE_USER_DAILY_LIMIT=100` and `AI_VOICE_VENUE_DAILY_LIMIT=300` voice model calls a day
+    (before: unset, i.e. `40` / `100`; two calls per spoken command, one per typed command). Set
+    all four back (unset / `5`) after the test week.
