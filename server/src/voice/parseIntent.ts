@@ -6,7 +6,9 @@ import { mentionedIn, periodSaid, type Term } from './vocabulary.js';
 import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt } from './prompts.js';
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
-import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
+import { getRotaPublishPreview, publishFingerprint } from '../lib/actions/rotaActions.js';
+import { announcementAudience } from '../lib/actions/communicationActions.js';
+import { prisma } from '../lib/prisma.js';
 import { bestMatch } from '../lib/textSimilarity.js';
 import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, textInputEstimate, withAiBudget } from '../lib/aiBudget.js';
 import { billedOutputTokens } from '../parsing/visionProvider.js';
@@ -184,6 +186,7 @@ async function resolveCall(call: ToolCall, ctx: VenueContext, user: Caller, tran
     let checked: ParsedIntent = r;
     if (checked.intent === 'PUBLISH_ROTA') checked = await refinePublishRotaResponse(checked, user.locationId);
     else if (checked.intent === 'APPLY_ROTA_TEMPLATE') checked = await refineApplyRotaTemplateResponse(checked, ctx.rotaTemplates ?? []);
+    else if (checked.intent === 'POST_ANNOUNCEMENT') checked = await refineAnnouncementResponse(checked, user);
     return checkAgainstContext(checked, ctx, user, timezone, transcript);
   };
   if (resolved.kind === 'reading') return check(resolved.reading);
@@ -243,7 +246,20 @@ export async function refinePublishRotaResponse(response: Extract<ParsedIntent, 
   }
   const s = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const summary = `This will publish ${s(shiftsChanging, 'new or changed shift', 'new or changed shifts')} for the week of ${week} and notify ${s(staffCount, 'person', 'people')} — confirm?`;
-  return { ...response, counts: { shiftsChanging, peopleNotified: staffCount }, summary };
+  const fingerprint = await publishFingerprint(prisma, locationId, weekStart);
+  return { ...response, counts: { shiftsChanging, peopleNotified: staffCount }, fingerprint, summary };
+}
+
+/**
+ * An announcement's preview says how many people it notifies (everyone active at the venue but the
+ * author), counted here, never by the app; the fingerprint lets Confirm check nobody joined or left.
+ */
+export async function refineAnnouncementResponse(
+  response: Extract<ParsedIntent, { intent: 'POST_ANNOUNCEMENT' }>,
+  caller: { id: string; locationId: string },
+): Promise<ParsedIntent> {
+  const { recipients, fingerprint } = await announcementAudience(prisma, caller.locationId, caller.id);
+  return { ...response, recipients, fingerprint };
 }
 
 const TEMPLATE_MATCH_THRESHOLD = 0.6;

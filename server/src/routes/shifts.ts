@@ -332,6 +332,8 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
     const result = await publishRota({ locationId, weekStart: start, publishedById });
     if (result.result === 'not_found') return res.status(404).json({ error: result.message });
     if (result.result === 'empty') return res.status(400).json({ error: result.message });
+    // Never here (this route sends no fingerprint); handled for completeness.
+    if (result.result === 'changed') return res.status(409).json({ error: result.message });
 
     // Real delivery on top of the flag-stamp above (never inside
     // publishRota's own transaction — a push failure must not roll back the

@@ -115,3 +115,11 @@ test('POST_ANNOUNCEMENT: the board card, and that everyone at the venue is notif
   assert.match(text, /Staff meeting Monday at 3./);
   assert.match(text, /Everyone at your venue gets this as a notification./);
 });
+
+test('POST_ANNOUNCEMENT: how many people are notified, from the server; an older server sends no count and the card says everyone', () => {
+  const counted = render({ intent: 'POST_ANNOUNCEMENT', content: 'Payday is Thursday.', recipients: 3, fingerprint: 'f', confidence: 0.9, summary: 's' });
+  assert.match(counted, /3 people will be notified\./);
+  assert.doesNotMatch(counted, /Everyone at your venue/);
+  assert.match(render({ intent: 'POST_ANNOUNCEMENT', content: 'x', recipients: 1, fingerprint: 'f', confidence: 0.9, summary: 's' }), /1 person will be notified\./);
+  assert.match(render({ intent: 'POST_ANNOUNCEMENT', content: 'x', confidence: 0.9, summary: 's' }), /Everyone at your venue gets this as a notification\./);
+});

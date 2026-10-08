@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError, VoiceOfflineError, VoiceTimeoutError } from '@/api/voice';
-import { IPHONE_MIC_HELP, alreadyDone, micProblem, offlineProblem, requestProblem } from './voiceErrors';
+import { IPHONE_MIC_HELP, alreadyDone, micProblem, offlineProblem, previewChanged, requestProblem } from './voiceErrors';
 
 const understand = { stage: 'understand' as const, online: true };
 
@@ -75,4 +75,16 @@ test('a repeated Confirm the server already did (409 voice_already_executed) cou
   assert.equal(alreadyDone(new ApiError('That command has already been done.', 409, undefined, 'voice_already_executed')), true);
   assert.equal(alreadyDone(new ApiError('That shift overlaps another one.', 409)), false);
   assert.equal(alreadyDone(new VoiceTimeoutError(25)), false);
+});
+
+test('a recording refused before any model call says so plainly; a changed preview is told apart from other refusals', () => {
+  const short = requestProblem(new ApiError("I didn't hear anything: the recording was empty or too short.", 422, undefined, 'voice_audio_too_short'), { stage: 'understand', online: true });
+  assert.equal(short.kind, 'no_speech');
+  assert.equal(short.title, "Didn't hear anything");
+  const long = requestProblem(new ApiError('That recording is too long for a voice command.', 413, undefined, 'voice_audio_too_long'), { stage: 'understand', online: true });
+  assert.equal(long.title, 'Recording too long');
+  assert.match(long.message, /too long/);
+  assert.equal(previewChanged(new ApiError('Things changed.', 409, undefined, 'voice_preview_changed')), true);
+  assert.equal(previewChanged(new ApiError('Already done.', 409, undefined, 'voice_already_executed')), false);
+  assert.equal(alreadyDone(new ApiError('Things changed.', 409, undefined, 'voice_preview_changed')), false);
 });
