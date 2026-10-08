@@ -171,11 +171,11 @@ test('a clip with no clear speech becomes "no_speech", never a command built fro
   assert.match(instruction, /never add a name or term that wasn't said/);
 });
 
-test('the transcription vocabulary hint: names, sections and roles only, contact data dropped, de-duplicated and capped', async () => {
+test('the transcription vocabulary hint: staff names and sections only (no role labels), contact data dropped, de-duplicated and capped', async () => {
   const { buildVocabularyHint, VOCABULARY_MAX_TERMS, VOCABULARY_MAX_CHARS } = await import('./transcribe.js');
-  const hint = buildVocabularyHint(['Layla Nasser', 'Omar Haddad', 'Omar Haddad', 'Zed +971 50 123 4567', 'zed@example.test'], ['Terrace'], ['Bartender']);
-  assert.equal(hint, 'Layla Nasser, Omar Haddad, Terrace, Bartender, rota, floor, section, swap, cover, shift');
-  const many = buildVocabularyHint(Array.from({ length: 400 }, (_, i) => `Person Number${String.fromCharCode(65 + (i % 26))}${i}`), [], []);
+  const hint = buildVocabularyHint(['Layla Nasser', 'Omar Haddad', 'Omar Haddad', 'Zed +971 50 123 4567', 'zed@example.test'], ['Terrace']);
+  assert.equal(hint, 'Layla Nasser, Omar Haddad, Terrace, rota, floor, section, swap, cover, shift');
+  const many = buildVocabularyHint(Array.from({ length: 400 }, (_, i) => `Person Number${String.fromCharCode(65 + (i % 26))}${i}`), []);
   assert.ok(many.split(', ').length <= VOCABULARY_MAX_TERMS);
   assert.ok(many.length <= VOCABULARY_MAX_CHARS);
 });

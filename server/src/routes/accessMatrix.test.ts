@@ -58,6 +58,7 @@ interface Fx {
   shiftA: string;
   shiftA2: string;
   shiftDel: string;
+  shiftCancel: string;
   annA: string;
   annDel: string;
   shoutDel: string;
@@ -155,6 +156,7 @@ before(async () => {
   const shiftA = await shift(staffA.id, tuesday);
   const shiftA2 = await shift(staffA.id, addDays(monday, 3));
   const shiftDel = await shift(null, addDays(monday, 4));
+  const shiftCancel = await shift(null, addDays(monday, 5));
 
   const annA = await prisma.announcement.create({ data: { locationId: locA.id, body: `${TAG} announcement` } });
   const annDel = await prisma.announcement.create({ data: { locationId: locA.id, body: `${TAG} announcement to delete` } });
@@ -203,7 +205,7 @@ before(async () => {
 
   fx = {
     locA: locA.id, locB: locB.id, staffA: staffA.id, staffA2: staffA2.id, managerA: managerA.id, ownerA: ownerA.id, staffB: staffB.id,
-    roleA: roleA.id, roleA2: roleA2.id, roleDel: roleDel.id, shiftA: shiftA.id, shiftA2: shiftA2.id, shiftDel: shiftDel.id,
+    roleA: roleA.id, roleA2: roleA2.id, roleDel: roleDel.id, shiftA: shiftA.id, shiftA2: shiftA2.id, shiftDel: shiftDel.id, shiftCancel: shiftCancel.id,
     annA: annA.id, annDel: annDel.id, shoutDel: shoutDel.id, imgA: imgA.id, imgFile, secA: secA.id, secDel: secDel.id,
     asgA: asgA.id, asgDel: asgDel.id, docA: docA.id, docFile, docDel: docDel.id, itemA: itemA.id, itemOnBehalf: itemOnBehalf.id,
     fbA: fbA.id, markA: markA.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
@@ -483,6 +485,9 @@ const CASES: Case[] = [
       ['APPLY_ROTA_TEMPLATE', (f: Fx) => ({ intent: 'APPLY_ROTA_TEMPLATE', templateId: f.tplA, weekStart: addDays(f.monday, 14) })],
       ['POST_SHOUTOUT', (f: Fx) => ({ intent: 'POST_SHOUTOUT', targetUserId: f.staffA, content: `${TAG} via voice` })],
       ['REQUEST_SWAP', (f: Fx) => ({ intent: 'REQUEST_SWAP', shiftId: f.shiftA2, targetUserId: f.staffA2 })],
+      ['DECLINE_SWAP', (f: Fx) => ({ intent: 'DECLINE_SWAP', swapRequestId: f.swapA })],
+      ['DECLINE_JOIN', (f: Fx) => ({ intent: 'DECLINE_JOIN', joinRequestId: f.jrA })],
+      ['CANCEL_SHIFT', (f: Fx) => ({ intent: 'CANCEL_SHIFT', shiftId: f.shiftCancel })],
     ] as const
   ).map(([intent, build]): Case => ({
     name: `POST /api/voice/execute ${intent} on venue A's records`,
@@ -490,6 +495,26 @@ const CASES: Case[] = [
     path: () => '/api/voice/execute',
     body: (f) => ({ intent: build(f) }),
     refuse: intent === 'REQUEST_SWAP' ? OUTSIDERS : NOT_MANAGERS_OF_A,
+  })),
+  // Voice tools with no venue record in the body: the session's own venue is the only target.
+  // Manager tools refuse staff (403); the caller's own changes refuse only a missing session.
+  ...(
+    [
+      ['PUBLISH_ROTA', (f: Fx) => ({ intent: 'PUBLISH_ROTA', weekStart: addDays(f.monday, 21) }), ['anon', 'deactivatedA', 'staffA', 'staffB']],
+      ['POST_ANNOUNCEMENT', () => ({ intent: 'POST_ANNOUNCEMENT', content: `${TAG} voice announcement` }), ['anon', 'deactivatedA', 'staffA', 'staffB']],
+      ['MARK_AVAILABILITY', (f: Fx) => ({ intent: 'MARK_AVAILABILITY', date: addDays(f.monday, 9), type: 'UNAVAILABLE' }), ['anon', 'deactivatedA']],
+      ['REQUEST_TIME_OFF', (f: Fx) => ({ intent: 'REQUEST_TIME_OFF', startDate: addDays(f.monday, 10), endDate: addDays(f.monday, 11), reason: null }), ['anon', 'deactivatedA']],
+      // Reads and DECLINED are never executed: without a session they are refused like everything else.
+      ...['QUERY_MY_SCHEDULE', 'WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS', 'DECLINED'].map(
+        (intent) => [intent, () => ({ intent, answer: { title: 't', items: [], emptyText: 'e' } }), ['anon', 'deactivatedA']] as const,
+      ),
+    ] as const
+  ).map(([intent, build, refuse]): Case => ({
+    name: `POST /api/voice/execute ${intent} (own venue only)`,
+    method: 'POST',
+    path: () => '/api/voice/execute',
+    body: (f) => ({ intent: build(f) }),
+    refuse: [...refuse] as Actor[],
   })),
 ];
 
@@ -588,6 +613,7 @@ test("nothing of venue A's changed after every refused request", async () => {
   assert.equal(link?.revokedAt, null);
   assert.equal(await prisma.announcement.count({ where: { id: fx.annDel } }), 1);
   assert.equal(await prisma.shift.count({ where: { id: fx.shiftDel } }), 1);
+  assert.equal(await prisma.shift.count({ where: { id: fx.shiftCancel } }), 1);
   assert.equal(await prisma.shoutout.count({ where: { locationId: fx.locA, note: { contains: 'via voice' } } }), 0);
 });
 
@@ -678,6 +704,10 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', "POST /api/voice/execute EDIT_SHIFT on venue A's records"],
   ['managerA', "POST /api/voice/execute ASSIGN_SECTION on venue A's records"],
   ['managerA', "POST /api/voice/execute POST_SHOUTOUT on venue A's records"],
+  ['managerA', "POST /api/voice/execute CANCEL_SHIFT on venue A's records"],
+  ['staffA', 'POST /api/voice/execute MARK_AVAILABILITY (own venue only)'],
+  ['staffA', 'POST /api/voice/execute REQUEST_TIME_OFF (own venue only)'],
+  ['managerA', 'POST /api/voice/execute POST_ANNOUNCEMENT (own venue only)'],
 ];
 
 test('positive controls: the right person gets through with the same request', async () => {

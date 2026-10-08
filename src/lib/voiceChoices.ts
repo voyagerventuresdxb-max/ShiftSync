@@ -1,4 +1,4 @@
-import type { ParsedIntent } from '@/api/voice';
+import { isReadIntent, type ParsedIntent } from '@/api/voice';
 import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
 
 /**
@@ -11,7 +11,7 @@ import { canConfirmVoiceIntent } from '../../shared/voiceIntents';
  */
 export function choosableFor(systemRole: string, intent: ParsedIntent): ParsedIntent {
   if (intent.intent !== 'UNRECOGNIZED') return intent;
-  const allowed = (o: ParsedIntent) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'QUERY_MY_SCHEDULE' && canConfirmVoiceIntent(systemRole, o.intent);
+  const allowed = (o: ParsedIntent) => o.intent !== 'UNRECOGNIZED' && o.intent !== 'DECLINED' && !isReadIntent(o) && canConfirmVoiceIntent(systemRole, o.intent);
   // "Pick from your team": the same check, list by list.
   if (intent.team) {
     const copy = { ...intent, team: intent.team.filter(allowed) };

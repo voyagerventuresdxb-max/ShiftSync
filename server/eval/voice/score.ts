@@ -4,7 +4,7 @@
  */
 import type { ParsedIntent } from '../../src/voice/intentSchema.js';
 import { canConfirmVoiceIntent } from '../../../shared/voiceIntents.js';
-import { addDays, LEAK_STRINGS, PEOPLE, JOIN, type Fixture, type PersonKey } from './fixture.js';
+import { addDays, LEAK_STRINGS, PEOPLE, JOIN, SHIFTS, VENUE_B, type Fixture, type PersonKey, type ShiftKey } from './fixture.js';
 import type { ArgSpec, Expect, VoiceCase } from './corpus.js';
 
 /** An id that exists nowhere. */
@@ -91,8 +91,11 @@ function heardName(text: string, key: PersonKey): string {
   return said.includes(firstName.toLowerCase()) ? firstName : name;
 }
 
-/** The JSON a well-behaved (or, for `adversarial`, misbehaving) model would return. */
-export function rawModelOutput(fx: Fixture, c: VoiceCase, which: 'ideal' | 'adversarial'): Record<string, unknown> {
+/**
+ * The legacy, id-shaped reading for a case (what the confirm sheet and /execute carry): the
+ * expected intent's arguments, or the adversarial/model override, resolved against the fixture.
+ */
+export function legacyReading(fx: Fixture, c: VoiceCase, which: 'ideal' | 'adversarial'): Record<string, unknown> {
   if (which === 'adversarial' || c.model) {
     const a = which === 'adversarial' ? c.adversarial! : c.model!;
     const raw: Record<string, unknown> =
@@ -117,6 +120,117 @@ export function rawModelOutput(fx: Fixture, c: VoiceCase, which: 'ideal' | 'adve
   const personKey = personField ? (Object.entries(fx.users).find(([, id]) => id === raw[personField])?.[0] as PersonKey | undefined) : undefined;
   if (personKey) raw.targetUserName = heardName(c.text, personKey);
   return raw;
+}
+
+/** The adversarial reading as an /execute body: the hand-crafted request a client could send. */
+export function executeBody(fx: Fixture, c: VoiceCase): Record<string, unknown> {
+  const { availabilityType, hasAdditionalRequest, ...rest } = legacyReading(fx, c, 'adversarial');
+  void hasAdditionalRequest;
+  return availabilityType ? { ...rest, type: availabilityType } : rest;
+}
+
+/** A name for an id the venue doesn't have: what a model "hears" when it points somewhere it can't. */
+const UNKNOWN = { person: 'Kevin', role: 'Chef', section: 'Patio', template: 'Summer', applicant: 'Tom' };
+
+/**
+ * The tool call a model answers with under the tool contract, for a case: the same reading as
+ * `legacyReading`, said as words (names, days, times), never ids. An id the case points at
+ * becomes the name a caller would have said: a venue-A person as heard in the text, venue B's
+ * names as they appear in the text, and an id from nowhere a name nobody has.
+ */
+export function rawModelOutput(fx: Fixture, c: VoiceCase, which: 'ideal' | 'adversarial'): Record<string, unknown> {
+  const legacy = legacyReading(fx, c, which);
+  if (legacy.intent === 'UNRECOGNIZED') return { tool: 'UNRECOGNIZED', args: {}, summary: legacy.summary, unrecognizedReason: legacy.unrecognizedReason };
+  const text = c.text.toLowerCase();
+  const said = (full: string) => (text.includes(full.toLowerCase()) ? full : text.includes(full.split(' ')[0]!.toLowerCase()) ? full.split(' ')[0]! : null);
+  const userKey = (id: unknown) => Object.entries(fx.users).find(([, v]) => v === id)?.[0] as PersonKey | undefined;
+  const person = (id: unknown): string | undefined => {
+    if (!id) return undefined;
+    const key = userKey(id);
+    if (key) return heardName(c.text, key);
+    if (id === fx.other.person) return said(VENUE_B.person) ?? VENUE_B.person;
+    return UNKNOWN.person;
+  };
+  const nameIn = (map: Record<string, string>, id: unknown, other: string, otherName: string, unknown: string) =>
+    Object.entries(map).find(([, v]) => v === id)?.[0] ?? (id === other ? otherName : unknown);
+  const shiftOf = (id: unknown): { who?: string; day: string } => {
+    const key = Object.entries(fx.shifts).find(([, v]) => v === id)?.[0] as ShiftKey | undefined;
+    if (key) return { who: heardName(c.text, SHIFTS[key].who as PersonKey), day: addDays(fx.today, SHIFTS[key].day) };
+    if (id === fx.other.shift) return { who: said(VENUE_B.person) ?? VENUE_B.person, day: addDays(fx.today, 1) };
+    return { who: said(PEOPLE.layla.name) ?? 'Layla', day: addDays(fx.today, 1) };
+  };
+  const callerKey = CALLER[c.role];
+  /** A day the caller has no shift on: the only way a model can "point at" someone else's shift. */
+  const freeDay = () => {
+    for (let d = 0; d < 14; d++) {
+      const iso = addDays(fx.today, d);
+      if (!Object.values(SHIFTS).some((s) => s.who === callerKey && addDays(fx.today, s.day) === iso)) return iso;
+    }
+    return addDays(fx.today, 13);
+  };
+  const L = legacy as Record<string, string | null | undefined>;
+  const args: Record<string, unknown> = {};
+  switch (legacy.intent) {
+    case 'MARK_AVAILABILITY':
+      Object.assign(args, { day: L.date, availability: L.availabilityType });
+      break;
+    case 'REQUEST_SWAP': {
+      const own = Object.entries(fx.shifts).some(([k, v]) => v === L.shiftId && SHIFTS[k as ShiftKey].who === callerKey);
+      Object.assign(args, { day: own ? shiftOf(L.shiftId).day : freeDay(), person: L.targetUserName ?? person(L.targetUserId) });
+      break;
+    }
+    case 'APPROVE_SWAP':
+    case 'DECLINE_SWAP':
+      args.requester = L.swapRequestId === fx.swaps['alex+1'] ? (said(PEOPLE.alex.name) ?? undefined) : UNKNOWN.person;
+      break;
+    case 'APPROVE_JOIN':
+    case 'DECLINE_JOIN':
+      args.applicant = L.joinRequestId === fx.joins.riya ? (said(JOIN.riya.name) ?? undefined) : UNKNOWN.applicant;
+      break;
+    case 'CREATE_SHIFT':
+      Object.assign(args, {
+        role: L.roleId ? nameIn(fx.roles, L.roleId, fx.other.role, VENUE_B.role, UNKNOWN.role) : undefined,
+        person: L.targetUserName ?? person(L.userId),
+        day: L.date,
+        start: L.start,
+        end: L.end,
+      });
+      break;
+    case 'EDIT_SHIFT': {
+      const shift = shiftOf(L.shiftId);
+      Object.assign(args, {
+        person: shift.who,
+        day: shift.day,
+        start: L.start,
+        end: L.end,
+        role: L.roleId ? nameIn(fx.roles, L.roleId, fx.other.role, VENUE_B.role, UNKNOWN.role) : undefined,
+        newPerson: L.targetUserName ?? person(L.userId),
+      });
+      break;
+    }
+    case 'ASSIGN_SECTION':
+      Object.assign(args, {
+        section: nameIn(fx.sections, L.sectionId, fx.other.section, said(VENUE_B.section) ?? VENUE_B.section, UNKNOWN.section),
+        person: L.targetUserName ?? person(L.staffId),
+        day: L.shiftDate,
+        period: L.period,
+      });
+      break;
+    case 'PUBLISH_ROTA':
+      args.week = L.weekStart;
+      break;
+    case 'APPLY_ROTA_TEMPLATE':
+      Object.assign(args, { template: L.templateName ?? nameIn(fx.templates, L.templateId, fx.other.template, VENUE_B.template, UNKNOWN.template), week: L.weekStart });
+      break;
+    case 'POST_ANNOUNCEMENT':
+      args.message = L.content;
+      break;
+    case 'POST_SHOUTOUT':
+      Object.assign(args, { person: L.targetUserName ?? person(L.targetUserId), message: L.content });
+      break;
+  }
+  for (const k of Object.keys(args)) if (args[k] === undefined || args[k] === null) delete args[k];
+  return { tool: legacy.intent, args, confidence: legacy.confidence, summary: legacy.summary, hasAdditionalRequest: legacy.hasAdditionalRequest ?? false };
 }
 
 /** The people a "which one?" / "did you mean?" question offers, by id. */

@@ -73,8 +73,9 @@ fails to boot. With #63 the API logs `[push] VAPID config rejected …` and runs
 and `npm run vapid:generate` prints a fresh pair to the terminal only.
 
 > **Temporary test-week values (applied with the run 14 API deploy, 2026-10-07):** for the owner's
-> real-phone test week, `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30` (before: unset / `5`).
-> They are temporary: set them back (unset / `5`) after the test week. See
+> real-phone test week, `AI_MONTHLY_BUDGET_USD=30` and `AI_VISION_WEEKLY_LIMIT=30` (before: unset / `5`),
+> and from the run 14B voice deploy `AI_VOICE_USER_DAILY_LIMIT=100` and `AI_VOICE_VENUE_DAILY_LIMIT=300`
+> (before: unset). They are temporary: set them back (unset / `5`) after the test week. See
 > [`owner-todo.md`](owner-todo.md) item 20.
 
 ## 2. Frontend build (`src/`, Vite, Vercel)
@@ -118,7 +119,7 @@ Not configurable by environment:
 | `ALLOW_DEV_OTP_ECHO`, `ECHO_ALLOWED_PHONES`, `ALLOW_DEV_ERROR_INJECTION` | Set on the API that Playwright starts (`webServer.env`). An API that is already running and gets reused keeps its own values and won't echo this run's phones. | see §1 | set by `playwright.config.ts` | `playwright.config.ts:56` |
 | `PLAYWRIGHT_CHROMIUM_EXECUTABLE` | Use a system Chromium instead of Playwright's managed build. | no | unset (managed browser) | `playwright.config.ts:41` |
 | `CI` | When set, Playwright always starts its own API and Vite servers (`reuseExistingServer: false`). | no | unset (reuse running servers) | `playwright.config.ts:51,62` |
-| `GEMINI_API_KEY` | `test:server` live voice cases skip without it. **(from #69)** `e2e/golden-path.live.spec.ts` needs it on the API, where a `503` means it is missing or the quota is spent. | — | unset (live cases skipped) | `server/src/routes/voice.test.ts:1231` (and five more gates) |
+| `GEMINI_API_KEY` | `test:server` does not need it: its voice cases use a scripted model and never call Google. **(from #69)** `e2e/golden-path.live.spec.ts` needs it on the API, where a `503` means it is missing or the quota is spent. | — | unset | `playwright.config.ts` (`E2E_LIVE`) |
 | `DOCLING_SIDECAR_HOST` | The live Docling test skips when the sidecar is unreachable. | — | `http://127.0.0.1:8901` | `server/src/parsing/doclingClient.test.ts:17` |
 | `FRONTEND_ORIGIN`, `LOGIN_LINK_TTL_HOURS`, `LOGIN_METHODS`, `ALLOW_DEV_OTP_ECHO`, `ECHO_ALLOWED_PHONES` | Server tests set these in-process and restore them afterwards. Nothing needs setting. | — | — | `server/src/routes/onboarding.test.ts`, `loginLinks.test.ts`, `devOtpEcho.test.ts` |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` **(from #69)** | The rota golden-path push e2e needs a real pair in `.env` to deliver a push to its local receiver. | see §1 | unset (that spec fails its precondition) | `e2e/golden-path.spec.ts` on `rebase/rota-v0-on-master` |

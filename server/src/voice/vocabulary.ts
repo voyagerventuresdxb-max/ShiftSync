@@ -74,8 +74,11 @@ export function mentionedIn(transcript: string, items: Term[]): Term[] {
 }
 
 // Service words only: "open" (an open shift), "close" and a bare "am" ("I am") say nothing about the period.
-const EVENING = ['evening', 'night', 'tonight', 'dinner', 'closing', 'late', 'supper'];
-const MORNING = ['morning', 'opening', 'breakfast', 'brunch', 'lunch', 'daytime'];
+// Plus the code-mixed time-of-day words callers use inside English ("kal shaam" is tomorrow evening):
+// Hindi/Urdu shaam/sham/raat and subah, Arabic masaa/masa/leil/layl and sabah, Tagalog gabi/hapon
+// and umaga/sabahan.
+const EVENING = ['evening', 'night', 'tonight', 'dinner', 'closing', 'late', 'supper', 'shaam', 'sham', 'raat', 'masaa', 'masa', 'leil', 'layl', 'gabi', 'hapon'];
+const MORNING = ['morning', 'opening', 'breakfast', 'brunch', 'lunch', 'daytime', 'subah', 'sabah', 'umaga', 'sabahan'];
 
 /** "AM"/"PM" when the caller named a service period ("closing", "lunch"), null when none or both. */
 export function periodSaid(transcript: string): 'AM' | 'PM' | null {

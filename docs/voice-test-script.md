@@ -92,7 +92,9 @@ problem (accent/noise); a right **You said** with a wrong sentence is an underst
 
 ## "Not set up" and "limit reached" messages
 
-These come from the server, word for word (`server/src/routes/voice.ts`), shown in the red banner.
+These come from the server, word for word (`server/src/routes/voice.ts`). Before Confirm they show
+above the typed command box (titled **Assistant unavailable** or **Limit reached**), so the command
+can be typed instead; after Confirm they show in the red banner. The last four rows are the phone's own.
 
 | Situation | Message |
 |---|---|
@@ -105,10 +107,9 @@ These come from the server, word for word (`server/src/routes/voice.ts`), shown 
 | Google busy or unreachable | "Voice commands aren't available right now — try again later." |
 | More than 20 recordings (or 30 commands understood) in 5 minutes by one person | "Too many requests — please wait a few minutes and try again." |
 | Phone's recording format refused | "Your phone's recording format (<type>) wasn't accepted by the transcription service. This is a bug on our side rather than an outage — please tell us your phone model." |
-| Microphone blocked | "Microphone access was denied or unavailable." |
-| Browser can't record | "Voice commands are not supported in this browser." |
-| Empty recording | "No audio captured — try again." |
-| The recording stayed silent (checked on the phone, nothing is sent) | "I didn't hear anything. Hold the phone a little closer and try again." |
+| Microphone blocked | Box **Microphone is off**: "ShiftSync isn't allowed to use the microphone, so nothing was recorded. Type your command below instead.", then how to turn it back on in iPhone Safari |
+| Browser can't record | Box **Voice doesn't work here**: "This browser can't record voice commands. Type your command below instead." |
+| Empty recording, or the recording stayed silent (checked on the phone, nothing is sent) | Box **Didn't hear anything**: "I didn't hear anything. Hold the phone a little closer and try again, or type your command below." |
 | The transcriber heard no speech (noise only) | "I didn't hear a command. Hold the phone a little closer and try again." |
 
 How to see them without spending money: on a **non-production** environment, set
@@ -176,35 +177,43 @@ until **Confirm**.
 ## 12-minute demo flow (made-up names)
 
 Same structure as the owner's private demo script, with made-up names. Example venue: a roster
-PDF with 21 staff including **Alex Morgan** (Waiter), two people called **Karim** (Karim Saleh,
-Bartender; Karim Aziz, Runner), and an **Edwin** and an **Edwina**. Sections to create on the
-floor plan: **Terrace**, **Bar**, **Main floor**.
+PDF with 21 staff including **Alex Morgan** (Waiter), **Sam Okoye** (Runner), two people called
+**Karim** (Karim Saleh, Bartender; Karim Aziz, Runner), and an **Edwin** and an **Edwina**.
+Sections to create on the floor plan: **Terrace**, **Bar**, **Main floor**. Before the demo,
+have Sam ask for a swap from a staff phone for a shift in a week whose cover requests are still
+open, so there is a swap to approve.
 
 | Min | Step | Say / do | Expected on screen |
 |---|---|---|---|
 | 0–1 | Sign in, fresh venue | Owner sign-in; check the venue name in the header | The name you typed; a rename shows everywhere at once |
 | 1–3 | Import the roster | Schedule → Upload → the roster PDF, AI reading allowed | Progress: "Uploading", "Reading your roster with the AI reader", "Cross-checking the two readings", "Matched people to your staff"; then the review screen |
-| 3–4 | Check names and week | Scroll the review list | Every person listed as new, the printed week (not this week); any cell marked to check opens with the readings to pick from |
+| 3–4 | Check names and week | Scroll the review list | Every person listed as new, the printed week (not this week); a cell marked to check opens with the readings to pick from; a person only one AI reading listed asks "Import them?" |
 | 4 | Confirm | Tap Confirm | People lists everyone; the week is filled. Uploading the same file again adds 0 people and 0 shifts |
 | 4–5 | Floor plan | Floor Plan tab | Empty state with "Add your first section"; add Terrace, Bar, Main floor |
 | 5–6 | Section by voice | "Put Alex on the terrace tomorrow evening" | Alex Morgan (Waiter), Terrace, tomorrow's full date, PM. Confirm |
-| 6–7 | Shift by voice | "Create a waiter shift for Alex on Friday from 6 to 2" | Alex Morgan, Waiter, Friday's full date, 18:00–02:00 (ends next day). Confirm |
+| 6–7 | Shift by voice | "Create a waiter shift for Alex on Friday from 6 to 2" | Two readings, evening first: tap 18:00–02:00 (ends next day), then Confirm |
 | 7–8 | Shout-out | "Give Alex a shout-out for great service tonight" | Shout-out preview for Alex Morgan. Confirm |
-| 8–9 | Shared first name | "Give Karim a shout-out saying well done" | "Which Karim did you mean?" with both Karims and their roles; tap one, then Confirm |
-| 9–10 | Announcement | Announcements screen (typed) | The announcement on the board |
-| 10–11 | Swap approval | Swaps list → Approve | The swap approved; the rota updates |
-| 11–12 | Publish | Rota → Publish | Staff see the published week |
+| 8 | Shared first name | "Give Karim a shout-out saying well done" | "Which Karim did you mean?" with both Karims and their roles; tap one, then Confirm |
+| 8–9 | Announcement by voice | "Post an announcement: staff meeting Monday at 3pm in the bar" | The announcement text, word for word. Confirm |
+| 9–10 | Swap approval by voice | "Approve Sam's swap request" | The approve sheet for Sam's swap. Confirm |
+| 10–11 | A question | "Who is working tonight?" | A list of tonight's people with roles and times; just Done, no Confirm |
+| 11–12 | Publish by voice | "Publish next week's rota" | The stronger card: how many shifts change and how many people are notified. "Confirm: publish and notify N people" |
 
-**Phrases verified live (local stack, live model):** the section, shift and three shout-out
-phrases above, a shout-out naming someone not on the team, a full-name shout-out, a mangled
-long name (resolved to the right person), "Who is working tonight?" (polite decline: staff can
-ask about their own schedule only) and "Order more limes" (polite decline).
+**Phrases verified live (local stack, live model, typed):** every phrase in the table, plus
+"Who's on tomorrow?", "Who is on the terrace tonight?", "Are there any pending swap requests?",
+"What are the latest announcements?", "When am I working next?" (staff), "Cancel Sam's shift
+tomorrow", "Move Alex's Saturday shift to start at 7pm", "Add Alex on Sunday from 18:30 to 1",
+a split shift ("10am to 2pm and 6pm to 11pm"), "I need next Tuesday off for a doctor's
+appointment" (staff), "Ask Alex to cover my shift tomorrow" (staff), "Mark me unavailable next
+Wednesday" (staff), code-mixed phrasing ("Yalla, put Alex sa terrace bukas ng gabi"; "Sam ko kal
+shaam six to eleven ki shift do"; "Shukran Sam, give her a shout-out"), and every never-by-voice
+request (each declined with a link to the right screen).
 
 **Three recovery moves**
-1. Wrong or unclear person: "Which one?" or "Pick from your team" — tap the right person;
+1. Wrong or unclear person: "Which one?" or "Pick from your team". Tap the right person;
    nothing changes before Confirm.
-2. Misheard words: in "I heard — fix it and try again", correct the words and press Enter; no
-   new recording.
+2. Misheard words, or a noisy room: tap the keyboard next to the mic and type the command, or fix
+   the words in "I heard — fix it and try again"; the same preview and Confirm follow.
 3. Import says "Hard to read — not imported", or many cells to check: upload the original PDF
    export instead of a photo; a repeat import adds no duplicates.
 
@@ -212,10 +221,47 @@ ask about their own schedule only) and "Order more limes" (polite decline).
 close alternative at the same venue ("Edwin" when there is also an Edwina) asks, the exact
 match listed first; saying the full name settles it.
 
-**Not for a demo:** "Who is working tonight?"; anything outside rota and people; announcement
-and swap approval *by voice* (not verified live this round — use the screens); phone photos of
-dense or angled printed rosters; rosters whose day headings are shifted against the columns
-(everyone is imported, every day is shown to check).
+**Not for a demo:** anything outside rota and people (declined politely); phone photos of dense
+or angled printed rosters; rosters whose day headings are shifted against the columns (everyone
+is imported, every day is shown to check); staff swap requests for a week whose cover requests
+have closed (the app explains the cut-off).
+
+## Typing, answers, declines and error states (voice tools v2, phone side)
+
+The keyboard button next to the mic opens **Type a command**: type what you would say and tap
+**Send**. A typed command goes through the same reading, preview and **Confirm** as a spoken one;
+its sheet says **You typed** instead of *I heard*. While a command runs, its step is written out:
+*Listening… tap the mic to stop*, *Transcribing…*, *Understanding…* (a card just above the mic), then
+*Ready to confirm* or *Here's the answer*, then *Doing it…* on the sheet, then a **Done: …** banner.
+With iPhone **Reduce Motion** on (Settings → Accessibility → Motion), nothing pulses, and the words
+still show. Made-up names as in *Before you start*; dates are spelled out in full (weekday, day,
+month, year).
+
+| # | Role | Do or say | Expect |
+|---|---|---|---|
+| T1 | Manager | Tap the keyboard button, type "Create a bartender shift for Alex on Friday from 6pm to 2am", **Send** | *Understanding…*, then **New shift** with **You typed "…"**, Alex Example, "Bartender · Friday <date>, 18:00 – 02:00 (ends Saturday)", *Ready to confirm*. **Confirm** → "Done: …" banner. |
+| T2 | Staff | Type "order more limes", **Send** | **Didn't catch that**, the words in the box, and three phrases under **Or try**: "When am I working this week?", "I can't work next Friday", "Request next Monday to Wednesday off". Tap one: it fills the box and nothing is sent. **Try again** sends it. |
+| T3 | Manager | Same as T2 | The phrases are the manager's: "Who's working tonight?", "Add an open bartender shift tomorrow 6pm to 2am", "Any pending requests?" |
+| T4 | Anyone | Say any command | *Listening…*, *Transcribing…* and *Understanding…* each show as words above the mic before the sheet. |
+| R1 | Manager | "Who's working tonight?" | Label **Who's working**; a title with tonight's full date; one row per person (name, then role, then times); a single **Done**; no Confirm. Nothing changes. |
+| R2 | Manager | "Who's on the terrace tonight?" | Label **Sections**; one row per person on Terrace, or the empty sentence if nobody is. **Done** only. |
+| R3 | Staff | "Any pending requests?" | Label **Requests**; only this person's own requests. **Done** only. |
+| R4 | Anyone | "What were the last announcements?" | Label **Announcements**; recent announcements as rows. Any text that looks like code shows as plain text. **Done** only. |
+| R5 | Staff | "What's my schedule?" | Label **Your schedule**; a row per shift, or "You have no shifts in the next 14 days." **Done** only. |
+| D1 | Manager | "Deactivate Riley Demo" | Label **Not by voice**; *exact (server):* "Removing or deactivating someone isn't done by voice. Do it in People."; an **Open People** button that opens People; **Got it**; no Confirm, nothing changes. |
+| D2 | Manager | "Run payroll" | **Not by voice** with the server's sentence about payroll and WPS; no screen button. |
+| D3 | Staff | "Change my sign-in phone number" | **Not by voice**, a sentence telling them to ask a manager; no screen button. |
+| P1 | Manager | "Publish next week's rota" (with some draft changes) | Label **Publish rota**; card **Before you publish**: *Shifts changing N*, *People notified M*, "N shifts will change and M people will be notified."; the big button reads **Confirm: publish and notify M people**. Check N and M against the rota: only shifts this publish changes, only people who get a notification. |
+| C1 | Manager | "Cancel Alex's Friday shift" | Label **Cancel shift**; card **Shift to cancel** with a red edge and a **Cancel** tag: Alex Example, Bartender, "Bartender · Friday <date>, <start> – <end>", and "This shift comes off the rota, and Alex Example is no longer working it." Buttons **Confirm: cancel this shift**, **Edit**, **Keep shift**. **Keep shift** changes nothing. |
+| O1 | Staff | "Book next Monday to Wednesday off" | Label **Time off**; "Time off · 3 days"; "From Monday <date> to Wednesday <date>"; the reason if one was said. |
+| S1 | Manager | "Add a split shift for Sam on Saturday, 11 to 3 and 6 to 11" | **New shift**; "Split shift, two parts", then "1st: Saturday <date>, 11:00 – 15:00" and "2nd: Saturday <date>, 18:00 – 23:00". One **Confirm** creates both. |
+| E1 | Anyone | Safari → **aA** → Website Settings → Microphone → **Deny**; tap the mic | Box **Microphone is off** with how to turn it back on (aA → Website Settings → Microphone → Allow, or Settings → Apps → Safari → Microphone). Type the command in **Type it instead**: it works. Then allow the microphone again with those steps. |
+| E2 | Anyone | Airplane mode on; tap the mic | Box **You're offline**: "Voice needs a connection, so nothing was recorded. Reconnect and try again." Type something, **Send**: "Nothing was sent. Reconnect, then send it again — your words are kept below." Airplane mode off, **Send**: the sheet appears. |
+| E3 | Manager | Get any preview, airplane mode on, tap **Confirm** | The sheet stays open with **You're offline**: "Nothing was sent and nothing changed. Reconnect, then tap Confirm again." Reconnect and **Confirm**: done once, not twice. |
+| E4 | Anyone | On a slow connection (or a dev build with `window.__shiftsyncVoiceTimeoutMs = 1000` set in the console), send a command | After 25 seconds (1 s on the dev setting): box **Taking too long**: "The assistant didn't answer within 25 seconds, so I stopped waiting. Nothing changed. Try again, or type it below." The words are kept. |
+| E4b | Manager | Get any preview, then make **Confirm** slow (very weak signal, or the dev setting above) | The sheet stays open with **Taking too long**: "No answer after 25 seconds. It may still have gone through — check before you confirm again." Tap **Confirm** again: "Done: …", and the change exists once, never twice. |
+| E5 | Anyone | Non-production with no AI key; send a typed command | Box **Assistant unavailable** with the server's sentence (see the table above). |
+| E6 | Anyone | More than 30 commands in 5 minutes, or a spent daily limit | Box **Limit reached** with the server's sentence. |
 
 ## Results log
 

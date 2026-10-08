@@ -3,8 +3,9 @@ import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager } from '../middleware/requireSession.js';
-import { transcribeRateLimiter, parseIntentRateLimiter } from '../middleware/rateLimit.js';
-import { buildVocabularyHint, transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
+import { transcribeRateLimiter, parseIntentRateLimiter, voiceExecuteRateLimiter } from '../middleware/rateLimit.js';
+import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
+import { venueSpellingHint } from '../voice/context.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
 import type { AiBudgetExceededError } from '../lib/aiBudget.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
@@ -14,13 +15,14 @@ import { SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { decideJoinRequest, JOIN_LINK_CHOICE_MESSAGE, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
-import { createShift, updateShift } from '../lib/actions/shiftActions.js';
+import { createShift, deleteShift, updateShift } from '../lib/actions/shiftActions.js';
+import { findActiveVenueRole, findOverlappingShift, findVenueUser, isPastVenueDay, isRealDate, shiftInstants } from '../lib/shiftRules.js';
+import { isClockTime } from '../voice/times.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
 import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
 import { createAnnouncement, createShoutout } from '../lib/actions/communicationActions.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
-import { combineDateAndTime } from '../parsing/normalize.js';
 import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
 
 export const voiceRouter = Router();
@@ -43,7 +45,9 @@ function isNonEmptyString(v: unknown): v is string {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** Longest command /parse-intent reads; the sheet's edit box allows 300 characters. */
 const MAX_TRANSCRIPT_CHARS = 500;
-const TIME_RE = /^\d{2}:\d{2}$/;
+/** Time off is asked for at most this many days at a time (the voice tool's cap). */
+const MAX_TIME_OFF_DAYS = 14;
+const daysInRange = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000) + 1;
 
 /**
  * What the END USER is told when the Gemini-backed half of the pipeline is
@@ -121,27 +125,36 @@ function validateIntentShape(intent: ParsedIntent): string | null {
     case 'DECLINE_JOIN':
       if (!isNonEmptyString(intent.joinRequestId)) return 'joinRequestId is required.';
       return null;
+    case 'REQUEST_TIME_OFF': {
+      if (!isRealDate(intent.startDate) || !isRealDate(intent.endDate)) return 'startDate/endDate must be real calendar dates (YYYY-MM-DD).';
+      if (intent.endDate < intent.startDate) return 'endDate must not be before startDate.';
+      if (daysInRange(intent.startDate, intent.endDate) > MAX_TIME_OFF_DAYS) return `Time off can be asked for up to ${MAX_TIME_OFF_DAYS} days at a time.`;
+      if (intent.reason !== null && intent.reason !== undefined && typeof intent.reason !== 'string') return 'reason must be a string or null.';
+      return null;
+    }
     case 'CREATE_SHIFT': {
       if (!isNonEmptyString(intent.roleId)) return 'roleId is required.';
       if (!DATE_RE.test(intent.date)) return 'date must be YYYY-MM-DD.';
-      const d = new Date(`${intent.date}T00:00:00.000Z`);
-      if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== intent.date) {
-        return 'date must be a real calendar date (YYYY-MM-DD).';
-      }
-      if (!TIME_RE.test(intent.start) || !TIME_RE.test(intent.end)) return 'start/end must be HH:MM.';
+      if (!isRealDate(intent.date)) return 'date must be a real calendar date (YYYY-MM-DD).';
+      if (!isClockTime(intent.start) || !isClockTime(intent.end)) return 'start/end must be HH:MM.';
+      if (intent.userId !== null && intent.userId !== undefined && !isNonEmptyString(intent.userId)) return 'userId must be an id or null.';
+      if (intent.second !== undefined && (!intent.second || !isClockTime(intent.second.start) || !isClockTime(intent.second.end))) return 'second.start/second.end must be HH:MM.';
       return null;
     }
     case 'EDIT_SHIFT': {
       if (!isNonEmptyString(intent.shiftId)) return 'shiftId is required.';
-      if (intent.date !== undefined && !DATE_RE.test(intent.date)) return 'date must be YYYY-MM-DD.';
-      if (intent.start !== undefined && !TIME_RE.test(intent.start)) return 'start must be HH:MM.';
-      if (intent.end !== undefined && !TIME_RE.test(intent.end)) return 'end must be HH:MM.';
+      if (intent.date !== undefined && !isRealDate(intent.date)) return 'date must be a real calendar date (YYYY-MM-DD).';
+      if (intent.start !== undefined && !isClockTime(intent.start)) return 'start must be HH:MM.';
+      if (intent.end !== undefined && !isClockTime(intent.end)) return 'end must be HH:MM.';
       return null;
     }
+    case 'CANCEL_SHIFT':
+      if (!isNonEmptyString(intent.shiftId)) return 'shiftId is required.';
+      return null;
     case 'ASSIGN_SECTION': {
       if (!isNonEmptyString(intent.sectionId)) return 'sectionId is required.';
       if (!isNonEmptyString(intent.staffId)) return 'staffId is required.';
-      if (!DATE_RE.test(intent.shiftDate)) return 'shiftDate must be YYYY-MM-DD.';
+      if (!isRealDate(intent.shiftDate)) return 'shiftDate must be a real calendar date (YYYY-MM-DD).';
       if (intent.period !== 'AM' && intent.period !== 'PM') return 'period must be "AM" or "PM".';
       return null;
     }
@@ -190,18 +203,9 @@ voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.si
     // without the vocabulary boost" instead of failing the whole request.
     let vocabulary: string | undefined;
     try {
-      const [staff, sections, roles] = await Promise.all([
-        prisma.user.findMany({ where: { locationId: req.user!.locationId, isActive: true }, select: { fullName: true } }),
-        prisma.floorSection.findMany({ where: { locationId: req.user!.locationId }, select: { label: true } }),
-        prisma.role.findMany({ where: { locationId: req.user!.locationId }, select: { name: true } }),
-      ]);
-      // Capped, de-duplicated, contact-looking text dropped (buildVocabularyHint): a venue with
-      // hundreds of staff/sections/roles doesn't blow up the prompt — this is a hint, not a directory.
-      vocabulary = buildVocabularyHint(
-        staff.map((s) => s.fullName),
-        sections.map((s) => s.label),
-        roles.map((r) => r.name),
-      );
+      // The same bounded hint intent parsing gets (voice/context.ts): active staff names and
+      // section names only, capped, de-duplicated, contact-looking text dropped.
+      vocabulary = await venueSpellingHint(req.user!.locationId);
     } catch (vocabErr) {
       console.error('[voice.transcribe] failed to build vocabulary hint, transcribing without it', vocabErr);
       vocabulary = undefined;
@@ -307,7 +311,7 @@ voiceRouter.post('/parse-intent', requireSession, parseIntentRateLimiter, async 
  * this endpoint directly with a hand-crafted body, bypassing /parse-intent
  * entirely. The role-permission check below MUST hold on its own.
  */
-voiceRouter.post('/execute', requireSession, async (req, res) => {
+voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req, res) => {
   const transcript = String(req.body?.transcript ?? '');
   const intent = req.body?.intent as ParsedIntent | undefined;
   const voiceLogId = typeof req.body?.voiceLogId === 'string' ? req.body.voiceLogId : null;
@@ -366,12 +370,47 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
     const shapeError = validateIntentShape(intent);
     if (shapeError) return respond(400, { error: shapeError }, 'REJECTED_VALIDATION', shapeError);
 
+    // One command runs once: a Confirm retried after a slow or dropped first try (same voice log)
+    // must not create a second shift. The log row is claimed in one conditional update; a row
+    // already claimed is answered 409 without touching anything (and without `respond`, which
+    // would overwrite the first try's outcome). A refused or failed run records its own outcome,
+    // which releases the claim, so the command can be confirmed again.
+    if (voiceLogId) {
+      const claimed = await prisma.voiceInteractionLog.updateMany({ where: { id: voiceLogId, actorId: req.user!.id, outcome: { not: 'EXECUTED' } }, data: { outcome: 'EXECUTED' } });
+      if (claimed.count === 0 && (await prisma.voiceInteractionLog.count({ where: { id: voiceLogId, actorId: req.user!.id } }))) {
+        return res.status(409).json({ error: 'That command has already been done.', errorCode: 'voice_already_executed' });
+      }
+    }
+
     const note = `[voice] "${transcript}"`;
     const actorId = req.user!.id;
     const locationId = req.user!.locationId;
+    const timezone = await venueTimezoneFor(locationId);
+    /** Every change is re-checked here, whatever /parse-intent offered: a hand-built body skips it. */
+    const refuse = (status: number, msg: string) => respond(status, { error: msg }, 'REJECTED_VALIDATION', msg);
+    const PAST = 'That day has already passed.';
 
     switch (intent.intent) {
+      case 'REQUEST_TIME_OFF': {
+        if (isPastVenueDay(intent.startDate, timezone)) return refuse(400, PAST);
+        // Time off is recorded as an "unavailable" mark for each day: the same rows (and audit
+        // entries) the availability route writes, which managers already see. All or nothing.
+        const days: string[] = [];
+        for (let d = intent.startDate; d <= intent.endDate; d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)) days.push(d);
+        const reason = typeof intent.reason === 'string' && intent.reason.trim() ? intent.reason.trim() : null;
+        const marks = await prisma.$transaction(async (tx) => {
+          const out = [];
+          for (const date of days) {
+            const { mark } = await markAvailability({ userId: actorId, date, type: 'UNAVAILABLE', note: reason ?? note }, tx);
+            await writeAuditLog(tx, { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: mark.id, note });
+            out.push(mark);
+          }
+          return out;
+        });
+        return respond(201, { executed: true, result: { marks } }, 'EXECUTED');
+      }
       case 'MARK_AVAILABILITY': {
+        if (isPastVenueDay(intent.date, timezone)) return refuse(400, PAST);
         // markAvailability() upserts unconditionally (one row per (userId, date))
         // and only ever returns { result: 'ok' } — there is no 'not_found' case
         // to handle here, unlike the swap/join actions below.
@@ -526,82 +565,71 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         return respond(200, { executed: true, result: { status: result.status, userId: result.userId } }, 'EXECUTED');
       }
       case 'CREATE_SHIFT': {
-        const role = await prisma.role.findUnique({ where: { id: intent.roleId } });
-        if (!role || role.locationId !== locationId) {
-          const msg = `Role "${intent.roleId}" not found.`;
-          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
-        }
+        // Same checks as POST /api/shifts (lib/shiftRules.ts), plus the ones voice adds: the
+        // person is active, the day hasn't passed, and nobody is double-booked.
+        if (!(await findActiveVenueRole(intent.roleId, locationId))) return refuse(404, `Role "${intent.roleId}" not found or no longer active.`);
+        if (intent.userId && !(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
+        if (isPastVenueDay(intent.date, timezone)) return refuse(400, PAST);
+        const parts = [{ start: intent.start, end: intent.end }, ...(intent.second ? [intent.second] : [])].map((p) => shiftInstants(intent.date, p.start, p.end, timezone));
+        if (parts.length === 2 && parts[0]!.startTime < parts[1]!.endTime && parts[1]!.startTime < parts[0]!.endTime) return refuse(400, 'The two parts of a split shift overlap.');
         if (intent.userId) {
-          const staff = await prisma.user.findUnique({ where: { id: intent.userId } });
-          if (!staff || staff.locationId !== locationId) {
-            const msg = `Staff member "${intent.userId}" not found.`;
-            return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
+          for (const part of parts) {
+            if (await findOverlappingShift({ userId: intent.userId, locationId, ...part })) return refuse(409, 'That person already has a shift that overlaps.');
           }
         }
-        const timezone = await venueTimezoneFor(locationId);
-        const overnight = intent.end <= intent.start;
-        const startTime = combineDateAndTime(intent.date, intent.start, timezone);
-        const endTime = combineDateAndTime(intent.date, intent.end, timezone, overnight);
-
-        const created = await withAuditedTransaction(
-          prisma,
-          (tx) =>
-            createShift(
+        // A split shift is two shifts, created together or not at all, each with its audit row.
+        const created = await prisma.$transaction(async (tx) => {
+          const rows = [];
+          for (const part of parts) {
+            const shift = await createShift(
               {
                 locationId,
                 roleId: intent.roleId,
                 userId: intent.userId,
                 createdById: actorId,
                 date: new Date(`${intent.date}T00:00:00.000Z`),
-                startTime,
-                endTime,
+                ...part,
                 breakMinutes: 0,
                 sidework: [],
                 status: 'DRAFT',
               } as unknown as Parameters<typeof createShift>[0],
               tx,
-            ),
-          (shift) => ({ locationId, actorId, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id, note }),
-        );
-        return respond(201, { executed: true, result: created }, 'EXECUTED');
+            );
+            await writeAuditLog(tx, { locationId, actorId, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id, note });
+            rows.push(shift);
+          }
+          return rows;
+        });
+        return respond(201, { executed: true, result: created.length === 1 ? created[0] : created }, 'EXECUTED');
       }
       case 'EDIT_SHIFT': {
         const existing = await prisma.shift.findUnique({ where: { id: intent.shiftId } });
-        if (!existing || existing.locationId !== locationId) {
-          const msg = `Shift "${intent.shiftId}" not found.`;
-          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
-        }
-        const timezone = await venueTimezoneFor(locationId);
+        if (!existing || existing.locationId !== locationId) return refuse(404, `Shift "${intent.shiftId}" not found.`);
+        const currentDate = existing.date.toISOString().slice(0, 10);
+        if (isPastVenueDay(currentDate, timezone) || (intent.date !== undefined && isPastVenueDay(intent.date, timezone))) return refuse(400, PAST);
         const data: Record<string, unknown> = {};
         if (intent.roleId !== undefined) {
-          const role = await prisma.role.findUnique({ where: { id: intent.roleId } });
-          if (!role || role.locationId !== locationId) {
-            const msg = `Role "${intent.roleId}" not found.`;
-            return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
-          }
+          // A removed role stays on old shifts, but nothing is moved onto it.
+          if (!(await findActiveVenueRole(intent.roleId, locationId))) return refuse(404, `Role "${intent.roleId}" not found or no longer active.`);
           data.roleId = intent.roleId;
         }
         if (intent.userId !== undefined) {
           if (intent.userId) {
-            const staff = await prisma.user.findUnique({ where: { id: intent.userId } });
-            if (!staff || staff.locationId !== locationId) {
-              const msg = `Staff member "${intent.userId}" not found.`;
-              return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
-            }
+            if (!(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
             data.userId = intent.userId;
           } else {
             data.userId = null;
           }
         }
-        const nextDate = intent.date ?? existing.date.toISOString().slice(0, 10);
-        const nextStart = intent.start ?? formatVenueTime(existing.startTime, timezone);
-        const nextEnd = intent.end ?? formatVenueTime(existing.endTime, timezone);
+        const nextDate = intent.date ?? currentDate;
+        const next = shiftInstants(nextDate, intent.start ?? formatVenueTime(existing.startTime, timezone), intent.end ?? formatVenueTime(existing.endTime, timezone), timezone);
         if (intent.date !== undefined || intent.start !== undefined || intent.end !== undefined) {
-          const overnight = nextEnd <= nextStart;
           data.date = new Date(`${nextDate}T00:00:00.000Z`);
-          data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
-          data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
+          data.startTime = next.startTime;
+          data.endTime = next.endTime;
         }
+        const assignee = intent.userId !== undefined ? intent.userId : existing.userId;
+        if (assignee && (await findOverlappingShift({ userId: assignee, locationId, ...next, excludeShiftId: existing.id }))) return refuse(409, 'That person already has a shift that overlaps.');
 
         const updated = await withAuditedTransaction(
           prisma,
@@ -610,17 +638,19 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
         );
         return respond(200, { executed: true, result: updated }, 'EXECUTED');
       }
+      case 'CANCEL_SHIFT': {
+        // The same removal as DELETE /api/shifts/:id (deleteShift), after the same venue check.
+        const existing = await prisma.shift.findUnique({ where: { id: intent.shiftId } });
+        if (!existing || existing.locationId !== locationId) return refuse(404, `Shift "${intent.shiftId}" not found.`);
+        if (isPastVenueDay(existing.date.toISOString().slice(0, 10), timezone)) return refuse(400, 'That shift has already happened.');
+        await deleteShift({ id: existing.id, locationId, actorId, note });
+        return respond(200, { executed: true, result: { id: existing.id, cancelled: true } }, 'EXECUTED');
+      }
       case 'ASSIGN_SECTION': {
         const section = await prisma.floorSection.findUnique({ where: { id: intent.sectionId } });
-        if (!section || section.locationId !== locationId) {
-          const msg = `Section "${intent.sectionId}" not found.`;
-          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
-        }
-        const staff = await prisma.user.findUnique({ where: { id: intent.staffId } });
-        if (!staff || staff.locationId !== locationId) {
-          const msg = `Staff member "${intent.staffId}" not found.`;
-          return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
-        }
+        if (!section || section.locationId !== locationId) return refuse(404, `Section "${intent.sectionId}" not found.`);
+        if (!(await findVenueUser(intent.staffId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.staffId}" not found.`);
+        if (isPastVenueDay(intent.shiftDate, timezone)) return refuse(400, PAST);
         const shiftDate = new Date(`${intent.shiftDate}T00:00:00.000Z`);
 
         const assignment = await withAuditedTransaction(
@@ -689,6 +719,8 @@ voiceRouter.post('/execute', requireSession, async (req, res) => {
           const msg = `Template "${intent.templateId}" not found.`;
           return respond(404, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        const weekEnd = new Date(Date.parse(`${intent.weekStart}T00:00:00Z`) + 6 * 86_400_000).toISOString().slice(0, 10);
+        if (isPastVenueDay(weekEnd, timezone)) return refuse(400, 'That week has already passed.');
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
         const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
         if (result.result !== 'ok') {

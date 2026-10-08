@@ -6,13 +6,13 @@ import type { GoogleGenAI } from '@google/genai';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../../src/app.js';
 import { issueSession } from '../../src/lib/identity.js';
-import { __setVoiceIntentClientForTests, normalizeParsedIntent } from '../../src/voice/parseIntent.js';
-import { parseIntentRateLimiter } from '../../src/middleware/rateLimit.js';
+import { __setVoiceIntentClientForTests } from '../../src/voice/parseIntent.js';
+import { parseIntentRateLimiter, voiceExecuteRateLimiter } from '../../src/middleware/rateLimit.js';
 import type { ParsedIntent } from '../../src/voice/intentSchema.js';
 import { canConfirmVoiceIntent } from '../../../shared/voiceIntents.js';
 import { CORPUS, intentRoleTable } from './corpus.js';
 import { cleanupFixture, seedFixture, snapshot, type Fixture } from './fixture.js';
-import { CALLER, rawModelOutput, scoreCase } from './score.js';
+import { CALLER, executeBody, rawModelOutput, scoreCase } from './score.js';
 
 /**
  * The voice corpus through the real parse route with a scripted model (no network, nothing
@@ -42,6 +42,7 @@ let next: Record<string, unknown> = {};
  */
 async function tokenFor(role: keyof typeof CALLER): Promise<string> {
   parseIntentRateLimiter.resetKey(fx.users[CALLER[role]]);
+  voiceExecuteRateLimiter.resetKey(fx.users[CALLER[role]]);
   return (await issueSession(fx.users[CALLER[role]])).plainToken;
 }
 
@@ -73,7 +74,7 @@ async function parse(token: string, transcript: string, raw: Record<string, unkn
   return (await res.json()) as { intent: ParsedIntent; hasAdditionalRequest: boolean };
 }
 
-async function execute(token: string, transcript: string, intent: ParsedIntent) {
+async function execute(token: string, transcript: string, intent: ParsedIntent | Record<string, unknown>) {
   return fetch(`${base}/api/voice/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -130,7 +131,7 @@ test('every adversarial model answer is refused before a Confirm, and /execute r
     if (intent.intent !== 'UNRECOGNIZED') failures.push(`${c.id} offered ${intent.intent} for an adversarial answer`);
     if (c.category === 'wrong-role' && canConfirmVoiceIntent(c.role, c.adversarial!.intent)) failures.push(`${c.id} the app would offer Confirm for ${c.adversarial!.intent}`);
     if (c.executeMustFail) {
-      const res = await execute(await tokenFor(c.role), c.text, normalizeParsedIntent(raw));
+      const res = await execute(await tokenFor(c.role), c.text, executeBody(fx, c));
       if (res.status < 400) failures.push(`${c.id} /execute accepted ${c.adversarial!.intent} (${res.status})`);
     }
     if ((await snapshot(prisma, locations())) !== before) failures.push(`${c.id} changed data`);
@@ -140,17 +141,17 @@ test('every adversarial model answer is refused before a Confirm, and /execute r
 
 test('conflicts: a decided swap or a reviewed join request cannot be decided again', async () => {
   const manager = await tokenFor('MANAGER');
-  const approve = normalizeParsedIntent({ intent: 'APPROVE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence: 0.9, summary: 'Approve.' });
+  const approve = { intent: 'APPROVE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence: 0.9, summary: 'Approve.' };
   assert.equal((await execute(manager, 'approve the swap', approve)).status, 200);
-  const decline = normalizeParsedIntent({ intent: 'DECLINE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence: 0.9, summary: 'Decline.' });
+  const decline = { intent: 'DECLINE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence: 0.9, summary: 'Decline.' };
   const before = await snapshot(prisma, locations());
   assert.equal((await execute(manager, 'decline it', decline)).status, 409);
   assert.equal(await snapshot(prisma, locations()), before);
   // And once decided, the parse step stops offering it.
-  const { intent } = await parse(manager, 'decline the swap', { intent: 'DECLINE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence: 0.9, summary: 'Decline.' });
+  const { intent } = await parse(manager, "decline Alex's swap", { tool: 'DECLINE_SWAP', args: { requester: 'Alex' }, confidence: 0.9, summary: 'Decline.' });
   assert.equal(intent.intent, 'UNRECOGNIZED');
 
-  const join = normalizeParsedIntent({ intent: 'DECLINE_JOIN', joinRequestId: fx.joins.riya, confidence: 0.9, summary: 'Decline.' });
+  const join = { intent: 'DECLINE_JOIN', joinRequestId: fx.joins.riya, confidence: 0.9, summary: 'Decline.' };
   assert.equal((await execute(manager, 'decline riya', join)).status, 200);
   assert.equal((await execute(manager, 'decline riya again', join)).status, 409);
 });

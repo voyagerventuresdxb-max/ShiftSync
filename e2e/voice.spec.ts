@@ -137,11 +137,20 @@ async function voiceLogs(actorId: string) {
   return prisma.voiceInteractionLog.findMany({ where: { actorId }, orderBy: { createdAt: 'asc' } });
 }
 
-/** The parse call's `intent` enum — what the model was structurally allowed to answer for this caller. */
+/** The parse call's `tool` enum — what the model was structurally allowed to answer for this caller. */
 function intentEnum(call: GeminiCall): unknown {
-  const config = call.body.generationConfig as { responseSchema?: { properties?: { intent?: { enum?: unknown } } } } | undefined;
-  return config?.responseSchema?.properties?.intent?.enum;
+  const config = call.body.generationConfig as { responseSchema?: { properties?: { tool?: { enum?: unknown } } } } | undefined;
+  return config?.responseSchema?.properties?.tool?.enum;
 }
+
+/** Every tool a staff caller's model may answer with: their own changes, the reads, a decline, or "not understood". */
+const STAFF_TOOLS = ['MARK_AVAILABILITY', 'REQUEST_SWAP', 'REQUEST_TIME_OFF', 'QUERY_MY_SCHEDULE', 'WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS', 'DECLINED', 'UNRECOGNIZED'];
+
+/** "Sat 17 Oct": how the server's own sentences name a day. */
+const shortDay = (iso: string) => new Date(`${iso}T00:00:00.000Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+/** What the server answers for "what's my schedule?" when there is nothing in the next 14 days. */
+const NO_SHIFTS = 'You have no shifts in the next 14 days.';
 
 /** Each parse call received exactly the text the transcribe call before it returned. */
 async function expectPipeline(transcripts: string[]): Promise<GeminiCall[]> {
@@ -178,10 +187,11 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await logIn(page, managerPhone, '/');
 
     const first = 'Create a bartender shift for Layla on Saturday 6pm to 2am and give her a shoutout for covering last night';
-    const createSummary = `Create a Bartender shift for Layla Haddad on ${saturday}, 18:00 to 02:00.`;
+    // The model passes the words as heard; the server finds the role and person and writes the sentence.
+    const createSummary = `Create a Bartender shift for Layla Haddad, ${shortDay(saturday)} 18:00–02:00.`;
     await speak(page, first, {
-      intent: 'CREATE_SHIFT', roleId, date: saturday, start: '18:00', end: '02:00', userId: layla.id,
-      confidence: 0.93, hasAdditionalRequest: true, summary: createSummary,
+      tool: 'CREATE_SHIFT', args: { role: 'bartender', person: 'Layla', day: saturday, start: '6pm', end: '2am' },
+      confidence: 0.93, hasAdditionalRequest: true, summary: 'Create a bartender shift for Layla on Saturday.',
     });
 
     // Before executing: the plain confirm view for the primary intent, no follow-up copy yet.
@@ -222,7 +232,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const second = 'Give Layla a shoutout for covering last night';
     const note = 'Thanks for covering last night, Layla!';
     await speak(page, second, {
-      intent: 'POST_SHOUTOUT', targetUserId: layla.id, targetUserName: 'Layla Haddad', content: note,
+      tool: 'POST_SHOUTOUT', args: { person: 'Layla', message: note },
       confidence: 0.9, hasAdditionalRequest: false, summary: 'Post a shoutout for Layla Haddad.',
     });
     const sheet2 = sheetFor(page, second);
@@ -255,7 +265,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     const said = 'Mark me unavailable next Monday';
     const summary = `Mark you unavailable on ${monday}.`;
-    await speak(page, said, { intent: 'MARK_AVAILABILITY', date: monday, availabilityType: 'UNAVAILABLE', confidence: 0.95, summary });
+    await speak(page, said, { tool: 'MARK_AVAILABILITY', args: { day: monday, availability: 'UNAVAILABLE' }, confidence: 0.95, summary });
     const sheet = sheetFor(page, said);
     await expect(sheet.getByText(summary, { exact: true })).toBeVisible();
     await sheet.getByRole('button', { name: 'Confirm' }).click();
@@ -268,12 +278,12 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     expect(await prisma.auditLog.count({ where: { locationId, actorId: staff.id, action: 'AVAILABILITY_MARKED', entityId: mark.id } })).toBe(1);
 
     const asked = "What's my schedule this week?";
-    await speak(page, asked, { intent: 'QUERY_MY_SCHEDULE', confidence: 0.9, summary: 'You have no shifts scheduled this week.' });
+    // The answer is the server's, from the caller's own shifts: the model only picked the question.
+    await speak(page, asked, { tool: 'QUERY_MY_SCHEDULE', args: {}, confidence: 0.9, summary: 'What is my schedule this week?' });
     const answer = sheetFor(page, asked);
-    await expect(answer.locator('.eyebrow')).toHaveText('Your schedule');
-    await expect(answer.getByText('You have no shifts scheduled this week.', { exact: true })).toBeVisible();
-    await expect(answer.getByRole('button')).toHaveText(['Got it']);
-    await answer.getByRole('button', { name: 'Got it' }).click();
+    await expect(answer.getByText(NO_SHIFTS, { exact: true }).first()).toBeVisible();
+    await expect(answer.getByRole('button')).toHaveText([/^(Got it|Done)$/]);
+    await answer.getByRole('button', { name: /^(Got it|Done)$/ }).click();
     await expect(answer).toHaveCount(0);
 
     const logs = await voiceLogs(staff.id);
@@ -282,7 +292,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
       ['QUERY_MY_SCHEDULE', 'ANSWERED'],
     ]);
     const calls = await expectPipeline([said, asked]);
-    expect(intentEnum(calls[1]!)).toEqual(['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE', 'UNRECOGNIZED']);
+    expect(intentEnum(calls[1]!)).toEqual(STAFF_TOOLS);
   });
 
   test('consent: the first tap explains where the audio goes; "Not now" records and sends nothing; it is asked once', async ({ page }) => {
@@ -302,10 +312,10 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     expect(await geminiCalls()).toEqual([]);
 
     const asked = "What's my schedule this week?";
-    await speak(page, asked, { intent: 'QUERY_MY_SCHEDULE', confidence: 0.9, summary: 'You have no shifts scheduled this week.' });
-    await sheetFor(page, asked).getByRole('button', { name: 'Got it' }).click();
+    await speak(page, asked, { tool: 'QUERY_MY_SCHEDULE', args: {}, confidence: 0.9, summary: 'What is my schedule this week?' });
+    await sheetFor(page, asked).getByRole('button', { name: /^(Got it|Done)$/ }).click();
 
-    await scriptUtterance(asked, { intent: 'QUERY_MY_SCHEDULE', confidence: 0.9, summary: 'You have no shifts scheduled this week.' });
+    await scriptUtterance(asked, { tool: 'QUERY_MY_SCHEDULE', args: {}, confidence: 0.9, summary: 'What is my schedule this week?' });
     await mic.click();
     await expect(page.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
     await expect(notice).toHaveCount(0);
@@ -324,7 +334,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await logIn(page, managerPhone, '/');
     const said = "Approve Omar's request to join";
     const summary = "Approve Omar Farouk's request to join the team.";
-    await speak(page, said, { intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.9, summary });
+    await speak(page, said, { tool: 'APPROVE_JOIN', args: { applicant: 'Omar' }, confidence: 0.9, summary });
     const sheet = sheetFor(page, said);
     await expect(sheet.getByText(summary, { exact: true })).toBeVisible();
     await sheet.getByRole('button', { name: 'Confirm' }).click();
@@ -363,8 +373,9 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await logIn(page, managerPhone, '/');
     const said = "Publish next week's rota";
     // The model's own summary is replaced server-side by the counted preview.
-    await speak(page, said, { intent: 'PUBLISH_ROTA', weekStart: monday, confidence: 0.9, summary: 'Publish the rota for next week.' });
-    const preview = `This will publish 3 shifts across 2 staff members for the week of ${monday} — confirm?`;
+    await speak(page, said, { tool: 'PUBLISH_ROTA', args: { week: monday }, confidence: 0.9, summary: 'Publish the rota for next week.' });
+    // Only what this publish changes (three draft shifts) and who it notifies (two people).
+    const preview = `This will publish 3 new or changed shifts for the week of ${shortDay(monday)} and notify 2 people — confirm?`;
     const sheet = sheetFor(page, said);
     await expect(sheet.getByText(preview, { exact: true })).toBeVisible();
     expect(await prisma.shift.count({ where: { locationId, status: 'PUBLISHED' } })).toBe(0);
@@ -385,7 +396,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const managerPhone = freshPhone();
     const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
     const ahmed = await createUser(locationId, 'STAFF', 'Ahmed Khan');
-    const template = await prisma.rotaTemplate.create({
+    await prisma.rotaTemplate.create({
       data: {
         locationId,
         name: 'Weekend Bar',
@@ -399,10 +410,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     await logIn(page, managerPhone, '/');
     const said = 'Apply the weekend bar template to next week';
-    await speak(page, said, {
-      intent: 'APPLY_ROTA_TEMPLATE', templateId: template.id, templateName: 'weekend bar', weekStart: monday,
-      confidence: 0.88, summary: 'Apply the weekend bar template.',
-    });
+    await speak(page, said, { tool: 'APPLY_ROTA_TEMPLATE', args: { template: 'weekend bar', week: monday }, confidence: 0.88, summary: 'Apply the weekend bar template.' });
     const preview = `Apply template "Weekend Bar" to the week of ${monday} — confirm?`;
     const sheet = sheetFor(page, said);
     await expect(sheet.getByText(preview, { exact: true })).toBeVisible();
@@ -428,7 +436,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await logIn(page, managerPhone, '/');
     const said = 'Tell everyone the staff meeting moved to 4pm on Thursday please be on time';
     const content = 'The staff meeting moved to 4pm on Thursday — please be on time.';
-    await speak(page, said, { intent: 'POST_ANNOUNCEMENT', content, confidence: 0.91, summary: 'Post an announcement to all staff.' });
+    await speak(page, said, { tool: 'POST_ANNOUNCEMENT', args: { message: content }, confidence: 0.91, summary: 'Post an announcement to all staff.' });
     const sheet = sheetFor(page, said);
     // The preview is the board's own announcement card: the text verbatim, under the poster's name.
     await expect(sheet.getByText('How it will look')).toBeVisible();
@@ -452,10 +460,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     await logIn(page, managerPhone, '/');
     const said = 'Approve uh the new guy and also';
-    await speak(page, said, {
-      intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.42, hasAdditionalRequest: true,
-      summary: "Approve Omar Farouk's request to join.",
-    });
+    await speak(page, said, { tool: 'APPROVE_JOIN', args: {}, confidence: 0.42, hasAdditionalRequest: true, summary: "Approve Omar Farouk's request to join." });
     const sheet = voiceSheet(page);
     await expect(sheet.locator('.eyebrow')).toHaveText("Didn't catch that");
     await expect(sheet.getByRole('heading', { name: "I'm not sure I got that right." })).toBeVisible();
@@ -464,7 +469,9 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     ).toBeVisible();
     // What was heard is open for editing; there is nothing to confirm.
     await expect(sheet.getByLabel(/I heard/)).toHaveValue(said);
-    await expect(sheet.getByRole('button')).toHaveText(['Try again', 'Cancel']);
+    await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await expect(sheet.getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(sheet.getByRole('button', { name: 'Cancel' })).toBeVisible();
     await expect(sheet.getByText(FOLLOW_UP)).toHaveCount(0);
     await sheet.getByRole('button', { name: 'Cancel' }).click();
     await expect(sheet).toHaveCount(0);
@@ -488,8 +495,8 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const approve = "Approve Omar Farouk's request to join.";
     const decline = "Decline Omar Farouk's request to join.";
     await speak(page, said, {
-      intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.45, summary: approve,
-      alternatives: [{ intent: 'DECLINE_JOIN', joinRequestId: request.id, confidence: 0.4, summary: decline }],
+      tool: 'APPROVE_JOIN', args: { applicant: 'Omar' }, confidence: 0.45, summary: approve,
+      alternatives: [{ tool: 'DECLINE_JOIN', args: { applicant: 'Omar' }, confidence: 0.4, summary: decline }],
     });
     const sheet = sheetFor(page, said);
     await expect(sheet.locator('.eyebrow')).toHaveText('Choose one');
@@ -522,7 +529,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     await logIn(page, staffPhone, '/my-shifts');
     const said = "Approve Omar's request to join";
-    await speak(page, said, { intent: 'APPROVE_JOIN', joinRequestId: request.id, confidence: 0.97, summary: "Approve Omar Farouk's request to join." });
+    await speak(page, said, { tool: 'APPROVE_JOIN', args: { applicant: 'Omar' }, confidence: 0.97, summary: "Approve Omar Farouk's request to join." });
 
     // The role is checked BEFORE any confirm sheet: a staff member is told
     // plainly and never sees a "Confirm" for a manager action.
@@ -530,9 +537,9 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await expect(sheetFor(page, said)).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
 
-    // A real model couldn't answer this: the staff schema it was given has no manager intents.
+    // A real model couldn't answer this: the staff schema it was given has no manager tools.
     const [, parse] = await expectPipeline([said]);
-    expect(intentEnum(parse!)).toEqual(['MARK_AVAILABILITY', 'REQUEST_SWAP', 'QUERY_MY_SCHEDULE', 'UNRECOGNIZED']);
+    expect(intentEnum(parse!)).toEqual(STAFF_TOOLS);
 
     // Nothing reached /execute, nothing changed.
     expect(await prisma.joinRequest.findUniqueOrThrow({ where: { id: request.id } })).toMatchObject({ status: 'PENDING', reviewedById: null });
@@ -561,11 +568,8 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     await logIn(page, managerPhone, '/');
     const said = 'Give Layla a shout-out saying great job';
-    // The model gives the name as said and no id: the server finds her in this venue.
-    await speak(page, said, {
-      intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Layla', content: 'Great job',
-      confidence: 0.95, summary: 'Give Layla a shout-out with this note.',
-    });
+    // The model gives the name as said (it is never given ids): the server finds her in this venue.
+    await speak(page, said, { tool: 'POST_SHOUTOUT', args: { person: 'Layla', message: 'Great job' }, confidence: 0.95, summary: 'Give Layla a shout-out with this note.' });
     const sheet = sheetFor(page, said);
     await expect(sheet.locator('.eyebrow')).toHaveText('Shout-out');
     await expect(sheet.getByText('How it will look')).toBeVisible();
@@ -593,9 +597,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     await logIn(page, managerPhone, '/');
     const said = 'Give Rana a shout-out saying great job';
-    await speak(page, said, {
-      intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Rana', content: 'Great job', confidence: 0.9, summary: 'Give Rana a shout-out.',
-    });
+    await speak(page, said, { tool: 'POST_SHOUTOUT', args: { person: 'Rana', message: 'Great job' }, confidence: 0.9, summary: 'Give Rana a shout-out.' });
     const sheet = voiceSheet(page);
     await expect(sheet.locator('.eyebrow')).toHaveText('Not on your team');
     await expect(sheet.getByRole('heading', { name: "I couldn't find Rana on your team." })).toBeVisible();
@@ -620,15 +622,13 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const { locationId } = await createVenue('which');
     const managerPhone = freshPhone();
     const manager = await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
-    const saleh = await createUser(locationId, 'STAFF', 'Karim Saleh');
+    await createUser(locationId, 'STAFF', 'Karim Saleh');
     await createUser(locationId, 'STAFF', 'Karim Aziz');
 
     await logIn(page, managerPhone, '/');
     const said = 'Give Karim a shout-out saying great job';
-    // Seen live: the model picks one of them at high confidence. The app must still ask.
-    await speak(page, said, {
-      intent: 'POST_SHOUTOUT', targetUserId: saleh.id, targetUserName: 'Karim', content: 'Great job', confidence: 0.9, summary: 'Give Karim a shout-out.',
-    });
+    // Seen live: a confident model. The name as heard fits two people, so the app asks.
+    await speak(page, said, { tool: 'POST_SHOUTOUT', args: { person: 'Karim', message: 'Great job' }, confidence: 0.9, summary: 'Give Karim a shout-out.' });
     const sheet = sheetFor(page, said);
     await expect(sheet.locator('.eyebrow')).toHaveText('Which person?');
     await expect(sheet.getByRole('heading', { name: 'Which Karim did you mean?' })).toBeVisible();
@@ -669,7 +669,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await logIn(page, managerPhone, '/');
     const misheard = 'Give later a shout out saying great job';
     await speak(page, misheard, {
-      intent: 'UNRECOGNIZED', summary: "I didn't catch who the shout-out is for.", unrecognizedReason: 'Say their name, for example "Give Sam a shout-out".',
+      tool: 'UNRECOGNIZED', args: {}, summary: "I didn't catch who the shout-out is for.", unrecognizedReason: 'Say their name, for example "Give Sam a shout-out".',
     });
     const sheet = voiceSheet(page);
     await expect(sheet.locator('.eyebrow')).toHaveText("Didn't catch that");
@@ -681,9 +681,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     const fixed = 'Give Layla a shout-out saying great job';
     await heard.fill(fixed);
-    await scriptIntent({
-      intent: 'POST_SHOUTOUT', targetUserId: layla.id, targetUserName: 'Layla', content: 'Great job', confidence: 0.95, summary: 'Give Layla Nasser a shout-out with this note.',
-    });
+    await scriptIntent({ tool: 'POST_SHOUTOUT', args: { person: 'Layla', message: 'Great job' }, confidence: 0.95, summary: 'Give Layla Nasser a shout-out with this note.' });
     await sheet.getByRole('button', { name: 'Try again' }).click();
     const again = sheetFor(page, fixed);
     await expect(again.locator('.eyebrow')).toHaveText('Shout-out');
@@ -711,19 +709,16 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
   test('a command missing a part (seen live): "Almost there" asks for exactly that part; fixing the words and trying again gives the preview', async ({ page }) => {
     await phone(page);
-    const { locationId, roleId } = await createVenue('incomplete');
+    const { locationId } = await createVenue('incomplete');
     const managerPhone = freshPhone();
     await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
-    const alex = await createUser(locationId, 'STAFF', 'Alex Morgan');
+    await createUser(locationId, 'STAFF', 'Alex Morgan');
     const friday = addDays(nextMonday(), 4);
 
     await logIn(page, managerPhone, '/');
     const said = 'Create a bartender shift for Alex on Friday from 6 p.m.';
     // The live answer's shape: no end, no role, no person.
-    await speak(page, said, {
-      intent: 'CREATE_SHIFT', summary: 'Create a Bartender shift for Alex Morgan on Friday.', confidence: 0.95,
-      date: friday, start: '18:00', templateId: null, templateName: null, weekStart: null,
-    });
+    await speak(page, said, { tool: 'CREATE_SHIFT', args: { day: friday, start: '18:00' }, summary: 'Create a Bartender shift for Alex Morgan on Friday.', confidence: 0.95 });
     const sheet = voiceSheet(page);
     await expect(sheet.locator('.eyebrow')).toHaveText('Almost there');
     const day = new Date(`${friday}T00:00:00.000Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -735,8 +730,8 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const fixed = 'Create a bartender shift for Alex on Friday from 6 p.m. to 2 a.m.';
     await sheet.getByLabel(/I heard/).fill(fixed);
     await scriptIntent({
-      intent: 'CREATE_SHIFT', roleId, date: friday, start: '18:00', end: '02:00', userId: alex.id, targetUserName: 'Alex',
-      confidence: 0.95, summary: `Create a Bartender shift for Alex Morgan on ${friday}, 18:00 to 02:00.`,
+      tool: 'CREATE_SHIFT', args: { role: 'bartender', person: 'Alex', day: friday, start: '6 p.m.', end: '2 a.m.' },
+      confidence: 0.95, summary: 'Create a bartender shift for Alex on Friday.',
     });
     await sheet.getByRole('button', { name: 'Try again' }).click();
     const again = sheetFor(page, fixed);
@@ -752,11 +747,11 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const { locationId } = await createVenue('alix');
     const managerPhone = freshPhone();
     await createUser(locationId, 'MANAGER', 'E2E Voice Manager', managerPhone);
-    const alex = await createUser(locationId, 'STAFF', 'Alex Morgan');
+    await createUser(locationId, 'STAFF', 'Alex Morgan');
 
     await logIn(page, managerPhone, '/');
     const said = 'Give Alek a shout-out.';
-    await speak(page, said, { intent: 'POST_SHOUTOUT', targetUserId: null, targetUserName: 'Alek', content: null, confidence: 0.9, summary: 'Give Alek a shout-out.' });
+    await speak(page, said, { tool: 'POST_SHOUTOUT', args: { person: 'Alek' }, confidence: 0.9, summary: 'Give Alek a shout-out.' });
     const sheet = voiceSheet(page);
     await expect(sheet.getByRole('heading', { name: "I couldn't find Alek on your team." })).toBeVisible();
     await expect(sheet.getByText(/^Did you mean Alex Morgan\? If Alek is new/)).toBeVisible();
@@ -765,7 +760,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     await expectPhoneFriendly(sheet);
     await screenshot(page, '10-did-you-mean-name');
 
-    await scriptIntent({ intent: 'POST_SHOUTOUT', targetUserId: alex.id, targetUserName: 'Alex Morgan', content: null, confidence: 0.9, summary: 'Give Alex Morgan a shout-out.' });
+    await scriptIntent({ tool: 'POST_SHOUTOUT', args: { person: 'Alex Morgan' }, confidence: 0.9, summary: 'Give Alex Morgan a shout-out.' });
     await names.first().click();
     await expect(sheet.locator('.eyebrow')).toHaveText('Almost there');
     await expect(sheet.getByRole('heading', { name: "I've got a shout-out for Alex Morgan — what should it say?" })).toBeVisible();

@@ -107,16 +107,16 @@ export const VOCABULARY_MAX_TERMS = 150;
 export const VOCABULARY_MAX_CHARS = 4000;
 
 /**
- * The bounded spelling hint sent with a recording: the caller's own venue's ACTIVE staff display
- * names, its section names and its role names (the caller passes only those), plus a few fixed
- * scheduling words. Anything that looks like contact data — an email address, or a run of six or
+ * The bounded spelling hint sent with a recording and with intent parsing (prompts.ts): the
+ * caller's own venue's ACTIVE staff display names and its section names (the caller passes only
+ * those; no role labels, ids or anything else), plus a few fixed scheduling words. Anything that looks like contact data — an email address, or a run of six or
  * more digits such as a phone number — is dropped even if it was typed into a name, duplicates are
  * removed, and the list is capped by count and length. It only helps spelling: the server's own
  * lookup (people.ts) decides who a person is, never the model.
  */
-export function buildVocabularyHint(staffNames: string[], sectionNames: string[], roleNames: string[]): string {
+export function buildVocabularyHint(staffNames: string[], sectionNames: string[]): string {
   const looksLikeContact = (t: string) => /@/.test(t) || /\d[\d\s().+-]{5,}\d/.test(t) || /\d{6,}/.test(t);
-  const terms = [...staffNames, ...sectionNames, ...roleNames, 'rota', 'floor', 'section', 'swap', 'cover', 'shift']
+  const terms = [...staffNames, ...sectionNames, 'rota', 'floor', 'section', 'swap', 'cover', 'shift']
     .map((t) => t.replace(/\s+/g, ' ').trim())
     .filter((t) => t && t.length <= 80 && !looksLikeContact(t));
   const out: string[] = [];

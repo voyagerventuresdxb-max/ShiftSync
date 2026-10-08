@@ -5,8 +5,9 @@ import type { VoiceIntentResolution } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
 
 function resolution(attempted: ParsedIntent, response: ParsedIntent, hasAdditionalRequest = false): VoiceIntentResolution {
-  return { attempted, response, hasAdditionalRequest };
+  return { attempted: { intent: attempted.intent, confidence: 'confidence' in attempted ? attempted.confidence : 0 }, response, hasAdditionalRequest };
 }
+const answer = { title: 'Your shifts — next 14 days', items: [{ primary: 'Friday 9 October 2026', secondary: '18:00–02:00 · Bartender' }], emptyText: 'You have no shifts in the next 14 days.' };
 
 test('outcomeAtParseTime: an attempted UNRECOGNIZED always logs UNRECOGNIZED', () => {
   const unrecognized: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'no match', summary: 'x' };
@@ -14,13 +15,13 @@ test('outcomeAtParseTime: an attempted UNRECOGNIZED always logs UNRECOGNIZED', (
 });
 
 test('outcomeAtParseTime: a QUERY_MY_SCHEDULE coerced to UNRECOGNIZED by the confidence gate logs LOW_CONFIDENCE, not ANSWERED', () => {
-  const attempted: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', confidence: 0.2, summary: 'You are working Friday.' };
+  const attempted: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', answer, confidence: 0.2, summary: 'You are working Friday.' };
   const coercedResponse: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'not confident enough', summary: 'x' };
   assert.equal(outcomeAtParseTime(resolution(attempted, coercedResponse)), 'LOW_CONFIDENCE');
 });
 
 test('outcomeAtParseTime: a genuine above-threshold QUERY_MY_SCHEDULE logs ANSWERED', () => {
-  const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
+  const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', answer, confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
   assert.equal(outcomeAtParseTime(resolution(intent, intent)), 'ANSWERED');
 });
 
@@ -43,7 +44,7 @@ test('shouldPromptForAdditionalRequest: true + a genuine pending-confirmation in
 });
 
 test('shouldPromptForAdditionalRequest: true + a genuine QUERY_MY_SCHEDULE (answer-only) -> true', () => {
-  const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
+  const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', answer, confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
   assert.equal(shouldPromptForAdditionalRequest(resolution(intent, intent, true)), true);
 });
 
@@ -59,7 +60,7 @@ test('shouldPromptForAdditionalRequest: true + a real intent coerced to UNRECOGN
 });
 
 test('shouldPromptForAdditionalRequest: false -> false regardless of intent', () => {
-  const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
+  const intent: ParsedIntent = { intent: 'QUERY_MY_SCHEDULE', answer, confidence: 0.95, summary: 'You are working Friday 6pm-close.' };
   assert.equal(shouldPromptForAdditionalRequest(resolution(intent, intent, false)), false);
 });
 
@@ -85,4 +86,13 @@ test('noteAtParseTime: a recognised command missing parts is noted by intent and
   const note = noteAtParseTime(resolution(attempted, asked));
   assert.equal(note, 'person_ambiguous:0 incomplete:ASSIGN_SECTION:sectionId,shiftDate,period');
   assert.ok(!/karim/i.test(note!));
+});
+
+test('outcomeAtParseTime: every read is ANSWERED; a never-by-voice request is REJECTED_PERMISSION', () => {
+  for (const intent of ['WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS'] as const) {
+    const read: ParsedIntent = { intent, answer: { title: 't', items: [], emptyText: 'e' }, confidence: 0.9, summary: 'e' };
+    assert.equal(outcomeAtParseTime(resolution(read, read)), 'ANSWERED', intent);
+  }
+  const declined: ParsedIntent = { intent: 'DECLINED', category: 'payroll_wps', message: 'm', screen: null, confidence: 0.9, summary: 'm' };
+  assert.equal(outcomeAtParseTime(resolution(declined, declined)), 'REJECTED_PERMISSION');
 });

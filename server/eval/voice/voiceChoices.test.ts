@@ -66,8 +66,9 @@ async function parseWithLog(role: keyof typeof CALLER, transcript: string, raw: 
 
 const parse = async (role: keyof typeof CALLER, transcript: string, raw: Record<string, unknown>) => (await parseWithLog(role, transcript, raw)).intent;
 
-const approve = (confidence: number) => ({ intent: 'APPROVE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence, summary: "Approve Alex's swap request." });
-const decline = (confidence: number) => ({ intent: 'DECLINE_SWAP', swapRequestId: fx.swaps['alex+1'], confidence, summary: "Decline Alex's swap request." });
+// The model answers with a tool and the words as heard; the server finds the request itself.
+const approve = (confidence: number) => ({ tool: 'APPROVE_SWAP', args: { requester: 'Alex' }, confidence, summary: "Approve Alex's swap request." });
+const decline = (confidence: number) => ({ tool: 'DECLINE_SWAP', args: { requester: 'Alex' }, confidence, summary: "Decline Alex's swap request." });
 const options = (intent: ParsedIntent) => (intent.intent === 'UNRECOGNIZED' ? (intent.options ?? []) : []);
 const locations = () => [fx.locationId, fx.otherLocationId];
 
@@ -89,11 +90,8 @@ test('approve or decline? both readings are offered as choices, and nothing chan
 test("a choice outside the caller's role is never offered", async () => {
   // A staff caller: their own swap request, and two manager-only readings the model shouldn't have produced.
   const intent = await parse('STAFF', 'swap with omar or approve it', {
-    intent: 'REQUEST_SWAP',
-    shiftId: fx.shifts['sam+1'],
-    targetUserId: fx.users.omar,
-    targetUserName: 'Omar Haddad',
-    reason: null,
+    tool: 'REQUEST_SWAP',
+    args: { person: 'Omar Haddad', day: addDays(fx.today, 1) },
     confidence: 0.4,
     summary: 'Ask Omar to cover your shift tomorrow.',
     alternatives: [approve(0.3), decline(0.3)],
@@ -105,7 +103,7 @@ test("a choice outside the caller's role is never offered", async () => {
 test("a choice that points at another venue's data is dropped, and nothing of that venue is shown", async () => {
   const intent = await parse('MANAGER', 'shout out to bart or approve the swap', {
     ...approve(0.4),
-    alternatives: [{ intent: 'POST_SHOUTOUT', targetUserId: fx.other.person, targetUserName: 'Bartholomew Quill', content: 'Great work', confidence: 0.4, summary: 'Thank Bartholomew Quill.' }],
+    alternatives: [{ tool: 'POST_SHOUTOUT', args: { person: 'Bartholomew Quill', message: 'Great work' }, confidence: 0.4, summary: 'Thank them.' }],
   });
   assert.equal(intent.intent, 'UNRECOGNIZED');
   assert.deepEqual(options(intent), []);
@@ -115,11 +113,11 @@ test("a choice that points at another venue's data is dropped, and nothing of th
 
 test('past dates and duplicates are dropped; at most three choices', async () => {
   const yesterday = addDays(fx.today, -1);
-  const pastShift = { intent: 'CREATE_SHIFT', roleId: fx.roles.Server, userId: fx.users.layla, date: yesterday, start: '09:00', end: '17:00', confidence: 0.4, summary: 'Create a shift yesterday.' };
+  const pastShift = { tool: 'CREATE_SHIFT', args: { role: 'Server', person: 'Layla', day: yesterday, start: '09:00', end: '17:00' }, confidence: 0.4, summary: 'Create a shift yesterday.' };
   const dropped = await parse('MANAGER', 'the swap, or a shift yesterday', { ...approve(0.4), alternatives: [pastShift, approve(0.35)] });
   assert.deepEqual(options(dropped), []);
 
-  const join = (intent: string) => ({ intent, joinRequestId: fx.joins.riya, confidence: 0.3, summary: `${intent} Riya.` });
+  const join = (tool: string) => ({ tool, args: { applicant: 'Riya' }, confidence: 0.3, summary: `${tool} Riya.` });
   const capped = await parse('MANAGER', 'approve them', { ...approve(0.4), alternatives: [decline(0.35), join('APPROVE_JOIN'), join('DECLINE_JOIN')] });
   assert.deepEqual(
     options(capped).map((o) => o.intent),

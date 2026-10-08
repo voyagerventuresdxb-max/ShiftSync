@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkAgainstContext } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
-import type { PromptContext } from './prompts.js';
+import type { VenueContext } from './context.js';
 
 // A made-up venue: two bars and a terrace; Omar is a bartender.
-const ctx: PromptContext = {
+const ctx: VenueContext = {
   today: '2031-03-03',
+  timezone: 'Asia/Dubai',
   callerName: 'Dina Manager',
   callerShifts: [],
   staffDirectory: [
