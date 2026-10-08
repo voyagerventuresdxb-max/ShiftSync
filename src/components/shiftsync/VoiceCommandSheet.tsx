@@ -84,7 +84,7 @@ function choiceDetail(option: ParsedIntent): string {
 
 const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/60';
 
-/** The big gold Confirm (and Run it): the one action that does something. Utilities, not .btn, so its size and radius hold. */
+/** The big gold Confirm (and Update preview): the one action that does something. Utilities, not .btn, so its size and radius hold. */
 const primaryAction =
   'inline-flex h-14 w-full items-center justify-center rounded-2xl bg-accent text-[17px] font-semibold text-accent-foreground hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:opacity-60 motion-safe:transition';
 /** Edit, Cancel, Back, Done: quiet, smaller, still 48 px tall. */
@@ -100,7 +100,7 @@ const initialsDisc = 'grid h-10 w-10 shrink-0 place-items-center rounded-full bo
  * voice sheet (VoiceStage), whose orb stays above it as a small ring.
  *
  * One layout for every state: what kind of command it is, one plain sentence, what was heard
- * (tap the words or Edit — "Run it" re-reads the edited words, no new recording), then either a preview of
+ * (tap the words or Edit — "Update preview" re-reads the edited words, no new recording), then either a preview of
  * the result exactly as the app will show it, or the choices to pick from. Confirm is the one big
  * button; Edit and Cancel are small. Nothing runs without Confirm.
  */
@@ -134,7 +134,7 @@ export function VoiceCommandSheet({
   onChoose: (option: ParsedIntent) => void;
   /** Set after a choice was picked: back to the list it came from. */
   onBackToChoices?: () => void;
-  /** "Run it" with the edited words: a fresh read of the text (no recording). Never executes anything itself. */
+  /** "Update preview" with the edited words: a fresh read of the text (no recording). Never executes anything itself. */
   onReparse: (text: string) => void;
   onCancel: () => void;
   executing: boolean;
@@ -299,7 +299,7 @@ export function VoiceCommandSheet({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-semibold text-foreground/87">{r.person}</span>
-                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Try again with this name</span>
+                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Update the preview with this name</span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-foreground/60" aria-hidden />
                 </button>
@@ -334,7 +334,7 @@ export function VoiceCommandSheet({
               {showEditor ? (
                 <>
                   <label htmlFor={heardId} className={caption}>
-                    {typed ? 'You typed' : 'I heard'} — fix it and try again
+                    {typed ? 'You typed' : 'I heard'} — fix it, then update the preview
                   </label>
                   <textarea
                     ref={heardRef}
@@ -453,7 +453,7 @@ export function VoiceCommandSheet({
             {showEditor ? (
               <>
                 <button type="button" className={primaryAction} onClick={reparse} disabled={busy || !draft.trim()}>
-                  {reparsing ? 'Checking…' : 'Run it'}
+                  {reparsing ? 'Checking…' : 'Update preview'}
                 </button>
                 <div className={cn('grid gap-2', editing ? 'grid-cols-2' : 'grid-cols-1')}>
                   {editing && (

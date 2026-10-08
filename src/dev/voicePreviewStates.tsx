@@ -126,7 +126,7 @@ const notUnderstood: ParsedIntent = { intent: 'UNRECOGNIZED', reason: 'Say it ag
 
 const almost: ParsedIntent = {
   intent: 'UNRECOGNIZED',
-  reason: 'Add the end time and the role, then run it again.',
+  reason: 'Add the end time and the role, then update the preview.',
   summary: "I've got a new shift for Alex Example on Friday 9 October 2026 from 18:00 — what time does it end, and which role?",
   incomplete: { intent: 'CREATE_SHIFT', missing: ['end', 'role'] },
 };

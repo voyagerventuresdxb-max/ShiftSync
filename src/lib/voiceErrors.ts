@@ -63,7 +63,7 @@ export function offlineProblem(stage: VoiceStage | 'record'): VoiceProblem {
       ? 'Voice needs a connection, so nothing was recorded. Reconnect and try again.'
       : stage === 'execute'
         ? 'Nothing was sent and nothing changed. Reconnect, then tap Confirm again.'
-        : 'Nothing was sent. Reconnect, then send it again — your words are kept below.';
+        : 'Nothing was sent. Reconnect, then tap Show preview again — your words are kept below.';
   return { kind: 'offline', title: "You're offline", message };
 }
 
@@ -88,7 +88,7 @@ export function requestProblem(err: unknown, { stage, online }: { stage: VoiceSt
       message:
         stage === 'execute'
           ? "The connection dropped. It may still have gone through — check before you confirm again."
-          : 'The connection dropped before an answer came back. Check your signal and send it again.',
+          : 'The connection dropped before an answer came back. Check your signal and tap Show preview again.',
     };
   }
   if (err instanceof VoiceTimeoutError) {

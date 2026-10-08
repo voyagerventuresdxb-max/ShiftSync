@@ -158,7 +158,7 @@ test('result kinds: confirm, answer, which-one, not understood, declined, done a
   assert.equal(orb(whichOne), 'choose');
   assert.equal(orb(notUnderstood), 'unclear');
   assert.equal(orb(declined), 'unclear');
-  // "Run it" with edited words: the sheet stays up while the words are read again.
+  // "Update preview" with edited words: the sheet stays up while the words are read again.
   assert.equal(orb(notUnderstood, { reparsing: true }), 'rereading');
   assert.equal(voiceStageWord(at({ result: result(notUnderstood), reparsing: true })), 'Understanding');
   // Which-one is small and dim; not understood is small, dim and still.

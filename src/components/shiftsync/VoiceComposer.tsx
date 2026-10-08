@@ -1,5 +1,4 @@
 import { useId, useRef } from 'react';
-import { Send } from 'lucide-react';
 import type { VoiceProblem } from '@/lib/voiceErrors';
 
 const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/60';
@@ -124,8 +123,7 @@ export function VoiceComposer({
         onClick={send}
         disabled={sending || !value.trim()}
       >
-        <Send className="h-4 w-4" aria-hidden />
-        {sending ? 'Sending…' : 'Send'}
+        {sending ? 'Checking…' : 'Show preview'}
       </button>
     </div>
   );

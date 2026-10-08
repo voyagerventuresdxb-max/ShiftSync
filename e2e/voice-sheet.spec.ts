@@ -3,7 +3,7 @@ import type { SystemRole } from '@prisma/client';
 import { cleanupTestOrgs, nextEchoPhone, prisma, testVenueName } from './helpers';
 
 /**
- * The full-height voice sheet (VoiceStage) and its confirm sheet: edit what was heard and run it
+ * The full-height voice sheet (VoiceStage) and its confirm sheet: edit what was heard and update the preview
  * again, the typed fallback, "Which one?", what the confirm sheet says, reduced motion, the
  * microphone released on close, keyboard-only use, and 50 open/close cycles. Every /api/voice/*
  * call is stubbed (no model, no key); sign-in is real (dev OTP echo). Names are made up.
@@ -111,7 +111,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     await page.setViewportSize({ width: 390, height: 844 });
   });
 
-  test('edit what was heard, then Run it: the same reading again from the edited words, nothing recorded again; only the new reading is confirmed', async ({ page }) => {
+  test('edit what was heard, then Update preview: the same reading again from the edited words, nothing recorded again; only the new reading is confirmed', async ({ page }) => {
     await signIn(page, 'MANAGER');
     const heard = 'Give Alex a shout-out for the spotless bar';
     const calls = await stubVoice(page, { transcript: heard, parse: [alexShoutout('Spotless bar'), alexShoutout('Spotless bar and great service')] });
@@ -127,7 +127,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     await expect(box).toHaveValue(heard);
     const fixed = 'Give Alex a shout-out for the spotless bar and great service';
     await box.fill(fixed);
-    await sheet.getByRole('button', { name: 'Run it' }).click();
+    await sheet.getByRole('button', { name: 'Update preview' }).click();
 
     const again = page.getByRole('dialog').filter({ hasText: `“${fixed}”` });
     await expect(again.getByText('Spotless bar and great service', { exact: true })).toBeVisible();
@@ -158,7 +158,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     expect(calls.execute).toEqual([]);
   });
 
-  test('typed fallback inside the sheet: a reading that timed out keeps the heard words in the box; Send goes on to the same Confirm', async ({ page }) => {
+  test('typed fallback inside the sheet: a reading that timed out keeps the heard words in the box; Show preview goes on to the same Confirm', async ({ page }) => {
     await page.addInitScript(() => {
       (window as { __shiftsyncVoiceTimeoutMs?: number }).__shiftsyncVoiceTimeoutMs = 1000;
     });
@@ -173,7 +173,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     // The same sheet: the mic is still there to try again by voice, and the keyboard is on.
     await expect(sheet.getByRole('button', { name: 'Start recording a voice command' })).toBeEnabled();
     await expect(sheet.getByRole('button', { name: 'Type instead' })).toHaveAttribute('aria-pressed', 'true');
-    await sheet.getByRole('button', { name: 'Send' }).click();
+    await sheet.getByRole('button', { name: 'Show preview' }).click();
 
     const confirm = confirmSheet(page, 'You typed');
     await expect(confirm.getByText('Alex Example', { exact: true })).toBeVisible();
