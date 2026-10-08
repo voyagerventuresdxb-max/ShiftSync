@@ -334,10 +334,10 @@ export function VoiceStage({
 
         <div className={cn('shrink-0', hasSheet && 'hidden')}>
           {b ? (
-            <div className="glass-bar flex items-center justify-between rounded-full p-1.5">
-              {keyboard}
+            <div className="glass-bar grid grid-cols-[1fr_auto_1fr] items-center rounded-full p-1.5">
+              <div className="justify-self-start">{keyboard}</div>
               {mic}
-              {cancel}
+              <div className="justify-self-end">{cancel}</div>
             </div>
           ) : (
             <div className="grid grid-cols-[1fr_auto_1fr] items-center pt-4">
