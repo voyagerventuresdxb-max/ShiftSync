@@ -302,7 +302,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     const s = sheet(page);
     await expect(s.locator('.eyebrow')).toHaveText('Time off');
     await expect(s.getByText('From Monday 12 October 2026 to Wednesday 14 October 2026', { exact: true })).toBeVisible();
-    await expect(s.getByText('Time off · 3 days')).toBeVisible();
+    await expect(s.getByText('Your time off · 3 days')).toBeVisible();
     expect(calls.transcribe).toBe(0);
     expect(calls.parse.map((c) => c.source)).toEqual(['typed']);
   });

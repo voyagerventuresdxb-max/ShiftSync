@@ -199,7 +199,8 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
       return (
         <Line
           lead={iconLead(<Plane className="h-4 w-4" />)}
-          title={`Time off · ${days === 1 ? '1 day' : `${days} days`}`}
+          // Always the caller's own days (a voice time-off request carries no person): said on the card.
+          title={`Your time off · ${days === 1 ? '1 day' : `${days} days`}`}
           detail={[when, ...(intent.reason ? [`Reason: ${intent.reason}`] : [])]}
           tag={<Tag>Request</Tag>}
         />

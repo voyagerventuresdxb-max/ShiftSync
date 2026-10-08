@@ -36,13 +36,13 @@ test('CANCEL_SHIFT without its details draws nothing rather than guess', () => {
   assert.equal(render(intent), '');
 });
 
-test('REQUEST_TIME_OFF: both dates in full, the number of days, and the reason', () => {
+test('REQUEST_TIME_OFF: whose time off it is (yours), both dates in full, the number of days, and the reason', () => {
   const text = render({ intent: 'REQUEST_TIME_OFF', startDate: '2026-10-12', endDate: '2026-10-14', reason: 'Family visit', confidence: 0.9, summary: 'Request time off.' });
-  assert.match(text, /Time off · 3 days/);
+  assert.match(text, /Your time off · 3 days/);
   assert.match(text, /From Monday 12 October 2026 to Wednesday 14 October 2026/);
   assert.match(text, /Reason: Family visit/);
   const one = render({ intent: 'REQUEST_TIME_OFF', startDate: '2026-10-16', endDate: '2026-10-16', reason: null, confidence: 0.9, summary: 'x' });
-  assert.match(one, /Time off · 1 day Request Friday 16 October 2026$/);
+  assert.match(one, /Your time off · 1 day Request Friday 16 October 2026$/);
   assert.doesNotMatch(one, /Reason/);
 });
 

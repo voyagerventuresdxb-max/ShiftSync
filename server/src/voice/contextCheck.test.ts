@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { weekdayMismatch } from './parseIntent.js';
+import { selfOnlyNamesOther, weekdayMismatch } from './parseIntent.js';
 import { buildSystemPrompt, calendarDay } from './prompts.js';
 import type { ParsedIntent } from './intentSchema.js';
 
@@ -30,4 +30,27 @@ test('the prompt carries a 14-day calendar with weekday names, starting today', 
   const prompt = buildSystemPrompt('STAFF', { today: '2031-03-03', hint: '' });
   assert.match(prompt, /Today is Monday 2031-03-03\./);
   assert.match(prompt, /Calendar .*Monday 2031-03-03; Tuesday 2031-03-04; .*Sunday 2031-03-16\. Weeks start on Monday\./);
+});
+
+const team = [
+  { id: 'me', fullName: 'Hannah Clarke' },
+  { id: 'omar', fullName: 'Omar Haddad' },
+  { id: 'alex', fullName: 'Alex Morgan' },
+];
+const timeOff: ParsedIntent = { intent: 'REQUEST_TIME_OFF', startDate: '2031-03-07', endDate: '2031-03-07', reason: null, confidence: 0.95, summary: 'Ask for Fri 7 Mar off.' };
+const unavailable: ParsedIntent = { intent: 'MARK_AVAILABILITY', date: '2031-03-07', type: 'UNAVAILABLE', confidence: 0.95, summary: 's' };
+
+test('time off or availability that names someone else is asked, never offered: it would book the caller instead', () => {
+  const r = selfOnlyNamesOther(timeOff, 'Give Omar next Friday off.', team, 'me');
+  assert.ok(r && r.intent === 'UNRECOGNIZED');
+  assert.equal(r.summary, "That would book your own days off, not Omar's.");
+  assert.match(r.reason ?? '', /use the rota/);
+  assert.equal(selfOnlyNamesOther(unavailable, 'Mark Alex Morgan unavailable on Friday', team, 'me')?.intent, 'UNRECOGNIZED');
+});
+
+test('time off and availability for yourself are untouched, even when you say your own name; other readings are not this check', () => {
+  assert.equal(selfOnlyNamesOther(timeOff, 'I need next Friday off.', team, 'me'), null);
+  assert.equal(selfOnlyNamesOther(timeOff, 'This is Hannah, I need Friday off.', team, 'me'), null);
+  assert.equal(selfOnlyNamesOther(unavailable, 'Mark me unavailable on Friday', team, 'me'), null);
+  assert.equal(selfOnlyNamesOther({ intent: 'POST_SHOUTOUT', targetUserId: 'omar', targetUserName: 'Omar', content: 'x', confidence: 0.9, summary: 's' }, 'Give Omar a shout-out', team, 'me'), null);
 });

@@ -39,6 +39,15 @@ export function resolveRef(fx: Fixture, ref: string): (string | null)[] {
       const options = ahead === 0 ? [fx.today, first] : [first];
       return kind === 'dow-next' ? [...options, addDays(options[options.length - 1]!, 7)] : options;
     }
+    case 'dom':
+    case 'md': {
+      // dom:N — the next day-of-month N after today; md:MM-DD — the next such date after today (month/year boundaries).
+      for (let d = 1; d <= 400; d++) {
+        const iso = addDays(fx.today, d);
+        if (kind === 'dom' ? Number(iso.slice(8)) === Number(rest) : iso.slice(5) === rest) return [iso];
+      }
+      return [];
+    }
     case 'week': {
       const monday = mondayOf(fx.today);
       return [rest === 'next' ? addDays(monday, 7) : monday];
