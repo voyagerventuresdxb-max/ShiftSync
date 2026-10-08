@@ -382,3 +382,25 @@ test('the same sentence from the model as summary and reason reaches the app onc
   assert.equal(q.summary, limes);
   assert.notEqual(q.reason, limes);
 });
+
+test('"Shukran Layla, give her a shout-out … habibi" (seen live, the model sent "her"): the shout-out is for Layla', async () => {
+  const said = 'Shukran Layla, give her a shout-out for helping today habibi';
+  const { intent } = await parse('MANAGER', said, { tool: 'POST_SHOUTOUT', args: { person: 'her', message: 'Thanks for helping today' }, confidence: 0.9, summary: 'Give her a shout-out.' });
+  assert.equal(intent.intent, 'POST_SHOUTOUT');
+  assert.deepEqual(intent.intent === 'POST_SHOUTOUT' && [intent.targetUserId, intent.targetUserName], [fx.users.layla, PEOPLE.layla.name]);
+});
+
+test('a pronoun with two names in the sentence asks who; with no name, the caller picks from the team; nothing changes', async () => {
+  const before = await snapshot(prisma, locations());
+  const two = question((await parse('MANAGER', 'Layla and Maricel were great tonight, give her a shout-out', shoutout('her'))).intent);
+  assert.equal(two.summary, 'Who did you mean?');
+  assert.deepEqual(offered(two).sort(), [fx.users.layla, fx.users.maricel].sort());
+  const none = question((await parse('MANAGER', 'give her a shout-out for helping today', shoutout('her'))).intent);
+  assert.equal(none.summary, "I couldn't find that person on your team.");
+  assert.equal(none.options, undefined);
+  assert.ok((none.team ?? []).length >= Object.keys(PEOPLE).length - 1, 'the team to pick from');
+  // "Karim" is two people: the pronoun doesn't settle it.
+  const shared = question((await parse('MANAGER', 'Thanks Karim, give him a shout-out', shoutout('him'))).intent);
+  assert.deepEqual(offered(shared).sort(), [fx.users.karim, fx.users.karim2].sort());
+  assert.equal(await snapshot(prisma, locations()), before);
+});

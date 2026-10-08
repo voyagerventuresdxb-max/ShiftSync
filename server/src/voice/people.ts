@@ -34,6 +34,23 @@ export type PersonResolution =
 export const MAX_PEOPLE_CHOICES = 4;
 const SELF_WORDS = new Set(['me', 'myself', 'i']);
 
+/**
+ * Words that point at someone without naming them, in English and the code-mixed Hindi/Urdu,
+ * Tagalog and Arabic callers use ("usko", "siya", "kanya", "hiya"). Seen live: "Shukran Layla, give
+ * her a shout-out" reached the server as the person "her".
+ */
+const PRONOUNS = new Set([
+  'her', 'him', 'them', 'she', 'he', 'they', 'hers', 'his', 'their',
+  'this person', 'that person', 'this guy', 'that guy', 'this girl', 'that girl', 'this lady', 'that lady',
+  'usko', 'unko', 'isko', 'inko', 'use', 'unhe', 'unhein', 'inhe', 'uska', 'unka',
+  'siya', 'sya', 'kanya', 'kaniya', 'niya', 'hiya', 'huwa', 'huwwa',
+]);
+
+/** True when the person as heard is a pronoun or a "that person"-style pointer, not a name. */
+export function isPronoun(heard: string): boolean {
+  return PRONOUNS.has(normalizeName(heard));
+}
+
 /** NFKC, lowercase, accents and possessive "'s" dropped, punctuation as spaces: "Jun-Jun's" → "jun jun". */
 export function normalizeName(s: string): string {
   return s
@@ -394,6 +411,32 @@ function sharedFirstNameOnly(person: StaffEntry, staff: StaffEntry[], transcript
 }
 
 /**
+ * "Give her a shout-out": who the pronoun points at, from the staff names actually said in the same
+ * transcript (word for word, or the same name spelled another way; never a sound-alike, and never
+ * the caller). Exactly one person named: that name goes through the normal rules below, so a first
+ * name two people share still asks. Two or more named: "Who did you mean?" with them. None named:
+ * nobody to look up, so the caller picks from the team. Never a guess.
+ */
+function resolvePronoun(staff: StaffEntry[], transcript: string, callerId: string): PersonResolution {
+  const said = tokens(transcript).filter((w) => !PRONOUNS.has(w) && !SELF_WORDS.has(w));
+  const folded = new Set(said.map(foldName));
+  const saidOf = (p: StaffEntry) => new Set(nameWords(p).filter((w) => w.length >= 3 && folded.has(foldName(w))).map(foldName));
+  const matched = staff.filter((p) => p.id !== callerId).map((p) => ({ p, words: saidOf(p) })).filter((m) => m.words.size > 0);
+  // "Thanks Omar Farouk": Omar Haddad is named only by a word Omar Farouk's name also covers, so he isn't meant.
+  const named = matched
+    .filter((m) => !matched.some((o) => o !== m && o.words.size > m.words.size && [...m.words].every((w) => o.words.has(w))))
+    .map((m) => m.p);
+  if (named.length === 1) {
+    // The words of their name as said, in order ("Layla", "Layla Nasser"), looked up like any name.
+    const words = nameWords(named[0]!).filter((w) => folded.has(foldName(w)));
+    const heard = said.filter((w) => words.some((x) => foldName(x) === foldName(w))).filter((w, i, all) => all.indexOf(w) === i).join(' ');
+    return resolvePerson(heard, null, staff, transcript, callerId);
+  }
+  if (named.length > 1) return { kind: 'ambiguous', heard: 'person', people: [...named].sort(byName).slice(0, MAX_PEOPLE_CHOICES) };
+  return { kind: 'missing', heard: '', near: [] };
+}
+
+/**
  * @param heard the name as the caller said it (the model's `targetUserName`), or '' if none
  * @param modelId the id the model picked, if any — trusted only when it agrees with the name
  * @param staff the caller's own venue's active staff
@@ -416,6 +459,7 @@ export function resolvePerson(heard: string, modelId: string | null, staff: Staf
     if (self) return { kind: 'one', person: self };
     return picked ? settle(picked) : { kind: 'unknown' };
   }
+  if (isPronoun(name)) return resolvePronoun(staff, transcript, callerId);
 
   const found = candidatesFor(name, staff);
   const said = tokens(name);

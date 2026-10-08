@@ -93,3 +93,30 @@ test("only the venue's own staff are ever candidates", () => {
   assert.equal(r.kind, 'missing');
   assert.deepEqual(ids(r), []);
 });
+
+test('a pronoun ("her", "usko", "siya") is resolved from the staff name said in the same sentence, never guessed', () => {
+  // Seen live: "Shukran <name>, give her a shout-out for helping today habibi" arrived as the person "her".
+  for (const pronoun of ['her', 'him', 'them', 'this person', 'usko', 'siya', 'kanya']) {
+    const r = resolvePerson(pronoun, null, staff, `Shukran Layla, give ${pronoun} a shout-out for helping today habibi`, 'caller');
+    assert.deepEqual([r.kind, ids(r)], ['one', ['layla']], pronoun);
+  }
+  // Two people named: asked, both offered.
+  const two = resolvePerson('her', null, staff, 'Layla and Maricel were great, give her a shout-out', 'caller');
+  assert.deepEqual([two.kind, ids(two).sort()], ['ambiguous', ['layla', 'maricel']]);
+  // Nobody named: nobody to look up, the caller picks.
+  const none = resolvePerson('her', null, staff, 'give her a shout-out for helping today', 'caller');
+  assert.deepEqual([none.kind, none.kind === 'missing' && none.heard, ids(none)], ['missing', '', []]);
+  // A first name two people share still asks, through the normal rules.
+  const shared = resolvePerson('him', null, staff, 'Thanks Omar, give him a shout-out', 'caller');
+  assert.deepEqual([shared.kind, ids(shared).sort()], ['ambiguous', ['omarF', 'omarH']]);
+  // The full name settles it; the caller's own name is never the one meant.
+  assert.deepEqual(ids(resolvePerson('him', null, staff, 'Thanks Omar Farouk, give him a shout-out', 'caller')), ['omarF']);
+  assert.deepEqual(ids(resolvePerson('her', null, staff, 'Dina here: thanks Layla, give her a shout-out', 'caller')), ['layla']);
+  // A sound-alike in the sentence is not a name said ("Lela" is not Layla): asked, not guessed.
+  assert.equal(resolvePerson('her', null, staff, 'thanks Lela, give her a shout-out', 'caller').kind, 'missing');
+});
+
+test('a pronoun with two different people named is asked about, even when one is named in full', () => {
+  const r = resolvePerson('her', null, staff, 'Layla Nasser and Maricel closed together, give her a shout-out', 'caller');
+  assert.deepEqual([r.kind, ids(r).sort()], ['ambiguous', ['layla', 'maricel']]);
+});
