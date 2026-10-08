@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { micLevel, orbLook, ORB_PERSONALITIES, smoothLevel, type OrbPhase } from './voiceOrb';
 
-const PHASES: OrbPhase[] = ['ready', 'listening', 'transcribing', 'understanding', 'confirm', 'choose', 'sending', 'unclear', 'problem'];
+const PHASES: OrbPhase[] = ['ready', 'listening', 'transcribing', 'understanding', 'confirm', 'choose', 'rereading', 'sending', 'unclear', 'problem'];
 
 test('each step has its own shape, as briefed: ready breathes, listening listens, then working, connecting, composing', () => {
   const state = (p: OrbPhase) => orbLook(p, false).state;

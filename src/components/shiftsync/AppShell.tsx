@@ -17,9 +17,10 @@ import { choosableFor } from '@/lib/voiceChoices';
 import { NOTHING_HEARD, UNSUPPORTED, alreadyDone, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
 import { voiceExamples } from '@/lib/voiceExamples';
 import type { VoiceOrigin } from '@/lib/voiceSteps';
-import { VoiceProgress } from '@/components/shiftsync/VoiceProgress';
-// Not lazy: it is what opens when the phone is offline, when a lazy chunk could not be fetched.
-import { VoiceComposer } from '@/components/shiftsync/VoiceComposer';
+import { voiceContextLine, voiceStageMode, type VoiceCloseAction, type VoiceStageState } from '@/lib/voiceStage';
+// Not lazy: it is what opens when the phone is offline, when a lazy chunk could not be fetched (only its orb loads lazily).
+import { VoiceStage } from '@/components/shiftsync/VoiceStage';
+import { loadVoiceOrb } from '@/components/shiftsync/voiceOrbChunk';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
 const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
@@ -114,6 +115,11 @@ function isRouteHandle(handle: unknown): handle is RouteHandle {
   return typeof handle === 'object' && handle !== null && typeof (handle as RouteHandle).title === 'string';
 }
 
+/** Starts fetching the voice sheet's orb on the first touch of the mic or keyboard, so it is ready when the sheet opens. */
+function warmUpVoice(): void {
+  void loadVoiceOrb().catch(() => {});
+}
+
 /** First letter of the venue name, for the profile avatar. */
 function avatarInitial(venueName: string): string {
   return venueName.trim().charAt(0).toUpperCase() || '·';
@@ -177,6 +183,14 @@ export function AppShell() {
   const [composer, setComposer] = useState<{ open: boolean; text: string; problem: VoiceProblem | null }>({ open: false, text: '', problem: null });
   const [typedSending, setTypedSending] = useState(false);
   const examples = voiceExamples(session?.user.systemRole ?? 'STAFF');
+  // What the recording said, shown on the voice sheet while it is read (display only).
+  const [voiceHeard, setVoiceHeard] = useState('');
+  // The sheet was closed while a recording was being read: it comes back with the answer, as before.
+  const [voiceHidden, setVoiceHidden] = useState(false);
+  // The microphone level while recording, for the sheet's orb (read every frame, so a ref).
+  const voiceLevelRef = useRef<number | null>(null);
+  // Closed while recording: the clip is dropped when the recorder stops, and nothing is sent.
+  const discardRecordingRef = useRef(false);
 
   /** Opens the typed command box, with what went wrong (if anything) and the words so far. */
   const openComposer = useCallback((problem: VoiceProblem | null, text = '') => {
@@ -257,9 +271,11 @@ export function AppShell() {
         return;
       }
       setVoicePhase('transcribing');
+      setVoiceHeard('');
       let transcript = '';
       try {
         ({ transcript } = await transcribeAudio(session.token, blob));
+        setVoiceHeard(transcript);
         setVoicePhase('understanding');
         showParsed(session.user.systemRole, transcript, await parseVoiceIntent(session.token, transcript, 'voice'), 'voice');
       } catch (err) {
@@ -267,6 +283,7 @@ export function AppShell() {
         openComposer(requestProblem(err, { stage: 'understand', online: navigator.onLine }), transcript);
       } finally {
         setVoicePhase(null);
+        setVoiceHidden(false);
       }
     },
     [session, showParsed, openComposer],
@@ -351,14 +368,24 @@ export function AppShell() {
       });
       const mimeType = pickRecorderMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-      const meter = startLevelMeter(stream);
+      const meter = startLevelMeter(stream, (level) => {
+        voiceLevelRef.current = level;
+      });
       audioChunksRef.current = [];
+      discardRecordingRef.current = false;
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
       recorder.onstop = () => {
         const peak = meter.stop();
         stream.getTracks().forEach((t) => t.stop());
+        voiceLevelRef.current = null;
+        // Closed while recording: the microphone is off and nothing is sent.
+        if (discardRecordingRef.current) {
+          discardRecordingRef.current = false;
+          audioChunksRef.current = [];
+          return;
+        }
         const finalType = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(audioChunksRef.current, { type: finalType });
         audioChunksRef.current = [];
@@ -413,6 +440,28 @@ export function AppShell() {
   }, [session, startVoiceRecording]);
 
   const handleVoiceConsentCancel = useCallback(() => setVoiceConsentOpen(false), []);
+
+  /** The voice sheet's mic is the dock's: from the typed box, the box gives way to the recording. */
+  const handleStageMic = useCallback(() => {
+    if (composer.open && !voiceOn) setComposer((c) => ({ ...c, open: false }));
+    handleToggleVoice();
+  }, [composer.open, voiceOn, handleToggleVoice]);
+
+  /** The voice sheet's close and Cancel: which one applies comes from lib/voiceStage.ts. */
+  const handleStageClose = useCallback(
+    (action: VoiceCloseAction) => {
+      if (action === 'discard-recording') {
+        // The recorder stops, the microphone is released, and the clip is dropped unsent.
+        discardRecordingRef.current = true;
+        stopVoiceRecording();
+      } else if (action === 'hide-until-answer') {
+        setVoiceHidden(true);
+      } else if (action === 'close') {
+        handleComposerCancel();
+      }
+    },
+    [stopVoiceRecording, handleComposerCancel],
+  );
 
   const handleVoiceCancel = useCallback(() => {
     setVoiceResult(null);
@@ -478,9 +527,38 @@ export function AppShell() {
   // the manager-side nav and has no room for it.
   const onMyShifts = useLocation().pathname === '/my-shifts';
 
+  const stageState: VoiceStageState = {
+    starting: voiceStarting,
+    recording: voiceOn,
+    phase: voicePhase,
+    hiddenWhileBusy: voiceHidden,
+    composer: { open: composer.open, problem: composer.problem, sending: typedSending },
+    result: voiceResult ? { intent: voiceResult.intent, executed: voiceResult.executed ?? false, hasAdditionalRequest: voiceResult.hasAdditionalRequest } : null,
+    executing: voiceExecuting,
+    reparsing: voiceReparsing,
+  };
+  // While the voice sheet is open, everything behind it is out of reach (screen readers, Tab, taps).
+  const stageOpen = voiceStageMode(stageState) !== 'closed';
+  const stageWasOpen = useRef(false);
+  // The dock button that opened the sheet (the page behind goes inert while it is open, so it is noted at the tap).
+  const voiceOpenerRef = useRef<HTMLElement | null>(null);
+  const fromDock = (open: () => void) => () => {
+    const el = document.activeElement;
+    voiceOpenerRef.current = el instanceof HTMLElement && el !== document.body ? el : null;
+    open();
+  };
+  useEffect(() => {
+    // Closed: focus goes back to the button that opened it (or the mic), unless something else already has it.
+    if (stageWasOpen.current && !stageOpen && (!document.activeElement || document.activeElement === document.body)) {
+      const opener = voiceOpenerRef.current?.isConnected ? voiceOpenerRef.current : document.querySelector<HTMLElement>('[data-voice-entry]');
+      opener?.focus({ preventScroll: true });
+    }
+    stageWasOpen.current = stageOpen;
+  }, [stageOpen]);
+
   return (
     <div className="min-h-dvh bg-background pb-[calc(6rem+env(safe-area-inset-bottom))]">
-      <header className="sticky top-0 z-20 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-4">
+      <header inert={stageOpen} className="sticky top-0 z-20 px-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-4">
         <div className="glass-bar mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-2xl px-3 py-2.5 shadow-lux sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Link
@@ -517,7 +595,7 @@ export function AppShell() {
       </header>
 
       {!online && (
-        <div className="mx-auto mt-2.5 max-w-6xl px-3 sm:px-4" role="status">
+        <div inert={stageOpen} className="mx-auto mt-2.5 max-w-6xl px-3 sm:px-4" role="status">
           <div className="flex items-center justify-center gap-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-center text-xs font-medium text-warning">
             <WifiOff className="h-3.5 w-3.5 shrink-0" />
             You're offline — some actions are unavailable until your connection returns.
@@ -525,25 +603,12 @@ export function AppShell() {
         </div>
       )}
 
-      <main className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
+      <main inert={stageOpen} className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
         <SessionGuard />
         <Suspense fallback={<PanelSkeleton />}>
           <Outlet />
         </Suspense>
       </main>
-
-      {(voiceStarting || voiceOn || voicePhase) && !composer.open && (
-        // Where the command is up to, in words, just above the mic.
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6.5rem+env(safe-area-inset-bottom))] z-40 mx-auto w-full max-w-sm px-4">
-          <div className="panel px-4 py-3 shadow-lux motion-safe:animate-rise">
-            <VoiceProgress
-              origin="voice"
-              step={voicePhase ?? 'listening'}
-              label={voiceStarting ? 'Starting the microphone…' : undefined}
-            />
-          </div>
-        </div>
-      )}
 
       {voiceBanner && (
         <div className="fixed inset-x-0 bottom-24 z-40 mx-auto w-full max-w-sm px-4">
@@ -556,39 +621,43 @@ export function AppShell() {
         </div>
       )}
 
-      {voiceSheetNeeded && (
-        <Suspense fallback={null}>
-          <VoiceCommandSheet
-            intent={voiceResult?.intent ?? null}
-            transcript={voiceResult?.transcript ?? ''}
-            hasAdditionalRequest={voiceResult?.hasAdditionalRequest ?? false}
-            executed={voiceResult?.executed ?? false}
-            onConfirm={handleVoiceConfirm}
-            onChoose={handleVoiceChoose}
-            onBackToChoices={voiceResult?.asked ? handleVoiceBackToChoices : undefined}
-            onReparse={handleVoiceReparse}
-            onCancel={handleVoiceCancel}
-            executing={voiceExecuting}
-            reparsing={voiceReparsing}
-            viewerName={session?.user.fullName ?? 'You'}
-            canManageStaff={session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER'}
-            origin={voiceResult?.origin ?? 'voice'}
-            examples={examples}
-            problem={voiceExecProblem}
-          />
-        </Suspense>
+      {stageOpen && (
+        <VoiceStage
+          state={stageState}
+          context={voiceContextLine(venueName, session?.user.systemRole)}
+          heard={voiceHeard}
+          level={voiceLevelRef}
+          composerText={composer.text}
+          examples={examples}
+          onComposerChange={handleComposerChange}
+          onSend={handleTypedSend}
+          onMic={handleStageMic}
+          onClose={handleStageClose}
+        >
+          {voiceSheetNeeded && voiceResult && (
+            <Suspense fallback={null}>
+              <VoiceCommandSheet
+                intent={voiceResult.intent}
+                transcript={voiceResult.transcript}
+                hasAdditionalRequest={voiceResult.hasAdditionalRequest}
+                executed={voiceResult.executed ?? false}
+                onConfirm={handleVoiceConfirm}
+                onChoose={handleVoiceChoose}
+                onBackToChoices={voiceResult.asked ? handleVoiceBackToChoices : undefined}
+                onReparse={handleVoiceReparse}
+                onCancel={handleVoiceCancel}
+                executing={voiceExecuting}
+                reparsing={voiceReparsing}
+                viewerName={session?.user.fullName ?? 'You'}
+                canManageStaff={session?.user.systemRole === 'MANAGER' || session?.user.systemRole === 'OWNER'}
+                origin={voiceResult.origin}
+                examples={examples}
+                problem={voiceExecProblem}
+              />
+            </Suspense>
+          )}
+        </VoiceStage>
       )}
-
-      <VoiceComposer
-        open={composer.open}
-        value={composer.text}
-        onChange={handleComposerChange}
-        problem={composer.problem}
-        sending={typedSending}
-        examples={examples}
-        onSend={handleTypedSend}
-        onCancel={handleComposerCancel}
-      />
 
       {voiceConsentNeeded && (
         <Suspense fallback={null}>
@@ -600,9 +669,11 @@ export function AppShell() {
         listening={voiceOn}
         starting={voiceStarting}
         processing={voiceProcessing}
-        onToggleListening={handleToggleVoice}
-        onType={handleOpenComposer}
+        onToggleListening={fromDock(handleToggleVoice)}
+        onType={fromDock(handleOpenComposer)}
         typeDisabled={voiceOn || voiceStarting || voiceProcessing}
+        concealed={stageOpen}
+        onWarmUp={warmUpVoice}
       />
     </div>
   );

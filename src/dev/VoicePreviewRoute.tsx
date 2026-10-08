@@ -3,6 +3,10 @@ import { useSearchParams } from 'react-router-dom';
 import { VoiceOrb, type OrbStats } from '@/components/shiftsync/VoiceOrb';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { ORB_PERSONALITIES, orbLook, type OrbPhase, type OrbVariant } from '@/lib/voiceOrb';
+import { VoiceStage } from '@/components/shiftsync/VoiceStage';
+import { VoiceCommandSheet } from '@/components/shiftsync/VoiceCommandSheet';
+import { voiceContextLine } from '@/lib/voiceStage';
+import { PREVIEW_STATES, PREVIEW_VENUE } from './voicePreviewStates';
 
 /**
  * DEVELOPMENT ONLY (registered in router.tsx behind `import.meta.env.DEV`, so production builds
@@ -11,9 +15,11 @@ import { ORB_PERSONALITIES, orbLook, type OrbPhase, type OrbVariant } from '@/li
  *   /dev/voice?variant=a&phase=listening      one orb (simulated voice while listening)
  *   /dev/voice?view=grid&variant=b            every step side by side
  *   &stats=1                                  frame times on screen and on window.__voiceOrbStats
+ *   /dev/voice?view=stage&state=confirm-shoutout&variant=b   the whole voice sheet in one state
+ *                                             (states: dev/voicePreviewStates.tsx)
  */
 
-const PHASES: OrbPhase[] = ['ready', 'listening', 'transcribing', 'understanding', 'confirm', 'choose', 'sending', 'unclear', 'problem'];
+const PHASES: OrbPhase[] = ['ready', 'listening', 'transcribing', 'understanding', 'confirm', 'choose', 'rereading', 'sending', 'unclear', 'problem'];
 
 /** A speech-like level for the listening orb without a microphone: syllables in bursts, short pauses. */
 function useSimulatedVoice(on: boolean) {
@@ -50,6 +56,38 @@ export default function VoicePreviewRoute() {
     setStats(s);
     (window as unknown as { __voiceOrbStats?: OrbStats }).__voiceOrbStats = s;
   };
+
+  if (params.get('view') === 'stage') {
+    const name = params.get('state') ?? 'listening';
+    const preview = (PREVIEW_STATES[name] ?? PREVIEW_STATES.listening!)();
+    const { backToChoices, ...sheet } = preview.sheet ?? { backToChoices: false };
+    return (
+      <VoiceStage
+        state={preview.state}
+        variant={variant}
+        context={voiceContextLine(PREVIEW_VENUE, 'MANAGER')}
+        heard={preview.heard}
+        level={level}
+        composerText={preview.composerText}
+        examples={['Who\x27s working tonight?', 'Add an open bartender shift tomorrow 6pm to 2am', 'Any pending requests?']}
+        onComposerChange={() => {}}
+        onSend={() => {}}
+        onMic={() => {}}
+        onClose={() => {}}
+      >
+        {preview.sheet && (
+          <VoiceCommandSheet
+            {...(sheet as Required<typeof preview>['sheet'])}
+            onConfirm={() => {}}
+            onChoose={() => {}}
+            onReparse={() => {}}
+            onCancel={() => {}}
+            onBackToChoices={backToChoices ? () => {} : undefined}
+          />
+        )}
+      </VoiceStage>
+    );
+  }
 
   return (
     <div className="min-h-dvh bg-background px-4 pb-10 pt-[max(1rem,env(safe-area-inset-top))] text-foreground">

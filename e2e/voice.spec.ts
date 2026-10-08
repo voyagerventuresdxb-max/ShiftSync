@@ -470,7 +470,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     // What was heard is open for editing; there is nothing to confirm.
     await expect(sheet.getByLabel(/I heard/)).toHaveValue(said);
     await expect(sheet.getByRole('button', { name: 'Confirm' })).toHaveCount(0);
-    await expect(sheet.getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(sheet.getByRole('button', { name: 'Run it' })).toBeVisible();
     await expect(sheet.getByRole('button', { name: 'Cancel' })).toBeVisible();
     await expect(sheet.getByText(FOLLOW_UP)).toHaveCount(0);
     await sheet.getByRole('button', { name: 'Cancel' }).click();
@@ -659,7 +659,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     expect(logs.map((l) => [l.resolvedIntent, l.outcome, l.declineReason])).toEqual([['POST_SHOUTOUT', 'REJECTED_VALIDATION', 'person_ambiguous:2']]);
   });
 
-  test('edit what was heard: "Try again" re-reads the edited words (no new recording), and only the new reading is confirmed', async ({ page }) => {
+  test('edit what was heard: "Run it" re-reads the edited words (no new recording), and only the new reading is confirmed', async ({ page }) => {
     await phone(page);
     const { locationId } = await createVenue('edit');
     const managerPhone = freshPhone();
@@ -682,7 +682,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     const fixed = 'Give Layla a shout-out saying great job';
     await heard.fill(fixed);
     await scriptIntent({ tool: 'POST_SHOUTOUT', args: { person: 'Layla', message: 'Great job' }, confidence: 0.95, summary: 'Give Layla Nasser a shout-out with this note.' });
-    await sheet.getByRole('button', { name: 'Try again' }).click();
+    await sheet.getByRole('button', { name: 'Run it' }).click();
     const again = sheetFor(page, fixed);
     await expect(again.locator('.eyebrow')).toHaveText('Shout-out');
     await expect(again.getByText('Layla Nasser', { exact: true })).toBeVisible();
@@ -733,7 +733,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
       tool: 'CREATE_SHIFT', args: { role: 'bartender', person: 'Alex', day: friday, start: '6 p.m.', end: '2 a.m.' },
       confidence: 0.95, summary: 'Create a bartender shift for Alex on Friday.',
     });
-    await sheet.getByRole('button', { name: 'Try again' }).click();
+    await sheet.getByRole('button', { name: 'Run it' }).click();
     const again = sheetFor(page, fixed);
     await expect(again.locator('.eyebrow')).toHaveText('New shift');
     await expect(again.getByText('Alex Morgan', { exact: true })).toBeVisible();

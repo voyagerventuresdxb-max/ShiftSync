@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, Home, Keyboard, LoaderCircle, Map, Mic, Sparkles, Users } from 'lucide-react';
+import { CalendarDays, Home, Keyboard, LoaderCircle, Map, Mic, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -86,6 +86,8 @@ export function RadialDock({
   starting = false,
   onType,
   typeDisabled = false,
+  concealed = false,
+  onWarmUp,
 }: {
   listening: boolean;
   onToggleListening: () => void;
@@ -97,6 +99,10 @@ export function RadialDock({
   onType?: () => void;
   /** While a spoken command is being recorded or read. */
   typeDisabled?: boolean;
+  /** The voice sheet is open over everything: the dock is out of reach (and of screen readers) until it closes. */
+  concealed?: boolean;
+  /** First touch of the mic or keyboard: start fetching what the voice sheet needs. */
+  onWarmUp?: () => void;
 }) {
   const navigate = useNavigate();
   const pathname = useLocation().pathname;
@@ -207,6 +213,8 @@ export function RadialDock({
   return (
     <nav
       aria-label="Primary"
+      aria-hidden={concealed || undefined}
+      inert={concealed}
       // 0.5rem of breathing room ABOVE the home-indicator inset, not
       // max()'d with it — on an iPhone the inset alone puts the dock's
       // bottom edge exactly on the indicator's gesture strip.
@@ -273,7 +281,11 @@ export function RadialDock({
         {/* fixed keystone: AI / voice — drives AppShell's record -> transcribe -> parse -> confirm pipeline */}
         <button
           type="button"
-          onPointerDown={(e) => e.stopPropagation()}
+          data-voice-entry
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onWarmUp?.();
+          }}
           onClick={onToggleListening}
           disabled={processing || starting}
           aria-pressed={listening}
@@ -311,10 +323,8 @@ export function RadialDock({
         >
           {processing || starting ? (
             <LoaderCircle className="h-[18px] w-[18px] motion-safe:animate-spin" />
-          ) : listening ? (
-            <Mic className="h-[18px] w-[18px]" />
           ) : (
-            <Sparkles className="h-4 w-4" />
+            <Mic className="h-[18px] w-[18px]" />
           )}
         </button>
 
@@ -322,7 +332,10 @@ export function RadialDock({
         {onType && (
           <button
             type="button"
-            onPointerDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onWarmUp?.();
+            }}
             onClick={onType}
             disabled={typeDisabled}
             aria-label="Type a command"

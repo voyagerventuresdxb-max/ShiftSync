@@ -166,7 +166,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await s.getByRole('button', { name: 'Cancel' }).click();
   });
 
-  test('not understood: example phrases for the role fill the box without sending; Try again sends them', async ({ page }) => {
+  test('not understood: example phrases for the role fill the box without sending; Run it sends them', async ({ page }) => {
     await signIn(page, 'STAFF');
     const calls = await stubVoice(page, {
       parse: [
@@ -184,7 +184,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await expect(s.getByLabel(/You typed/)).toHaveValue('When am I working this week?');
     expect(calls.parse).toHaveLength(1); // filled, not sent
 
-    await s.getByRole('button', { name: 'Try again' }).click();
+    await s.getByRole('button', { name: 'Run it' }).click();
     await expect(sheet(page).getByRole('heading', { name: 'Your shifts — next 14 days' })).toBeVisible();
     expect(calls.parse[1]).toEqual({ transcript: 'When am I working this week?', source: 'typed' });
   });
