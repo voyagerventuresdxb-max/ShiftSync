@@ -369,7 +369,8 @@ function newShiftTimes(call: ToolCall, ctx: VenueContext, roleId: string | null,
   const firsts = first.kind === 'one' ? [first.times] : first.readings;
   if (!a.start2 && !a.end2) return { kind: 'times', options: firsts.map((f) => ({ first: f })) };
   // A split shift: the second part is later the same day than the first.
-  const second = readShiftTimes(a.start2, a.end2, '');
+  // The second part's times are checked against what was said; a time-of-day word settles the first part only.
+  const second = readShiftTimes(a.start2, a.end2, transcript, false);
   if (second.kind === 'none') return { kind: 'final', intent: clarify(AGAIN, `I didn't catch the second part of that split shift. Say both parts again, for example "11 to 3 and 6 to 11".`) };
   const seconds = second.kind === 'one' ? [second.times] : second.readings;
   const options: { first: ShiftTimes; second: ShiftTimes }[] = [];

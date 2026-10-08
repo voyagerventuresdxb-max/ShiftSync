@@ -340,6 +340,17 @@ test('times: "6 to 2" is asked, the evening reading first; "6pm to 2" is 18:00â€
   assert.deepEqual(closing.intent === 'CREATE_SHIFT' && [closing.start, closing.end], ['18:00', '02:00']);
 });
 
+test('"<name> ko kal shaam six to eleven ki shift do" (seen live): the evening shift, even when the model sent 24-hour morning times', async () => {
+  const said = 'Maricel ko kal shaam six to eleven ki shift do';
+  for (const [start, end] of [['six', 'eleven'], ['06:00', '11:00']]) {
+    const r = await parse('hannah', said, call('CREATE_SHIFT', { person: 'Maricel', role: 'server', day: day(1), start, end }));
+    assert.deepEqual(r.intent === 'CREATE_SHIFT' && [r.start, r.end], ['18:00', '23:00'], `${start}â€“${end}`);
+  }
+  // Without the time-of-day word, both readings are offered, the evening one first.
+  const asked2 = asked(await parse('hannah', 'Maricel ko kal six to eleven ki shift do', call('CREATE_SHIFT', { person: 'Maricel', role: 'server', day: day(1), start: '06:00', end: '11:00' })));
+  assert.deepEqual(asked2.options!.map((o) => (o.intent === 'CREATE_SHIFT' ? `${o.start}-${o.end}` : '')), ['18:00-23:00', '06:00-11:00']);
+});
+
 test('code-mixed words: "yalla put Omar sa terrace bukas ng gabi" resolves from the heard arguments', async () => {
   const r = await parse('hannah', 'yalla put Omar sa terrace bukas ng gabi', call('ASSIGN_SECTION', { person: 'Omar', section: 'terrace', day: day(1) }));
   assert.equal(r.intent, 'ASSIGN_SECTION');

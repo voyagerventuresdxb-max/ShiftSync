@@ -9,8 +9,13 @@ import { periodSaid } from './vocabulary.js';
  *  - a bare hour ("6") could be morning or evening: every reading is tried, and only shift
  *    lengths from 1 to 14 hours are kept (an end at or before the start runs past midnight);
  *  - one reading left is the answer ("6pm to 2" is 18:00–02:00, "18:30 to 1" is 18:30–01:00);
- *  - two left ("6 to 2": 06:00–14:00 or 18:00–02:00) is settled by a service word the caller said
- *    ("tonight", "closing", "lunch"), or else asked, the evening reading first.
+ *  - two left ("6 to 2": 06:00–14:00 or 18:00–02:00, "6 to 11": 06:00–11:00 or 18:00–23:00) is
+ *    settled by a time-of-day word the caller said ("tonight", "closing", "lunch", or code-mixed
+ *    "shaam", "masaa", "gabi", "subah"; vocabulary.ts `periodSaid`), or else asked, the evening
+ *    reading first. Never one reading picked silently.
+ * A model that turns a bare "six" into "06:00" or "18:00" has guessed: a 24-hour value the caller
+ * didn't say (`heardTime`) is read back as the bare hour, unless the caller's own words fixed it
+ * (the digits, "noon"/"midnight", or am/pm next to a number).
  */
 export interface SpokenTime {
   hour: number;
@@ -99,6 +104,29 @@ function readingsOf(t: SpokenTime): number[] {
   return [am, am + 12 * 60];
 }
 
+/** am/pm said next to a number ("6pm", "six p.m.", "seven pee em"): the caller fixed the half of the day. */
+const MERIDIEM_SAID = /(\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\s*(?:a\.?\s?m\b\.?|p\.?\s?m\b\.?|pee\s?em\b|ay\s?em\b)/i;
+
+/**
+ * A time as the model passed it, checked against what the caller actually said. A 24-hour value
+ * from 01:00 to 23:59 that the caller didn't say ("six" came back as "06:00" or "18:00") is the
+ * model's guess at the half of the day, so it is read as the bare hour again. It keeps its 24-hour
+ * meaning when the caller said those digits, said noon or midnight, or said am/pm next to a number
+ * (the model then applied what was said). With no transcript, values are taken as given.
+ */
+export function heardTime(raw: string | null | undefined, transcript = ''): SpokenTime | null {
+  const t = parseSpokenTime(raw);
+  if (!t || !t.fixed || t.meridiem || !transcript.trim() || !raw) return t;
+  const said = transcript.toLowerCase();
+  const digits = raw.trim().toLowerCase();
+  if (!/^\d{1,2}[:.h]?\d{2}$/.test(digits)) return t; // "noon", "midnight", words: as said
+  if (t.hour === 0) return t; // 00:xx is only ever midnight
+  if (said.includes(digits) || said.includes(digits.replace(/[:.h]/, ''))) return t;
+  if (t.hour === 12 && t.minute === 0 && /\b(noon|midday)\b/.test(said)) return t;
+  if (MERIDIEM_SAID.test(said)) return t;
+  return { hour: t.hour % 12 || 12, minute: t.minute, meridiem: null, fixed: false };
+}
+
 const MIN_SHIFT = 60;
 const MAX_SHIFT = 14 * 60;
 /** Length of a shift from `start` to `end` minutes, past midnight when end ≤ start. */
@@ -116,16 +144,16 @@ export type TimesReading =
  * A shift's start and end as said. `transcript` lets a service word ("tonight", "lunch") settle a
  * two-way reading.
  */
-export function readShiftTimes(startHeard: string | null | undefined, endHeard: string | null | undefined, transcript = ''): TimesReading {
-  const s = parseSpokenTime(startHeard);
-  const e = parseSpokenTime(endHeard);
+export function readShiftTimes(startHeard: string | null | undefined, endHeard: string | null | undefined, transcript = '', useCue = true): TimesReading {
+  const s = heardTime(startHeard, transcript);
+  const e = heardTime(endHeard, transcript);
   if (!s || !e) return { kind: 'none' };
   const fixedBoth = (s.fixed || s.meridiem) && (e.fixed || e.meridiem);
   const pairs: [number, number][] = [];
   for (const a of readingsOf(s)) for (const b of readingsOf(e)) if (a !== b) pairs.push([a, b]);
   // Exactly what was said is used as said; only a bare hour is checked for a plausible length.
   const plausible = fixedBoth ? pairs : pairs.filter(([a, b]) => lengthOf(a, b) >= MIN_SHIFT && lengthOf(a, b) <= MAX_SHIFT);
-  return settle(plausible, transcript);
+  return settle(plausible, useCue ? transcript : '');
 }
 
 /**
@@ -133,7 +161,7 @@ export function readShiftTimes(startHeard: string | null | undefined, endHeard: 
  * that keeps the shift a plausible length.
  */
 export function readOneTime(heard: string | null | undefined, side: 'start' | 'end', keep: string, transcript = ''): TimesReading {
-  const t = parseSpokenTime(heard);
+  const t = heardTime(heard, transcript);
   const k = parseSpokenTime(keep);
   if (!t || !k) return { kind: 'none' };
   const kept = k.hour * 60 + k.minute;
