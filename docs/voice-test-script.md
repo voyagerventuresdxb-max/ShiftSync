@@ -116,6 +116,8 @@ can be typed instead; after Confirm they show in the red banner. The last four r
 | Microphone blocked | Box **Microphone is off**: "ShiftSync isn't allowed to use the microphone, so nothing was recorded. Type your command below instead.", then how to turn it back on in iPhone Safari |
 | Browser can't record | Box **Voice doesn't work here**: "This browser can't record voice commands. Type your command below instead." |
 | Empty recording, or the recording stayed silent (checked on the phone, nothing is sent) | Box **Didn't hear anything**: "I didn't hear anything. Hold the phone a little closer and try again, or type your command below." |
+| The app went to the background (another app, a locked screen) while recording or while the microphone was starting | The microphone turns off and nothing is sent. Back in the app: box **Recording stopped**: "The app went to the background, so the microphone was turned off and nothing was sent. Tap the mic to try again, or type your command below." |
+| Time off or availability that names someone else ("Give Sam next Friday off") | **Didn't catch that**: "That would book your own days off, not Sam's." with "To change someone else's days, use the rota." No Confirm. |
 | The transcriber heard no speech (noise only) | "I didn't hear a command. Hold the phone a little closer and try again." |
 
 How to see them without spending money: on a **non-production** environment, set
