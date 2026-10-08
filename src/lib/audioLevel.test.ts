@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { isSilent, METER_INTERVAL_MS, METER_WINDOW_SAMPLES, rms, SILENCE_RMS, startLevelMeter } from './audioLevel';
 
 /** Runs `startLevelMeter` against a fake AudioContext in `state` whose analyser reads `level`. */
-function meterPeak(state: 'running' | 'suspended', level: number): number | null {
+function meterPeak(state: 'running' | 'suspended', level: number, onLevel?: (rms: number) => void): number | null {
   class FakeContext {
     state = state;
     createAnalyser() {
@@ -21,7 +21,7 @@ function meterPeak(state: 'running' | 'suspended', level: number): number | null
   g.window = { AudioContext: FakeContext };
   mock.timers.enable({ apis: ['setInterval'] });
   try {
-    const meter = startLevelMeter({} as MediaStream);
+    const meter = startLevelMeter({} as MediaStream, onLevel);
     mock.timers.tick(METER_INTERVAL_MS * 5);
     return meter.stop();
   } finally {
@@ -29,6 +29,16 @@ function meterPeak(state: 'running' | 'suspended', level: number): number | null
     g.window = saved;
   }
 }
+
+test('each reading is passed on as it is taken (the orb follows it), without changing the silence check', () => {
+  const heard: number[] = [];
+  assert.equal(meterPeak('running', 0.25, (l) => heard.push(l)), 0.25);
+  assert.deepEqual(heard, [0.25, 0.25, 0.25, 0.25, 0.25]);
+  // A suspended context reads nothing, so nothing is passed on either.
+  const none: number[] = [];
+  assert.equal(meterPeak('suspended', 0.2, (l) => none.push(l)), null);
+  assert.deepEqual(none, []);
+});
 
 test('a suspended audio context measures nothing, so the clip is never blocked as silent', () => {
   // Some browsers start an AudioContext suspended until a user gesture; its analyser reads only zeros.
