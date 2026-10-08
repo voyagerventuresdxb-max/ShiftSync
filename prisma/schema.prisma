@@ -72,6 +72,9 @@ model Location {
   policyDocuments      PolicyDocument[]
   floorFeedback        FloorFeedback[]
   aiUsage              AiUsage[]
+  rosterReadings       RosterReadingCache[]
+  rosterRoleAliases    RosterRoleAlias[]
+  rosterNameAliases    RosterNameAlias[]
 
   @@index([organizationId])
   @@map("locations")
@@ -99,6 +102,7 @@ model Role {
   location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
   users    User[]
   shifts   Shift[]
+  rosterAliases RosterRoleAlias[]
 
   @@unique([locationId, name])
   @@map("roles")
@@ -183,6 +187,7 @@ model User {
   policyDocumentsUploaded PolicyDocument[]           @relation("PolicyDocumentUploadedBy")
   floorFeedbackSubmitted  FloorFeedback[]            @relation("FloorFeedbackSubmitter")
   floorFeedbackReviewed   FloorFeedback[]            @relation("FloorFeedbackReviewedBy")
+  rosterNameAliases       RosterNameAlias[]
 
   @@index([locationId])
   @@index([roleId])
@@ -993,4 +998,60 @@ model AiUsage {
 
   @@unique([locationId, feature, month])
   @@map("ai_usage")
+}
+
+/// The AI roster reader's answer for one uploaded file at one venue, keyed by the
+/// sha256 of the file's bytes and the reader's prompt/schema version: a re-upload
+/// of the same file reuses it with no model call (nothing billed, no allowance
+/// used). Holds the reading only (what the model transcribed), never the file.
+model RosterReadingCache {
+  id         String   @id @default(cuid())
+  locationId String   @map("location_id")
+  fileSha256 String   @map("file_sha256")
+  version    String
+  reading    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, fileSha256, version])
+  @@map("roster_reading_cache")
+}
+
+/// Roster import memory, per venue: a role label as printed on a roster (normalized like
+/// resolveRows.ts's nameKey) that the manager assigned to one of the venue's roles on the
+/// review screen ("Remember for next time"). Consulted by the next import's role resolution.
+model RosterRoleAlias {
+  id              String   @id @default(cuid())
+  locationId      String   @map("location_id")
+  normalizedLabel String   @map("normalized_label")
+  roleId          String   @map("role_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, normalizedLabel])
+  @@index([roleId])
+  @@map("roster_role_aliases")
+}
+
+/// Roster import memory, per venue: a name as printed on a roster (normalized) that the
+/// manager linked to an existing staff member ("Same person"), e.g. "Bast" -> Bastian Rao.
+/// The next import matches that printed name straight to the same person.
+model RosterNameAlias {
+  id             String   @id @default(cuid())
+  locationId     String   @map("location_id")
+  normalizedName String   @map("normalized_name")
+  userId         String   @map("user_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, normalizedName])
+  @@index([userId])
+  @@map("roster_name_aliases")
 }

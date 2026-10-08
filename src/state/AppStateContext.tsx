@@ -106,7 +106,7 @@ interface AppStateValue {
   setCurrentEmployeeId: React.Dispatch<React.SetStateAction<string | undefined>>;
   handleRequestCover: (shiftId: string, coveringEmployeeId: string) => Promise<void>;
   handleDecideRequest: (requestId: string, decision: 'approved' | 'denied') => Promise<void>;
-  handleCommitted: (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => void;
+  handleCommitted: (rows: PreviewRow[], batchId: string, persisted: PersistedRow[], importWeekStart?: string | null) => void;
   weekStart: string;
   setWeekStart: React.Dispatch<React.SetStateAction<string>>;
   refetchWeekShifts: () => Promise<void>;
@@ -518,7 +518,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const handleCommitted = useCallback(
-    (rows: PreviewRow[], batchId: string, persisted: PersistedRow[]) => {
+    (rows: PreviewRow[], batchId: string, persisted: PersistedRow[], importWeekStart?: string | null) => {
       // Conversion lives in engine/commitBinding so it is directly unit-testable
       // (see commitBinding.test.ts) instead of being mirrored by the tests.
       const { employees, shifts } = buildCommitted(rows, batchId, persisted);
@@ -526,8 +526,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         employees: [...prev.employees, ...employees],
         shifts: [...prev.shifts, ...shifts],
       }));
+      // A roster import adds real staff: reload the directory (names on the grid,
+      // People), and show the week the shifts landed in — the roster's own week,
+      // which is often not the one on screen. Changing the week refetches it;
+      // the same week is refetched here.
+      if (session) {
+        fetchStaffDirectory(session.token, session.user.locationId)
+          .then(setStaffDirectory)
+          .catch(() => {
+            // The grid still shows the imported rows from `committed`; People reloads on its own.
+          });
+      }
+      if (importWeekStart && importWeekStart !== weekStart) setWeekStart(importWeekStart);
+      else void refetchWeekShifts();
     },
-    [],
+    [session, weekStart, refetchWeekShifts],
   );
 
   const createRotaShift = useCallback(

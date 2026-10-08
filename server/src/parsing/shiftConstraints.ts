@@ -71,6 +71,32 @@ export function enforceNoDoubleShifts(
         });
       }
     } else {
+      // Three or more segments: real only when each one ends a real break before the next one
+      // starts (a printed three-part day). Then they are kept and flagged for a look; back-to-back
+      // or overlapping pieces are the cell-splitting artifact and go to review instead.
+      const sorted = [...shiftGroup].sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+      const toMin = (t: string) => {
+        const [h, m] = t.split(':').map(Number);
+        return (Number.isFinite(h) ? h! : 0) * 60 + (Number.isFinite(m) ? m! : 0);
+      };
+      const separated = sorted.every((s, i) => {
+        const next = sorted[i + 1];
+        if (!next) return true;
+        if (s.overnight) return false;
+        return toMin(next.startTime) - toMin(s.endTime) >= MIN_BREAK_MINUTES;
+      });
+      if (separated) {
+        for (const s of sorted) accepted.push({ ...s, flags: [...new Set([...(s.flags ?? []), 'low_confidence' as const])] });
+        anomalies.push({
+          employeeName: sorted[0]!.employeeName,
+          date: sorted[0]!.date,
+          rawText: sorted.map((s) => `${s.startTime}-${s.endTime}`).join(', '),
+          reason: `${sorted.length} separate shifts on the same day — kept; check they are right.`,
+          confidence: 0.5,
+          rowNumber: sorted[0]!.rowNumber,
+        });
+        continue;
+      }
       anomalies.push({
         employeeName: shiftGroup[0].employeeName,
         date: shiftGroup[0].date,

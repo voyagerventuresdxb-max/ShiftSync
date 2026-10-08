@@ -66,3 +66,15 @@ test('rejects three+ shifts on the same day (cell-splitting hallucination)', () 
   assert.equal(r.anomalies.length, 1);
   assert.match(r.anomalies[0].reason, /max 2 allowed/i);
 });
+
+test('three separate shifts with real breaks are kept (flagged for a look), not stripped', () => {
+  const r = enforceNoDoubleShifts([
+    shift({ rowNumber: 1, startTime: '07:00', endTime: '10:00' }),
+    shift({ rowNumber: 2, startTime: '12:00', endTime: '15:00' }),
+    shift({ rowNumber: 3, startTime: '18:00', endTime: '23:00' }),
+  ]);
+  assert.equal(r.accepted.length, 3);
+  assert.ok(r.accepted.every((s) => s.flags?.includes('low_confidence')));
+  assert.equal(r.anomalies.length, 1);
+  assert.equal(r.anomalies[0].rowNumber, 1, 'linked to the kept rows');
+});

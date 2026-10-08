@@ -1,404 +1,328 @@
 /**
- * VLM (Vision-Language Model) ingestion — system prompt + structured-output
- * schema for arbitrary, never-seen-before roster layouts (image snapshots,
- * complex multi-colour Excel grids exported as images, screenshots of
- * WhatsApp-forwarded rotas, etc).
+ * The AI roster reader's instructions and its structured-output schemas.
  *
- * Unlike server/src/parsing/templates.ts (which matches 3 known header
- * shapes), this path makes NO assumption about layout. The model is asked
- * to spatially re-derive the grid from scratch every time and to be
- * explicit about anything it cannot confidently resolve, rather than
- * guessing — guessed shift codes are the #1 source of silent payroll/MOHRE
- * compliance errors, so low-confidence cells must surface to a human.
+ * The model TRANSCRIBES: every person row, the day headers and each cell exactly as printed.
+ * The server interprets: dates come from the printed headers (weekDetection.ts), times from the
+ * printed cell text (shiftText.ts) — the same rules as the table reader, so readers can be
+ * compared cell by cell. That also keeps the answer small (≈60 output tokens per person), far
+ * below the output cap even for a 40-person page.
+ *
+ * Two framings of the same transcription, so a photo or scan (which has no text layer for the
+ * table reader) still gets an independent cross-check:
+ *  - rows    (ROSTER_VLM_SYSTEM_PROMPT / ROSTER_VLM_GEMINI_SCHEMA): person by person, each with
+ *            one cell per day — the primary read;
+ *  - columns (ROSTER_VLM_COLUMN_PROMPT / ROSTER_VLM_COLUMN_SCHEMA): the list of people, then day
+ *            column by day column, each cell keyed by the person's row — a second read whose
+ *            mistakes (a value slipping into a neighbouring day) don't line up with the first's.
+ *
+ * Generic on purpose: no venue names, no staff names, no layout from any one customer.
  */
+import { createHash } from 'node:crypto';
 
-export const ROSTER_VLM_SYSTEM_PROMPT = `You are ShiftSync's roster vision analyst. You will be given ONE staff shift
-rota from a Dubai/GCC hospitality venue (restaurant, cafe, hotel F&B outlet),
-shown either as an image (photo/screenshot/scan) or as a plain-text grid
-extracted from a spreadsheet (one line per row, cells separated by tab
-characters). In both cases, apply the exact same spatial grid analysis below
-to whichever structure is present — rows/columns of text are read the same
-way as rows/columns of pixels. Every venue uses a completely different,
-hand-made template — you have never seen this exact layout before and never
-will again. Do not assume any fixed column order, header wording, or
-shift-code vocabulary.
+const INTRO = `You read staff rotas (weekly shift rosters) from hospitality venues. Every venue
+uses its own hand-made layout. Your job is to TRANSCRIBE the roster into the JSON schema, exactly
+as printed. Do not interpret dates or convert times: the system does that from your transcription.`;
 
-Work in two passes:
+const HEADINGS = `- "title": the heading printed above the grid, exactly as printed (it often names the week,
+  e.g. "Rota 24 - 30 Aug" or "Week of 24/08"); null if there is none.
+- "days": one entry per day column, left to right, with the header text exactly as printed.
+  When the header is stacked (a date row and a weekday row), join them with a space, e.g.
+  "17-Aug MONDAY". Never convert to another format, never add a year, never assume a week.
+- "key": the colour key / legend if one is printed: {"c": code or colour, "m": meaning}.
+- "pages": one entry per page you were asked to read, in page order.`;
 
-PASS 1 — SPATIAL GRID ANALYSIS (do this silently before producing output)
-1. Identify the table's orientation: are dates/days laid out as columns with
-   employee names down the left (most common), or the reverse? Note any
-   venue/brand title line above the grid (e.g. "Bar des Pres", "FOH
-   Schedule") — it is a header, not a data row.
-2. Merged/multi-row headers: a date header may span two stacked cells (e.g.
-   "Mon" over "14/07"). Combine them into one column identity per date.
-3. CRITICAL — Daily Sub-Column Structure & SPLIT SHIFTS: Rosters vary widely
-   in how they encode multiple shifts per day. Detect and handle whichever
-   structure is present:
-   
-   (a) AM/PM sub-columns: Some rosters split each day into TWO sub-columns
-       (AM and PM, or Morning/Evening). Header row 1: "Mon 17-Aug" | "Mon
-       17-Aug" | "Tue 18-Aug" | "Tue 18-Aug"; header row 2: "AM" | "PM" |
-       "AM" | "PM". Each sub-column is an INDEPENDENT shift block on the
-       SAME parent day. Record the sub-column label in the cell's "period"
-       field ("AM" or "PM").
-   
-   (b) Multi-segmented split shifts in ONE cell: Many venues (e.g. bar FOH
-       schedules) put two or more shift segments in a single cell, separated
-       by a slash or similar, e.g. "10am/3pm-7pm/12am", "9-13/18-23",
-       "11:00-17:00 / 19:00-01:00". Each segment is a SEPARATE shift on the
-       same day. You MUST split them into separate cell entries — one per
-       segment — each with its own startTime/endTime. Do NOT merge them into
-       one combined block, and do NOT drop any segment.
-       Example: "10am/3pm-7pm/12am" → two entries on the same date:
-       {startTime:"10:00", endTime:"15:00"} and {startTime:"19:00",
-       endTime:"00:00"}. Set "period" to null (these are not AM/PM columns).
-   
-   (c) Single shift per day: one column per day, one shift per cell. Set
-       "period" to null.
-   
-   In all cases: the date you record is the parent day only. Use the
-   sub-column label or segment position ONLY as a hint to estimate times if
-   ambiguous; it does NOT change the date.
-4. Identify employee name column(s) and, if present, a separate role/
-   position/department column. Names and roles are sometimes combined in one
-   cell ("Ahmed - Waiter") — split them.
-5. ROW BOUNDING — START AT THE TOP STAFF ROW: The staff rows begin
-   immediately beneath the date/header rows. The FIRST data row under the
-   headers is a real staff member — do NOT skip it. Rosters group staff by
-   role/department in many different ways (management, floor, bar, kitchen,
-   supervisors, waiters, runners, hosts, etc.) and the groups can appear in
-   ANY order — management is not always on top. You MUST include every staff
-   row from the very first one under the headers down to the last, regardless
-   of how the rows are grouped or which role group sits where. A truncated
-   top row (missing staff) is a data-loss bug — if you see a role/department
-   label at the top of the grid, its staff rows below it are part of the
-   roster and must be extracted.
-6. ROLE EXTRACTION — USE THE STAFF MEMBER'S ACTUAL TITLE: For each staff row,
-   read the role/position/department label printed next to the employee's
-   name (e.g. "Manager", "GM", "Floor Manager", "Supervisor", "Head Waiter",
-   "Waiter", "Runner", "Bartender", "Host", "Chef", "Bar Manager", "FOH",
-   "BOH", etc.). Record the ACTUAL title as printed — do not invent or
-   normalize it to a fixed vocabulary. When a section header (e.g.
-   "MANAGEMENT", "FLOOR", "BAR", "SUPERVISORS", "FOH", "BOH") groups the rows
-   below it, apply that section's role to the rows beneath it unless an
-   individual row has its own explicit title.
-   A role/section header ONLY counts if it sits directly above a contiguous
-   run of staff rows, in the same name/role column as those rows. NEVER pull
-   a role from text in an unrelated part of the sheet — a covers/pax count
-   block, a legend/leave-code key, a totals row, a notes column, or any other
-   label that is not immediately and structurally attached to the staff list
-   (e.g. a "COVERS" or "Sofia - 20pax" label describing a headcount panel
-   elsewhere on the sheet is NEVER a role, even if it is the nearest text
-   above the first staff row). If the top-most staff rows in the grid have no
-   role/section label of their own AND no section header directly above them
-   in the staff list, leave "role" null for those rows rather than guessing —
-   do not borrow a label from a different block of the sheet just because it
-   is nearby. The pipeline resolves a null role by surfacing it for manual
-   review; a wrong guessed role silently fails validation instead, which is
-   worse.
-7. Identify every distinct cell VALUE used in the shift-code area of the
-   grid (e.g. "10-18", "3-Close", "AL", "PH", "DO", "OFF", "SICK", a colour
-   swatch with no text, etc). Build a legend mapping each distinct code to
-   its most likely meaning using context clues: position in a leave-key/
-   legend printed elsewhere on the sheet, common hospitality shorthand
-   (AL=Annual Leave, PH=Public Holiday, DO=Day Off, SL=Sick Leave,
-   TR=Training), or the shape of the value itself (a hyphenated pair of
-   times like "10-18" or "3-Close" is almost always a shift, not an
-   absence code).
-8. Colour is a signal, not a label: if cells are colour-coded (e.g. a
-   distinct fill for leave vs. worked shifts) but you cannot read a printed
-   legend, DO NOT invent a meaning from colour alone — treat text content as
-   ground truth and only use colour to raise or lower your confidence.
+const PEOPLE = `PEOPLE — LIST EVERY PERSON ROW
+- A person row is a row with a person's name. List EVERY one, top to bottom, including people
+  with no times at all this week (their cells may be empty, coloured, or leave codes only).
+  Never skip a row, never merge two rows, never list a row twice.
+- A row whose name you can read is a person: list it, with "[?]" in any cell you can't read.
+  A row is cut off only when the page edge actually cuts through it.
+- NOT people: section headings / banners (e.g. "SUPERVISORS", "WAITER", "BAR", "HOSTS",
+  "MANAGEMENT"), column headings ("NAME", "TITLE", "#", "No.", "POSITION"), headcount, count or
+  total lines (a number where the name would be, or "Total staff …", "Headcount"), caption rows
+  (covers, pax, events, notes), the title, the day headers, the colour key / legend, footers,
+  "Prepared by" / "Printed on" / "issued" / "generated" lines and signatures.
+- Before listing, count the person rows on the page ("rows").
+- "nm": the person's NAME exactly as printed (keep spelling, case and spaces). The name column
+  and a title / role column can come in either order; job titles such as "Waiter 3", "Head
+  waiter 1", "RM", "AGM", "Supervisor" or "Ops Manager" are titles, never names. Never join the
+  title or a row number onto the name: "Ana Silva" with "RM" beside it is "nm": "Ana Silva",
+  "t": "RM". A "#" / "No." / "S/N" column holds row numbers, never names.
+- "t": the person's own title / role column as printed; null when the roster has no such column.
+  Never copy the section heading into "t".
+- "i": the person's position among the person rows of that page, counting from 1 at the top.`;
 
-PASS 2 — STRUCTURED EXTRACTION
-For every non-empty cell in the shift-code area, emit one entry per
-employee per date under that employee's "cells" array, with your best
-resolution of what it means AND an honest confidence score. Rules:
+const CELL_TEXT = `- Copy the cell text exactly: "9-17", "4pm to 2am", "10am/3pm-7pm/12am", "10:30-4:00-8:00-12",
+  "OFF", "AL", "UL", "4CL", "10IN". Keep numbers as printed: "25" stays "25", "18.5" stays
+  "18.5", "18" stays "18". Do not convert to 24-hour time and do not add or drop am/pm.
+- When one day is split into several sub-columns (e.g. AM start, AM end, PM start, PM end),
+  join that day's sub-cells with single spaces, left to right: "11 17 18 25". Empty sub-cells
+  are left out. Each value belongs to the day whose header is above it: a day with only PM
+  times stays on that day.
+- A cell's TEXT always wins over its colour: a cell that shows numbers or times is copied as
+  numbers or times, whatever its fill colour. Only a cell with NO text at all whose fill colour
+  the colour key explains is written as the key's meaning in square brackets, e.g. "[Holiday]".
+- An empty cell is "". A blacked-out or illegible cell is "[?]".`;
 
-CRITICAL DEDUPLICATION & HALLUCINATION PREVENTION:
-- SPLIT SHIFTS (AM/PM columns OR multi-segmented cells): Each distinct shift
-  block is an INDEPENDENT entry. An AM shift and a PM shift are TWO separate
-  entries on the SAME parent day. A multi-segmented cell like "10am/3pm-7pm/
-  12am" is TWO separate entries. Do NOT merge them into a single combined
-  block, and do NOT drop either one.
-  Example: "Ahmed" has "9-13" in Monday AM and "14-22" in Monday PM →
-  emit TWO entries for "Ahmed" on "2026-08-17": {period:"AM", 9:00-13:00}
-  and {period:"PM", 14:00-22:00}. Never collapse these into one "9-22" row.
-- A blank/empty cell or sub-column → emit NOTHING for that period. A blank
-  AM or PM cell means no shift that period, not a missing entry to guess
-  about.
-- Do NOT hallucinate shifts. If a cell contains only whitespace, a dash, a
-  single letter without context, or is indistinguishable from the grid
-  structure itself, leave it out entirely.
-- Verify your count: a 5-day week with 10 employees and ~2 shifts per
-  employee per day (AM+PM or split segments) should yield roughly 100 shift
-  entries. If your count is surprisingly high, re-examine whether you are
-  accidentally double-counting a sub-column or segment; if it is surprisingly
-  low, re-check whether you collapsed or dropped a shift block.
+const UNREAD = `ROWS YOU CANNOT READ
+- If you can see a person row but cannot read its name, put it in "unread" with what you can
+  read ("x") and why ("w"). Never drop it silently.
 
-SHIFT INTERPRETATION:
-- "10-18", "3pm-close", "17:00-01:00", "10am-3pm", "7pm-12am" etc →
-  interpretation "worked_shift". Resolve to 24h HH:mm start/end, handling
-  BOTH 12-hour (am/pm) and 24-hour formats. "Close" with no fixed time is
-  still a worked_shift with endTime "" and needsReview true (the exact
-  close time is venue-specific and cannot be inferred).
-- OVERNIGHT-ROLLOVER RULE — endTime is ALWAYS a true wall-clock hour (00-23),
-  NEVER 24 or higher: some rotas print overnight end times as raw
-  hours-past-midnight (e.g. "18 26" meaning 18:00 to 2am the next day, or
-  "16 24" meaning 16:00 to midnight). These are NOT valid HH:mm — you MUST
-  convert any hour of 24 or above by subtracting 24 before emitting it
-  (26 -> "02:00", 25 -> "01:00", 24 -> "00:00"). The pipeline already treats
-  an endTime earlier than startTime as an overnight rollover into the next
-  day, so emitting the raw ">=24" number instead of the converted wall-clock
-  time is always wrong and will cause the shift to be rejected as an invalid
-  time — the single most common cause of a lower-than-expected shift count.
-- MULTI-SEGMENTED SPLIT SHIFTS: A single cell may contain two or more shift
-  segments separated by a slash or similar (e.g. "10am/3pm-7pm/12am",
-  "9-13/18-23", "11:00-17:00 / 19:00-01:00"). Split these into SEPARATE cell
-  entries — one per segment — each with its own startTime/endTime. Do NOT
-  merge them into one combined block, and do NOT drop any segment. Set
-  "period" to null for these (they are not AM/PM columns).
-- For AM/PM rosters, keep each sub-column's times in its own entry: the AM
-  block's start/end go in the "AM" entry, the PM block's start/end go in the
-  "PM" entry. Do not combine them. An overnight PM shift (e.g. "18:00-01:00")
-  keeps its own endTime of "01:00" — the pipeline handles the midnight
-  rollover.
-- Recognised absence/leave shorthand (AL, PH, DO, SL, OFF, TR, etc) →
-  interpretation "leave" / "day_off" / "public_holiday" as appropriate,
-  leaveCode set to the raw code as printed.
-- Any code you cannot confidently place in the above buckets (a variant you
-  have not seen, ambiguous handwriting, a symbol, a blank-but-coloured
-  cell, a value that could be a typo) → interpretation "unresolved",
-  confidence <= 0.4, needsReview true, and a short reviewReason explaining
-  exactly why (e.g. "code 'X2' not in legend and doesn't match a time
-  pattern"). NEVER silently guess a time range or absence type for these —
-  under-confidence is always safer than a wrong payroll hour.
+Return only the JSON object described by the schema.`;
 
-DATE HANDLING:
-- For AM/PM rosters: the date is the parent day, not the sub-column label.
-- PASS 1 MUST explicitly read the roster's date-range header (the title line
-  at the top of the sheet, e.g. "Roster week of 17 Aug", "Week 17-23 Aug",
-  "Rota 17/08 - 23/08", "Schedule 17-23 August 2026"). Extract the week's
-  STARTING date (the first day of the roster week) and use it as the anchor
-  for every day column. Do NOT default to "unassigned" or "unresolved" dates
-  when a header date range is visible.
-- VENUE HEADERS: The sheet may have a venue/brand title line above the grid
-  (e.g. "Bar des Pres", "Il Gattopardo", "FOH Schedule"). This is NOT a date
-  header and NOT a staff row — ignore it for date/row purposes. The date
-  range is the line that names a week or date span, not the venue name.
-- If the sheet has no explicit year, infer it from any visible month/year
-  header or from the week-starting date range in the title; if genuinely
-  undeterminable, output the date as it appears (e.g. "Mon 14") and set
-  needsReview true with reviewReason "year not printed on source document".
-- When a reference week start is provided in the request (the current active
-  week), prefer dates that fall within that week; use it to resolve
-  day-month labels ("18-Aug") to a full ISO date rather than leaving them
-  unresolved.
+export const ROSTER_VLM_SYSTEM_PROMPT = `${INTRO}
 
-EMPLOYEE COMPLETENESS:
-- Every employee row must be represented even if some of their cells are
-  empty (empty = no shift that day, do not emit a cell entry for it).
+WHAT TO RETURN
+${HEADINGS}
 
-Confidence is a per-cell honesty signal, not a formality: a cell only earns
-confidence >= 0.85 when both the code/text is unambiguous AND it matches a
-pattern class you've already resolved elsewhere on this same sheet.
+${PEOPLE}
+- Group people by the section heading printed above them ("h", exactly as printed) and count
+  the person rows in each section ("n"). A group with no heading above it gets "h": null — do
+  not invent one and do not borrow text from elsewhere on the page (a covers caption or the
+  legend is never a heading).
 
-Output ONLY the JSON object described by the provided schema. No prose, no
-markdown fences, no commentary outside the JSON fields themselves.`;
+CELLS — ONE PER DAY, EXACTLY AS PRINTED
+- "c" has exactly one string per entry of "days", in the same order.
+${CELL_TEXT}
+- Only when a cell's text is not plain times or a code (e.g. "noon till late"), add your reading
+  to "z": {"d": day index from 0, "s": ["HH:MM-HH:MM", ...]} in 24-hour time; otherwise omit "z".
+- "q": day indexes (from 0) of any cell you are not sure you read correctly; omit when sure.
 
-/** JSON Schema passed as `response_format.json_schema` to the VLM call. */
-export const ROSTER_VLM_JSON_SCHEMA = {
-  name: 'roster_extraction',
-  strict: true,
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      venueTemplateNotes: {
-        type: 'string',
-        description: 'One or two sentences on the layout you detected (orientation, header structure) — for debugging/audit only.',
-      },
-      legend: {
-        type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            code: { type: 'string' },
-            meaning: { type: 'string' },
-            category: { type: 'string', enum: ['worked_shift', 'leave', 'day_off', 'public_holiday', 'other'] },
-          },
-          required: ['code', 'meaning', 'category'],
-        },
-      },
-      employees: {
-        type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            rawName: { type: 'string' },
-            role: { type: ['string', 'null'] },
-            cells: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  date: { type: 'string', description: 'ISO YYYY-MM-DD if resolvable, else the raw day label printed on the sheet.' },
-                  rawText: { type: 'string' },
-                  period: {
-                    type: ['string', 'null'],
-                    enum: ['AM', 'PM', null],
-                    description: 'The daily sub-column this cell belongs to when the roster splits each day into AM/PM (or Morning/Evening) columns. null when the roster has a single column per day.',
-                  },
-                  interpretation: {
-                    type: 'string',
-                    enum: ['worked_shift', 'leave', 'day_off', 'public_holiday', 'unresolved'],
-                  },
-                  startTime: { type: ['string', 'null'], pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: 'True 24h wall-clock HH:mm, hour 00-23 only — never 24 or higher.' },
-                  endTime: { type: ['string', 'null'], pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: 'True 24h wall-clock HH:mm, hour 00-23 only — never 24 or higher.' },
-                  leaveCode: { type: ['string', 'null'] },
-                  confidence: { type: 'number', minimum: 0, maximum: 1 },
-                  needsReview: { type: 'boolean' },
-                  reviewReason: { type: ['string', 'null'] },
-                },
-                required: [
-                  'date',
-                  'rawText',
-                  'period',
-                  'interpretation',
-                  'startTime',
-                  'endTime',
-                  'leaveCode',
-                  'confidence',
-                  'needsReview',
-                  'reviewReason',
-                ],
-              },
-            },
-          },
-          required: ['rawName', 'role', 'cells'],
-        },
-      },
-      documentAnomalies: {
-        type: 'array',
-        description: 'Sheet-level issues that are not tied to one employee/cell (illegible section, cropped edge, unreadable header, etc).',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            location: { type: 'string' },
-            rawText: { type: 'string' },
-            reason: { type: 'string' },
-          },
-          required: ['location', 'rawText', 'reason'],
-        },
-      },
-    },
-    required: ['venueTemplateNotes', 'legend', 'employees', 'documentAnomalies'],
+${UNREAD}`;
+
+export const ROSTER_VLM_COLUMN_PROMPT = `${INTRO}
+Work COLUMN BY COLUMN: first list the people, then go down one day column at a time.
+
+WHAT TO RETURN
+${HEADINGS}
+
+${PEOPLE}
+- "h": the section heading printed above the person (exactly as printed); null when none.
+
+CELLS — DAY COLUMN BY DAY COLUMN
+- "cols" has one entry per entry of "days" ("d" = day index from 0, left to right). Go down that
+  day's column from the top and, for every person row whose cell in that column is not empty,
+  give {"i": the person's "i", "x": the cell exactly as printed}. Leave out empty cells.
+- Read each column under its own header: check the header above every value you write.
+- Half days: when a day is split into AM and PM sub-columns, go down that day's AM and PM
+  sub-columns before moving on to the next day, and write the day's values left to right in
+  one "x" ("10.5 15 18 23.5"). A person with only PM values that day ("18 23.5"), or only AM
+  values, keeps them on THAT day: never move a value into the next or the previous day.
+- Keep every half hour exactly: "10.5" stays "10.5" and "23.5" stays "23.5" — never drop,
+  round or shorten the ".5". Write every value in the cell, in the order printed.
+${CELL_TEXT}
+
+${UNREAD}`;
+
+/** Extra instruction for a focused read: one page, or part of one (the second, stricter pass). */
+export function focusInstruction(page: number, rows?: { from: number; to: number | null }, strict = false): string {
+  const span = rows
+    ? rows.to
+      ? `only person rows ${rows.from} to ${rows.to} (counted from the top of the page; keep their "i")`
+      : `only person rows ${rows.from} to the last one (counted from the top of the page; keep their "i")`
+    : 'every person row on it';
+  const check = strict
+    ? ' Go row by row from the top; for each person row check that it is in your answer before moving on. ' +
+      'Include people with no times this week. Count the person rows again at the end ("rows") and make sure your list has that many people.'
+    : '';
+  return `Read ONLY page ${page}, and ${span}. Return exactly one entry in "pages" (p = ${page}).${check}`;
+}
+
+const STR = { type: 'STRING' };
+const NSTR = { type: 'STRING', nullable: true };
+const INT = { type: 'INTEGER' };
+
+const TOP = {
+  title: { ...NSTR, description: 'Heading printed above the grid, exactly as printed; null if none.' },
+  days: { type: 'ARRAY', items: STR, description: 'Day column headers exactly as printed, left to right; stacked header rows joined with a space.' },
+  key: {
+    type: 'ARRAY',
+    description: 'Colour key / legend, if printed.',
+    items: { type: 'OBJECT', properties: { c: STR, m: STR }, required: ['c', 'm'] },
   },
 } as const;
+const UNREAD_SCHEMA = {
+  type: 'ARRAY',
+  items: { type: 'OBJECT', properties: { r: { ...INT, nullable: true }, x: STR, w: STR }, required: ['x', 'w'] },
+} as const;
 
-/**
- * Google Gen AI `responseSchema` equivalent of ROSTER_VLM_JSON_SCHEMA.
- * The Gemini API uses its own Schema shape (Type enum, `properties`,
- * `required`, `items`, `enum`) rather than OpenAI's `json_schema` wrapper,
- * so the same extraction contract is expressed here for the Gemini path.
- */
+/** Google Gen AI `responseSchema` (OpenAPI subset). Keys are short on purpose: they repeat per person. */
 export const ROSTER_VLM_GEMINI_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    venueTemplateNotes: {
-      type: 'STRING',
-      description: 'One or two sentences on the layout you detected (orientation, header structure) — for debugging/audit only.',
-    },
-    legend: {
+    ...TOP,
+    pages: {
       type: 'ARRAY',
       items: {
         type: 'OBJECT',
         properties: {
-          code: { type: 'STRING' },
-          meaning: { type: 'STRING' },
-          category: { type: 'STRING', enum: ['worked_shift', 'leave', 'day_off', 'public_holiday', 'other'] },
-        },
-        required: ['code', 'meaning', 'category'],
-      },
-    },
-    employees: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          rawName: { type: 'STRING' },
-          role: { type: 'STRING' },
-          cells: {
+          p: { ...INT, description: 'Page number, from 1.' },
+          rows: { ...INT, description: 'Person rows visible on this page (every person, including people with no times).' },
+          sec: {
             type: 'ARRAY',
             items: {
               type: 'OBJECT',
               properties: {
-                date: { type: 'STRING', description: 'ISO YYYY-MM-DD if resolvable, else the raw day label printed on the sheet.' },
-                rawText: { type: 'STRING' },
-                period: {
-                  type: 'STRING',
-                  enum: ['AM', 'PM'],
-                  description: 'The daily sub-column this cell belongs to when the roster splits each day into AM/PM (or Morning/Evening) columns. Omit/null when the roster has a single column per day.',
+                h: { ...NSTR, description: 'Section heading as printed above this group; null when none.' },
+                n: { ...INT, description: 'Person rows in this section.' },
+                ppl: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      nm: { ...STR, description: 'Name exactly as printed.' },
+                      t: { ...NSTR, description: "The person's own title/role column as printed; null when there is none." },
+                      i: { ...INT, description: 'Position among the person rows of the page, from 1 at the top.' },
+                      c: { type: 'ARRAY', items: STR, description: 'One cell per day column, exactly as printed; "" empty, "[Meaning]" colour only (no text), "[?]" illegible.' },
+                      z: {
+                        type: 'ARRAY',
+                        description: 'Only for cells whose text is not plain times or a code: your reading in 24h time.',
+                        items: { type: 'OBJECT', properties: { d: INT, s: { type: 'ARRAY', items: STR } }, required: ['d', 's'] },
+                      },
+                      q: { type: 'ARRAY', items: INT, description: 'Day indexes of cells you are unsure about.' },
+                    },
+                    required: ['nm', 't', 'i', 'c'],
+                  },
                 },
-                interpretation: {
-                  type: 'STRING',
-                  enum: ['worked_shift', 'leave', 'day_off', 'public_holiday', 'unresolved'],
-                },
-                startTime: {
-                  type: 'STRING',
-                  pattern: '^$|^([01][0-9]|2[0-3]):[0-5][0-9]$',
-                  description:
-                    'True 24h wall-clock HH:mm, hour 00-23 only, or "" when not applicable (leave/day_off/unresolved). ' +
-                    'NEVER an hour of 24 or higher — see the overnight-rollover rule.',
-                },
-                endTime: {
-                  type: 'STRING',
-                  pattern: '^$|^([01][0-9]|2[0-3]):[0-5][0-9]$',
-                  description:
-                    'True 24h wall-clock HH:mm, hour 00-23 only, or "" when not applicable (leave/day_off/unresolved). ' +
-                    'NEVER an hour of 24 or higher — see the overnight-rollover rule.',
-                },
-                leaveCode: { type: 'STRING' },
-                confidence: { type: 'NUMBER' },
-                needsReview: { type: 'BOOLEAN' },
-                reviewReason: { type: 'STRING' },
               },
-              required: [
-                'date',
-                'rawText',
-                'period',
-                'interpretation',
-                'startTime',
-                'endTime',
-                'leaveCode',
-                'confidence',
-                'needsReview',
-                'reviewReason',
-              ],
+              required: ['h', 'n', 'ppl'],
             },
           },
+          unread: UNREAD_SCHEMA,
         },
-        required: ['rawName', 'role', 'cells'],
-      },
-    },
-    documentAnomalies: {
-      type: 'ARRAY',
-      description: 'Sheet-level issues that are not tied to one employee/cell (illegible section, cropped edge, unreadable header, etc).',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          location: { type: 'STRING' },
-          rawText: { type: 'STRING' },
-          reason: { type: 'STRING' },
-        },
-        required: ['location', 'rawText', 'reason'],
+        required: ['p', 'rows', 'sec', 'unread'],
       },
     },
   },
-  required: ['venueTemplateNotes', 'legend', 'employees', 'documentAnomalies'],
+  required: ['title', 'days', 'key', 'pages'],
 } as const;
+
+/** The column-by-column framing of the same transcription (the second, independent read). */
+export const ROSTER_VLM_COLUMN_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    ...TOP,
+    pages: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          p: { ...INT, description: 'Page number, from 1.' },
+          rows: { ...INT, description: 'Person rows visible on this page (every person, including people with no times).' },
+          ppl: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                i: { ...INT, description: 'Position among the person rows of the page, from 1 at the top.' },
+                nm: { ...STR, description: 'Name exactly as printed.' },
+                t: { ...NSTR, description: "The person's own title/role column as printed; null when there is none." },
+                h: { ...NSTR, description: 'Section heading printed above the person; null when none.' },
+              },
+              required: ['i', 'nm', 't', 'h'],
+            },
+          },
+          cols: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                d: { ...INT, description: 'Day index, from 0, left to right.' },
+                c: {
+                  type: 'ARRAY',
+                  description: 'Non-empty cells of this day column, top to bottom.',
+                  items: { type: 'OBJECT', properties: { i: INT, x: STR }, required: ['i', 'x'] },
+                },
+              },
+              required: ['d', 'c'],
+            },
+          },
+          unread: UNREAD_SCHEMA,
+        },
+        required: ['p', 'rows', 'ppl', 'cols', 'unread'],
+      },
+    },
+  },
+  required: ['title', 'days', 'key', 'pages'],
+} as const;
+
+/** Changes whenever a prompt or a schema does: part of the AI-reading cache key. */
+export const ROSTER_READING_VERSION = createHash('sha256')
+  .update(ROSTER_VLM_SYSTEM_PROMPT)
+  .update(JSON.stringify(ROSTER_VLM_GEMINI_SCHEMA))
+  .update(ROSTER_VLM_COLUMN_PROMPT)
+  .update(JSON.stringify(ROSTER_VLM_COLUMN_SCHEMA))
+  .digest('hex')
+  .slice(0, 16);
+
+// --- the answers, as the server reads them -------------------------------------------------------
+
+export interface ReadingAnswerPerson {
+  nm: string;
+  t: string | null;
+  i: number;
+  c: string[];
+  z?: { d: number; s: string[] }[];
+  q?: number[];
+}
+export interface ReadingAnswerPage {
+  p: number;
+  rows: number;
+  sec: { h: string | null; n: number; ppl: ReadingAnswerPerson[] }[];
+  unread: { r?: number | null; x: string; w: string }[];
+}
+export interface ReadingAnswer {
+  title: string | null;
+  days: string[];
+  key: { c: string; m: string }[];
+  pages: ReadingAnswerPage[];
+  /** Cached only: the second, column-by-column reading of the same file (a photo or scan). */
+  cross?: ReadingAnswer;
+}
+
+export interface ColumnAnswer {
+  title: string | null;
+  days: string[];
+  key: { c: string; m: string }[];
+  pages: {
+    p: number;
+    rows: number;
+    ppl: { i: number; nm: string; t: string | null; h: string | null }[];
+    cols: { d: number; c: { i: number; x: string }[] }[];
+    unread: { r?: number | null; x: string; w: string }[];
+  }[];
+}
+
+/** True for an answer in the row schema (as opposed to the original single-list one). */
+export function isReadingAnswer(value: unknown): value is ReadingAnswer {
+  return !!value && typeof value === 'object' && Array.isArray((value as ReadingAnswer).pages) && Array.isArray((value as ReadingAnswer).days);
+}
+
+/** True for an answer in the column schema. */
+export function isColumnAnswer(value: unknown): value is ColumnAnswer {
+  return isReadingAnswer(value) && (value as unknown as ColumnAnswer).pages.every((p) => Array.isArray(p.cols) && Array.isArray(p.ppl));
+}
+
+/** The column-by-column answer laid out person by person, so both reads map the same way. */
+export function columnsToRows(answer: ColumnAnswer): ReadingAnswer {
+  const days = answer.days ?? [];
+  return {
+    title: answer.title ?? null,
+    days,
+    key: answer.key ?? [],
+    pages: (answer.pages ?? []).map((page) => {
+      const sec: ReadingAnswerPage['sec'] = [];
+      for (const person of [...(page.ppl ?? [])].sort((a, b) => a.i - b.i)) {
+        const cells = days.map((_, d) => page.cols?.find((col) => col.d === d)?.c?.find((cell) => cell.i === person.i)?.x ?? '');
+        let current = sec[sec.length - 1];
+        if (!current || current.h !== (person.h ?? null)) {
+          current = { h: person.h ?? null, n: 0, ppl: [] };
+          sec.push(current);
+        }
+        current.n++;
+        current.ppl.push({ nm: person.nm, t: person.t ?? null, i: person.i, c: cells });
+      }
+      return { p: page.p, rows: page.rows, sec, unread: page.unread ?? [] };
+    }),
+  };
+}

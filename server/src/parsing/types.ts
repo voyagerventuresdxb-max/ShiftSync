@@ -4,6 +4,7 @@
  * Pure data contracts, no DB or HTTP imports, so the parsing engine stays
  * unit-testable in isolation from Express/Prisma.
  */
+import type { ReadPerson, RowReadingInfo, UnreadRow, WeekDetection } from './rosterContract.js';
 
 /** Canonical field keys every master template must resolve to. */
 export type TemplateField =
@@ -49,7 +50,7 @@ export interface RowIssue {
 }
 
 /** A cleanly-parsed shift, ready for role/user resolution against the DB. */
-export interface ParsedShiftRow {
+export interface ParsedShiftRow extends RowReadingInfo {
   rowNumber: number;
   /**
    * Identifies which single physical source-file row (one grid row / one
@@ -76,6 +77,13 @@ export interface ParsedShiftRow {
   overnight: boolean;
   breakMinutes: number;
   managerNotes: string | null;
+  /**
+   * Table reader only, never sent to the client: this shift's day was inferred from how a PDF's
+   * columns line up (pdfTableExtractor inferredCells), not read from where its text sits.
+   */
+  inferredDay?: boolean;
+  /** Table reader only, never sent to the client: am / pm had to be inferred ("10:30-4:00-8:00-12", "6-11pm"). */
+  inferredTimes?: boolean;
 }
 
 export interface ParsedWorkbookResult {
@@ -152,6 +160,8 @@ export interface LeaveRecord {
   date: string;
   leaveCode: string;
   category: 'leave' | 'day_off' | 'public_holiday';
+  /** Table reader only, dropped before the client sees it: the day was inferred from a PDF's column alignment. */
+  inferredDay?: boolean;
 }
 
 export interface ParsedVisionResult {
@@ -161,6 +171,12 @@ export interface ParsedVisionResult {
   anomalies: AnomalyRecord[];
   leaveRecords: LeaveRecord[];
   legend: { code: string; meaning: string }[];
+  /** Every person the reader saw, including people with no shifts that week (readers that track people). */
+  people?: ReadPerson[];
+  /** Rows that look like roster rows but could not be read into a person or shifts. */
+  unreadRows?: UnreadRow[];
+  /** The week the roster prints (readers that read day headers). */
+  week?: WeekDetection;
 }
 
 /** Resolution status of a parsed row against Location/Role/User tables. */

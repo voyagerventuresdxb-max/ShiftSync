@@ -3,6 +3,8 @@ import { uploadRoster, ApiError, type UploadResponse } from '../../api/schedules
 import { useIdentity } from '../../state/IdentityContext';
 import { useOnboardingState } from '../../state/OnboardingStateContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
+import { ReadingProgress } from '../rosterReview/ReadingProgress';
+import { newUploadId, rosterFileKind, type RosterFileKind } from '../rosterReview/uploadProgress';
 
 /**
  * Onboarding · 03 · Roster — ported from `ShiftSync Roster.dc.html`.
@@ -29,7 +31,7 @@ import OnboardingScreenShell from './OnboardingScreenShell';
 
 type ZoneState =
   | { phase: 'empty' }
-  | { phase: 'uploading'; fileName: string }
+  | { phase: 'uploading'; fileName: string; uploadId: string; kind: RosterFileKind }
   | { phase: 'ready'; fileName: string; ext: string; sizeLabel: string; result: UploadResponse; viaPhoto: boolean }
   | { phase: 'error'; fileName: string; message: string }
   // The server needs the manager's go-ahead before this file goes to the third-party AI reader; nothing was sent yet.
@@ -81,13 +83,14 @@ export default function RosterScreen({
   const handlePick = async (file: File, pickedViaPhoto: boolean, aiConsent = false) => {
     pickedRef.current = { file, viaPhoto: pickedViaPhoto };
     setViaPhoto(pickedViaPhoto);
-    setZone({ phase: 'uploading', fileName: file.name });
+    const uploadId = newUploadId();
+    setZone({ phase: 'uploading', fileName: file.name, uploadId, kind: rosterFileKind(file) });
     if (!session) {
       setZone({ phase: 'error', fileName: file.name, message: 'You need to be signed in to upload a roster.' });
       return;
     }
     try {
-      const result = await uploadRoster(session.token, file, { aiConsent });
+      const result = await uploadRoster(session.token, file, { aiConsent, uploadId });
       setZone({ phase: 'ready', fileName: file.name, ext: extOf(file.name), sizeLabel: sizeLabel(file.size), result, viaPhoto: pickedViaPhoto });
       // Reflected into shared state the moment parsing succeeds, not deferred
       // to Continue — this is already-fetched, side-effect-free preview data
@@ -373,6 +376,10 @@ export default function RosterScreen({
           </svg>
         )}
       </div>
+
+      {zone.phase === 'uploading' && (
+        <ReadingProgress key={zone.uploadId} className="rr-onboarding" token={session?.token} uploadId={zone.uploadId} fileKind={zone.kind} />
+      )}
 
       {(zone.phase === 'consent' || (zone.phase === 'ready' && zone.result.escalation)) && (
         <div

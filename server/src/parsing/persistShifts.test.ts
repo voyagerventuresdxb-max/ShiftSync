@@ -1,55 +1,90 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
-import { persistShifts } from './persistShifts.js';
-import type { PreviewRow } from './types.js';
+import { persistRosterImport, type RosterImportInput } from './persistShifts.js';
+import { resolveRowsAgainstDatabase, TEAM_MEMBER_ROLE_NAME } from './resolveRows.js';
+import type { ParsedShiftRow } from './types.js';
 
 const prisma = new PrismaClient();
 
-function baseRow(overrides: Partial<PreviewRow>): PreviewRow {
+function parsed(overrides: Partial<ParsedShiftRow>): ParsedShiftRow {
   return {
     rowNumber: 1,
-    employeeName: 'Test Employee',
+    employeeName: '__persist-test__ Ava Thornton',
     roleName: '',
-    date: '2026-08-24',
+    date: '2031-05-05',
     startTime: '09:00',
     endTime: '17:00',
     overnight: false,
     breakMinutes: 0,
     managerNotes: null,
-    status: 'matched',
-    issues: [],
-    resolvedRoleId: null,
-    resolvedUserId: null,
     ...overrides,
   };
 }
 
-test('persistShifts returns rows correlated by rowNumber, not array position', async () => {
-  const location = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
-  const role = await prisma.role.findFirst({ where: { locationId: location!.id } });
-  const user = await prisma.user.findFirst({ where: { locationId: location!.id } });
-  assert.ok(location && role, 'seed data (location + role) must exist to run this test — run server/scripts/seed-test-data.ts first');
+async function importRows(locationId: string, actorId: string, rows: ParsedShiftRow[], extra: Partial<RosterImportInput> = {}) {
+  const { previewRows, people } = await resolveRowsAgainstDatabase(prisma, locationId, rows);
+  return prisma.$transaction(
+    (tx) =>
+      persistRosterImport(tx, {
+        locationId,
+        actorId,
+        createdById: actorId,
+        rows: previewRows,
+        people,
+        decisions: new Map(),
+        addedPeople: [],
+        weekDeltaDays: 0,
+        rememberRoleMappings: false,
+        ...extra,
+      }),
+    { timeout: 30_000 },
+  );
+}
 
-  const rows: PreviewRow[] = [
-    baseRow({ rowNumber: 5, resolvedRoleId: role!.id, resolvedUserId: user?.id ?? null }),
-    baseRow({ rowNumber: 2, resolvedRoleId: role!.id, resolvedUserId: null }), // unassigned (new_employee case)
-    baseRow({ rowNumber: 9, resolvedRoleId: null }), // unresolved role — must be skipped, not persisted
-  ];
+test('persistRosterImport: rows correlate by rowNumber, every person gets a staff record, role-unresolved shifts land under "Team member"', async () => {
+  const seed = await prisma.location.findFirst({ orderBy: { createdAt: 'asc' } });
+  assert.ok(seed, 'seed data (a location) must exist to run this test — run npm run db:seed first');
+  const location = await prisma.location.create({ data: { organizationId: seed!.organizationId, name: '__persist-test__ venue', timezone: 'Asia/Dubai' } });
+  const manager = await prisma.user.create({ data: { locationId: location.id, fullName: '__persist-test__ manager', systemRole: 'MANAGER' } });
+  await prisma.role.create({ data: { locationId: location.id, name: 'Waiter' } });
 
-  const result = await persistShifts(prisma, location!.id, null, rows);
+  try {
+    const rows = [
+      parsed({ rowNumber: 5, sourceRowIndex: 1, employeeName: '__persist-test__ Ava Thornton', roleName: 'Waiter' }),
+      parsed({ rowNumber: 2, sourceRowIndex: 2, employeeName: '__persist-test__ Ben Okafor', roleName: 'Wine Steward' }),
+      parsed({ rowNumber: 9, sourceRowIndex: 2, employeeName: '__persist-test__ Ben Okafor', roleName: 'Wine Steward', date: '2031-05-06' }),
+    ];
+    const first = await importRows(location.id, manager.id, rows);
 
-  assert.equal(result.createdCount, 2);
-  assert.equal(result.skippedCount, 1);
-  assert.equal(result.rows.length, 2);
+    assert.equal(first.createdPeople, 2);
+    assert.equal(first.createdShifts, 3);
+    assert.equal(first.skippedRowCount, 0);
+    const byRow = new Map(first.rows.map((r) => [r.rowNumber, r]));
+    assert.deepEqual([...byRow.keys()].sort((a, b) => a - b), [2, 5, 9]);
+    assert.match(byRow.get(5)!.shiftId, /^c/, 'a real cuid');
 
-  const byRowNumber = new Map(result.rows.map((r) => [r.rowNumber, r]));
-  assert.ok(byRowNumber.has(5), 'row 5 (resolved) must be in the result');
-  assert.ok(byRowNumber.has(2), 'row 2 (unassigned but role-resolved) must be in the result');
-  assert.ok(!byRowNumber.has(9), 'row 9 (unresolved role) must NOT be in the result');
-  assert.equal(byRowNumber.get(2)!.userId, null, 'an unassigned row reports userId: null, not a fabricated id');
-  assert.match(byRowNumber.get(5)!.shiftId, /^c/, 'shiftId looks like a real cuid, not a synthetic string');
+    const ben = await prisma.user.findFirst({ where: { locationId: location.id, fullName: '__persist-test__ Ben Okafor' }, include: { role: true } });
+    assert.equal(ben?.role?.name, TEAM_MEMBER_ROLE_NAME);
+    assert.equal(ben?.systemRole, 'STAFF');
+    const benShifts = await prisma.shift.findMany({ where: { userId: ben!.id }, include: { role: true } });
+    assert.equal(benShifts.length, 2);
+    assert.ok(benShifts.every((s) => s.role.name === TEAM_MEMBER_ROLE_NAME));
 
-  // Clean up the shifts this test created.
-  await prisma.shift.deleteMany({ where: { id: { in: result.rows.map((r) => r.shiftId) } } });
+    const staffAudits = await prisma.auditLog.count({ where: { locationId: location.id, action: 'STAFF_CREATED' } });
+    assert.equal(staffAudits, 2, 'one STAFF_CREATED entry per new staff member');
+
+    // Same roster again: nothing new.
+    const second = await importRows(location.id, manager.id, rows);
+    assert.equal(second.createdPeople, 0);
+    assert.equal(second.linkedPeople, 2);
+    assert.equal(second.createdShifts, 0);
+    assert.equal(second.skippedDuplicates, 3);
+    assert.equal(await prisma.user.count({ where: { locationId: location.id } }), 3);
+    assert.equal(await prisma.shift.count({ where: { locationId: location.id } }), 3);
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { locationId: location.id } });
+    await prisma.shift.deleteMany({ where: { locationId: location.id } });
+    await prisma.location.delete({ where: { id: location.id } }).catch(() => {});
+  }
 });

@@ -5,6 +5,13 @@ import { getVisionProvider, VisionProviderError, type VisionInput, type VisionOu
 import { AI_PAUSED_MESSAGE, AI_PAUSED_TODAY_MESSAGE, AI_PAUSED_USER_MESSAGE, AI_PAUSED_VENUE_MESSAGE, AiBudgetExceededError } from '../lib/aiBudget.js';
 import { enforceNoDoubleShifts } from './shiftConstraints.js';
 import { parseRotaFile, processRowsIntoRoster } from './deterministicParser.js';
+import { AI_TEMPLATE_LABEL, mapReadingAnswer } from './aiReading.js';
+import { isReadingAnswer } from './vlmPrompt.js';
+import { addDays, parseDayLabel } from './weekDetection.js';
+import { personKeyOf } from './personKey.js';
+import { extractPdfTable } from './pdfTableExtractor.js';
+import { parseExcelGrid } from './deterministicGridParser.js';
+import type { ReadPerson } from './rosterContract.js';
 import type { AnomalyRecord, LeaveRecord, ParsedShiftRow, ParsedVisionResult, RowIssue } from './types.js';
 
 /**
@@ -49,7 +56,7 @@ export const VISION_ERROR_MESSAGES: Record<VisionErrorCode, string> = {
 };
 
 /** VISION_ERROR_MESSAGES, except a refusal by the daily call limit says it is back tomorrow. */
-function visionErrorMessage(code: VisionErrorCode, cause: unknown): string {
+export function visionErrorMessage(code: VisionErrorCode, cause: unknown): string {
   if (code === 'vision_paused' && cause instanceof AiBudgetExceededError) {
     if (cause.limit === 'daily_calls') return AI_PAUSED_TODAY_MESSAGE;
     if (cause.limit === 'user_daily') return AI_PAUSED_USER_MESSAGE;
@@ -77,7 +84,7 @@ export class VisionIngestionError extends Error {
   }
 }
 
-// --- Raw shape returned by the VLM, mirroring ROSTER_VLM_JSON_SCHEMA ---
+// --- The original single-list answer shape (recorded answers, tests); the current one is vlmPrompt.ts ReadingAnswer ---
 interface VlmCell {
   date: string;
   rawText: string;
@@ -178,8 +185,10 @@ function normalizeInterpretation(value: unknown): VlmCell['interpretation'] {
   }
 }
 
-/** templateLabel of a result the AI reader produced (local fallbacks are labelled 'Deterministic local parser (…)'). */
-export const AI_TEMPLATE_LABEL = 'Direct Vision Ingestion';
+export { AI_TEMPLATE_LABEL };
+
+/** How long one AI read (all its attempts) may take before giving up: inside the web proxy's ~120 s. */
+export const AI_READ_BUDGET_MS = 95_000;
 
 export interface VisionCallOptions {
   /** Default true (per VLM_FALLBACK_MODE). false: on any AI failure throw the coded VisionIngestionError. */
@@ -226,10 +235,13 @@ function mapProviderOutput(output: VisionOutput, provider: VisionProvider, weekS
   try {
     parsed = JSON.parse(output.raw) as VlmResponse;
   } catch {
-    throw new VisionIngestionError('Vision model response was not valid JSON.');
+    throw new VisionIngestionError(output.truncated ? 'Vision model answer was cut off before it finished.' : 'Vision model response was not valid JSON.');
   }
   try {
     const result = mapVlmResponseToResult(parsed, weekStart);
+    if (output.truncated) {
+      result.unreadRows = [...(result.unreadRows ?? []), { page: null, row: null, text: '', reason: 'The AI reader stopped before the end of the roster; rows after the last one shown may be missing.' }];
+    }
     console.log(
       `[parseVision] ${what} read by ${provider.name} model=${output.model} in ${Date.now() - startTime}ms — ` +
         `${output.raw.length} chars, tokens in/out=${output.usage.promptTokens ?? '?'}/${output.usage.outputTokens ?? '?'}, ` +
@@ -278,7 +290,7 @@ export async function parseRosterGrid(
     return { ...result, templateLabel: 'Deterministic local parser (AI roster reading not configured)' };
   }
 
-  const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart, locationId: options.locationId ?? null, userId: options.userId ?? null });
+  const read = await readWithProvider(provider, { kind: 'grid', text: gridToTsvText(grid), originalFilename, weekStart, locationId: options.locationId ?? null, userId: options.userId ?? null, deadline: startTime + AI_READ_BUDGET_MS });
   if ('code' in read) {
     if (mode === 'off') throw new VisionIngestionError(visionErrorMessage(read.code, read.cause), read.cause, read.code);
     console.warn(`[parseVision] Falling back to the deterministic local parser for a grid roster (${read.code}).`);
@@ -309,7 +321,7 @@ export async function parseRosterImage(
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, 'vision_unconfigured', undefined);
   }
 
-  const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart, locationId: options.locationId ?? null, userId: options.userId ?? null });
+  const read = await readWithProvider(provider, { kind: 'file', data: imageBuffer, mimeType, originalFilename, weekStart, locationId: options.locationId ?? null, userId: options.userId ?? null, deadline: startTime + AI_READ_BUDGET_MS });
   if ('code' in read) {
     if (mode === 'off') throw new VisionIngestionError(visionErrorMessage(read.code, read.cause), read.cause, read.code);
     return buildLocalFallback(imageBuffer, mimeType, weekStart, startTime, read.code, read.cause);
@@ -336,6 +348,20 @@ async function buildLocalFallback(
 ): Promise<ParsedVisionResult> {
   const isPdf = mimeType === 'application/pdf' || /\.pdf$/i.test(mimeType);
   if (isPdf) {
+    // The table reader first: it reads the printed day headers (dates, not column positions).
+    try {
+      const table = await extractPdfTable(imageBuffer);
+      if (table.grid.length) {
+        const today = new Date().toISOString().slice(0, 10);
+        const grid = parseExcelGrid(table.grid, weekStart ?? today, { today: weekStart ?? today, clientWeekStart: weekStart ?? null, rowRefs: table.rowRefs });
+        if (grid.templateLabel === 'Deterministic Grid Parser') {
+          console.log(`[parseVision] Table reader used in ${Date.now() - startTime}ms (${code}) — ${grid.rows.length} shifts, ${grid.people?.length ?? 0} people.`);
+          return { ...grid, templateLabel: `Deterministic local parser (${code})` };
+        }
+      }
+    } catch (err) {
+      console.warn('[parseVision] Table reader fallback failed:', err instanceof Error ? err.message : 'unexpected error');
+    }
     try {
       const parser = new PDFParse({ data: imageBuffer });
       let text: string | null = null;
@@ -365,12 +391,31 @@ async function buildLocalFallback(
   throw new VisionIngestionError(visionErrorMessage(code, cause), cause, code);
 }
 
-/** Pure mapping function (no network calls) — kept separate so it's unit-testable against fixture JSON. */
+/**
+ * A weekday-only label ("Monday", "TUE") in an answer of the original schema: the matching day of
+ * the reference week (the week the caller asked for), never dropped for want of a year.
+ */
+function weekdayInWeek(label: string | undefined, weekStart: string | undefined): string | null {
+  const day = parseDayLabel(label ?? '');
+  if (!day || day.weekday === null || day.day !== null || !weekStart) return null;
+  return addDays(weekStart, day.weekday);
+}
+
+/**
+ * Pure mapping function (no network calls) — kept separate so it's unit-testable against fixture JSON.
+ * Accepts the current transcription schema (vlmPrompt.ts) and the original one (recorded answers).
+ */
 export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string): ParsedVisionResult {
+  if (isReadingAnswer(parsed)) {
+    const today = weekStart ?? new Date().toISOString().slice(0, 10);
+    return mapReadingAnswer(parsed, { today, clientWeekStart: weekStart ?? null });
+  }
   const rows: ParsedShiftRow[] = [];
   const issues: RowIssue[] = [];
   const anomalies: AnomalyRecord[] = [];
   const leaveRecords: LeaveRecord[] = [];
+  // Every employee the model listed is a person on the roster, whatever became of their cells.
+  const people: ReadPerson[] = [];
 
   let rowNumber = 1;
   // One value per detected employee block, shared by every shift pushed for
@@ -383,6 +428,10 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
     const employeeName = (employee.rawName ?? '').trim();
     const roleName = (employee.role ?? '').trim();
     const currentSourceRowIndex = sourceRowIndex++;
+    const personKey = employeeName ? personKeyOf(employeeName, null, currentSourceRowIndex + 1) : undefined;
+    if (employeeName) {
+      people.push({ personKey: personKey!, name: employeeName, roleLabel: roleName || null, section: null, sourcePage: null, sourceRow: currentSourceRowIndex + 1, readerSource: 'ai' });
+    }
 
     for (const cell of employee.cells ?? []) {
       const confidence = clampConfidence(cell.confidence ?? 0);
@@ -391,11 +440,13 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
       // paths use, so "14/07/2026", "9:00", "17:00:00" etc. are accepted
       // rather than rejected for not being strict ISO/HH:mm. Gemini often
       // returns day-month dates without a year ("18-Aug") — resolve those
-      // against the roster week when one is known.
+      // against the roster week when one is known, and a weekday alone to
+      // that day of the roster week.
       const isoDate =
         parseDateCell(cell.date ?? '') ??
         (ISO_DATE_RE.test(cell.date ?? '') ? cell.date : null) ??
-        (weekStart ? resolveDayMonthDate(cell.date, weekStart) : null);
+        (weekStart ? resolveDayMonthDate(cell.date, weekStart) : null) ??
+        weekdayInWeek(cell.date, weekStart);
       const isDateResolved = !!isoDate;
 
       // Anything the model itself couldn't place, or dated it couldn't
@@ -498,6 +549,9 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
         ]
           .filter(Boolean)
           .join(' ') || null,
+        personKey,
+        readerSource: 'ai',
+        ...(cell.needsReview ? { flags: ['low_confidence' as const] } : {}),
       });
     }
   }
@@ -528,5 +582,7 @@ export function mapVlmResponseToResult(parsed: VlmResponse, weekStart?: string):
     anomalies: [...anomalies, ...constraintAnomalies],
     leaveRecords,
     legend: (parsed.legend ?? []).map((l) => ({ code: l.code, meaning: l.meaning })),
+    people,
+    unreadRows: [],
   };
 }

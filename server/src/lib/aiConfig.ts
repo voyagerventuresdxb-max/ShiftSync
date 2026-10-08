@@ -22,6 +22,12 @@ export const DEFAULT_VISION_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 export const DEFAULT_VOICE_MODEL = 'gemini-3.6-flash';
 export const DEFAULT_VERTEX_LOCATION = 'eu';
 export const DEFAULT_GEMINI_HTTP_TIMEOUT_MS = 30_000;
+/**
+ * Per-call timeout for an AI roster read (GEMINI_VISION_TIMEOUT_MS). A full-week read takes far
+ * longer than a voice call, and the whole upload must still answer before the web proxy gives up
+ * (~120 s): long enough for one page, short enough to leave room for a second read.
+ */
+export const DEFAULT_GEMINI_VISION_TIMEOUT_MS = 75_000;
 
 export type VisionBackend = 'vertex' | 'developer-api';
 
@@ -35,6 +41,8 @@ export interface VisionConfig {
   /** Vertex AI location (`eu`, `us`, `global` or a region); null on the Developer API. */
   location: string | null;
   timeoutMs: number;
+  /** Per-call timeout for roster reading (vision only; voice keeps `timeoutMs`). */
+  readTimeoutMs: number;
 }
 
 /** Voice uses the same backend, project, region and timeout as vision; only the model is its own. */
@@ -54,6 +62,7 @@ export function visionConfig(env: NodeJS.ProcessEnv = process.env): VisionConfig
   const project = trimmed(env.GEMINI_VERTEX_PROJECT) || null;
   const backend: VisionBackend | null = project ? 'vertex' : trimmed(env.GEMINI_API_KEY) ? 'developer-api' : null;
   const timeout = Number(env.GEMINI_HTTP_TIMEOUT_MS);
+  const readTimeout = Number(env.GEMINI_VISION_TIMEOUT_MS);
   return {
     backend,
     model: trimmed(env.VLM_MODEL) || DEFAULT_VISION_MODEL,
@@ -61,6 +70,7 @@ export function visionConfig(env: NodeJS.ProcessEnv = process.env): VisionConfig
     project,
     location: backend === 'vertex' ? trimmed(env.GEMINI_VERTEX_LOCATION) || DEFAULT_VERTEX_LOCATION : null,
     timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_GEMINI_HTTP_TIMEOUT_MS,
+    readTimeoutMs: Number.isFinite(readTimeout) && readTimeout > 0 ? readTimeout : DEFAULT_GEMINI_VISION_TIMEOUT_MS,
   };
 }
 
