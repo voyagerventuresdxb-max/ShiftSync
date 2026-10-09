@@ -111,6 +111,42 @@
   }
 }
 
+/*
+ * The voice sheet (components/shiftsync/VoiceStage.tsx). Motion only for people who allow it:
+ * with reduced motion the sheet appears at once, the heard words appear together and the
+ * recording ring is drawn full and still.
+ */
+@keyframes voice-stage-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes voice-word-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.3em);
+  }
+}
+@keyframes voice-countdown {
+  to {
+    stroke-dashoffset: var(--voice-ring);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .voice-stage {
+    animation: voice-stage-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .voice-word {
+    display: inline-block;
+    animation: voice-word-in 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .voice-countdown {
+    animation-name: voice-countdown;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+  }
+}
+
 @utility panel {
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);

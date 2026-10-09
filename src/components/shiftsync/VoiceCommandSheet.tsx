@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, ChevronLeft, ChevronRight, Pencil, UserPlus } from 'lucide-react';
 import { readingPerson, voiceAnswer, type ParsedIntent, type VoiceAnswer } from '@/api/voice';
@@ -89,7 +89,7 @@ const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foregr
  * centred card from `sm` up (same overlay conventions as RotaBuilder.tsx's `SheetShell`).
  *
  * One layout for every state: what kind of command it is, one plain sentence, what was heard
- * (editable — "Try again" re-reads the edited words, no new recording), then either a preview of
+ * (editable — "Update preview" re-reads the edited words, no new recording), then either a preview of
  * the result exactly as the app will show it, or the choices to pick from. Confirm is the one big
  * button; Edit and Cancel are small. Nothing runs without Confirm.
  */
@@ -123,7 +123,7 @@ export function VoiceCommandSheet({
   onChoose: (option: ParsedIntent) => void;
   /** Set after a choice was picked: back to the list it came from. */
   onBackToChoices?: () => void;
-  /** "Try again" with the edited words: a fresh read of the text (no recording). Never executes anything itself. */
+  /** "Update preview" with the edited words: a fresh read of the text (no recording). Never executes anything itself. */
   onReparse: (text: string) => void;
   onCancel: () => void;
   executing: boolean;
@@ -149,6 +149,11 @@ export function VoiceCommandSheet({
   const headingId = useId();
   const heardId = useId();
   const heardRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Each new reading or answer: focus moves onto the sheet, so a screen reader starts from its heading.
+  useEffect(() => {
+    if (intent) panelRef.current?.focus({ preventScroll: true });
+  }, [intent]);
   // The edit box follows the answer on screen: a new one (a choice, a re-read) starts from what was heard.
   const [shown, setShown] = useState(intent);
   const [editing, setEditing] = useState(false);
@@ -223,17 +228,27 @@ export function VoiceCommandSheet({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:items-center sm:p-6"
+      // Rises from the bottom of the voice sheet (VoiceStage), which stays behind it with the orb;
+      // it fills the sheet's box, so it too stays above an on-screen keyboard.
+      className="absolute inset-0 z-50 flex items-end justify-center"
       // Once execution is in flight the mutation lands regardless — offering a
       // backdrop dismiss here would be a cancel button that cancels nothing.
       onClick={busy ? undefined : onCancel}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !busy) {
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}
         aria-busy={busy}
-        className="panel max-h-[calc(100dvh-1.5rem-env(safe-area-inset-bottom))] w-full max-w-sm overflow-y-auto overscroll-contain shadow-lux motion-safe:animate-rise"
+        tabIndex={-1}
+        className="panel max-h-[calc(100dvh-9rem-env(safe-area-inset-top))] w-full max-w-md overflow-y-auto overscroll-contain rounded-b-none border-b-0 pb-[env(safe-area-inset-bottom)] shadow-lux focus:outline-none motion-safe:animate-rise"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="gold-rule h-px opacity-50" aria-hidden />
@@ -272,7 +287,7 @@ export function VoiceCommandSheet({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold text-foreground/87">{r.person}</span>
-                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Try again with this name</span>
+                    <span className="mt-0.5 block truncate text-xs text-foreground/60">Update the preview with this name</span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-foreground/38" aria-hidden />
                 </button>
@@ -307,7 +322,7 @@ export function VoiceCommandSheet({
               {showEditor ? (
                 <>
                   <label htmlFor={heardId} className={caption}>
-                    {typed ? 'You typed' : 'I heard'} — fix it and try again
+                    {typed ? 'You typed' : 'I heard'} — fix it, then update the preview
                   </label>
                   <textarea
                     ref={heardRef}
@@ -414,7 +429,7 @@ export function VoiceCommandSheet({
             {showEditor ? (
               <>
                 <button type="button" className="btn btn-primary h-12 w-full text-base font-semibold" onClick={reparse} disabled={busy || !draft.trim()}>
-                  {reparsing ? 'Checking…' : 'Try again'}
+                  {reparsing ? 'Checking…' : 'Update preview'}
                 </button>
                 <div className={cn('grid gap-2', editing ? 'grid-cols-2' : 'grid-cols-1')}>
                   {editing && (

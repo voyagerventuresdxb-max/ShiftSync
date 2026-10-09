@@ -1,10 +1,7 @@
 import { useId, useRef } from 'react';
-import { Send } from 'lucide-react';
-import { useCloseOnBack } from '@/lib/backNavigation';
 import type { VoiceProblem } from '@/lib/voiceErrors';
-import { VoiceProgress } from '@/components/shiftsync/VoiceProgress';
 
-const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/38';
+const caption = 'text-[11px] font-medium uppercase tracking-[0.14em] text-foreground/60';
 
 /** Phrases to try, as tappable chips. Tapping one only fills the box; nothing is sent until the person sends it. */
 export function ExamplePhrases({ examples, onPick, disabled }: { examples: string[]; onPick: (phrase: string) => void; disabled?: boolean }) {
@@ -30,22 +27,21 @@ export function ExamplePhrases({ examples, onPick, disabled }: { examples: strin
 }
 
 /**
- * The typed command box: opened from the keyboard button next to the mic, and on every voice
- * problem (microphone off, offline, timeout, assistant unavailable, limit reached), which it shows
- * above the box in plain words. What is typed goes through the same reading, preview and Confirm
- * as a spoken command.
+ * The typed command, inside the voice sheet: opened from the keyboard button (on the dock or the
+ * sheet), and on every voice problem (microphone off, offline, timeout, assistant unavailable,
+ * limit reached), which it shows above the box in plain words. What is typed goes through the
+ * same reading, preview and Confirm as a spoken command. The sheet around it carries the step
+ * (its live region) and, in its pinned bottom row, Show preview and Cancel; Enter here sends too.
  */
 export function VoiceComposer({
-  open,
   value,
   onChange,
   problem,
   sending,
   examples,
   onSend,
-  onCancel,
+  headingId,
 }: {
-  open: boolean;
   value: string;
   onChange: (text: string) => void;
   /** Why the box opened instead of (or after) the voice flow; null when opened to type. */
@@ -54,107 +50,73 @@ export function VoiceComposer({
   sending: boolean;
   examples: string[];
   onSend: (text: string) => void;
-  onCancel: () => void;
+  /** The sheet is named by this heading. */
+  headingId: string;
 }) {
-  useCloseOnBack(open, () => {
-    if (!sending) onCancel();
-  });
-  const headingId = useId();
   const inputId = useId();
   const problemId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  if (!open) return null;
   const send = () => {
     const text = value.trim();
     if (text && !sending) onSend(text);
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-background/70 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:items-center sm:p-6"
-      onClick={sending ? undefined : onCancel}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={headingId}
-        aria-describedby={problem ? problemId : undefined}
-        aria-busy={sending}
-        className="panel max-h-[calc(100dvh-1.5rem-env(safe-area-inset-bottom))] w-full max-w-sm overflow-y-auto overscroll-contain shadow-lux motion-safe:animate-rise"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="gold-rule h-px opacity-50" aria-hidden />
-        <div className="p-5">
-          <p className="eyebrow">Type a command</p>
-          <h2 id={headingId} className="mt-2 text-[17px] font-semibold leading-snug tracking-tight text-foreground/87">
-            {problem ? problem.title : 'What would you like to do?'}
-          </h2>
-          {problem && (
-            <div id={problemId} role="alert" className="mt-3 rounded-xl border border-warning/35 bg-warning/10 p-3">
-              <p className="text-sm leading-relaxed text-foreground/87">{problem.message}</p>
-              {problem.help && (
-                <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-foreground/60">
-                  {problem.help.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
+    <div aria-describedby={problem ? problemId : undefined}>
+      <p className="eyebrow">Type a command</p>
+      <h2 id={headingId} className="mt-2 text-[19px] font-semibold leading-snug tracking-tight text-foreground/87">
+        {problem ? problem.title : 'What would you like to do?'}
+      </h2>
+      {problem && (
+        <div id={problemId} role="alert" className="mt-3 rounded-2xl border border-warning/35 bg-warning/10 p-3.5">
+          <p className="text-sm leading-relaxed text-foreground/87">{problem.message}</p>
+          {problem.help && (
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-foreground/60">
+              {problem.help.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
           )}
-
-          <label htmlFor={inputId} className={`${caption} mt-4 block`}>
-            {problem ? 'Type it instead' : "Type what you'd say"}
-          </label>
-          <textarea
-            ref={inputRef}
-            id={inputId}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            rows={2}
-            maxLength={300}
-            // Straight into typing when it was opened to type; a problem is read first.
-            autoFocus={!problem}
-            disabled={sending}
-            placeholder={examples[0] ? `e.g. ${examples[0]}` : undefined}
-            className="mt-1.5 block min-h-11 w-full resize-none rounded-lg border border-input bg-background/60 p-3 text-sm text-foreground/87 placeholder:text-foreground/38 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
-          />
-          <ExamplePhrases
-            examples={examples}
-            disabled={sending}
-            onPick={(phrase) => {
-              onChange(phrase);
-              inputRef.current?.focus();
-            }}
-          />
-
-          {sending && <VoiceProgress step="understanding" origin="typed" className="mt-4" />}
-
-          <p className="mt-4 text-[11px] leading-relaxed text-foreground/38">
-            What you type goes to Google's Gemini AI service, outside the UAE, to work out what you mean. Nothing changes until you confirm.
-          </p>
-
-          <div className="mt-4 space-y-2">
-            <button
-              type="button"
-              className="btn btn-primary inline-flex h-12 w-full items-center justify-center gap-2 text-base font-semibold"
-              onClick={send}
-              disabled={sending || !value.trim()}
-            >
-              <Send className="h-4 w-4" aria-hidden />
-              {sending ? 'Sending…' : 'Send'}
-            </button>
-            <button type="button" className="btn btn-ghost min-h-11 w-full" onClick={onCancel} disabled={sending}>
-              Cancel
-            </button>
-          </div>
         </div>
-      </div>
+      )}
+
+      <label htmlFor={inputId} className={`${caption} mt-5 block`}>
+        {problem ? 'Type it instead' : "Type what you'd say"}
+      </label>
+      <textarea
+        ref={inputRef}
+        id={inputId}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            send();
+          }
+        }}
+        rows={3}
+        maxLength={300}
+        // Straight into typing when it was opened to type; a problem is read first.
+        autoFocus={!problem}
+        disabled={sending}
+        placeholder={examples[0] ? `e.g. ${examples[0]}` : undefined}
+        className="mt-2 block min-h-11 w-full resize-none rounded-2xl border border-input bg-surface px-4 py-3 text-[17px] leading-relaxed text-foreground/87 placeholder:text-foreground/50 focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+      />
+      {/* Only while the box is empty: once there are words, they are the command. */}
+      {!value.trim() && (
+        <ExamplePhrases
+          examples={examples}
+          disabled={sending}
+          onPick={(phrase) => {
+            onChange(phrase);
+            inputRef.current?.focus();
+          }}
+        />
+      )}
+
+      <p className="mt-4 text-[12px] leading-relaxed text-foreground/60">
+        What you type goes to Google's Gemini AI service, outside the UAE, to work out what you mean. Nothing changes until you confirm.
+      </p>
     </div>
   );
 }

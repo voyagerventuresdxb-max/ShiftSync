@@ -1,4 +1,4 @@
-/*! @license thinking-orbs 0.3.2 (dot geometry) — MIT © 2026 Jakub Antalik — full notice: docs/THIRD_PARTY.md */
+/*! @license thinking-orbs 0.3.2 (dot geometry) — MIT © 2026 Jakub Antalik — full notice: docs/THIRD_PARTY.md, shipped as /third-party-licenses.txt */
 import { useEffect, useRef, type RefObject } from 'react';
 import { MODE_FRAMES, resolvePreset, type ModeOpts, type OrbFrame, type OrbState } from 'thinking-orbs/engine';
 import { scaleCounts, scaleRadii } from 'thinking-orbs';
@@ -278,6 +278,11 @@ export function VoiceOrb({
       current.t += step;
       if (previous) previous.t += (dt / 1000) * shape(previous.state).speed * personality.speed;
       const dots = draw(now);
+      // Development only (the e2e mic-follow test): what the loop did this frame. Stripped from production builds.
+      if (import.meta.env?.DEV) {
+        const probe = (window as unknown as { __voiceOrbProbe?: unknown[] }).__voiceOrbProbe;
+        probe?.push({ t: now, state: current.state, level: smoothed, rate: step / (dt / 1000), ring: l.audio && smoothed > 0.02 ? 0.1 + 0.3 * smoothed : 0 });
+      }
       // Shed dots when frames run slow; let them back slowly when there is room.
       if (ema > SLOW_MS) {
         if (++slowRun > 30) shed(0.8);

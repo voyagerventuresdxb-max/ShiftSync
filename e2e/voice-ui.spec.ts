@@ -97,14 +97,14 @@ async function typeCommand(page: Page, words: string): Promise<void> {
   const box = composer(page);
   await expect(box.getByRole('heading', { name: 'What would you like to do?' })).toBeVisible();
   await box.getByLabel("Type what you'd say").fill(words);
-  await box.getByRole('button', { name: 'Send' }).click();
+  await box.getByRole('button', { name: 'Show preview' }).click();
 }
 
 /** The confirm/answer sheet for a typed command. */
 const sheet = (page: Page) => page.getByRole('dialog').filter({ hasText: 'You typed' });
 
 test.describe('voice UI v2 (voice endpoints stubbed)', () => {
-  test('typed command: the keyboard button beside the mic, then the same preview and Confirm (a split shift, both parts in full)', async ({ page }) => {
+  test('typed command: the keyboard button beside the mic, Show preview, then the same preview and Confirm (a split shift, both parts in full)', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await signIn(page, 'MANAGER');
     const summary = 'Create a split Bartender shift for Alex Example on Friday 9 October.';
@@ -166,7 +166,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await s.getByRole('button', { name: 'Cancel' }).click();
   });
 
-  test('not understood: example phrases for the role fill the box without sending; Try again sends them', async ({ page }) => {
+  test('not understood: example phrases for the role fill the box without sending; Update preview sends them', async ({ page }) => {
     await signIn(page, 'STAFF');
     const calls = await stubVoice(page, {
       parse: [
@@ -184,7 +184,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await expect(s.getByLabel(/You typed/)).toHaveValue('When am I working this week?');
     expect(calls.parse).toHaveLength(1); // filled, not sent
 
-    await s.getByRole('button', { name: 'Try again' }).click();
+    await s.getByRole('button', { name: 'Update preview' }).click();
     await expect(sheet(page).getByRole('heading', { name: 'Your shifts — next 14 days' })).toBeVisible();
     expect(calls.parse[1]).toEqual({ transcript: 'When am I working this week?', source: 'typed' });
   });
@@ -297,7 +297,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await expect(box.getByRole('alert')).toContainText("ShiftSync isn't allowed to use the microphone, so nothing was recorded.");
     await expect(box.getByRole('alert')).toContainText('tap “aA” in the address bar, then Website Settings → Microphone → Allow');
     await box.getByLabel('Type it instead').fill('Book Monday to Wednesday off for a family visit');
-    await box.getByRole('button', { name: 'Send' }).click();
+    await box.getByRole('button', { name: 'Show preview' }).click();
 
     const s = sheet(page);
     await expect(s.locator('.eyebrow')).toHaveText('Time off');
@@ -319,13 +319,13 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await expect(box.getByRole('alert')).toHaveText('Voice needs a connection, so nothing was recorded. Reconnect and try again.');
 
     await box.getByLabel('Type it instead').fill('Announce staff meeting Monday at 3');
-    await box.getByRole('button', { name: 'Send' }).click();
-    await expect(box.getByRole('alert')).toHaveText('Nothing was sent. Reconnect, then send it again — your words are kept below.');
+    await box.getByRole('button', { name: 'Show preview' }).click();
+    await expect(box.getByRole('alert')).toHaveText('Nothing was sent. Reconnect, then tap Show preview again — your words are kept below.');
     await expect(box.getByLabel('Type it instead')).toHaveValue('Announce staff meeting Monday at 3');
     expect(calls.parse).toEqual([]);
 
     await context.setOffline(false);
-    await box.getByRole('button', { name: 'Send' }).click();
+    await box.getByRole('button', { name: 'Show preview' }).click();
     await expect(sheet(page).locator('.eyebrow')).toHaveText('Announcement');
     expect(calls.parse).toEqual([{ transcript: 'Announce staff meeting Monday at 3', source: 'typed' }]);
   });
@@ -384,7 +384,7 @@ test.describe('voice UI v2 (voice endpoints stubbed)', () => {
     await typeCommand(page, 'Any pending requests?');
     const unavailable = page.getByRole('dialog', { name: 'Assistant unavailable' });
     await expect(unavailable.getByRole('alert')).toHaveText("Voice commands aren't available right now — try again later.");
-    await unavailable.getByRole('button', { name: 'Send' }).click();
+    await unavailable.getByRole('button', { name: 'Show preview' }).click();
     const limit = page.getByRole('dialog', { name: 'Limit reached' });
     await expect(limit.getByRole('alert')).toHaveText('Too many requests — please wait a few minutes and try again.');
     await expect(limit.getByLabel('Type it instead')).toHaveValue('Any pending requests?');

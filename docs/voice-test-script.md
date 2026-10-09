@@ -26,16 +26,22 @@ All names below are made up. Use your own test venue's fake staff, never real pe
   approval rows.
 - The first mic tap per person on a phone shows **"Before you use voice"** (what is sent to Google,
   that the recording isn't kept). Tap **Use voice**. Test **Not now** once: nothing is recorded or sent.
-- One tap starts recording, a second tap stops it; it stops by itself after 10 seconds.
+- One tap starts recording, a second tap stops it; it stops by itself after 10 seconds. The voice
+  sheet opens full-screen: the gold orb, one word for the step under it, what was heard (once it
+  is transcribed — there are no live captions), and at the bottom the mic (its ring counts down the
+  10 seconds), the keyboard on the left and **Cancel** on the right. Closing it while recording
+  (the arrow at the top, or **Cancel**) turns the microphone off and sends nothing; closing it
+  while the words are being read lets it step aside, and the sheet comes back with the answer.
 - Every command shows a sheet first: a small label naming the kind of command (e.g. **Shout-out**,
   **New shift**), one sentence saying what will happen, **I heard "…"** (exactly what was heard),
   then a **preview** of the result as the app will show it (a shout-out or announcement as its board
   card, a shift as its rota line, a swap or join as its request line). One big **Confirm**, small
   **Edit** and **Cancel**. Nothing changes until **Confirm**.
-- **Edit** turns *I heard* into a text box; fix the words and tap **Try again**: the edited text is
-  read again (no new recording), and you get a new sheet. **Back** returns to the preview.
+- **Edit** (or tapping the heard words) turns *I heard* into a text box; fix the words and tap
+  **Update preview**: the edited text is read again (no new recording), and you get a new sheet — still
+  nothing changes until **Confirm**. **Back** returns to the preview.
 - A low-confidence or unclear command shows **"Didn't catch that"**, a plain sentence and a hint,
-  *I heard* already open for editing with **Try again**, and no Confirm. No sheet ever says
+  *I heard* already open for editing with **Update preview**, and no Confirm. No sheet ever says
   "supported command" or "intent".
 - Two requests in one breath ("…and also…"): only the first is confirmed, then the sheet says
   *"I heard something else in there too — what's the next thing you'd like me to do?"*.
@@ -63,7 +69,7 @@ banner *"That command needs a manager or owner account."* and no confirm sheet.
 | `APPLY_ROTA_TEMPLATE` | Manager or owner | "Apply the Weekend Standard template to next week." | "Can you, like, use the weekend standard one for next week?" | *Exact:* "Apply template "Weekend Standard" to the week of <Monday> — confirm?" Unclear name: "I'm not sure which saved template you meant — did you mean "…" or "…"? Please say the template name again." | The template's shifts are created as drafts for that week. |
 | `POST_ANNOUNCEMENT` | Manager or owner | "Post an announcement: staff meeting Monday at 3pm in the bar." | "Um, announcement, uh, everyone, staff meeting Monday three pm, at the bar." | A short line ("Post this announcement to the venue") **plus "How it will look": the board's announcement card** with the exact text, filler words removed, nothing added, under your name. | The announcement appears on the venue board exactly as shown in the card. |
 | `POST_SHOUTOUT` | Manager or owner | "Give Alex a shoutout for handling the rush tonight." | "Shoutout to, uh, Alex, amazing job with the rush tonight." | "Give Alex Example a shoutout with this note" **plus "How it will look": the board's shout-out card** (initials, **Alex Example**, the exact note, "<your name> · just now"). | The shoutout appears on the board for Alex, with that note. |
-| `UNRECOGNIZED` | Any signed-in role | "Order more limes." | "Uh, what's the weather like?" | **"Didn't catch that"**, a plain sentence (default *exact:* "I didn't catch what you'd like to do.") and a hint; *I heard* open for editing; **Try again** and **Cancel**. | Nothing changes. |
+| `UNRECOGNIZED` | Any signed-in role | "Order more limes." | "Uh, what's the weather like?" | **"Didn't catch that"**, a plain sentence (default *exact:* "I didn't catch what you'd like to do.") and a hint; *I heard* open for editing; **Update preview** and **Cancel**. | Nothing changes. |
 
 Low confidence (any intent): the sheet shows **"Didn't catch that"**, *exact:* "I'm not sure I got
 that right." and "It sounded like "<sentence>", but I'd rather check than guess. Say it again, or fix
@@ -168,9 +174,9 @@ until **Confirm**.
 | P7 | Manager | "Put Karim on the terrace tomorrow evening." | "Which Karim did you mean?"; each choice previews *Terrace · <date> · PM*. |
 | P8 | Manager | A close misspelling of someone on the team, e.g. "Give Alix a shout-out." (with or without a note) | Either the sheet for Alex Example, or "I couldn't find Alix on your team." with "Did you mean Alex Example?" and **Alex Example** offered: with a note, as a choice that previews the shout-out; without one, as a button that reads "Give Alex Example a shout-out." again (then **Almost there** asks what it should say). Never anyone from another venue. |
 | P9 | Anyone | "Order more limes." | **Didn't catch that**, a plain sentence and a hint (never the same sentence twice), no Confirm. Note the exact words shown: they must read like a person, not a log line. |
-| P10 | Manager | Say "Give Alex a shout-out", then on the sheet tap **Edit**, change the words to "Give Alex a shout-out for the spotless bar", tap **Try again** | A new sheet for the edited words, with the new note in the preview; no new recording. **Back** (while editing) returns to the previous preview unchanged. |
-| P11 | Manager | Say something that isn't understood, then fix the words in the *I heard* box and tap **Try again** | The sheet for the fixed words. In the voice log both commands appear, the first as not understood. |
-| P12 | Manager | "Create a bartender shift for Alex on Friday from 6pm." (no end time) | Either the new-shift sheet with an end you can check, or label **Almost there** with *exact* wording like "I've got a new shift for Alex Morgan on Fri <date> from 18:00 — what time does it end?". Never "I didn't catch what you'd like to do." Add "to 2am" to *I heard* and **Try again**: the new-shift preview. |
+| P10 | Manager | Say "Give Alex a shout-out", then on the sheet tap **Edit**, change the words to "Give Alex a shout-out for the spotless bar", tap **Update preview** | A new sheet for the edited words, with the new note in the preview; no new recording. **Back** (while editing) returns to the previous preview unchanged. |
+| P11 | Manager | Say something that isn't understood, then fix the words in the *I heard* box and tap **Update preview** | The sheet for the fixed words. In the voice log both commands appear, the first as not understood. |
+| P12 | Manager | "Create a bartender shift for Alex on Friday from 6pm." (no end time) | Either the new-shift sheet with an end you can check, or label **Almost there** with *exact* wording like "I've got a new shift for Alex Morgan on Fri <date> from 18:00 — what time does it end?". Never "I didn't catch what you'd like to do." Add "to 2am" to *I heard* and **Update preview**: the new-shift preview. |
 | P13 | Manager | "Put Alex on the bar tomorrow evening." | The section sheet (Bar, tomorrow, PM). If a part is ever dropped: **Almost there** naming Alex Morgan and asking only for the missing part(s). |
 | P14 | Manager | "Put Karim on the terrace tomorrow evening." | **Which Karim did you mean?** with both Karims (each previewing *Terrace · <date> · PM*); if section/day/period were dropped, **Almost there** asking "which Karim (…)" plus the missing parts. |
 
@@ -213,7 +219,7 @@ request (each declined with a link to the right screen).
 1. Wrong or unclear person: "Which one?" or "Pick from your team". Tap the right person;
    nothing changes before Confirm.
 2. Misheard words, or a noisy room: tap the keyboard next to the mic and type the command, or fix
-   the words in "I heard — fix it and try again"; the same preview and Confirm follow.
+   the words in "I heard — fix it, then update the preview"; the same preview and Confirm follow.
 3. Import says "Hard to read — not imported", or many cells to check: upload the original PDF
    export instead of a photo; a repeat import adds no duplicates.
 
@@ -229,20 +235,21 @@ have closed (the app explains the cut-off).
 ## Typing, answers, declines and error states (voice tools v2, phone side)
 
 The keyboard button next to the mic opens **Type a command**: type what you would say and tap
-**Send**. A typed command goes through the same reading, preview and **Confirm** as a spoken one;
+**Show preview**. A typed command goes through the same reading, preview and **Confirm** as a spoken one;
 its sheet says **You typed** instead of *I heard*. While a command runs, its step is written out:
-*Listening… tap the mic to stop*, *Transcribing…*, *Understanding…* (a card just above the mic), then
-*Ready to confirm* or *Here's the answer*, then *Doing it…* on the sheet, then a **Done: …** banner.
-With iPhone **Reduce Motion** on (Settings → Accessibility → Motion), nothing pulses, and the words
-still show. Made-up names as in *Before you start*; dates are spelled out in full (weekday, day,
+*Listening… tap the mic to stop*, *Transcribing…*, *Understanding…* (on the voice sheet: one word
+under the orb, the full step for a screen reader), then *Ready to confirm* or *Here's the answer*,
+then *Doing it…* on the confirm sheet, then a **Done: …** banner. With iPhone **Reduce Motion** on
+(Settings → Accessibility → Motion), the orb is a still image, nothing moves or pulses, the heard
+words appear at once, and the words of each step still show. Made-up names as in *Before you start*; dates are spelled out in full (weekday, day,
 month, year).
 
 | # | Role | Do or say | Expect |
 |---|---|---|---|
-| T1 | Manager | Tap the keyboard button, type "Create a bartender shift for Alex on Friday from 6pm to 2am", **Send** | *Understanding…*, then **New shift** with **You typed "…"**, Alex Example, "Bartender · Friday <date>, 18:00 – 02:00 (ends Saturday)", *Ready to confirm*. **Confirm** → "Done: …" banner. |
-| T2 | Staff | Type "order more limes", **Send** | **Didn't catch that**, the words in the box, and three phrases under **Or try**: "When am I working this week?", "I can't work next Friday", "Request next Monday to Wednesday off". Tap one: it fills the box and nothing is sent. **Try again** sends it. |
+| T1 | Manager | Tap the keyboard button, type "Create a bartender shift for Alex on Friday from 6pm to 2am", **Show preview** | *Understanding…*, then **New shift** with **You typed "…"**, Alex Example, "Bartender · Friday <date>, 18:00 – 02:00 (ends Saturday)", *Ready to confirm*. **Confirm** → "Done: …" banner. |
+| T2 | Staff | Type "order more limes", **Show preview** | **Didn't catch that**, the words in the box, and three phrases under **Or try**: "When am I working this week?", "I can't work next Friday", "Request next Monday to Wednesday off". Tap one: it fills the box and nothing is sent. **Update preview** sends it. |
 | T3 | Manager | Same as T2 | The phrases are the manager's: "Who's working tonight?", "Add an open bartender shift tomorrow 6pm to 2am", "Any pending requests?" |
-| T4 | Anyone | Say any command | *Listening…*, *Transcribing…* and *Understanding…* each show as words above the mic before the sheet. |
+| T4 | Anyone | Say any command | *Listening*, *Transcribing* and *Understanding* each show under the orb (the orb changes with them) before the confirm sheet. |
 | R1 | Manager | "Who's working tonight?" | Label **Who's working**; a title with tonight's full date; one row per person (name, then role, then times); a single **Done**; no Confirm. Nothing changes. |
 | R2 | Manager | "Who's on the terrace tonight?" | Label **Sections**; one row per person on Terrace, or the empty sentence if nobody is. **Done** only. |
 | R3 | Staff | "Any pending requests?" | Label **Requests**; only this person's own requests. **Done** only. |
@@ -256,12 +263,24 @@ month, year).
 | O1 | Staff | "Book next Monday to Wednesday off" | Label **Time off**; "Time off · 3 days"; "From Monday <date> to Wednesday <date>"; the reason if one was said. |
 | S1 | Manager | "Add a split shift for Sam on Saturday, 11 to 3 and 6 to 11" | **New shift**; "Split shift, two parts", then "1st: Saturday <date>, 11:00 – 15:00" and "2nd: Saturday <date>, 18:00 – 23:00". One **Confirm** creates both. |
 | E1 | Anyone | Safari → **aA** → Website Settings → Microphone → **Deny**; tap the mic | Box **Microphone is off** with how to turn it back on (aA → Website Settings → Microphone → Allow, or Settings → Apps → Safari → Microphone). Type the command in **Type it instead**: it works. Then allow the microphone again with those steps. |
-| E2 | Anyone | Airplane mode on; tap the mic | Box **You're offline**: "Voice needs a connection, so nothing was recorded. Reconnect and try again." Type something, **Send**: "Nothing was sent. Reconnect, then send it again — your words are kept below." Airplane mode off, **Send**: the sheet appears. |
+| E2 | Anyone | Airplane mode on; tap the mic | Box **You're offline**: "Voice needs a connection, so nothing was recorded. Reconnect and try again." Type something, **Show preview**: "Nothing was sent. Reconnect, then tap Show preview again — your words are kept below." Airplane mode off, **Show preview**: the sheet appears. |
 | E3 | Manager | Get any preview, airplane mode on, tap **Confirm** | The sheet stays open with **You're offline**: "Nothing was sent and nothing changed. Reconnect, then tap Confirm again." Reconnect and **Confirm**: done once, not twice. |
 | E4 | Anyone | On a slow connection (or a dev build with `window.__shiftsyncVoiceTimeoutMs = 1000` set in the console), send a command | After 25 seconds (1 s on the dev setting): box **Taking too long**: "The assistant didn't answer within 25 seconds, so I stopped waiting. Nothing changed. Try again, or type it below." The words are kept. |
 | E4b | Manager | Get any preview, then make **Confirm** slow (very weak signal, or the dev setting above) | The sheet stays open with **Taking too long**: "No answer after 25 seconds. It may still have gone through — check before you confirm again." Tap **Confirm** again: "Done: …", and the change exists once, never twice. |
 | E5 | Anyone | Non-production with no AI key; send a typed command | Box **Assistant unavailable** with the server's sentence (see the table above). |
 | E6 | Anyone | More than 30 commands in 5 minutes, or a spent daily limit | Box **Limit reached** with the server's sentence. |
+
+## The voice sheet (run 15)
+
+| # | Do | Expect |
+|---|---|---|
+| V1 | Tap the mic, say a command, tap the mic again | Orb: a slow ring (starting), a dotted sphere whose speed and fine outer ring follow your voice (listening), orbits (transcribing), a connected web (understanding); the heard words appear word by word, then the confirm sheet rises and the orb becomes a small calm ring above it. |
+| V2 | Tap the mic, then the top arrow (or **Cancel**) while still recording | The sheet closes, the phone's microphone indicator goes off, and nothing is sent (no transcript, nothing in the voice log). |
+| V3 | Say a command, then close the sheet while it shows *Transcribing* | The sheet steps aside, the dock's mic spins; the confirm sheet comes back on its own with the answer. |
+| V4 | On any preview, tap the heard words (or **Edit**), change them, **Update preview** | The same reading again from the edited words, no recording; a new preview; nothing changes before **Confirm**. |
+| V5 | "Which one?" (two people with the same first name) | The orb is small and dim; each person is a card with full name and role; no Confirm until one is chosen. |
+| V6 | Microphone denied, airplane mode, or a timeout | A still, dim orb, the problem in plain words, and the typed box on the same sheet; **Show preview** goes on to the same Confirm. |
+| V7 | iPhone **Reduce Motion** on, then V1 | The orb is a still image in every step; the heard words appear at once; nothing slides. |
 
 ## Results log
 

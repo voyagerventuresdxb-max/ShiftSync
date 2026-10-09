@@ -19,6 +19,8 @@ export type OrbPhase =
   | 'confirm'
   /** "Which one?": people or readings to pick from. */
   | 'choose'
+  /** Edited words being read again ("Update preview") while the sheet stays up. */
+  | 'rereading'
   /** Confirm was tapped and the change is being made. */
   | 'sending'
   /** Didn't catch that, not by voice: a still, dim orb above the sheet. */
@@ -50,6 +52,7 @@ const LOOKS: Record<OrbPhase, OrbLook> = {
   understanding: { state: 'connecting', alpha: 1, animate: true, speed: 1, audio: false, scale: 1 },
   confirm: { state: 'breathing', alpha: 1, animate: true, speed: 0.7, audio: false, scale: SMALL },
   choose: { state: 'breathing', alpha: 0.55, animate: true, speed: 0.6, audio: false, scale: SMALL },
+  rereading: { state: 'connecting', alpha: 1, animate: true, speed: 1, audio: false, scale: SMALL },
   sending: { state: 'composing', alpha: 1, animate: true, speed: 1, audio: false, scale: SMALL },
   unclear: { state: 'breathing', alpha: 0.38, animate: false, speed: 0, audio: false, scale: SMALL },
   problem: { state: 'breathing', alpha: 0.38, animate: false, speed: 0, audio: false, scale: 1 },
