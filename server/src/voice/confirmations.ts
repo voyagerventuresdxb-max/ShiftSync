@@ -8,7 +8,8 @@ import { prisma } from '../lib/prisma.js';
  *  - the same key again (a double tap, a retry after a timeout) gets the stored answer, and
  *    nothing is done twice;
  *  - while the first is still running, or when its outcome is unknown (the server stopped half
- *    way), a retry is refused with "check before confirming again", never run;
+ *    way), a retry is refused ("I couldn't confirm whether that went through. Check the schedule,
+ *    then preview it again"), never run;
  *  - a Confirm that was refused before anything changed (FAILED) may be tried again;
  *  - a key someone else (another person or venue) already used is refused.
  * Keys expire after 24 hours and are swept.
@@ -29,8 +30,21 @@ export type Claim =
   | { kind: 'replay'; status: number; body: Prisma.JsonValue }
   | { kind: 'refused'; status: number; body: { error: string; errorCode: string } };
 
-const IN_PROGRESS = { error: 'That command is already being done. Check the screen before confirming again.', errorCode: 'voice_confirm_in_progress' };
-const UNKNOWN = { error: 'That command may already have gone through. Check the screen before confirming again.', errorCode: 'voice_confirm_unknown' };
+/** Where the person can see for themselves whether a command went through. */
+function whereToCheck(intent: string): string {
+  if (intent === 'POST_ANNOUNCEMENT') return 'the announcements';
+  if (intent === 'POST_SHOUTOUT') return 'the shout-outs';
+  if (intent === 'APPROVE_JOIN' || intent === 'DECLINE_JOIN') return 'the join requests in People';
+  return 'the schedule';
+}
+const inProgress = (intent: string) => ({
+  error: `That's still going through. Check ${whereToCheck(intent)} in a moment, then preview it again if it's still needed.`,
+  errorCode: 'voice_confirm_in_progress',
+});
+const unknown = (intent: string) => ({
+  error: `I couldn't confirm whether that went through. Check ${whereToCheck(intent)}, then preview it again if it's still needed.`,
+  errorCode: 'voice_confirm_unknown',
+});
 const NOT_YOURS = { error: 'That confirmation belongs to someone else.', errorCode: 'voice_key_conflict' };
 
 let lastSweep = 0;
@@ -42,17 +56,17 @@ export async function sweepExpiredConfirmations(now = new Date()): Promise<numbe
   return count;
 }
 
-type Row = { id: string; locationId: string; userId: string; status: string; responseStatus: number | null; responseBody: Prisma.JsonValue | null; updatedAt: Date };
+type Row = { id: string; locationId: string; userId: string; intent: string; status: string; responseStatus: number | null; responseBody: Prisma.JsonValue | null; updatedAt: Date };
 
 async function fromExisting(row: Row, owner: { locationId: string; userId: string }, now: Date): Promise<Claim> {
   if (row.locationId !== owner.locationId || row.userId !== owner.userId) return { kind: 'refused', status: 409, body: NOT_YOURS };
   if (row.status === 'DONE') return { kind: 'replay', status: row.responseStatus ?? 200, body: row.responseBody };
   if (row.status === 'PENDING') {
-    return { kind: 'refused', status: 409, body: now.getTime() - row.updatedAt.getTime() > STALE_PENDING_MS ? UNKNOWN : IN_PROGRESS };
+    return { kind: 'refused', status: 409, body: now.getTime() - row.updatedAt.getTime() > STALE_PENDING_MS ? unknown(row.intent) : inProgress(row.intent) };
   }
   // FAILED: refused before anything changed; this attempt takes the key over, if no one else did.
   const { count } = await prisma.voiceConfirmation.updateMany({ where: { id: row.id, status: 'FAILED' }, data: { status: 'PENDING' } });
-  return count === 1 ? { kind: 'claimed', id: row.id } : { kind: 'refused', status: 409, body: IN_PROGRESS };
+  return count === 1 ? { kind: 'claimed', id: row.id } : { kind: 'refused', status: 409, body: inProgress(row.intent) };
 }
 
 export async function claimConfirmation(input: { key: string; locationId: string; userId: string; intent: string }, now = new Date()): Promise<Claim> {

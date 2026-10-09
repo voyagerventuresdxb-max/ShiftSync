@@ -195,6 +195,30 @@ test('F2 a Confirm refused before anything changed can be tried again with the s
   assert.equal(await shoutouts(), before + 1);
 });
 
+test('F2 a key still running, or whose outcome is unknown, is refused with a clear message and nothing runs', async () => {
+  const before = await shoutouts();
+  const running = key('running');
+  await prisma.voiceConfirmation.create({
+    data: { key: running, locationId: fx.locationId, userId: fx.users.hannah, intent: 'POST_SHOUTOUT', status: 'PENDING', expiresAt: new Date(Date.now() + 60_000) },
+  });
+  const busy = await execute(fx.users.hannah, shout('Still running'), { idempotencyKey: running });
+  assert.equal(busy.status, 409, JSON.stringify(busy.body));
+  assert.equal(busy.body.errorCode, 'voice_confirm_in_progress');
+  assert.match(String(busy.body.error), /still going through\. Check the shout-outs in a moment, then preview it again/);
+
+  // The server stopped half way (a claim with no answer for over 2 minutes): its outcome is unknown.
+  const stale = key('unknown');
+  await prisma.voiceConfirmation.create({
+    data: { key: stale, locationId: fx.locationId, userId: fx.users.hannah, intent: 'CREATE_SHIFT', status: 'PENDING', expiresAt: new Date(Date.now() + 60_000) },
+  });
+  await prisma.$executeRaw`UPDATE voice_confirmations SET updated_at = now() - interval '5 minutes' WHERE key = ${stale}`;
+  const unknown = await execute(fx.users.hannah, shout('Unknown outcome'), { idempotencyKey: stale });
+  assert.equal(unknown.status, 409, JSON.stringify(unknown.body));
+  assert.equal(unknown.body.errorCode, 'voice_confirm_unknown');
+  assert.equal(unknown.body.error, "I couldn't confirm whether that went through. Check the schedule, then preview it again if it's still needed.");
+  assert.equal(await shoutouts(), before);
+});
+
 test('F2 keys expire after 24 hours and are swept', async () => {
   const k = key('expired');
   await prisma.voiceConfirmation.create({

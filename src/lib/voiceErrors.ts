@@ -140,6 +140,9 @@ export function requestProblem(err: unknown, { stage, online }: { stage: VoiceSt
     if (err.status === 422 && err.errorCode === 'voice_no_speech') {
       return { kind: 'no_speech', title: "Didn't hear a command", message: err.message };
     }
+    // The same Confirm again, but the first one may have gone through: never "Didn't go through".
+    if (err.errorCode === 'voice_confirm_unknown') return { kind: 'failed', title: 'Not sure it went through', message: err.message };
+    if (err.errorCode === 'voice_confirm_in_progress') return { kind: 'failed', title: 'Still going through', message: err.message };
     return { kind: 'failed', title: stage === 'execute' ? "Didn't go through" : "Couldn't read that", message: err.message };
   }
   return {

@@ -88,3 +88,12 @@ test('a recording refused before any model call says so plainly; a changed previ
   assert.equal(previewChanged(new ApiError('Already done.', 409, undefined, 'voice_already_executed')), false);
   assert.equal(alreadyDone(new ApiError('Things changed.', 409, undefined, 'voice_preview_changed')), false);
 });
+
+test('a Confirm whose outcome is unknown, or still running, is never called "Didn\'t go through"', () => {
+  const said = "I couldn't confirm whether that went through. Check the schedule, then preview it again if it's still needed.";
+  const unknown = requestProblem(new ApiError(said, 409, undefined, 'voice_confirm_unknown'), { stage: 'execute', online: true });
+  assert.equal(unknown.title, 'Not sure it went through');
+  assert.equal(unknown.message, said);
+  const running = requestProblem(new ApiError("That's still going through.", 409, undefined, 'voice_confirm_in_progress'), { stage: 'execute', online: true });
+  assert.equal(running.title, 'Still going through');
+});
