@@ -114,14 +114,24 @@ export default function PolicyDocuments({ locationId, isManager }: { locationId:
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
-          <input type="file" accept="application/pdf" className="max-w-full" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          {/* The CSS reset strips the browser's own file button down to plain text, so it is styled here as a real button. */}
+          <input
+            type="file"
+            accept="application/pdf"
+            aria-label="Choose a PDF document"
+            className="max-w-full text-sm text-foreground/60 file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-lg file:border file:border-border file:bg-foreground/5 file:px-4 file:text-sm file:font-medium file:text-foreground hover:file:border-foreground/30"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
           <button
-            className="btn btn-primary"
+            className="btn btn-primary inline-flex min-h-11 items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => void handleUpload()}
             disabled={uploading || !file || !category.trim() || !title.trim()}
           >
-            <Upload className="h-4 w-4" /> Upload
+            <Upload className="h-4 w-4" aria-hidden /> {uploading ? 'Uploading…' : 'Upload'}
           </button>
+          {!uploading && (!file || !category.trim() || !title.trim()) && (
+            <p className="hint w-full">PDF only. Add a category and a title, choose the file, then Upload.</p>
+          )}
         </div>
       )}
 
