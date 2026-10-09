@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { selfOnlyNamesOther, weekdayMismatch } from './parseIntent.js';
+import { namedForSomeone } from './people.js';
 import { buildSystemPrompt, calendarDay } from './prompts.js';
 import type { ParsedIntent } from './intentSchema.js';
 
@@ -53,4 +54,34 @@ test('time off and availability for yourself are untouched, even when you say yo
   assert.equal(selfOnlyNamesOther(timeOff, 'This is Hannah, I need Friday off.', team, 'me'), null);
   assert.equal(selfOnlyNamesOther(unavailable, 'Mark me unavailable on Friday', team, 'me'), null);
   assert.equal(selfOnlyNamesOther({ intent: 'POST_SHOUTOUT', targetUserId: 'omar', targetUserName: 'Omar', content: 'x', confidence: 0.9, summary: 's' }, 'Give Omar a shout-out', team, 'me'), null);
+});
+
+test('F8: a name nobody on the team has, in time off or availability, is asked about, never booked as the caller\'s own', () => {
+  const r = selfOnlyNamesOther(timeOff, 'Give Zebulon next Friday off.', team, 'me');
+  assert.ok(r && r.intent === 'UNRECOGNIZED');
+  assert.equal(r.summary, "I couldn't find Zebulon on your team.");
+  assert.match(r.reason ?? '', /^Who did you mean\?/);
+  assert.deepEqual(r.person, { heard: 'Zebulon', status: 'missing' });
+  for (const said of ['Zebulon needs next Friday off', 'Time off for Zebulon next Friday', "Book Zebulon's day off on Friday"]) {
+    assert.equal(selfOnlyNamesOther(timeOff, said, team, 'me')?.summary, "I couldn't find Zebulon on your team.", said);
+  }
+  assert.equal(selfOnlyNamesOther(unavailable, 'Mark Zebulon unavailable on Friday', team, 'me')?.summary, "I couldn't find Zebulon on your team.");
+});
+
+test('F8: a close name is offered to read again ("Alix" → Alex Morgan)', () => {
+  const r = selfOnlyNamesOther(timeOff, 'Give Alix next Friday off.', team, 'me');
+  assert.ok(r && r.intent === 'UNRECOGNIZED');
+  assert.equal(r.summary, "I couldn't find Alix on your team.");
+  assert.match(r.reason ?? '', /^Did you mean Alex Morgan\?/);
+  assert.deepEqual(r.retry, [{ person: 'Alex Morgan', text: 'Give Alex Morgan next Friday off.' }]);
+});
+
+test('F8: the words that only sit where a name would are not names; the venue\'s own words are not either', () => {
+  for (const said of ['Give me next Friday off', 'Book next Friday off', 'Mark Friday as unavailable', 'I need Friday off', "I'm off on Friday", 'Give myself the day off', 'Put in for Eid off', 'Give her next Friday off']) {
+    assert.deepEqual(namedForSomeone(said), [], said);
+  }
+  assert.deepEqual(namedForSomeone('Create a Bartender shift on Friday for Zebulon', ['Bartender']), ['Zebulon']);
+  assert.deepEqual(namedForSomeone('Schedule Bartender Friday 6 to 2', ['Bartender']), []);
+  assert.deepEqual(namedForSomeone('Create a shift for Terrace on Friday', ['Terrace']), []);
+  assert.deepEqual(namedForSomeone('time off for zebulon on friday'), ['zebulon']);
 });

@@ -212,6 +212,48 @@ export function missingPerson(
   return { intent: 'UNRECOGNIZED', summary: `I couldn't find ${who} on your team.`, reason, person: { heard, status: 'missing' }, ...(retry.length ? { retry } : {}) };
 }
 
+export const OWN_DAYS_ONLY = "To change someone else's days, use the rota. By voice, time off and availability are for your own days only.";
+
+/**
+ * Time off and availability are always the caller's own, so a reading of one that names someone
+ * else would book the caller's days, not theirs: it is asked, never offered. Each name said (the
+ * model's `person`, or a name in the words) is looked up on the caller's team: their own name is
+ * fine; a teammate is "not Omar's"; nobody by that name is "I couldn't find Zebulon on your team",
+ * asking who they meant, with close names to read again. Null when nobody else is named.
+ */
+export function someoneElsesDays(names: string[], staff: StaffEntry[], callerId: string, transcript: string): Unrecognized | null {
+  for (const heard of names) {
+    const n = normalizeName(heard);
+    if (!n || n === 'me' || n === 'myself' || n === 'i') continue;
+    const found = resolvePerson(heard, null, staff, transcript, callerId);
+    if (found.kind === 'unknown' || (found.kind === 'one' && found.person.id === callerId)) continue;
+    if (found.kind === 'missing') {
+      const said = saidAloud(found.heard, transcript) ? found.heard : '';
+      const near = found.near.map((p) => p.fullName);
+      const retry = said ? near.map((person) => ({ person, text: withName(transcript, said, person) })).filter((r) => r.text !== transcript) : [];
+      return {
+        intent: 'UNRECOGNIZED',
+        summary: `I couldn't find ${said || 'that person'} on your team.`,
+        reason: near.length
+          ? `Did you mean ${near.join(' or ')}? By voice, time off and availability are for your own days only; for someone else's, use the rota.`
+          : 'Who did you mean? By voice, time off and availability are for your own days only: say "me" for yours, or use the rota for someone else\'s.',
+        person: { heard: said, status: 'missing' },
+        ...(retry.length ? { retry } : {}),
+      };
+    }
+    const who = found.kind === 'one' ? found.person.fullName.split(/\s+/)[0]! : found.heard;
+    return clarify(OWN_DAYS_ONLY, `That would book your own days off, not ${who}'s.`);
+  }
+  return null;
+}
+
+/** The venue's own words (sections, roles, templates): never taken for a person's name. */
+export const venueWords = (ctx: VenueContext): string[] => [
+  ...(ctx.floorSections ?? []).map((s) => s.label),
+  ...(ctx.roles ?? []).map((r) => r.name),
+  ...(ctx.rotaTemplates ?? []).map((t) => t.name),
+];
+
 // ---------------------------------------------------------------------------
 // Looking things up in the caller's venue
 // ---------------------------------------------------------------------------
@@ -441,11 +483,15 @@ export async function resolveToolCall(call: ToolCall, ctx: VenueContext, caller:
     }
 
     case 'MARK_AVAILABILITY': {
+      const elses = someoneElsesDays(person ? [person] : [], staffEntries(ctx), caller.id, transcript);
+      if (elses) return final(elses);
       const missing = missingOf(call, ['day', 'availability']);
       if (missing.length) return final(askFor(call.tool, missing, call, ctx, caller, transcript));
       return one({ intent: 'MARK_AVAILABILITY', date: a.day!, type: a.availability as 'UNAVAILABLE' | 'PREFERRED_OFF', ...base });
     }
     case 'REQUEST_TIME_OFF': {
+      const elses = someoneElsesDays(person ? [person] : [], staffEntries(ctx), caller.id, transcript);
+      if (elses) return final(elses);
       if (!day(a.day)) return final(askFor(call.tool, ['day'], call, ctx, caller, transcript));
       const startDate = a.day!;
       const endDate = day(a.endDay) ?? startDate;
