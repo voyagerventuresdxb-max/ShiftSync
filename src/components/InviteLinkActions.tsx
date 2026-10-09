@@ -22,7 +22,7 @@ const PANEL: Record<Part, { className: string; style?: CSSProperties }> = {
 const obButton: CSSProperties = {
   padding: '11px 14px',
   borderRadius: 10,
-  border: '1px solid rgba(239,234,224,.12)',
+  border: '1px solid color-mix(in srgb, var(--bone) 12%, transparent)',
   color: 'var(--ob-stone)',
   font: "500 10.5px/1 'Manrope'",
   letterSpacing: '.06em',
@@ -32,15 +32,15 @@ const obButton: CSSProperties = {
 const ONBOARDING: Record<Part, { className: string; style?: CSSProperties }> = {
   meta: { className: '', style: { font: "500 11px/1.4 'Manrope'", letterSpacing: '.02em', color: 'var(--ob-bronze)' } },
   text: { className: '', style: { font: "400 11.5px/1.5 'Manrope'", color: 'var(--ob-stone)' } },
-  error: { className: '', style: { font: "400 12px/1.5 'Manrope'", color: '#e5484d' } },
+  error: { className: '', style: { font: "400 12px/1.5 'Manrope'", color: 'var(--danger)' } },
   label: { className: '', style: { font: "500 9px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' } },
   field: {
     className: '',
-    style: { padding: '9px 10px', borderRadius: 9, border: '1px solid rgba(239,234,224,.12)', background: 'rgba(5,4,3,.55)', color: 'var(--ob-bone)', font: "500 12px/1.2 'Manrope'" },
+    style: { padding: '9px 10px', borderRadius: 9, border: '1px solid color-mix(in srgb, var(--bone) 12%, transparent)', background: 'color-mix(in srgb, var(--void) 55%, transparent)', color: 'var(--ob-bone)', font: "500 12px/1.2 'Manrope'" },
   },
   button: { className: 'hit-44', style: obButton },
-  primary: { className: 'hit-44', style: { ...obButton, border: '1px solid rgba(201,166,107,.6)', color: 'var(--ob-champagne)', background: 'rgba(201,166,107,.08)' } },
-  danger: { className: 'hit-44', style: { ...obButton, border: '1px solid rgba(229,72,77,.5)', color: '#e5484d' } },
+  primary: { className: 'hit-44', style: { ...obButton, border: '1px solid color-mix(in srgb, var(--champagne) 60%, transparent)', color: 'var(--ob-champagne)', background: 'color-mix(in srgb, var(--champagne) 8%, transparent)' } },
+  danger: { className: 'hit-44', style: { ...obButton, border: '1px solid color-mix(in srgb, var(--danger) 50%, transparent)', color: 'var(--danger)' } },
 };
 
 /**

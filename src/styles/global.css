@@ -1,14 +1,4 @@
-:root {
-  --bg: #0f0f12;
-  --surface: #1a1a22;
-  --surface-2: #1e1e28;
-  --border: #2a2a36;
-  --text: #e0e0e0;
-  --text-secondary: #9ca3af;
-  --accent: #e5a93c;
-  --danger: #e5484d;
-  --success: #2e9e5b;
-}
+/* Colours: src/styles/tokens.css (imported first) is the only place they are defined. */
 
 * {
   box-sizing: border-box;
@@ -54,11 +44,39 @@ body,
   min-height: 100dvh;
 }
 
+/* html too, not only body: iOS rubber-band overscroll and the strip behind the keyboard show
+   the root's background, so it must never fall back to the browser's white. */
+html,
 body {
   background: var(--bg);
+}
+
+body {
   color: var(--text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Native controls take the palette: gold caret, checkboxes and selection; quiet scrollbars. */
+:root {
+  accent-color: var(--accent);
+  caret-color: var(--accent);
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--text);
+}
+
+/* Browser autofill must not repaint a field blue or yellow: keep the field's own background
+   (the transition never visibly starts) and the app's text colour. */
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--accent);
+  transition: background-color 600000s 0s;
 }
 
 .roster {
@@ -155,18 +173,18 @@ body {
 }
 
 .cell.shift.bar {
-  background: #3a2f1f;
-  color: #e5c98a;
+  background: var(--chip-gold-bg);
+  color: var(--chip-gold-fg);
 }
 
 .cell.shift.kitchen {
-  background: #2a2f24;
-  color: #a8c98a;
+  background: var(--chip-sage-bg);
+  color: var(--chip-sage-fg);
 }
 
 .cell.shift.service {
-  background: #24303a;
-  color: #8ab8e5;
+  background: var(--chip-clay-bg);
+  color: var(--chip-clay-fg);
 }
 
 .cell.shift.other {
@@ -211,11 +229,11 @@ body {
 }
 
 .roster-section-head-warn {
-  border-color: #d9a441;
+  border-color: var(--warning);
 }
 
 .roster-section-head-warn .section-label {
-  color: #d9a441;
+  color: var(--warning);
 }
 
 .section-caret {
@@ -288,7 +306,7 @@ body {
 .dropzone:hover,
 .dropzone-active {
   border-color: var(--accent);
-  background: rgba(229, 169, 60, 0.05);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
 .dropzone-icon {
@@ -343,7 +361,7 @@ body {
 
 .error-block {
   border: 1px solid var(--danger);
-  background: rgba(229, 72, 77, 0.08);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   border-radius: 10px;
   padding: 1rem;
   color: var(--danger);
@@ -357,14 +375,14 @@ body {
    manager immediately understands the preview lapsed and must re-upload. */
 .error-block-toast {
   border-color: var(--accent);
-  background: rgba(229, 169, 60, 0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--shadow) 35%, transparent);
 }
 
 .success-block {
   border: 1px solid var(--success);
-  background: rgba(46, 158, 91, 0.08);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
   border-radius: 10px;
   padding: 1rem;
   color: var(--text);
@@ -398,13 +416,13 @@ body {
 /* Disabled looks disabled: dimmer, no hover or press feedback (the press scale above already skips
    :disabled), a not-allowed cursor. Opacity only, so the text stays readable and nothing moves. */
 .btn:disabled {
-  opacity: 0.5;
+  opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
 
 .btn-primary {
   background: var(--accent);
-  color: #1a1a22;
+  color: var(--accent-foreground);
 }
 
 .btn-ghost {
@@ -419,8 +437,8 @@ body {
 }
 
 .badge-warn {
-  color: #d9a441;
-  border-color: #d9a441;
+  color: var(--warning);
+  border-color: var(--warning);
 }
 
 .chip {
@@ -476,7 +494,7 @@ body {
 }
 
 .preview-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--bone) 2%, transparent);
 }
 
 .cell-num {
@@ -557,7 +575,7 @@ select.app-select {
   appearance: none;
   color-scheme: dark;
   padding-right: 2rem;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23e0e0e0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23efeae0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.65rem center;
   background-size: 0.75rem;
@@ -646,7 +664,7 @@ select.app-select {
 .fp-picker-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: color-mix(in srgb, var(--shadow) 55%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;

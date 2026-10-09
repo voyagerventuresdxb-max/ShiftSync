@@ -80,3 +80,6 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
 28. [ ] **Make the confirm-key claim transactional for every Confirm action.** Today the voice
     Confirm key is claimed in its own write just before the change (accepted in run 17): a
     command whose outcome is unknown is refused, never repeated.
+29. [ ] **App icon on Android:** the launcher icon is still the Capacitor placeholder (blue on white); it
+    needs the ShiftSync icon artwork. The splash and window background already use the warm page
+    colour ([`color-evidence.md`](color-evidence.md)).

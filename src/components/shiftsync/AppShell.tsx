@@ -664,11 +664,14 @@ export function AppShell() {
 
       {voiceBanner && (
         <div className="fixed inset-x-0 bottom-24 z-40 mx-auto w-full max-w-sm px-4">
-          <div className={voiceBanner.kind === 'error' ? 'error-block' : 'success-block'} role={voiceBanner.kind === 'error' ? 'alert' : 'status'}>
-            <p>{voiceBanner.message}</p>
-            <button className="btn btn-ghost" onClick={() => setVoiceBanner(null)}>
-              Dismiss
-            </button>
+          {/* Opaque raised surface under the block's light tint, so page text never shows through. */}
+          <div className="rounded-[10px] bg-surface-raised shadow-lux">
+            <div className={voiceBanner.kind === 'error' ? 'error-block' : 'success-block'} role={voiceBanner.kind === 'error' ? 'alert' : 'status'}>
+              <p>{voiceBanner.message}</p>
+              <button className="btn btn-ghost" onClick={() => setVoiceBanner(null)}>
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}

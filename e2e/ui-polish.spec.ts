@@ -49,8 +49,8 @@ test("the join link's Expires after picker uses the app's surface and text colou
     return { appearance: c.appearance || c.webkitAppearance, background: c.backgroundColor, color: c.color, scheme: c.colorScheme, chevron: c.backgroundImage.includes('svg') };
   });
   expect(s.appearance).toBe('none');
-  expect(s.background).toBe('rgb(30, 30, 40)');
-  expect(s.color).toBe('rgb(224, 224, 224)');
+  expect(s.background).toBe('rgb(30, 25, 19)'); // --surface-2
+  expect(s.color).toBe('rgb(239, 234, 224)'); // --text
   expect(s.scheme).toBe('dark');
   expect(s.chevron).toBe(true);
   // Still a real select: picking another value works (an iPhone opens its own picker on tap).

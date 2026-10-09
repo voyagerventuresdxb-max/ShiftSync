@@ -13,10 +13,14 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Shown before the web view paints: the page colour, never white (colors.xml). -->
+        <item name="android:windowBackground">@color/shell_background</item>
     </style>
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- Plain page colour instead of the white placeholder splash image (drawable/splash.png, now unused). -->
+        <item name="android:background">@color/shell_background</item>
+        <item name="windowSplashScreenBackground">@color/shell_background</item>
     </style>
 </resources>

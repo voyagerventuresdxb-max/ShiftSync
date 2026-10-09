@@ -169,8 +169,8 @@ export default function RosterScreen({
               width: '100%',
               padding: '16px 20px',
               borderRadius: 14,
-              background: ready ? 'var(--ob-bone)' : 'rgba(239,234,224,.10)',
-              color: ready ? '#100D0A' : 'var(--ob-dim-2)',
+              background: ready ? 'var(--ob-bone)' : 'color-mix(in srgb, var(--bone) 10%, transparent)',
+              color: ready ? 'var(--ink-cta)' : 'var(--ob-dim-2)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
               transition: 'background-color var(--ob-t), color var(--ob-t)',
@@ -231,8 +231,8 @@ export default function RosterScreen({
           gap: 14,
           padding: fileZoneFilled ? '16px 16px' : '22px 20px',
           borderRadius: 16,
-          border: `1px ${fileZoneFilled ? 'solid rgba(201,166,107,.6)' : 'dashed rgba(201,166,107,.28)'}`,
-          background: fileZoneFilled ? 'rgba(201,166,107,.07)' : 'rgba(239,234,224,.02)',
+          border: `1px ${fileZoneFilled ? 'solid color-mix(in srgb, var(--champagne) 60%, transparent)' : 'dashed color-mix(in srgb, var(--champagne) 28%, transparent)'}`,
+          background: fileZoneFilled ? 'color-mix(in srgb, var(--champagne) 7%, transparent)' : 'color-mix(in srgb, var(--bone) 2%, transparent)',
           transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
           textAlign: 'left',
           justifyContent: fileZoneFilled ? 'flex-start' : 'center',
@@ -249,7 +249,7 @@ export default function RosterScreen({
                     width: 44,
                     height: 52,
                     borderRadius: 8,
-                    border: '1px solid rgba(201,166,107,.35)',
+                    border: '1px solid color-mix(in srgb, var(--champagne) 35%, transparent)',
                     display: 'flex',
                     alignItems: 'flex-end',
                     justifyContent: 'center',
@@ -257,7 +257,7 @@ export default function RosterScreen({
                     font: "600 9px/1 'Manrope'",
                     letterSpacing: '.08em',
                     color: 'var(--ob-champagne)',
-                    background: 'rgba(201,166,107,.05)',
+                    background: 'color-mix(in srgb, var(--champagne) 5%, transparent)',
                     transform: i === 1 ? 'translateY(-6px)' : undefined,
                   }}
                 >
@@ -281,7 +281,7 @@ export default function RosterScreen({
                 width: 44,
                 height: 52,
                 borderRadius: 8,
-                border: '1px solid rgba(201,166,107,.6)',
+                border: '1px solid color-mix(in srgb, var(--champagne) 60%, transparent)',
                 display: 'flex',
                 alignItems: 'flex-end',
                 justifyContent: 'center',
@@ -289,7 +289,7 @@ export default function RosterScreen({
                 font: "600 9px/1 'Manrope'",
                 letterSpacing: '.08em',
                 color: 'var(--ob-champagne)',
-                background: 'rgba(201,166,107,.10)',
+                background: 'color-mix(in srgb, var(--champagne) 10%, transparent)',
                 flexShrink: 0,
               }}
             >
@@ -309,7 +309,7 @@ export default function RosterScreen({
                 e.stopPropagation();
                 clear();
               }}
-              style={{ width: 32, height: 32, borderRadius: 9, border: '1px solid rgba(239,234,224,.10)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ob-bronze)', flexShrink: 0 }}
+              style={{ width: 32, height: 32, borderRadius: 9, border: '1px solid color-mix(in srgb, var(--bone) 10%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ob-bronze)', flexShrink: 0 }}
             >
               <svg width={12} height={12} viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.1} strokeLinecap="round">
                 <path d="M3 3l6 6M9 3l-6 6" />
@@ -348,14 +348,14 @@ export default function RosterScreen({
           gap: 14,
           padding: '14px 16px',
           borderRadius: 16,
-          border: `1px ${photoZoneFilled ? 'solid rgba(201,166,107,.6)' : 'dashed rgba(201,166,107,.28)'}`,
-          background: photoZoneFilled ? 'rgba(201,166,107,.07)' : 'rgba(239,234,224,.02)',
+          border: `1px ${photoZoneFilled ? 'solid color-mix(in srgb, var(--champagne) 60%, transparent)' : 'dashed color-mix(in srgb, var(--champagne) 28%, transparent)'}`,
+          background: photoZoneFilled ? 'color-mix(in srgb, var(--champagne) 7%, transparent)' : 'color-mix(in srgb, var(--bone) 2%, transparent)',
           transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
           textAlign: 'left',
           cursor: photoZoneFilled ? 'default' : 'pointer',
         }}
       >
-        <div style={{ width: 40, height: 40, borderRadius: 11, border: '1px solid rgba(201,166,107,.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ob-champagne)', background: 'rgba(201,166,107,.05)', flexShrink: 0 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 11, border: '1px solid color-mix(in srgb, var(--champagne) 35%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ob-champagne)', background: 'color-mix(in srgb, var(--champagne) 5%, transparent)', flexShrink: 0 }}>
           <svg width={20} height={20} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 7.5c0-.8.7-1.5 1.5-1.5h1.7l1.1-1.6c.2-.3.5-.4.8-.4h3.8c.3 0 .6.1.8.4L13.8 6h1.7c.8 0 1.5.7 1.5 1.5v6c0 .8-.7 1.5-1.5 1.5h-11C3.7 15 3 14.3 3 13.5z" />
             <circle cx={10} cy={10.5} r={2.6} />
@@ -382,14 +382,14 @@ export default function RosterScreen({
               e.stopPropagation();
               clear();
             }}
-            style={{ width: 32, height: 32, borderRadius: 9, border: '1px solid rgba(239,234,224,.10)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ob-bronze)', flexShrink: 0 }}
+            style={{ width: 32, height: 32, borderRadius: 9, border: '1px solid color-mix(in srgb, var(--bone) 10%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ob-bronze)', flexShrink: 0 }}
           >
             <svg width={12} height={12} viewBox="0 0 12 12" stroke="currentColor" strokeWidth={1.1} strokeLinecap="round">
               <path d="M3 3l6 6M9 3l-6 6" />
             </svg>
           </button>
         ) : (
-          <svg width={14} height={14} viewBox="0 0 14 14" fill="none" stroke="#55514A" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+          <svg width={14} height={14} viewBox="0 0 14 14" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--dim-2)', flexShrink: 0 }}>
             <path d="M5 2.5 9.5 7 5 11.5" />
           </svg>
         )}
@@ -412,7 +412,7 @@ export default function RosterScreen({
         <div
           role={zone.phase === 'consent' ? 'alertdialog' : 'status'}
           data-testid={zone.phase === 'consent' ? 'ai-consent-panel' : 'escalation-banner'}
-          style={{ border: '1px solid rgba(201,166,107,.35)', borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}
+          style={{ border: '1px solid color-mix(in srgb, var(--champagne) 35%, transparent)', borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}
         >
           <div style={{ font: "400 12px/1.55 'Manrope'", color: 'var(--ob-bone)' }}>
             {zone.phase === 'consent' ? zone.message : zone.phase === 'ready' ? zone.result.escalation!.message : null}
@@ -433,7 +433,7 @@ export default function RosterScreen({
                   type="button"
                   className="hit-44"
                   onClick={clear}
-                  style={{ padding: '0 14px', borderRadius: 10, border: '1px solid rgba(239,234,224,.10)', color: 'var(--ob-bronze)', font: "500 13px 'Manrope'" }}
+                  style={{ padding: '0 14px', borderRadius: 10, border: '1px solid color-mix(in srgb, var(--bone) 10%, transparent)', color: 'var(--ob-bronze)', font: "500 13px 'Manrope'" }}
                 >
                   Choose another file
                 </button>
@@ -450,7 +450,7 @@ export default function RosterScreen({
 
       {/* Expectation line */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '2px 4px 0' }}>
-        <svg width={14} height={14} viewBox="0 0 14 14" fill="none" stroke="#8B7550" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
+        <svg width={14} height={14} viewBox="0 0 14 14" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--bronze)', flexShrink: 0, marginTop: 2 }}>
           <circle cx={7} cy={7} r={5.5} />
           <path d="M4.5 7.2l1.7 1.7L9.6 5.5" />
         </svg>

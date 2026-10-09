@@ -3,6 +3,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { MODE_FRAMES, resolvePreset, type ModeOpts, type OrbFrame, type OrbState } from 'thinking-orbs/engine';
 import { scaleCounts, scaleRadii } from 'thinking-orbs';
 import { micLevel, smoothLevel, type OrbLook, type OrbPersonality } from '@/lib/voiceOrb';
+import { cssRgb, tokenRgb, type Rgb } from '@/lib/cssToken';
 
 /**
  * The voice sheet's dotted orb: thinking-orbs' geometry (MIT, © Jakub Antalik — see
@@ -17,16 +18,6 @@ import { micLevel, smoothLevel, type OrbLook, type OrbPersonality } from '@/lib/
  *   meter, lib/audioLevel.ts) — no microphone or audio context of its own.
  */
 
-type Rgb = { r: number; g: number; b: number };
-
-/** The `--accent` token as RGB (falls back to the same gold if the token can't be read). */
-function accentRgb(): Rgb {
-  const raw = typeof document === 'undefined' ? '' : getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-  const hex = /^#([0-9a-f]{6})$/i.exec(raw)?.[1];
-  const n = hex ? parseInt(hex, 16) : 0xe5a93c;
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
-
 /** Brightness steps for the dots' depth shading; colours are built once, not per dot per frame. */
 const STEPS = 48;
 
@@ -34,7 +25,7 @@ function inkRamp(gold: Rgb): string[] {
   // The library's dark-substrate ramp: near dots (low `white`) full gold, far ones fade toward black.
   return Array.from({ length: STEPS + 1 }, (_, i) => {
     const w = i / STEPS;
-    return `rgb(${Math.round(gold.r * (1 - w))},${Math.round(gold.g * (1 - w))},${Math.round(gold.b * (1 - w))})`;
+    return cssRgb({ r: gold.r * (1 - w), g: gold.g * (1 - w), b: gold.b * (1 - w) });
   });
 }
 
@@ -44,9 +35,9 @@ function haloSprite(gold: Rgb): HTMLCanvasElement | null {
   const g = c.getContext('2d');
   if (!g) return null;
   const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
-  grad.addColorStop(0, `rgba(${gold.r},${gold.g},${gold.b},0.9)`);
-  grad.addColorStop(0.45, `rgba(${gold.r},${gold.g},${gold.b},0.25)`);
-  grad.addColorStop(1, `rgba(${gold.r},${gold.g},${gold.b},0)`);
+  grad.addColorStop(0, cssRgb(gold, 0.9));
+  grad.addColorStop(0.45, cssRgb(gold, 0.25));
+  grad.addColorStop(1, cssRgb(gold, 0));
   g.fillStyle = grad;
   g.fillRect(0, 0, 32, 32);
   return c;
@@ -153,7 +144,7 @@ export function VoiceOrb({
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     canvas.width = Math.round(size * dpr);
     canvas.height = Math.round(size * dpr);
-    const gold = accentRgb();
+    const gold = tokenRgb('--accent');
     const ramp = inkRamp(gold);
     const halo = personality.glow > 0 ? haloSprite(gold) : null;
 

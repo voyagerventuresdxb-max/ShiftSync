@@ -1,24 +1,24 @@
 /*
- * Onboarding wizard — dedicated "Champagne/Gold" palette from the locked
- * design prototype (ShiftSync Welcome/Venue/Roster/Review/Invite .dc.html).
- * Deliberately scoped under `.ob-root` rather than folded into the app-wide
- * `--accent` (#e5a93c) in styles/tailwind.css — this is a distinct, more
- * saturated onboarding-only palette the prototype calls its own anchor
- * ("oklch · sat ≤ 0.06"), not a replacement for the rest of the app's chrome.
+ * Onboarding wizard — the "Champagne/Gold" palette from the locked design
+ * prototype (ShiftSync Welcome/Venue/Roster/Review/Invite .dc.html). It is
+ * now the whole app's palette: the values live in
+ * styles/tokens.css and these `--ob-*` names are aliases kept so the wizard's
+ * screens read as before. (The shared roster review used to need its own
+ * token override here; the app tokens now carry the same values.)
  */
 .ob-root {
-  --ob-void: #050403;
-  --ob-obsidian: #0a0908;
-  --ob-ink: #0d0b09;
-  --ob-ink-2: #14110d;
-  --ob-ink-hi: #1e1913;
-  --ob-champagne: #c9a66b;
-  --ob-champagne-hi: #efd9a8;
-  --ob-bronze: #8b7550;
-  --ob-bone: #efeae0;
-  --ob-stone: #9a9184;
-  --ob-dim: #6f675b;
-  --ob-dim-2: #55514a;
+  --ob-void: var(--void);
+  --ob-obsidian: var(--obsidian);
+  --ob-ink: var(--ink);
+  --ob-ink-2: var(--ink-2);
+  --ob-ink-hi: var(--ink-hi);
+  --ob-champagne: var(--champagne);
+  --ob-champagne-hi: var(--champagne-hi);
+  --ob-bronze: var(--bronze);
+  --ob-bone: var(--bone);
+  --ob-stone: var(--stone);
+  --ob-dim: var(--dim);
+  --ob-dim-2: var(--dim-2);
   --ob-ease-settle: cubic-bezier(0.32, 0.72, 0, 1);
   --ob-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   /*
@@ -250,25 +250,9 @@
        is a viewport-sized spread that dims everything OUTSIDE the frame,
        so the letterbox reads as the room the phone sits in. */
     box-shadow:
-      0 0 0 11px #12100d,
-      0 0 0 12px rgba(255, 255, 255, 0.04),
-      0 40px 120px -30px rgba(0, 0, 0, 0.9),
-      0 0 0 200vmax rgba(5, 4, 3, 0.62);
+      0 0 0 11px var(--bezel),
+      0 0 0 12px color-mix(in srgb, var(--bone) 4%, transparent),
+      0 40px 120px -30px color-mix(in srgb, var(--shadow) 90%, transparent),
+      0 0 0 200vmax color-mix(in srgb, var(--void) 62%, transparent);
   }
-}
-
-/*
- * The shared roster review (src/features/rosterReview) is built on the app's
- * theme tokens; inside onboarding it takes the wizard's champagne palette by
- * redefining those tokens for its subtree only.
- */
-.ob-root .rr-onboarding {
-  --bg: var(--ob-ink);
-  --surface: var(--ob-ink-2);
-  --surface-2: var(--ob-ink-hi);
-  --border: rgba(239, 234, 224, 0.1);
-  --text: var(--ob-bone);
-  --text-secondary: var(--ob-stone);
-  --accent: var(--ob-champagne);
-  color: var(--ob-bone);
 }

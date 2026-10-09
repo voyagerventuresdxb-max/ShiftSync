@@ -18,7 +18,7 @@ export function StaticOrbRing({ size, dim = false }: { size: number; dim?: boole
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true" data-testid="static-orb-ring" style={{ display: 'block' }}>
       {Array.from({ length: dots }, (_, i) => {
         const a = (i / dots) * Math.PI * 2;
-        return <circle key={i} cx={size / 2 + Math.cos(a) * r} cy={size / 2 + Math.sin(a) * r} r={Math.max(1, size / 80)} fill="var(--accent, #e5a93c)" opacity={dim ? 0.3 : 0.7} />;
+        return <circle key={i} cx={size / 2 + Math.cos(a) * r} cy={size / 2 + Math.sin(a) * r} r={Math.max(1, size / 80)} style={{ fill: 'var(--accent)' }} opacity={dim ? 0.3 : 0.7} />;
       })}
     </svg>
   );

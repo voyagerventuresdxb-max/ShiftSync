@@ -64,7 +64,7 @@ export default function OnboardingScreenShell({
           position: 'fixed',
           inset: '-8%',
           background:
-            'radial-gradient(60% 50% at 30% 22%,rgba(201,166,107,.08),transparent 55%),radial-gradient(80% 60% at 78% 78%,rgba(60,40,20,.35),transparent 60%),linear-gradient(180deg,#0A0908 0%,#070605 60%,#050403 100%)',
+            'radial-gradient(60% 50% at 30% 22%,color-mix(in srgb, var(--champagne) 8%, transparent),transparent 55%),radial-gradient(80% 60% at 78% 78%,color-mix(in srgb, var(--umber) 35%, transparent),transparent 60%),linear-gradient(180deg,var(--obsidian) 0%,var(--night) 60%,var(--void) 100%)',
           animation: 'ob-ambient 14s ease-in-out infinite',
           pointerEvents: 'none',
           zIndex: 0,
@@ -77,7 +77,7 @@ export default function OnboardingScreenShell({
           top: -40,
           width: '70%',
           height: '60%',
-          background: 'radial-gradient(closest-side,rgba(201,166,107,.22),transparent 70%)',
+          background: 'radial-gradient(closest-side,color-mix(in srgb, var(--champagne) 22%, transparent),transparent 70%)',
           filter: 'blur(28px)',
           opacity: 0.8,
           pointerEvents: 'none',

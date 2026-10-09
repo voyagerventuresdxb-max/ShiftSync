@@ -232,7 +232,7 @@ export function RadialDock({
           className="glass-bar absolute inset-0"
           style={{
             borderRadius: '50% 50% 1rem 1rem / 30px 30px 1rem 1rem',
-            boxShadow: '0 10px 24px -14px oklch(0 0 0 / 0.7)',
+            boxShadow: '0 10px 24px -14px color-mix(in srgb, var(--shadow) 70%, transparent)',
           }}
         >
           <span className="gold-rule pointer-events-none absolute inset-x-12 top-[24px] h-px opacity-15" />
@@ -317,7 +317,7 @@ export function RadialDock({
             backgroundImage:
               listening || processing || starting
                 ? 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, var(--accent) 92%, transparent), color-mix(in oklab, var(--accent) 62%, transparent))'
-                : 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, oklch(1 0 0) 16%, transparent), color-mix(in oklab, var(--accent) 12%, transparent))',
+                : 'radial-gradient(120% 120% at 50% 15%, color-mix(in oklab, var(--bone) 16%, transparent), color-mix(in oklab, var(--accent) 12%, transparent))',
             transitionTimingFunction: 'cubic-bezier(0.34,1.56,0.64,1)',
           }}
         >
