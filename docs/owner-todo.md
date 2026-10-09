@@ -77,3 +77,6 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
 26. [ ] **One server quota test fails only under heavy machine load** (passes alone).
 27. [ ] **Slim the staff bundle** (lazy-load admin-only code). Its budget was raised once, to
     146.0 kB gzip, on 2026-10-09 (run 17); any further raise needs your approval.
+28. [ ] **Make the confirm-key claim transactional for every Confirm action.** Today the voice
+    Confirm key is claimed in its own write just before the change (accepted in run 17): a
+    command whose outcome is unknown is refused, never repeated.
