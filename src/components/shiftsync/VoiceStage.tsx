@@ -258,9 +258,11 @@ export function VoiceStage({
 
   return (
     <div
-      className="voice-stage fixed inset-x-0 z-50 overflow-hidden bg-background text-foreground"
+      className="voice-stage group/stage fixed inset-x-0 z-50 overflow-hidden bg-background text-foreground"
       // The visible part of the screen: above an on-screen keyboard, the whole screen otherwise.
       style={visible.height ? { top: visible.top, height: visible.height } : { top: 0, bottom: 0 }}
+      // A short visible area (a small phone, or the keyboard up): the confirm sheet takes nearly all of it.
+      data-short={visible.height > 0 && visible.height < 720}
       onKeyDown={(e) => {
         if (e.key === 'Escape' && !hasSheet) {
           e.stopPropagation();

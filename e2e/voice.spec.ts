@@ -691,10 +691,11 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
     expect(calls.map((c) => c.kind)).toEqual(['transcribe', 'parse', 'parse']);
     expect(calls[2]!.body.contents?.[0]?.parts?.[0]?.text).toBe(fixed);
 
-    // Edit from the preview opens the box again; Back returns to the same preview.
+    // Edit from the preview opens the box again (the words still match the preview, so Confirm
+    // stays available); Back returns to the same preview.
     await again.getByRole('button', { name: 'Edit' }).click();
     await expect(voiceSheet(page).getByLabel(/I heard/)).toHaveValue(fixed);
-    await expect(voiceSheet(page).getByRole('button', { name: 'Confirm' })).toHaveCount(0);
+    await expect(voiceSheet(page).getByRole('button', { name: 'Confirm' })).toBeEnabled();
     await voiceSheet(page).getByRole('button', { name: 'Back' }).click();
     await again.getByRole('button', { name: 'Confirm' }).click();
     await expect(page.locator('.success-block')).toContainText('Give Layla Nasser a shout-out with this note.');
