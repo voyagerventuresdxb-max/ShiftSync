@@ -32,7 +32,7 @@ test('finds hex, colour functions, 0x colours, named colours and Tailwind palett
       "const d = <i className='text-blue-500 bg-white' />;",
       "const e = { background: 'oklch(0.7 0.1 250)' };",
     ].join('\n'),
-    'b.css': '.x { color: white; border-color: #abc; }',
+    'b.css': ".x { color: white; border-color: #abc; }\n.y { background-image: url(\"data:image/svg+xml,%3Csvg stroke='%23e0e0e0'%3E\"); }",
   });
   assert.deepEqual(
     hits.map((h) => `${h.file}:${h.line} ${h.kind}`).sort(),
@@ -45,6 +45,7 @@ test('finds hex, colour functions, 0x colours, named colours and Tailwind palett
       'a.tsx:5 colour function',
       'b.css:1 hex',
       'b.css:1 named colour',
+      'b.css:2 url-encoded hex',
     ].sort(),
   );
 });

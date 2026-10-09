@@ -190,6 +190,8 @@ const TW_PALETTE = 'slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|g
 const PATTERNS = [
   { kind: 'hex', re: /(?<![\w&/-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g },
   { kind: 'hex-number', re: /\b0x[0-9a-fA-F]{6}\b/g },
+  // `#` written as `%23` inside an SVG data URI (data URIs cannot read CSS variables).
+  { kind: 'url-encoded hex', re: /%23(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-fA-F])/g },
   { kind: 'colour function', re: /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/g },
   { kind: 'named colour', re: new RegExp(`(?:[:\\s,(]|^)(?:${NAMED})(?=\\s*[;,)!'"\`]|\\s*$)`, 'gi'), css: true },
   { kind: 'tailwind palette class', re: new RegExp(`\\b(?:bg|text|border|ring|from|via|to|fill|stroke|outline|shadow|divide|placeholder|accent|caret|decoration)-(?:white|black|(?:${TW_PALETTE})-\\d{2,3})\\b`, 'g') },
