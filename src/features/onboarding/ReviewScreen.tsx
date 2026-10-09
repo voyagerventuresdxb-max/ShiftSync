@@ -25,7 +25,7 @@ const continueButtonStyle = {
   padding: '16px 20px',
   borderRadius: 14,
   background: 'var(--ob-bone)',
-  color: '#100D0A',
+  color: 'var(--ink-cta)',
   font: "600 14px/1 'Manrope'",
   letterSpacing: '.005em',
   transition: 'background-color var(--ob-t), color var(--ob-t)',

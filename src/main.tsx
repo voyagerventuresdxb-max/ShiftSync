@@ -4,6 +4,7 @@ import App from './App';
 import { registerServiceWorker } from './lib/push';
 import { registerNativeBackButton } from './lib/nativeBack';
 import { installKeyboardInsetScroll } from './lib/keyboardInset';
+import './styles/tokens.css';
 import './styles/global.css';
 import './styles/tailwind.css';
 

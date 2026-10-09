@@ -55,7 +55,7 @@ function Field({
       <div
         style={{
           marginTop: 6,
-          borderBottom: `1px solid ${value ? 'rgba(201,166,107,.55)' : 'rgba(239,234,224,.12)'}`,
+          borderBottom: `1px solid ${value ? 'color-mix(in srgb, var(--champagne) 55%, transparent)' : 'color-mix(in srgb, var(--bone) 12%, transparent)'}`,
           transition: 'border-color var(--ob-t)',
         }}
       >
@@ -69,7 +69,7 @@ function SecondaryLink({ to, children }: { to: string; children: React.ReactNode
   return (
     <Link
       to={to}
-      style={{ color: 'var(--ob-champagne)', borderBottom: '1px solid rgba(201,166,107,.35)', paddingBottom: 1, textDecoration: 'none' }}
+      style={{ color: 'var(--ob-champagne)', borderBottom: '1px solid color-mix(in srgb, var(--champagne) 35%, transparent)', paddingBottom: 1, textDecoration: 'none' }}
     >
       {children}
     </Link>
@@ -103,8 +103,8 @@ function LinkOnlyAccountScreen({ onBack }: { onBack: () => void }) {
     textAlign: 'center',
     padding: '16px 20px',
     borderRadius: 14,
-    background: enabled ? 'var(--ob-bone)' : 'rgba(239,234,224,.10)',
-    color: enabled ? '#100D0A' : 'var(--ob-dim-2)',
+    background: enabled ? 'var(--ob-bone)' : 'color-mix(in srgb, var(--bone) 10%, transparent)',
+    color: enabled ? 'var(--ink-cta)' : 'var(--ob-dim-2)',
     font: "600 14px/1 'Manrope'",
     letterSpacing: '.005em',
     transition: 'background-color var(--ob-t), color var(--ob-t)',
@@ -128,7 +128,7 @@ function LinkOnlyAccountScreen({ onBack }: { onBack: () => void }) {
         </>
       }
     >
-      {error && <div style={{ color: '#e5484d', font: "400 13px/1.5 'Manrope'" }}>{error}</div>}
+      {error && <div style={{ color: 'var(--danger)', font: "400 13px/1.5 'Manrope'" }}>{error}</div>}
       <div style={{ font: "400 14px/1.55 'Manrope'", color: 'var(--ob-stone)', maxWidth: 300 }}>
         ShiftSync is invite-only right now. Paste the login link you were sent — it works once and signs you straight in.
       </div>
@@ -221,8 +221,8 @@ function OtpAccountScreen({ onBack, onContinue }: { onBack: () => void; onContin
     textDecoration: 'none',
     padding: '16px 20px',
     borderRadius: 14,
-    background: primaryEnabled ? 'var(--ob-bone)' : 'rgba(239,234,224,.10)',
-    color: primaryEnabled ? '#100D0A' : 'var(--ob-dim-2)',
+    background: primaryEnabled ? 'var(--ob-bone)' : 'color-mix(in srgb, var(--bone) 10%, transparent)',
+    color: primaryEnabled ? 'var(--ink-cta)' : 'var(--ob-dim-2)',
     font: "600 14px/1 'Manrope'",
     letterSpacing: '.005em',
     transition: 'background-color var(--ob-t), color var(--ob-t)',
@@ -270,7 +270,7 @@ function OtpAccountScreen({ onBack, onContinue }: { onBack: () => void; onContin
         </>
       }
     >
-      {error && <div style={{ color: '#e5484d', font: "400 13px/1.5 'Manrope'" }}>{error}</div>}
+      {error && <div style={{ color: 'var(--danger)', font: "400 13px/1.5 'Manrope'" }}>{error}</div>}
 
       {phase === 'phone' && (
         <>
@@ -313,8 +313,8 @@ function OtpAccountScreen({ onBack, onContinue }: { onBack: () => void; onContin
                 gap: 10,
                 padding: '8px 12px',
                 borderRadius: 10,
-                border: '1px solid rgba(201,166,107,.25)',
-                background: 'rgba(201,166,107,.06)',
+                border: '1px solid color-mix(in srgb, var(--champagne) 25%, transparent)',
+                background: 'color-mix(in srgb, var(--champagne) 6%, transparent)',
                 color: 'var(--ob-bronze)',
                 font: "500 10px/1 'Manrope'",
                 letterSpacing: '.18em',
@@ -372,8 +372,8 @@ function OtpAccountScreen({ onBack, onContinue }: { onBack: () => void; onContin
           style={{
             padding: '16px 18px',
             borderRadius: 14,
-            border: '1px solid rgba(201,166,107,.25)',
-            background: 'rgba(201,166,107,.06)',
+            border: '1px solid color-mix(in srgb, var(--champagne) 25%, transparent)',
+            background: 'color-mix(in srgb, var(--champagne) 6%, transparent)',
             font: "400 14px/1.55 'Manrope'",
             color: 'var(--ob-stone)',
           }}

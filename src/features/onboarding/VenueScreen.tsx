@@ -25,8 +25,8 @@ function chipStyle(on: boolean) {
   return {
     padding: '10px 14px',
     borderRadius: 999,
-    border: `1px solid ${on ? 'rgba(201,166,107,.75)' : 'rgba(239,234,224,.10)'}`,
-    background: on ? 'rgba(201,166,107,.10)' : 'rgba(239,234,224,.02)',
+    border: `1px solid ${on ? 'color-mix(in srgb, var(--champagne) 75%, transparent)' : 'color-mix(in srgb, var(--bone) 10%, transparent)'}`,
+    background: on ? 'color-mix(in srgb, var(--champagne) 10%, transparent)' : 'color-mix(in srgb, var(--bone) 2%, transparent)',
     color: on ? 'var(--ob-champagne)' : 'var(--ob-stone)',
     font: "500 12.5px/1 'Manrope'",
     letterSpacing: '.005em',
@@ -131,8 +131,8 @@ export default function VenueScreen({
               width: '100%',
               padding: '16px 20px',
               borderRadius: 14,
-              background: canContinue && !disabled ? 'var(--ob-bone)' : 'rgba(239,234,224,.10)',
-              color: canContinue && !disabled ? '#100D0A' : 'var(--ob-dim-2)',
+              background: canContinue && !disabled ? 'var(--ob-bone)' : 'color-mix(in srgb, var(--bone) 10%, transparent)',
+              color: canContinue && !disabled ? 'var(--ink-cta)' : 'var(--ob-dim-2)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
               transition: 'background-color var(--ob-t), color var(--ob-t)',
@@ -148,7 +148,7 @@ export default function VenueScreen({
       }
     >
       {error && (
-        <div style={{ color: '#e5484d', font: "400 13px/1.5 'Manrope'" }}>{error}</div>
+        <div style={{ color: 'var(--danger)', font: "400 13px/1.5 'Manrope'" }}>{error}</div>
       )}
 
       {/* Venue name — Account already asked this; show what it collected as
@@ -158,7 +158,7 @@ export default function VenueScreen({
       <div>
         <div style={{ font: "500 10px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Venue name</div>
         {!editingName && name.trim() ? (
-          <div style={{ marginTop: 6, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, paddingBottom: 12, borderBottom: '1px solid rgba(201,166,107,.55)' }}>
+          <div style={{ marginTop: 6, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, paddingBottom: 12, borderBottom: '1px solid color-mix(in srgb, var(--champagne) 55%, transparent)' }}>
             <span style={{ font: "400 20px/1.2 'Instrument Serif'", color: 'var(--ob-bone)' }}>{name}</span>
             <button
               type="button"
@@ -171,7 +171,7 @@ export default function VenueScreen({
                 border: 0,
                 padding: 0,
                 color: 'var(--ob-champagne)',
-                borderBottom: '1px solid rgba(201,166,107,.35)',
+                borderBottom: '1px solid color-mix(in srgb, var(--champagne) 35%, transparent)',
                 font: "500 11px/1 'Manrope'",
                 letterSpacing: '.04em',
                 cursor: 'pointer',
@@ -184,7 +184,7 @@ export default function VenueScreen({
           <div
             style={{
               marginTop: 6,
-              borderBottom: `1px solid ${name ? 'rgba(201,166,107,.55)' : 'rgba(239,234,224,.12)'}`,
+              borderBottom: `1px solid ${name ? 'color-mix(in srgb, var(--champagne) 55%, transparent)' : 'color-mix(in srgb, var(--bone) 12%, transparent)'}`,
               transition: 'border-color var(--ob-t)',
             }}
           >

@@ -6,9 +6,9 @@
 
 /*
  * Tailwind theme tokens for the ported ShiftSync dashboard components.
- * Values are pinned to the palette already defined in styles/global.css
- * (AGENTS.md "Dark Luxury Speakeasy") so there is one source of truth,
- * not a second Lovable-provided palette living alongside it.
+ * Values are pinned to the palette defined in styles/tokens.css (the
+ * onboarding wizard's warm black and champagne gold) so there is one source
+ * of truth, not a second Lovable-provided palette living alongside it.
  */
 
 @theme inline {
@@ -26,23 +26,23 @@
   --color-popover: var(--surface-2);
   --color-popover-foreground: var(--text);
   --color-primary: var(--accent);
-  --color-primary-foreground: #17130a;
+  --color-primary-foreground: var(--accent-foreground);
   --color-secondary: var(--surface-2);
   --color-secondary-foreground: var(--text);
   --color-muted: var(--surface-2);
   --color-muted-foreground: var(--text-secondary);
   --color-accent: var(--accent);
-  --color-accent-foreground: #17130a;
-  --color-signal: #4fb8e0;
-  --color-signal-foreground: #0b2530;
+  --color-accent-foreground: var(--accent-foreground);
+  --color-signal: var(--info);
+  --color-signal-foreground: var(--info-foreground);
   --color-success: var(--success);
-  --color-warning: #d9a53c;
+  --color-warning: var(--warning);
   --color-destructive: var(--danger);
-  --color-destructive-foreground: #ffffff;
+  --color-destructive-foreground: var(--danger-foreground);
   --color-border: var(--border);
-  --color-border-strong: #3a3a4a;
-  --color-input: #3a3a4a;
-  --color-ring: color-mix(in oklab, var(--accent) 55%, transparent);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--border-strong);
+  --color-ring: var(--focus-ring);
   --color-ring-offset-background: var(--bg);
   --font-sans:
     "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -62,7 +62,7 @@
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
   --tracking-tight: -0.025em;
-  --shadow-lux: 0 24px 60px -24px rgb(0 0 0 / 0.75);
+  --shadow-lux: 0 24px 60px -24px color-mix(in srgb, var(--shadow) 75%, transparent);
   --shadow-glow: 0 0 0 1px var(--accent-dim), 0 12px 40px -20px var(--accent-dim);
   --animate-rise: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -71,7 +71,7 @@
   --radius: 0.875rem;
   --accent-dim: color-mix(in oklab, var(--accent) 22%, transparent);
   --glass-blur: 22px;
-  --glass-border: color-mix(in oklab, oklch(1 0 0) 12%, transparent);
+  --glass-border: color-mix(in oklab, var(--bone) 12%, transparent);
 }
 
 /* Roster upload's indeterminate "still reading" hairline (features/rosterReview/ReadingProgress). */
@@ -181,7 +181,7 @@
   background-image: linear-gradient(
     to bottom,
     color-mix(in oklab, var(--color-accent) 9%, transparent),
-    color-mix(in oklab, oklch(1 0 0) 8%, transparent)
+    color-mix(in oklab, var(--bone) 8%, transparent)
   );
   background-color: color-mix(in oklab, var(--color-background) 55%, transparent);
   backdrop-filter: blur(var(--glass-blur)) saturate(150%);

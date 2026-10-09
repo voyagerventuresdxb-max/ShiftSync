@@ -168,7 +168,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
             position: 'absolute',
             inset: '-8%',
             background:
-              'radial-gradient(60% 50% at 30% 22%,rgba(201,166,107,.08),transparent 55%),radial-gradient(80% 60% at 78% 78%,rgba(60,40,20,.35),transparent 60%),linear-gradient(180deg,#0A0908 0%,#070605 60%,#050403 100%)',
+              'radial-gradient(60% 50% at 30% 22%,color-mix(in srgb, var(--champagne) 8%, transparent),transparent 55%),radial-gradient(80% 60% at 78% 78%,color-mix(in srgb, var(--umber) 35%, transparent),transparent 60%),linear-gradient(180deg,var(--obsidian) 0%,var(--night) 60%,var(--void) 100%)',
             animation: 'ob-ambient 14s ease-in-out infinite',
             pointerEvents: 'none',
           }}
@@ -185,7 +185,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
             padding: '0 40px',
             animation: 'ob-fade-in .6s cubic-bezier(.32,.72,0,1) both',
             background:
-              'radial-gradient(38% 22% at 50% 34%,rgba(201,166,107,.14),transparent 70%),radial-gradient(45% 40% at 24% 18%,rgba(201,166,107,.10),transparent 60%),radial-gradient(60% 55% at 78% 78%,rgba(60,40,20,.42),transparent 65%),linear-gradient(180deg,#0A0908,#050403)',
+              'radial-gradient(38% 22% at 50% 34%,color-mix(in srgb, var(--champagne) 14%, transparent),transparent 70%),radial-gradient(45% 40% at 24% 18%,color-mix(in srgb, var(--champagne) 10%, transparent),transparent 60%),radial-gradient(60% 55% at 78% 78%,color-mix(in srgb, var(--umber) 42%, transparent),transparent 65%),linear-gradient(180deg,var(--obsidian),var(--void))',
           }}
         >
         <img src="/shiftsync-mark.svg" alt="ShiftSync" style={{ width: 88, height: 44, display: 'block', marginBottom: 28 }} />
@@ -201,7 +201,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
         </div>
         <button
           onClick={onFinish}
-          style={{ marginTop: 36, font: "500 11px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-dim-2)', borderBottom: '1px solid rgba(85,81,74,.5)', paddingBottom: 3, background: 'transparent', border: 0 }}
+          style={{ marginTop: 36, font: "500 11px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-dim-2)', borderBottom: '1px solid color-mix(in srgb, var(--dim-2) 50%, transparent)', paddingBottom: 3, background: 'transparent', border: 0 }}
         >
           Continue to Dashboard
         </button>
@@ -220,9 +220,9 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
       onBack={onBack}
       footer={
         <>
-          {error && <div style={{ color: '#e5484d', font: "400 13px/1.5 'Manrope'", marginBottom: 14 }}>{error}</div>}
+          {error && <div style={{ color: 'var(--danger)', font: "400 13px/1.5 'Manrope'", marginBottom: 14 }}>{error}</div>}
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '0 4px 14px' }}>
-            <svg width={14} height={14} viewBox="0 0 14 14" fill="none" stroke="#8B7550" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}>
+            <svg width={14} height={14} viewBox="0 0 14 14" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--bronze)', flexShrink: 0, marginTop: 2 }}>
               <path d="M2.5 7.5l3.2-1.2 1.2-3.2 1.2 3.2 3.2 1.2-3.2 1.2-1.2 3.2-1.2-3.2z" />
             </svg>
             <div style={{ font: "400 12px/1.5 'Manrope'", color: 'var(--ob-bronze)' }}>They&apos;ll get a link on WhatsApp to set up their own access. No app download required to start.</div>
@@ -234,9 +234,9 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
               width: '100%',
               padding: '16px 20px',
               borderRadius: 14,
-              background: ctaEngaged ? 'var(--ob-bone)' : 'rgba(239,234,224,.10)',
-              color: ctaEngaged ? '#100D0A' : 'var(--ob-bone)',
-              border: ctaEngaged ? '1px solid transparent' : '1px solid rgba(239,234,224,.14)',
+              background: ctaEngaged ? 'var(--ob-bone)' : 'color-mix(in srgb, var(--bone) 10%, transparent)',
+              color: ctaEngaged ? 'var(--ink-cta)' : 'var(--ob-bone)',
+              border: ctaEngaged ? '1px solid transparent' : '1px solid color-mix(in srgb, var(--bone) 14%, transparent)',
               font: "600 14px/1 'Manrope'",
               letterSpacing: '.005em',
               transition: 'background-color var(--ob-t), color var(--ob-t)',
@@ -264,7 +264,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
       ) : invite ? (
         <>
           {/* Join link card */}
-          <div style={{ borderRadius: 16, border: '1px solid rgba(201,166,107,.32)', background: 'rgba(201,166,107,.045)', padding: '14px 14px 14px 16px' }}>
+          <div style={{ borderRadius: 16, border: '1px solid color-mix(in srgb, var(--champagne) 32%, transparent)', background: 'color-mix(in srgb, var(--champagne) 4.5%, transparent)', padding: '14px 14px 14px 16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ font: "500 9px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Venue join-link</div>
@@ -279,7 +279,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                   flexShrink: 0,
                   padding: '8px 12px',
                   borderRadius: 9,
-                  border: `1px solid ${copied ? 'rgba(201,166,107,.7)' : 'rgba(239,234,224,.12)'}`,
+                  border: `1px solid ${copied ? 'color-mix(in srgb, var(--champagne) 70%, transparent)' : 'color-mix(in srgb, var(--bone) 12%, transparent)'}`,
                   color: copied ? 'var(--ob-champagne)' : 'var(--ob-stone)',
                   font: "500 10.5px/1 'Manrope'",
                   letterSpacing: '.06em',
@@ -307,7 +307,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                 padding: '15px 18px',
                 borderRadius: 12,
                 background: 'var(--ob-bone)',
-                color: '#100D0A',
+                color: 'var(--ink-cta)',
                 font: "600 14px/1 'Manrope'",
                 letterSpacing: '.005em',
               }}
@@ -317,7 +317,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
               </svg>
               Share to WhatsApp
             </a>
-            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'rgba(5,4,3,.55)', border: '1px solid rgba(239,234,224,.06)', font: "400 11px/1.5 'Manrope'", color: 'var(--ob-stone)' }}>
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'color-mix(in srgb, var(--void) 55%, transparent)', border: '1px solid color-mix(in srgb, var(--bone) 6%, transparent)', font: "400 11px/1.5 'Manrope'", color: 'var(--ob-stone)' }}>
               <span style={{ color: 'var(--ob-dim-2)', letterSpacing: '.2em', textTransform: 'uppercase', fontSize: 9, fontWeight: 500 }}>Message preview · </span>
               {messagePreview}
             </div>
@@ -325,7 +325,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
           </div>
 
           {/* QR (secondary) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', borderRadius: 14, border: '1px solid rgba(239,234,224,.07)', background: 'rgba(239,234,224,.02)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', borderRadius: 14, border: '1px solid color-mix(in srgb, var(--bone) 7%, transparent)', background: 'color-mix(in srgb, var(--bone) 2%, transparent)' }}>
             <div style={{ width: 72, height: 72, borderRadius: 10, background: 'var(--ob-bone)', padding: 6, flexShrink: 0 }}>
               <img src={invite.qrDataUrl} alt="Invite QR code" style={{ width: '100%', height: '100%', display: 'block' }} />
             </div>
@@ -339,7 +339,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
           </div>
 
           {/* Individual (collapsed) */}
-          <div style={{ borderRadius: 14, border: '1px solid rgba(239,234,224,.07)', background: 'rgba(239,234,224,.02)' }}>
+          <div style={{ borderRadius: 14, border: '1px solid color-mix(in srgb, var(--bone) 7%, transparent)', background: 'color-mix(in srgb, var(--bone) 2%, transparent)' }}>
             <div
               role="button"
               tabIndex={0}
@@ -355,7 +355,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                   {listOpen ? 'Tick anyone to send a direct invite.' : `${staff.length} people from Staff Directory · for no-WhatsApp or a direct nudge`}
                 </div>
               </div>
-              <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="#55514A" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: `rotate(${listOpen ? 180 : 0}deg)`, transition: 'transform .32s var(--ob-ease-out)' }}>
+              <svg width={12} height={12} viewBox="0 0 12 12" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--dim-2)', flexShrink: 0, transform: `rotate(${listOpen ? 180 : 0}deg)`, transition: 'transform .32s var(--ob-ease-out)' }}>
                 <path d="M3 4.5l3 3 3-3" />
               </svg>
             </div>
@@ -374,8 +374,8 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                         gap: 12,
                         padding: '10px 12px',
                         borderRadius: 12,
-                        border: `1px solid ${on ? 'rgba(201,166,107,.32)' : 'rgba(239,234,224,.06)'}`,
-                        background: on ? 'rgba(201,166,107,.045)' : 'rgba(239,234,224,.015)',
+                        border: `1px solid ${on ? 'color-mix(in srgb, var(--champagne) 32%, transparent)' : 'color-mix(in srgb, var(--bone) 6%, transparent)'}`,
+                        background: on ? 'color-mix(in srgb, var(--champagne) 4.5%, transparent)' : 'color-mix(in srgb, var(--bone) 1.5%, transparent)',
                         opacity: has ? 1 : 0.72,
                         transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                       }}
@@ -399,9 +399,9 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                           alignItems: 'center',
                           justifyContent: 'center',
                           flexShrink: 0,
-                          border: `1px solid ${on ? 'rgba(201,166,107,.7)' : 'rgba(239,234,224,.14)'}`,
+                          border: `1px solid ${on ? 'color-mix(in srgb, var(--champagne) 70%, transparent)' : 'color-mix(in srgb, var(--bone) 14%, transparent)'}`,
                           color: 'var(--ob-champagne)',
-                          background: on ? 'rgba(201,166,107,.14)' : 'transparent',
+                          background: on ? 'color-mix(in srgb, var(--champagne) 14%, transparent)' : 'transparent',
                           transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                         }}
                       >
@@ -435,7 +435,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                               width: '100%',
                               background: 'transparent',
                               border: 0,
-                              borderBottom: `1px solid ${has ? 'transparent' : 'rgba(201,166,107,.28)'}`,
+                              borderBottom: `1px solid ${has ? 'transparent' : 'color-mix(in srgb, var(--champagne) 28%, transparent)'}`,
                               outline: 'none',
                               transition: 'background-color var(--ob-t), border-color var(--ob-t), color var(--ob-t)',
                             }}
@@ -453,11 +453,11 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
                       width: '100%',
                       padding: 12,
                       borderRadius: 10,
-                      border: '1px solid rgba(201,166,107,.6)',
+                      border: '1px solid color-mix(in srgb, var(--champagne) 60%, transparent)',
                       color: 'var(--ob-champagne)',
                       font: "500 12px/1 'Manrope'",
                       letterSpacing: '.02em',
-                      background: 'rgba(201,166,107,.08)',
+                      background: 'color-mix(in srgb, var(--champagne) 8%, transparent)',
                     }}
                   >
                     Send {selectedStaff.length} direct invite{selectedStaff.length === 1 ? '' : 's'} on WhatsApp
@@ -468,7 +468,7 @@ export default function InviteScreen({ locationId, onBack, onFinish }: { locatio
           </div>
         </>
       ) : !error ? (
-        <div style={{ borderRadius: 16, border: '1px solid rgba(201,166,107,.32)', background: 'rgba(201,166,107,.045)', padding: '14px 14px 14px 16px' }}>
+        <div style={{ borderRadius: 16, border: '1px solid color-mix(in srgb, var(--champagne) 32%, transparent)', background: 'color-mix(in srgb, var(--champagne) 4.5%, transparent)', padding: '14px 14px 14px 16px' }}>
           <div style={{ font: "500 9px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Venue join-link</div>
           <InviteLinkActions locationId={locationId} active={null} onChange={setInvite} look="onboarding" />
         </div>

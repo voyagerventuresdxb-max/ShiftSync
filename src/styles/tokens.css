@@ -1,0 +1,111 @@
+/*
+ * ShiftSync colour tokens: the one file that may contain colour values.
+ * `scripts/check-palette.mjs` fails the build on a colour literal anywhere
+ * else in the app (its allowlist names the few exceptions) and on any token
+ * here whose OKLCH hue/chroma leaves the reference ranges below.
+ *
+ * Reference: the onboarding wizard's palette, measured in
+ * docs/color-evidence.md. Warm near-blacks and bone text (OKLCH hue 65–95,
+ * chroma ≤ 0.03), champagne gold (hue 74–92, chroma 0.05–0.10), and the
+ * semantic colours mapped into that family: no blue, no purple.
+ *
+ * Primitives keep the wizard's own names and values; the semantic tokens
+ * below them are what screens use. The mapping is the one the wizard
+ * already applied to the shared roster review (`.rr-onboarding`), now
+ * app-wide.
+ */
+:root {
+  /* Native controls (pickers, scrollbars, form fields) render dark. */
+  color-scheme: dark;
+
+  /* ---- Primitives: near-blacks, darkest first ---- */
+  --void: #050403;
+  --night: #070605;
+  --obsidian: #0a0908;
+  --ink-low: #0c0a08;
+  --ink: #0d0b09;
+  --ink-mid: #0f0d0a;
+  --ink-cta: #100d0a;
+  --bezel: #12100d;
+  --ink-2: #14110d;
+  --ink-hi: #1e1913;
+  /* One step above ink-hi in the same hue/chroma family (derived). */
+  --ink-top: #29231c;
+  /* Warm shadow tint used under the wizard's glass cards. */
+  --umber: #3c2814;
+  /* Neutral shadow; only ever used with transparency. */
+  --shadow: #000000;
+
+  /* ---- Primitives: bone text ramp ---- */
+  --bone: #efeae0;
+  --stone: #9a9184;
+  --dim: #6f675b;
+  --dim-2: #55514a;
+
+  /* ---- Primitives: champagne gold ---- */
+  --champagne: #c9a66b;
+  --champagne-hi: #efd9a8;
+  --champagne-hover: #d9b37a;
+  /* Darker press state, same hue and chroma family (derived). */
+  --champagne-pressed: #ac8d58;
+  --bronze: #8b7550;
+
+  /* ---- Primitives: semantic hues inside the warm family ---- */
+  /* Restrained warm red (OKLCH 0.66 0.14 30). */
+  --clay-red: #da6d5d;
+  /* Sage (OKLCH 0.72 0.07 135). */
+  --sage: #92af83;
+  /* Ochre, warmer than the gold so a warning never reads as an accent (OKLCH 0.75 0.105 62). */
+  --ochre: #de9f66;
+  /* Terracotta for chips (OKLCH 0.68 0.08 48). */
+  --clay: #c2896d;
+
+  /* ---- Surfaces (0 = page, 3 = highest) ---- */
+  --bg: var(--ink);
+  --surface: var(--ink-2);
+  --surface-2: var(--ink-hi);
+  --surface-3: var(--ink-top);
+
+  /* ---- Borders: bone hairlines, so they sit right on every surface ---- */
+  --border: color-mix(in srgb, var(--bone) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--bone) 18%, transparent);
+
+  /* ---- Text ---- */
+  --text: var(--bone);
+  /* Secondary and muted copy (Tailwind `text-muted-foreground`): AA on every surface. */
+  --text-secondary: var(--stone);
+  /* Decorative or large text only (AA-large 3:1); never body copy. */
+  --text-faint: var(--dim);
+
+  /* ---- Gold accent ---- */
+  --accent: var(--champagne);
+  --accent-hover: var(--champagne-hover);
+  --accent-pressed: var(--champagne-pressed);
+  --accent-subtle: color-mix(in srgb, var(--champagne) 12%, transparent);
+  --accent-foreground: var(--ink-cta);
+  --focus-ring: color-mix(in srgb, var(--champagne) 70%, transparent);
+
+  /* ---- Disabled controls: no gold, quieter fill, text still legible ---- */
+  --disabled-bg: color-mix(in srgb, var(--bone) 10%, transparent);
+  --disabled-fg: var(--stone);
+
+  /* ---- Semantic ---- */
+  --danger: var(--clay-red);
+  --danger-foreground: var(--ink-cta);
+  --success: var(--sage);
+  --warning: var(--ochre);
+  /* Information is gold/cream, never blue. */
+  --info: var(--champagne-hi);
+  --info-foreground: var(--ink-cta);
+
+  /* ---- Department chips on the roster grid (bar / kitchen / service) ---- */
+  --chip-gold-bg: color-mix(in oklab, var(--champagne) 18%, var(--surface-2));
+  --chip-gold-fg: var(--champagne-hi);
+  --chip-sage-bg: color-mix(in oklab, var(--sage) 16%, var(--surface-2));
+  --chip-sage-fg: var(--sage);
+  --chip-clay-bg: color-mix(in oklab, var(--clay) 18%, var(--surface-2));
+  --chip-clay-fg: var(--clay);
+
+  /* ---- Text selection ---- */
+  --selection-bg: color-mix(in srgb, var(--champagne) 35%, transparent);
+}

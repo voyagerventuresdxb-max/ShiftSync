@@ -54,7 +54,7 @@ const ICON_DEFS: IconDef[] = [
     floatDur: '6.2s',
     floatDelay: '0s',
     render: () => (
-      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" stroke="#C9A66B" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
+      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--champagne)' }}>
         <rect x={4} y={6} width={18} height={16} rx={2} />
         <path d="M4 11 H22 M9 6 V4 M17 6 V4 M9 15 H10 M13 15 H14 M17 15 H18 M9 18 H10 M13 18 H14" />
       </svg>
@@ -67,7 +67,7 @@ const ICON_DEFS: IconDef[] = [
     floatDur: '7.4s',
     floatDelay: '-1.2s',
     render: () => (
-      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" stroke="#C9A66B" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
+      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--champagne)' }}>
         <rect x={3} y={4} width={20} height={18} rx={1.5} />
         <circle cx={9} cy={10} r={1.8} />
         <circle cx={17} cy={10} r={1.8} />
@@ -83,7 +83,7 @@ const ICON_DEFS: IconDef[] = [
     floatDur: '6.8s',
     floatDelay: '-2.6s',
     render: () => (
-      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" stroke="#C9A66B" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
+      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--champagne)' }}>
         <circle cx={10} cy={10} r={3.2} />
         <path d="M4 21 c 0 -3.4 2.7 -5.6 6 -5.6 s 6 2.2 6 5.6" />
         <circle cx={18} cy={9} r={2.4} />
@@ -98,7 +98,7 @@ const ICON_DEFS: IconDef[] = [
     floatDur: '7.9s',
     floatDelay: '-3.4s',
     render: () => (
-      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" stroke="#C9A66B" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
+      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--champagne)' }}>
         <path d="M5 9 H19 L15 5" />
         <path d="M21 17 H7 L11 21" />
       </svg>
@@ -111,7 +111,7 @@ const ICON_DEFS: IconDef[] = [
     floatDur: '6.5s',
     floatDelay: '-4.1s',
     render: () => (
-      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" stroke="#C9A66B" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
+      <svg width={35} height={35} viewBox="0 0 26 26" fill="none" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--champagne)' }}>
         <rect x={10} y={3} width={6} height={12} rx={3} />
         <path d="M6 13 c 0 4 3 7 7 7 s 7 -3 7 -7" />
         <path d="M13 20 V23" />
@@ -146,7 +146,7 @@ const CAROUSEL_CARDS: CarouselCard[] = [
 
 const Chevron = ({ opacity = 0.85 }: { opacity?: number }) => (
   <svg width={18} height={10} viewBox="0 0 18 10" fill="none">
-    <path d="M2 8l7-6 7 6" stroke="#C9A66B" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" opacity={opacity} />
+    <path d="M2 8l7-6 7 6" strokeWidth={1.3} strokeLinecap="round" strokeLinejoin="round" opacity={opacity} style={{ stroke: 'var(--champagne)' }} />
   </svg>
 );
 
@@ -158,8 +158,8 @@ function SlideVisual({ idx }: { idx: number }) {
           position: 'absolute',
           inset: 0,
           borderRadius: 14,
-          background: 'linear-gradient(180deg,#0F0D0A,#0A0908)',
-          border: '1px solid rgba(239,234,224,.06)',
+          background: 'linear-gradient(180deg,var(--ink-mid),var(--obsidian))',
+          border: '1px solid color-mix(in srgb, var(--bone) 6%, transparent)',
           overflow: 'hidden',
           padding: '22px 24px',
           display: 'flex',
@@ -176,7 +176,7 @@ function SlideVisual({ idx }: { idx: number }) {
         </div>
         <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 44 }}>
           {[30, 60, 45, 80, 55, 35, 70, 40, 25, 20, 15].map((h, i) => (
-            <div key={i} style={{ flex: 1, background: i < 6 ? '#C9A66B' : i < 9 ? 'var(--ob-bronze)' : 'var(--ob-dim-2)', borderRadius: 1, height: `${h}%` }} />
+            <div key={i} style={{ flex: 1, background: i < 6 ? 'var(--champagne)' : i < 9 ? 'var(--ob-bronze)' : 'var(--ob-dim-2)', borderRadius: 1, height: `${h}%` }} />
           ))}
         </div>
       </div>
@@ -189,8 +189,8 @@ function SlideVisual({ idx }: { idx: number }) {
           position: 'absolute',
           inset: 0,
           borderRadius: 14,
-          background: 'linear-gradient(180deg,#0F0D0A,#0A0908)',
-          border: '1px solid rgba(239,234,224,.06)',
+          background: 'linear-gradient(180deg,var(--ink-mid),var(--obsidian))',
+          border: '1px solid color-mix(in srgb, var(--bone) 6%, transparent)',
           overflow: 'hidden',
           padding: '18px 20px',
           display: 'flex',
@@ -202,47 +202,47 @@ function SlideVisual({ idx }: { idx: number }) {
           <div style={{ font: "400 9.5px/1 'Manrope'", color: 'var(--ob-dim-2)' }}>8 on · 3 sections</div>
         </div>
         <svg viewBox="0 0 120 62" style={{ width: '100%', flex: 1, marginTop: 10 }} fill="none">
-          <rect x={4} y={4} width={52} height={24} rx={2} stroke="#EFEAE0" strokeOpacity={0.2} strokeWidth={0.8} />
-          <rect x={62} y={4} width={30} height={24} rx={2} stroke="#EFEAE0" strokeOpacity={0.2} strokeWidth={0.8} />
-          <rect x={98} y={4} width={18} height={54} rx={2} stroke="#EFEAE0" strokeOpacity={0.2} strokeWidth={0.8} />
-          <rect x={4} y={34} width={88} height={24} rx={2} stroke="#EFEAE0" strokeOpacity={0.2} strokeWidth={0.8} />
-          <circle cx={18} cy={16} r={2.4} fill="#C9A66B" />
-          <circle cx={32} cy={20} r={2.4} fill="#C9A66B" />
-          <circle cx={46} cy={14} r={2.4} fill="#8B7550" />
-          <circle cx={76} cy={18} r={2.4} fill="#C9A66B" />
-          <circle cx={24} cy={46} r={2.4} fill="#8B7550" />
-          <circle cx={52} cy={44} r={2.4} fill="#C9A66B" />
-          <circle cx={76} cy={48} r={2.4} fill="#8B7550" />
-          <circle cx={107} cy={30} r={2.4} fill="#C9A66B" />
+          <rect x={4} y={4} width={52} height={24} rx={2} strokeOpacity={0.2} strokeWidth={0.8} style={{ stroke: 'var(--bone)' }} />
+          <rect x={62} y={4} width={30} height={24} rx={2} strokeOpacity={0.2} strokeWidth={0.8} style={{ stroke: 'var(--bone)' }} />
+          <rect x={98} y={4} width={18} height={54} rx={2} strokeOpacity={0.2} strokeWidth={0.8} style={{ stroke: 'var(--bone)' }} />
+          <rect x={4} y={34} width={88} height={24} rx={2} strokeOpacity={0.2} strokeWidth={0.8} style={{ stroke: 'var(--bone)' }} />
+          <circle cx={18} cy={16} r={2.4} style={{ fill: 'var(--champagne)' }} />
+          <circle cx={32} cy={20} r={2.4} style={{ fill: 'var(--champagne)' }} />
+          <circle cx={46} cy={14} r={2.4} style={{ fill: 'var(--bronze)' }} />
+          <circle cx={76} cy={18} r={2.4} style={{ fill: 'var(--champagne)' }} />
+          <circle cx={24} cy={46} r={2.4} style={{ fill: 'var(--bronze)' }} />
+          <circle cx={52} cy={44} r={2.4} style={{ fill: 'var(--champagne)' }} />
+          <circle cx={76} cy={48} r={2.4} style={{ fill: 'var(--bronze)' }} />
+          <circle cx={107} cy={30} r={2.4} style={{ fill: 'var(--champagne)' }} />
         </svg>
       </div>
     );
   }
   return (
-    <div style={{ position: 'absolute', inset: 0, borderRadius: 14, background: 'linear-gradient(180deg,#0F0D0A,#0A0908)', border: '1px solid rgba(239,234,224,.06)', overflow: 'hidden' }}>
+    <div style={{ position: 'absolute', inset: 0, borderRadius: 14, background: 'linear-gradient(180deg,var(--ink-mid),var(--obsidian))', border: '1px solid color-mix(in srgb, var(--bone) 6%, transparent)', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', left: 16, top: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 7px 10px', borderRadius: 9999, border: '1px solid rgba(239,234,224,.1)', background: 'rgba(30,25,19,.6)', font: "500 11px/1 'Manrope'", color: 'var(--ob-bone)' }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#C9A66B' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 7px 10px', borderRadius: 9999, border: '1px solid color-mix(in srgb, var(--bone) 10%, transparent)', background: 'color-mix(in srgb, var(--ink-hi) 60%, transparent)', font: "500 11px/1 'Manrope'", color: 'var(--ob-bone)' }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--champagne)' }} />
           rota_dec.xlsx
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 7px 10px', borderRadius: 9999, border: '1px solid rgba(239,234,224,.08)', background: 'rgba(30,25,19,.4)', font: "500 11px/1 'Manrope'", color: 'var(--ob-stone)', marginLeft: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 7px 10px', borderRadius: 9999, border: '1px solid color-mix(in srgb, var(--bone) 8%, transparent)', background: 'color-mix(in srgb, var(--ink-hi) 40%, transparent)', font: "500 11px/1 'Manrope'", color: 'var(--ob-stone)', marginLeft: 8 }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--ob-bronze)' }} />
           staff_shifts.csv
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 7px 10px', borderRadius: 9999, border: '1px solid rgba(239,234,224,.06)', background: 'rgba(30,25,19,.3)', font: "500 11px/1 'Manrope'", color: 'var(--ob-dim-2)', marginLeft: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px 7px 10px', borderRadius: 9999, border: '1px solid color-mix(in srgb, var(--bone) 6%, transparent)', background: 'color-mix(in srgb, var(--ink-hi) 30%, transparent)', font: "500 11px/1 'Manrope'", color: 'var(--ob-dim-2)', marginLeft: 16 }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--ob-dim-2)' }} />
           weekly.pdf
         </div>
       </div>
       <svg style={{ position: 'absolute', left: 128, top: 46, opacity: 0.55 }} width={34} height={52} viewBox="0 0 60 52" preserveAspectRatio="none" fill="none">
-        <path d="M2 6 C 26 6 36 26 58 26" stroke="#C9A66B" strokeWidth={0.9} strokeLinecap="round" strokeDasharray="2 3" />
-        <path d="M2 26 C 26 26 34 26 58 26" stroke="#C9A66B" strokeWidth={0.9} strokeLinecap="round" strokeDasharray="2 3" />
-        <path d="M2 46 C 26 46 36 26 58 26" stroke="#C9A66B" strokeWidth={0.9} strokeLinecap="round" strokeDasharray="2 3" />
-        <path d="M52 22l6 4-6 4" stroke="#C9A66B" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        <path d="M2 6 C 26 6 36 26 58 26" strokeWidth={0.9} strokeLinecap="round" strokeDasharray="2 3" style={{ stroke: 'var(--champagne)' }} />
+        <path d="M2 26 C 26 26 34 26 58 26" strokeWidth={0.9} strokeLinecap="round" strokeDasharray="2 3" style={{ stroke: 'var(--champagne)' }} />
+        <path d="M2 46 C 26 46 36 26 58 26" strokeWidth={0.9} strokeLinecap="round" strokeDasharray="2 3" style={{ stroke: 'var(--champagne)' }} />
+        <path d="M52 22l6 4-6 4" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round" fill="none" style={{ stroke: 'var(--champagne)' }} />
       </svg>
-      <div style={{ position: 'absolute', right: 14, top: 22, bottom: 22, width: 104, borderRadius: 12, background: '#100D0A', border: '1px solid rgba(201,166,107,.18)', padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ position: 'absolute', right: 14, top: 22, bottom: 22, width: 104, borderRadius: 12, background: 'var(--ink-cta)', border: '1px solid color-mix(in srgb, var(--champagne) 18%, transparent)', padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ font: "500 8.5px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-bronze)' }}>Parsed</div>
-        <div style={{ height: 1, background: 'rgba(201,166,107,.14)' }} />
+        <div style={{ height: 1, background: 'color-mix(in srgb, var(--champagne) 14%, transparent)' }} />
         {[
           ['Layla H.', 'Head Server · FoH'],
           ['Yusuf O.', 'Floor · FoH'],
@@ -500,7 +500,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
           position: 'absolute',
           inset: '-8%',
           background:
-            'radial-gradient(60% 50% at 30% 22%,rgba(201,166,107,.08),transparent 55%),radial-gradient(80% 60% at 78% 78%,rgba(60,40,20,.35),transparent 60%),radial-gradient(120% 90% at 50% 50%,#100D0A 0%,#070605 60%,#050403 100%)',
+            'radial-gradient(60% 50% at 30% 22%,color-mix(in srgb, var(--champagne) 8%, transparent),transparent 55%),radial-gradient(80% 60% at 78% 78%,color-mix(in srgb, var(--umber) 35%, transparent),transparent 60%),radial-gradient(120% 90% at 50% 50%,var(--ink-cta) 0%,var(--night) 60%,var(--void) 100%)',
           animation: 'ob-ambient 14s cubic-bezier(.32,.72,0,1) infinite',
           zIndex: 1,
         }}
@@ -512,7 +512,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
           top: -40,
           width: '70%',
           height: '60%',
-          background: 'radial-gradient(closest-side,rgba(201,166,107,.22),transparent 70%)',
+          background: 'radial-gradient(closest-side,color-mix(in srgb, var(--champagne) 22%, transparent),transparent 70%)',
           filter: 'blur(28px)',
           opacity: 0.8,
           pointerEvents: 'none',
@@ -569,7 +569,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                 width: 340,
                 height: 340,
                 borderRadius: '50%',
-                background: `radial-gradient(circle,rgba(239,218,168,${(0.42 + p * 0.2).toFixed(3)}) 0%,rgba(201,166,107,${(0.24 + p * 0.1).toFixed(3)}) 28%,rgba(201,166,107,0.08) 58%,rgba(201,166,107,0) 82%)`,
+                background: `radial-gradient(circle,color-mix(in srgb, var(--champagne-hi) ${((0.42 + p * 0.2) * 100).toFixed(1)}%, transparent) 0%,color-mix(in srgb, var(--champagne) ${((0.24 + p * 0.1) * 100).toFixed(1)}%, transparent) 28%,color-mix(in srgb, var(--champagne) 8%, transparent) 58%,color-mix(in srgb, var(--champagne) 0%, transparent) 82%)`,
                 filter: `blur(${(22 - p * 6).toFixed(1)}px)`,
                 mixBlendMode: 'screen',
                 opacity: (0.85 + p * 0.15).toFixed(3),
@@ -607,7 +607,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                 height: pulseSize,
                 transform: 'translate(-50%,-50%)',
                 borderRadius: '50%',
-                background: `radial-gradient(circle,rgba(239,218,168,${(0.3 * arrivalStrength).toFixed(3)}) 0%,rgba(201,166,107,${(0.14 * arrivalStrength).toFixed(3)}) 40%,rgba(201,166,107,0) 72%)`,
+                background: `radial-gradient(circle,color-mix(in srgb, var(--champagne-hi) ${(0.3 * arrivalStrength * 100).toFixed(1)}%, transparent) 0%,color-mix(in srgb, var(--champagne) ${(0.14 * arrivalStrength * 100).toFixed(1)}%, transparent) 40%,color-mix(in srgb, var(--champagne) 0%, transparent) 72%)`,
                 filter: `blur(${(6 + arrivalStrength * 8).toFixed(1)}px)`,
                 mixBlendMode: 'screen',
                 opacity: arrivalStrength,
@@ -635,14 +635,14 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                     pointerEvents: 'none',
                   }}
                 >
-                  <div style={{ position: 'absolute', inset: -14, borderRadius: '50%', background: 'radial-gradient(circle,rgba(239,218,168,.32) 0%,rgba(201,166,107,.14) 45%,rgba(201,166,107,0) 75%)', filter: 'blur(6px)', mixBlendMode: 'screen', pointerEvents: 'none' }} />
+                  <div style={{ position: 'absolute', inset: -14, borderRadius: '50%', background: 'radial-gradient(circle,color-mix(in srgb, var(--champagne-hi) 32%, transparent) 0%,color-mix(in srgb, var(--champagne) 14%, transparent) 45%,color-mix(in srgb, var(--champagne) 0%, transparent) 75%)', filter: 'blur(6px)', mixBlendMode: 'screen', pointerEvents: 'none' }} />
                   <div
                     style={{
                       width: '100%',
                       height: '100%',
                       animation: `${def.floatName} ${def.floatDur} ease-in-out infinite`,
                       animationDelay: def.floatDelay,
-                      filter: 'drop-shadow(0 0 3px rgba(201,166,107,.55)) drop-shadow(0 0 8px rgba(239,218,168,.35))',
+                      filter: 'drop-shadow(0 0 3px color-mix(in srgb, var(--champagne) 55%, transparent)) drop-shadow(0 0 8px color-mix(in srgb, var(--champagne-hi) 35%, transparent))',
                     }}
                   >
                     {def.render()}
@@ -739,7 +739,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                 position: 'absolute',
                 inset: '-6%',
                 background:
-                  'radial-gradient(45% 40% at 24% 18%,rgba(201,166,107,.12),transparent 60%),radial-gradient(60% 55% at 78% 78%,rgba(60,40,20,.42),transparent 65%),linear-gradient(180deg,#0A0908,#050403)',
+                  'radial-gradient(45% 40% at 24% 18%,color-mix(in srgb, var(--champagne) 12%, transparent),transparent 60%),radial-gradient(60% 55% at 78% 78%,color-mix(in srgb, var(--umber) 42%, transparent),transparent 65%),linear-gradient(180deg,var(--obsidian),var(--void))',
                 transform: `translate3d(${(-dragX * 0.4).toFixed(1)}px,0,0)`,
                 transition: dragging ? 'none' : 'transform .52s cubic-bezier(.32,.72,0,1)',
                 zIndex: 1,
@@ -752,9 +752,9 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                   position: 'absolute',
                   inset: 0,
                   borderRadius: 22,
-                  background: 'linear-gradient(180deg,#100D0A,#0A0908)',
-                  border: '1px solid rgba(239,234,224,.05)',
-                  boxShadow: '0 12px 30px -14px rgba(0,0,0,.6)',
+                  background: 'linear-gradient(180deg,var(--ink-cta),var(--obsidian))',
+                  border: '1px solid color-mix(in srgb, var(--bone) 5%, transparent)',
+                  boxShadow: '0 12px 30px -14px color-mix(in srgb, var(--shadow) 60%, transparent)',
                   transform: `translate3d(0,${(18 - Math.min(1, Math.abs(dragX) / 180) * 18).toFixed(1)}px,0) scale(${(0.94 + Math.min(1, Math.abs(dragX) / 180) * 0.06).toFixed(3)})`,
                   transformOrigin: 'center top',
                   opacity: (0.65 + Math.min(1, Math.abs(dragX) / 180) * 0.35).toFixed(3),
@@ -777,7 +777,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                   position: 'absolute',
                   inset: 0,
                   borderRadius: 22,
-                  boxShadow: '0 30px 60px -20px rgba(0,0,0,.75),0 0 0 1px rgba(239,234,224,.06)',
+                  boxShadow: '0 30px 60px -20px color-mix(in srgb, var(--shadow) 75%, transparent),0 0 0 1px color-mix(in srgb, var(--bone) 6%, transparent)',
                   overflow: 'hidden',
                   transform: `translate3d(${dragX}px, ${(Math.abs(dragX) * 0.04).toFixed(1)}px, 0) rotate(${(dragX / 12).toFixed(2)}deg)`,
                   transition: dragging ? 'none' : 'transform .52s cubic-bezier(.32,.72,0,1)',
@@ -785,8 +785,8 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                   cursor: dragging ? 'grabbing' : 'grab',
                 }}
               >
-                <div style={{ position: 'absolute', inset: 0, borderRadius: 22, background: 'radial-gradient(120% 70% at 20% 0%,rgba(201,166,107,.09),transparent 55%),linear-gradient(180deg,#14110D 0%,#0C0A08 100%)', pointerEvents: 'none' }} />
-                <div style={{ position: 'absolute', inset: 0, borderRadius: 22, borderTop: '1px solid rgba(201,166,107,.22)', pointerEvents: 'none' }} />
+                <div style={{ position: 'absolute', inset: 0, borderRadius: 22, background: 'radial-gradient(120% 70% at 20% 0%,color-mix(in srgb, var(--champagne) 9%, transparent),transparent 55%),linear-gradient(180deg,var(--ink-2) 0%,var(--ink-low) 100%)', pointerEvents: 'none' }} />
+                <div style={{ position: 'absolute', inset: 0, borderRadius: 22, borderTop: '1px solid color-mix(in srgb, var(--champagne) 22%, transparent)', pointerEvents: 'none' }} />
 
                 <div style={{ position: 'relative', height: '100%', padding: '32px 28px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                   <div>
@@ -811,7 +811,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                             width: i === cardIdx ? 22 : 5,
                             height: 5,
                             borderRadius: 3,
-                            background: i === cardIdx ? '#C9A66B' : 'rgba(239,234,224,.18)',
+                            background: i === cardIdx ? 'var(--champagne)' : 'color-mix(in srgb, var(--bone) 18%, transparent)',
                             transition: 'width .42s cubic-bezier(.32,.72,0,1),background .42s cubic-bezier(.32,.72,0,1)',
                           }}
                         />
@@ -824,7 +824,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                         padding: '16px 20px',
                         borderRadius: 14,
                         background: 'var(--ob-bone)',
-                        color: '#100D0A',
+                        color: 'var(--ink-cta)',
                         font: "600 14px/1 'Manrope'",
                         letterSpacing: '.005em',
                         // No inline `transition` here on purpose — this is a
@@ -843,7 +843,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                       <button
                         className="hit-44"
                         onClick={() => setCardIdx(2)}
-                        style={{ font: "500 12px/1 'Manrope'", letterSpacing: '.005em', color: 'var(--ob-bronze)', borderBottom: '1px solid rgba(139,117,80,.35)', paddingBottom: 2, background: 'transparent', border: 0 }}
+                        style={{ font: "500 12px/1 'Manrope'", letterSpacing: '.005em', color: 'var(--ob-bronze)', borderBottom: '1px solid color-mix(in srgb, var(--bronze) 35%, transparent)', paddingBottom: 2, background: 'transparent', border: 0 }}
                       >
                         Skip intro
                       </button>
@@ -867,7 +867,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
               // takes the same ambient treatment as the carousel behind it
               // plus a soft halo under the mark, instead of flat black.
               background:
-                'radial-gradient(38% 22% at 50% 34%,rgba(201,166,107,.14),transparent 70%),radial-gradient(45% 40% at 24% 18%,rgba(201,166,107,.10),transparent 60%),radial-gradient(60% 55% at 78% 78%,rgba(60,40,20,.42),transparent 65%),linear-gradient(180deg,#0A0908,#050403)',
+                'radial-gradient(38% 22% at 50% 34%,color-mix(in srgb, var(--champagne) 14%, transparent),transparent 70%),radial-gradient(45% 40% at 24% 18%,color-mix(in srgb, var(--champagne) 10%, transparent),transparent 60%),radial-gradient(60% 55% at 78% 78%,color-mix(in srgb, var(--umber) 42%, transparent),transparent 65%),linear-gradient(180deg,var(--obsidian),var(--void))',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -881,14 +881,14 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
             <div style={{ font: "500 13.5px/1.55 'Manrope'", color: 'var(--ob-bronze)', marginTop: 14, maxWidth: 260, textWrap: 'pretty' }}>Next: verify your number, name your venue, add your floor, and invite your team.</div>
             <button
               onClick={onContinue}
-              style={{ marginTop: 36, display: 'inline-block', padding: '15px 28px', borderRadius: 14, background: 'var(--ob-bone)', color: '#100D0A', font: "600 14px/1 'Manrope'", letterSpacing: '.005em' }}
+              style={{ marginTop: 36, display: 'inline-block', padding: '15px 28px', borderRadius: 14, background: 'var(--ob-bone)', color: 'var(--ink-cta)', font: "600 14px/1 'Manrope'", letterSpacing: '.005em' }}
             >
               Continue
             </button>
             <button
               className="hit-44"
               onClick={resetToHold}
-              style={{ marginTop: 18, font: "500 11px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-dim-2)', borderBottom: '1px solid rgba(85,81,74,.5)', paddingBottom: 3, background: 'transparent', border: 0 }}
+              style={{ marginTop: 18, font: "500 11px/1 'Manrope'", letterSpacing: '.24em', textTransform: 'uppercase', color: 'var(--ob-dim-2)', borderBottom: '1px solid color-mix(in srgb, var(--dim-2) 50%, transparent)', paddingBottom: 3, background: 'transparent', border: 0 }}
             >
               Back to start
             </button>
