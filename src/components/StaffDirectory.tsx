@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { FileUp } from 'lucide-react';
 import {
   fetchStaffDirectory,
   addStaffMember,
@@ -12,6 +13,11 @@ import { useIdentity } from '../state/IdentityContext';
 import { useConnectivity } from '../state/ConnectivityContext';
 import { StaleDataNotice, OfflineActionNotice } from './shiftsync/OfflineNotice';
 import { useSingleFlight } from '../hooks/useLiveRefresh';
+import { btnPrimary } from '../features/rosterReview/styles';
+import { cn } from '../lib/utils';
+
+// The roster importer (the same one as onboarding and Scheduling), loaded when a manager opens the directory.
+const ShiftUpload = lazy(() => import('./ShiftUpload'));
 
 interface StaffDirectoryProps {
   locationId: string;
@@ -264,6 +270,18 @@ export default function StaffDirectory({ locationId, onChanged, refreshKey }: St
 
       {!collapsed && (
         <div className="staff-directory-body">
+          {isManager && (
+            <Suspense
+              fallback={
+                <button type="button" className={cn(btnPrimary, 'w-full sm:w-auto')} disabled>
+                  <FileUp className="h-5 w-5 shrink-0" aria-hidden />
+                  Import staff from a roster
+                </button>
+              }
+            >
+              <ShiftUpload variant="staff" onCommitted={() => load()} />
+            </Suspense>
+          )}
           <p className="hint">
             Job titles here are set by the venue and never inferred from an
             uploaded roster — they're what populates the Management tier in
@@ -360,7 +378,7 @@ export default function StaffDirectory({ locationId, onChanged, refreshKey }: St
                   onKeyDown={(e) => e.key === 'Enter' && void handleAdd()}
                   disabled={!online}
                 />
-                <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={adding || !newName.trim() || !online}>
+                <button className="btn btn-primary disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void handleAdd()} disabled={adding || !newName.trim() || !online}>
                   {adding ? 'Adding…' : 'Add staff member'}
                 </button>
               </div>
