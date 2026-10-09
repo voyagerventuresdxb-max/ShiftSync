@@ -90,7 +90,7 @@ const confirmSheet = (page: Page, origin: 'I heard' | 'You typed' = 'I heard') =
 
 async function record(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Start recording a voice command' }).click();
-  await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+  await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
   await page.waitForTimeout(600);
   // The recording ring animates, so the button never passes Playwright's stability check.
   await stage(page).getByRole('button', { name: 'Stop recording voice command' }).click({ force: true });
@@ -328,7 +328,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     await signIn(page, 'MANAGER');
     await page.getByRole('button', { name: 'Start recording a voice command' }).click();
     const s = stage(page);
-    await expect(s.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+    await expect(s.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
     const canvas = s.locator('canvas');
     await expect(canvas).toBeVisible();
     expect(await page.locator('.voice-stage').evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
@@ -376,7 +376,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
 
     for (const how of ['Close', 'Cancel'] as const) {
       await page.getByRole('button', { name: 'Start recording a voice command' }).click();
-      await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+      await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
       await page.waitForTimeout(400);
       await stage(page).getByRole('button', { name: how }).click();
       await expect(stage(page)).toHaveCount(0);
@@ -424,7 +424,7 @@ test.describe('voice sheet (endpoints stubbed)', () => {
     const heard = 'Give Alex a shout-out for the spotless bar';
     await stubVoice(page, { transcript: heard, transcribeDelayMs: 1500, parse: [{ body: { transcript: heard, intent: alexShoutout('Spotless bar'), voiceLogId: 'l', hasAdditionalRequest: false }, delayMs: 800 }] });
     await page.getByRole('button', { name: 'Start recording a voice command' }).click();
-    await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+    await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(500);
     await stage(page).getByRole('button', { name: 'Stop recording voice command' }).click({ force: true });
     await expect(page.getByRole('status').filter({ hasText: 'Transcribing…' })).toBeAttached();

@@ -447,6 +447,13 @@ function install() {
     }
   };
 
+  /**
+   * Long timers that are not the app's connection probe: going back online (below) makes ConnectivityContext
+   * check /api/health with a 5 s abort timer that clears itself when it answers, so on a busy machine it can
+   * still be in flight at the check. It belongs to the app, not the voice sheet.
+   */
+  const sheetLongTimers = () => [...fz.longTimers].filter((id) => !/checkReachable/.test(fz.timerFrom.get(id) ?? ''));
+
   /** Back to a closed, quiet sheet: visible, online, answers normal; then checks 5. */
   const settle = async (baseline: { raf: number; intervals: number; longTimers: number; listeners: Record<string, number> } | null) => {
     if (fz.hidden) {
@@ -483,7 +490,8 @@ function install() {
     const raf = fz.rafCalls - r0;
     if (raf > baseline.raf + 3) violate('frames-left-running', `${raf} animation frames in 0.5 s with the sheet closed (idle ${baseline.raf})`);
     if (fz.intervals.size > baseline.intervals) violate('interval-left', `${fz.intervals.size} intervals running (idle ${baseline.intervals})`);
-    if (fz.longTimers.size > baseline.longTimers) violate('timer-left', `${fz.longTimers.size} long timers pending (idle ${baseline.longTimers}) from ${[...fz.longTimers].map((id) => fz.timerFrom.get(id)).join(' ; ')}`);
+    const timers = sheetLongTimers();
+    if (timers.length > baseline.longTimers) violate('timer-left', `${timers.length} long timers pending (idle ${baseline.longTimers}) from ${timers.map((id) => fz.timerFrom.get(id)).join(' ; ')}`);
     for (const [k, n] of fz.listeners) if (n > (baseline.listeners[k] ?? 0)) violate('listener-left', `${k}: ${n} (idle ${baseline.listeners[k] ?? 0})`);
     if (liveTracks() > 0) violate('mic-left-on', 'microphone track live after closing');
     const open = fz.contexts.filter((c) => c.state !== 'closed').length;
@@ -495,7 +503,7 @@ function install() {
     await settle(null);
     const r0 = fz.rafCalls;
     await sleep(500);
-    return { raf: fz.rafCalls - r0, intervals: fz.intervals.size, longTimers: fz.longTimers.size, listeners: Object.fromEntries(fz.listeners) };
+    return { raf: fz.rafCalls - r0, intervals: fz.intervals.size, longTimers: sheetLongTimers().length, listeners: Object.fromEntries(fz.listeners) };
   };
 
   w.__fzRun = async (seed: number, steps: number, baseline: Parameters<typeof settle>[0]) => {
