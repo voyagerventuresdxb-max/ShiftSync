@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma.js';
+import { PREVIEW_CHANGED_MESSAGE } from './rotaActions.js';
 import { writeAuditLog } from '../auditLog.js';
 import { notifyUsersBatched, notifyUser } from '../push.js';
 
@@ -45,12 +48,37 @@ export type CreateAnnouncementResult =
   | { result: 'location_not_found'; message: string }
   | { result: 'author_not_found'; message: string }
   | { result: 'too_long'; message: string }
-  | { result: 'rate_limited'; message: string };
+  | { result: 'rate_limited'; message: string }
+  /** Only with `expectAudience`: who would be notified changed since the preview; nothing was posted. */
+  | { result: 'changed'; message: string };
+
+/**
+ * Who an announcement notifies: every active staff member at the venue except the author. The
+ * voice preview shows the count; the fingerprint (of their ids) lets Confirm check nobody joined
+ * or left since.
+ */
+export async function announcementAudience(
+  db: Prisma.TransactionClient,
+  locationId: string,
+  authorId: string | null,
+): Promise<{ ids: string[]; recipients: number; fingerprint: string }> {
+  const rows = await db.user.findMany({
+    where: { locationId, isActive: true, id: { not: authorId ?? undefined } },
+    select: { id: true },
+    orderBy: { id: 'asc' },
+  });
+  const ids = rows.map((r) => r.id);
+  return { ids, recipients: ids.length, fingerprint: createHash('sha256').update(ids.join(',')).digest('hex').slice(0, 32) };
+}
+
+class AudienceChanged extends Error {}
 
 export async function createAnnouncement(input: {
   locationId: string;
   authorId: string | null;
   body: string;
+  /** What the caller previewed (voice Confirm): checked inside the post's own transaction. */
+  expectAudience?: { recipients: number; fingerprint: string };
 }): Promise<CreateAnnouncementResult> {
   if (input.body.length > ANNOUNCEMENT_BODY_MAX) {
     return { result: 'too_long', message: `Announcement text is too long (max ${ANNOUNCEMENT_BODY_MAX} characters).` };
@@ -76,33 +104,41 @@ export async function createAnnouncement(input: {
     return { result: 'rate_limited', message: 'Too many announcements posted recently — please wait before posting another.' };
   }
 
-  const created = await prisma.$transaction(async (tx) => {
-    const row = await tx.announcement.create({
-      data: { locationId: input.locationId, authorId: input.authorId, body: input.body },
-      include: { author: { select: { fullName: true } } },
-    });
-    await writeAuditLog(tx, {
-      locationId: input.locationId,
-      actorId: input.authorId,
-      action: 'ANNOUNCEMENT_POSTED',
-      entityType: 'Announcement',
-      entityId: row.id,
-      note: `Posted an announcement (${row.body.length} characters).`,
-    });
-    return row;
-  });
+  let created;
+  let recipientIds: string[];
+  try {
+    ({ created, recipientIds } = await prisma.$transaction(async (tx) => {
+      // Who is notified is decided here, with the post: if it isn't what was previewed, nothing is posted.
+      const audience = await announcementAudience(tx, input.locationId, input.authorId);
+      if (input.expectAudience && (audience.recipients !== input.expectAudience.recipients || audience.fingerprint !== input.expectAudience.fingerprint)) {
+        throw new AudienceChanged();
+      }
+      const row = await tx.announcement.create({
+        data: { locationId: input.locationId, authorId: input.authorId, body: input.body },
+        include: { author: { select: { fullName: true } } },
+      });
+      await writeAuditLog(tx, {
+        locationId: input.locationId,
+        actorId: input.authorId,
+        action: 'ANNOUNCEMENT_POSTED',
+        entityType: 'Announcement',
+        entityId: row.id,
+        note: `Posted an announcement (${row.body.length} characters).`,
+      });
+      return { created: row, recipientIds: audience.ids };
+    }));
+  } catch (err) {
+    if (err instanceof AudienceChanged) return { result: 'changed', message: PREVIEW_CHANGED_MESSAGE };
+    throw err;
+  }
 
   // Real delivery on top of the write above — never inside it, a push
   // failure must not roll back the post. Every active staff member at the
   // location except the author, batched (not one big Promise.all) since this
   // is the app's one full-roster fan-out — see lib/push.ts's own comment on
   // notifyUsersBatched for why.
-  const recipients = await prisma.user.findMany({
-    where: { locationId: input.locationId, isActive: true, id: { not: input.authorId ?? undefined } },
-    select: { id: true },
-  });
   void notifyUsersBatched(
-    recipients.map((r) => r.id),
+    recipientIds,
     { title: 'New announcement', body: input.body, url: '/' },
   );
 

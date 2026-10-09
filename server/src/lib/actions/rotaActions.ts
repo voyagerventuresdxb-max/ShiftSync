@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { writeAuditLog } from '../auditLog.js';
 import { prisma } from '../prisma.js';
 import { withAuditedTransaction } from '../auditLog.js';
@@ -50,10 +52,33 @@ export async function getRotaPublishPreview(
   return { shiftCount, staffCount, shiftsChanging };
 }
 
+/**
+ * A fingerprint of everything a publish of this week acts on: every shift in the week with its
+ * person, status and last edit. Any shift added, removed, edited, reassigned or published since
+ * changes it. The voice preview carries it; Confirm publishes only if it still matches.
+ */
+export async function publishFingerprint(db: Prisma.TransactionClient, locationId: string, weekStart: Date): Promise<string> {
+  const weekEnd = new Date(weekStart);
+  weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
+  const shifts = await db.shift.findMany({
+    where: { locationId, date: { gte: weekStart, lt: weekEnd } },
+    select: { id: true, userId: true, status: true, updatedAt: true },
+    orderBy: { id: 'asc' },
+  });
+  const lines = shifts.map((s) => `${s.id}|${s.userId ?? ''}|${s.status}|${s.updatedAt.toISOString()}`);
+  return createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 32);
+}
+
+export const PREVIEW_CHANGED_MESSAGE = 'Things changed since this preview, so nothing was sent. Check the latest and confirm again.';
+
 export type PublishRotaResult =
   | { result: 'ok'; publishedAt: Date; notifiedCount: number; affectedUserIds: string[] }
   | { result: 'not_found'; message: string }
-  | { result: 'empty'; message: string };
+  | { result: 'empty'; message: string }
+  /** Only with `expectFingerprint`: the week changed since the preview; nothing was published. */
+  | { result: 'changed'; message: string };
+
+class PreviewChanged extends Error {}
 
 /**
  * Raw publish — exactly the `prisma.$transaction([...])` call
@@ -71,6 +96,8 @@ export async function publishRota(input: {
   locationId: string;
   weekStart: Date;
   publishedById: string;
+  /** The fingerprint the caller previewed (voice Confirm): checked inside the publish's own transaction. */
+  expectFingerprint?: string;
 }): Promise<PublishRotaResult> {
   const location = await prisma.location.findUnique({ where: { id: input.locationId } });
   if (!location) return { result: 'not_found', message: `Location "${input.locationId}" not found.` };
@@ -92,28 +119,38 @@ export async function publishRota(input: {
   // publish" the instant it was published.
   const publishedAt = new Date();
   const weekIso = input.weekStart.toISOString().slice(0, 10);
-  const publish = await prisma.$transaction(async (tx) => {
-    const row = await tx.rotaPublish.upsert({
-      where: { locationId_weekStart: { locationId: input.locationId, weekStart: input.weekStart } },
-      create: { locationId: input.locationId, weekStart: input.weekStart, publishedAt, publishedById: input.publishedById, notifiedCount },
-      update: { publishedAt, publishedById: input.publishedById, notifiedCount },
+  let publish;
+  try {
+    publish = await prisma.$transaction(async (tx) => {
+      // What was previewed is what gets published: anything changed since means nothing is written.
+      if (input.expectFingerprint !== undefined && (await publishFingerprint(tx, input.locationId, input.weekStart)) !== input.expectFingerprint) {
+        throw new PreviewChanged();
+      }
+      const row = await tx.rotaPublish.upsert({
+        where: { locationId_weekStart: { locationId: input.locationId, weekStart: input.weekStart } },
+        create: { locationId: input.locationId, weekStart: input.weekStart, publishedAt, publishedById: input.publishedById, notifiedCount },
+        update: { publishedAt, publishedById: input.publishedById, notifiedCount },
+      });
+      await tx.shift.updateMany({
+        where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
+        data: { status: 'PUBLISHED', updatedAt: publishedAt },
+      });
+      // The publish is a venue-wide event staff act on; it gets its own audit
+      // row (REST and voice both land here), committed with the publish itself.
+      await writeAuditLog(tx, {
+        locationId: input.locationId,
+        actorId: input.publishedById,
+        action: 'ROTA_PUBLISHED',
+        entityType: 'RotaPublish',
+        entityId: row.id,
+        note: `Published the rota for the week of ${weekIso}: ${shiftCount} shift(s), ${notifiedCount} people notified.`,
+      });
+      return row;
     });
-    await tx.shift.updateMany({
-      where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
-      data: { status: 'PUBLISHED', updatedAt: publishedAt },
-    });
-    // The publish is a venue-wide event staff act on; it gets its own audit
-    // row (REST and voice both land here), committed with the publish itself.
-    await writeAuditLog(tx, {
-      locationId: input.locationId,
-      actorId: input.publishedById,
-      action: 'ROTA_PUBLISHED',
-      entityType: 'RotaPublish',
-      entityId: row.id,
-      note: `Published the rota for the week of ${weekIso}: ${shiftCount} shift(s), ${notifiedCount} people notified.`,
-    });
-    return row;
-  });
+  } catch (err) {
+    if (err instanceof PreviewChanged) return { result: 'changed', message: PREVIEW_CHANGED_MESSAGE };
+    throw err;
+  }
 
   const affectedUserIds = shiftGroups
     .filter((g): g is typeof g & { userId: string } => g.userId !== null)

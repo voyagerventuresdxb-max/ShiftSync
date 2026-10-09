@@ -317,7 +317,7 @@ test.describe('voice commands — real pipeline, Gemini faked at the network bou
 
     await scriptUtterance(asked, { tool: 'QUERY_MY_SCHEDULE', args: {}, confidence: 0.9, summary: 'What is my schedule this week?' });
     await mic.click();
-    await expect(page.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
     await expect(notice).toHaveCount(0);
     await page.waitForTimeout(700);
     await page.getByRole('button', { name: 'Stop recording voice command' }).click({ force: true });

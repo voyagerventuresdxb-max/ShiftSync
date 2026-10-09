@@ -182,7 +182,12 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
       return (
         <>
           <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />
-          <p className="mt-2 text-xs text-foreground/60">Everyone at your venue gets this as a notification.</p>
+          <p className="mt-2 text-xs text-foreground/60">
+            {/* The server's count (never the app's guess); an older server sends none. */}
+            {intent.recipients !== undefined
+              ? `${intent.recipients} ${intent.recipients === 1 ? 'person' : 'people'} will be notified.`
+              : 'Everyone at your venue gets this as a notification.'}
+          </p>
         </>
       );
     case 'CREATE_SHIFT': {

@@ -59,11 +59,21 @@ type Action =
       weekStart: string;
       /** Only the shifts this publish actually changes, and only the people who will be notified (absent from older servers). */
       counts?: { shiftsChanging: number; peopleNotified: number };
+      /** What the publish acts on; sent back with Confirm, which publishes only if nothing changed since (absent from older servers). */
+      fingerprint?: string;
       confidence: number;
       summary: string;
     }
   | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
-  | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
+  | {
+      intent: 'POST_ANNOUNCEMENT';
+      content: string;
+      /** How many people the server says are notified, and who (absent from older servers). */
+      recipients?: number;
+      fingerprint?: string;
+      confidence: number;
+      summary: string;
+    }
   | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string }
   | { intent: 'REQUEST_TIME_OFF'; startDate: string; endDate: string; reason: string | null; confidence: number; summary: string };
 
@@ -258,10 +268,12 @@ export async function executeVoiceIntent(
   transcript: string,
   intent: ParsedIntent,
   voiceLogId: string | null,
+  /** One per preview: the server runs a Confirm with the same key only once (older servers ignore it). */
+  idempotencyKey?: string,
 ): Promise<{ executed: boolean; result: unknown }> {
   return request('/api/voice/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
-    body: JSON.stringify({ transcript, intent, voiceLogId }),
+    body: JSON.stringify({ transcript, intent, voiceLogId, ...(idempotencyKey ? { idempotencyKey } : {}) }),
   });
 }

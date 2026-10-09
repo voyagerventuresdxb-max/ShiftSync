@@ -14,7 +14,7 @@ import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voice
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 import { choosableFor } from '@/lib/voiceChoices';
-import { BACKGROUNDED, NOTHING_HEARD, UNSUPPORTED, alreadyDone, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
+import { BACKGROUNDED, NOTHING_HEARD, PREVIEW_CHANGED, UNSUPPORTED, alreadyDone, micProblem, offlineProblem, previewChanged, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
 import { voiceExamples } from '@/lib/voiceExamples';
 import type { VoiceOrigin } from '@/lib/voiceSteps';
 import { voiceContextLine, voiceStageMode, type VoiceCloseAction, type VoiceStageState } from '@/lib/voiceStage';
@@ -122,6 +122,12 @@ function warmUpVoice(): void {
 }
 
 /** First letter of the venue name, for the profile avatar. */
+/** A fresh key for one preview's Confirm: the server runs a Confirm with the same key only once. */
+function newConfirmKey(): string {
+  const c = typeof crypto !== 'undefined' ? crypto : undefined;
+  return c?.randomUUID ? c.randomUUID() : `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function avatarInitial(venueName: string): string {
   return venueName.trim().charAt(0).toUpperCase() || '·';
 }
@@ -169,6 +175,8 @@ export function AppShell() {
     executed?: boolean;
     /** The choices a picked reading came from, so the sheet can go back to them. */
     asked?: ParsedIntent;
+    /** This preview's Confirm key (a new one whenever the reading on screen changes). */
+    confirmKey: string;
   } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
   // The real guard against a second Confirm: two taps in the same instant both pass a state check.
@@ -256,7 +264,7 @@ export function AppShell() {
         setVoiceBanner({ kind: 'error', message: VOICE_ROLE_REFUSAL });
         return;
       }
-      setVoiceResult({ transcript, intent: choosableFor(systemRole, intent), voiceLogId, hasAdditionalRequest, origin });
+      setVoiceResult({ transcript, intent: choosableFor(systemRole, intent), voiceLogId, hasAdditionalRequest, origin, confirmKey: newConfirmKey() });
     },
     [],
   );
@@ -295,7 +303,8 @@ export function AppShell() {
   // "Update preview" on the sheet with the words as edited: the same parse step as a recording, from
   // the text alone (nothing is recorded or transcribed). Nothing runs until its own Confirm.
   const handleVoiceReparse = useCallback(
-    async (text: string) => {
+    /** `notice`: shown above the new preview (why it was read again). */
+    async (text: string, notice?: VoiceProblem) => {
       if (!session) {
         setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
         setVoiceResult(null);
@@ -305,6 +314,7 @@ export function AppShell() {
       setVoiceReparsing(true);
       try {
         showParsed(session.user.systemRole, text, await parseVoiceIntent(session.token, text, 'typed'), origin);
+        if (notice) setVoiceExecProblem(notice);
       } catch (err) {
         setVoiceResult(null);
         openComposer(requestProblem(err, { stage: 'understand', online: navigator.onLine }), text);
@@ -505,11 +515,11 @@ export function AppShell() {
   // A "which did you mean?" choice only swaps in that reading; its own Confirm still executes it.
   const handleVoiceChoose = useCallback((option: ParsedIntent) => {
     setVoiceExecProblem(null);
-    setVoiceResult((prev) => (prev ? { ...prev, intent: option, asked: prev.asked ?? prev.intent } : prev));
+    setVoiceResult((prev) => (prev ? { ...prev, intent: option, asked: prev.asked ?? prev.intent, confirmKey: newConfirmKey() } : prev));
   }, []);
 
   const handleVoiceBackToChoices = useCallback(() => {
-    setVoiceResult((prev) => (prev?.asked ? { ...prev, intent: prev.asked, asked: undefined } : prev));
+    setVoiceResult((prev) => (prev?.asked ? { ...prev, intent: prev.asked, asked: undefined, confirmKey: newConfirmKey() } : prev));
   }, []);
 
   const handleVoiceConfirm = useCallback(async () => {
@@ -535,11 +545,17 @@ export function AppShell() {
       }
     };
     try {
-      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId);
+      await executeVoiceIntent(session.token, voiceResult.transcript, voiceResult.intent, voiceResult.voiceLogId, voiceResult.confirmKey);
       done();
     } catch (err) {
       // A Confirm tapped again after a timeout or a dropped connection, for a command the first
       // tap already did: the server runs it once and says so, which is success, not an error.
+      // What the preview showed changed since (a shift edited, someone joined): nothing was sent; the
+      // same words are read again and the latest preview shows, saying why.
+      if (previewChanged(err)) {
+        await handleVoiceReparse(voiceResult.transcript, PREVIEW_CHANGED);
+        return;
+      }
       if (alreadyDone(err)) {
         done();
         return;
@@ -556,7 +572,7 @@ export function AppShell() {
       voiceExecutingRef.current = false;
       setVoiceExecuting(false);
     }
-  }, [voiceResult, session]);
+  }, [voiceResult, session, handleVoiceReparse]);
 
   // My Shifts is the staff-facing home screen, so it needs a real destination
   // in the shell chrome exactly like /profile has — the four-tab RadialDock is
