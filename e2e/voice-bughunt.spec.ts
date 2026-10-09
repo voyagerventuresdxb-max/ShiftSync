@@ -55,7 +55,7 @@ test('after a recording that could not be understood, the next recording starts 
   await expect(stage(page).getByLabel('Type it instead')).toHaveValue(heard);
   // The mic from the typed box: listening shows nothing from before.
   await stage(page).getByRole('button', { name: 'Start recording a voice command' }).click();
-  await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+  await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
   await expect(stage(page).getByText('I heard', { exact: true })).toHaveCount(0);
   await expect(stage(page).getByText(heard)).toHaveCount(0);
   await stage(page).getByRole('button', { name: 'Close' }).click();

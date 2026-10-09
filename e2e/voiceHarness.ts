@@ -80,7 +80,9 @@ export const confirmSheet = (page: Page, origin: 'I heard' | 'You typed' = 'I he
 
 export async function startRecording(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Start recording a voice command' }).click();
-  await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+  // The browser's fake microphone can take over 5 s to start on a busy machine; the app shows
+  // "Starting the microphone…" meanwhile. 15 s for that, as everywhere a test starts the mic.
+  await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
 }
 
 export async function record(page: Page): Promise<void> {
