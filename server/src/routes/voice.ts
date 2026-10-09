@@ -7,6 +7,8 @@ import { transcribeRateLimiter, parseIntentRateLimiter, voiceExecuteRateLimiter 
 import { transcribeAudio, VoiceTranscriptionError } from '../voice/transcribe.js';
 import { venueSpellingHint } from '../voice/context.js';
 import { parseVoiceIntent, VoiceIntentError } from '../voice/parseIntent.js';
+import { claimConfirmation, confirmationKey, finishConfirmation } from '../voice/confirmations.js';
+import { audioProblem } from '../voice/audioCheck.js';
 import type { AiBudgetExceededError } from '../lib/aiBudget.js';
 import { logParsedInteraction, shouldPromptForAdditionalRequest } from '../voice/interactionLog.js';
 import { allowedIntentsFor, MANAGER_INTENTS, type ParsedIntent } from '../voice/intentSchema.js';
@@ -196,6 +198,9 @@ function validateIntentShape(intent: ParsedIntent): string | null {
 voiceRouter.post('/transcribe', requireSession, transcribeRateLimiter, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No audio file uploaded.' });
+    // Empty, too short or too long: refused here, before any model call (nothing is spent).
+    const tooShortOrLong = audioProblem(req.file.buffer);
+    if (tooShortOrLong) return res.status(tooShortOrLong.status).json({ error: tooShortOrLong.error, errorCode: tooShortOrLong.errorCode });
 
     // The vocabulary hint is purely an accuracy optimization, not a
     // requirement — this endpoint previously touched no database at all.
@@ -322,6 +327,8 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
    * a caller that never sent a voiceLogId (a hand-crafted request) still
    * gets the normal response, just with no log row to update.
    */
+  // The key this Confirm claimed (voice/confirmations.ts), finished with the answer below.
+  let confirmationId: string | null = null;
   const respond = async (
     status: number,
     body: Record<string, unknown>,
@@ -334,6 +341,10 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
       await updateInteractionOutcome(voiceLogId, req.user!.id, outcome, declineReason, confirmed).catch((err) =>
         console.error('[voice.execute] failed to update interaction log', err),
       );
+    }
+    // A 5xx leaves the key claimed with no answer: its outcome is unknown, so it is never run again.
+    if (confirmationId && status < 500) {
+      await finishConfirmation(confirmationId, status, body).catch((err) => console.error('[voice.execute] failed to record the confirmation', err));
     }
     return res.status(status).json(body);
   };
@@ -370,6 +381,16 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
     const shapeError = validateIntentShape(intent);
     if (shapeError) return respond(400, { error: shapeError }, 'REJECTED_VALIDATION', shapeError);
 
+    // One Confirm, one run, whatever happens to the voice log: the key the app made for this preview
+    // is claimed before anything changes. A retry with it gets the stored answer; an older app sends
+    // none and is handled as before.
+    const key = confirmationKey(req.body?.idempotencyKey);
+    if (key) {
+      const claim = await claimConfirmation({ key, locationId: req.user!.locationId, userId: req.user!.id, intent: intent.intent });
+      if (claim.kind !== 'claimed') return res.status(claim.status).json(claim.body);
+      confirmationId = claim.id;
+    }
+
     // One command runs once: a Confirm retried after a slow or dropped first try (same voice log)
     // must not create a second shift. The log row is claimed in one conditional update; a row
     // already claimed is answered 409 without touching anything (and without `respond`, which
@@ -378,7 +399,9 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
     if (voiceLogId) {
       const claimed = await prisma.voiceInteractionLog.updateMany({ where: { id: voiceLogId, actorId: req.user!.id, outcome: { not: 'EXECUTED' } }, data: { outcome: 'EXECUTED' } });
       if (claimed.count === 0 && (await prisma.voiceInteractionLog.count({ where: { id: voiceLogId, actorId: req.user!.id } }))) {
-        return res.status(409).json({ error: 'That command has already been done.', errorCode: 'voice_already_executed' });
+        const already = { error: 'That command has already been done.', errorCode: 'voice_already_executed' };
+        if (confirmationId) await finishConfirmation(confirmationId, 409, already).catch(() => {});
+        return res.status(409).json(already);
       }
     }
 
@@ -682,7 +705,13 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
       }
       case 'PUBLISH_ROTA': {
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
-        const result = await publishRota({ locationId, weekStart, publishedById: actorId });
+        // A Confirm from an app that sent the preview's fingerprint publishes only what it previewed;
+        // without one (an older app) it publishes as before.
+        const expectFingerprint = typeof intent.fingerprint === 'string' ? intent.fingerprint : undefined;
+        const result = await publishRota({ locationId, weekStart, publishedById: actorId, expectFingerprint });
+        if (result.result === 'changed') {
+          return respond(409, { error: result.message, errorCode: 'voice_preview_changed' }, 'REJECTED_VALIDATION', result.message);
+        }
         if (result.result === 'not_found') {
           return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }
@@ -729,7 +758,13 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         return respond(201, { executed: true, result: { createdCount: result.createdCount, templateName: result.templateName } }, 'EXECUTED');
       }
       case 'POST_ANNOUNCEMENT': {
-        const result = await createAnnouncement({ locationId, authorId: actorId, body: intent.content });
+        // Posted only to the audience the preview counted, when the app sent it (an older app: as before).
+        const expectAudience =
+          typeof intent.fingerprint === 'string' && typeof intent.recipients === 'number' ? { recipients: intent.recipients, fingerprint: intent.fingerprint } : undefined;
+        const result = await createAnnouncement({ locationId, authorId: actorId, body: intent.content, expectAudience });
+        if (result.result === 'changed') {
+          return respond(409, { error: result.message, errorCode: 'voice_preview_changed' }, 'REJECTED_VALIDATION', result.message);
+        }
         if (result.result !== 'ok') {
           const status = result.result === 'rate_limited' ? 429 : result.result === 'too_long' ? 400 : 404;
           return respond(status, { error: result.message }, 'REJECTED_VALIDATION', result.message);

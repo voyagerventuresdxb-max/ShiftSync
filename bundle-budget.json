@@ -1,13 +1,14 @@
 {
   "note": "Gzipped JS each staff screen downloads; written by `node scripts/check-bundle-size.mjs --update`. The build fails above budget + tolerance.",
   "tolerance": 0.1,
+  "change": "2026-10-09 (run 17, approved by the owner once): staff screens raised from 132613 to 135913 bytes, so the build ceiling (budget + 10%) goes from 142.45 kB to 146.0 kB gzip, for the voice safety fixes in the app shell (one Confirm = one command, microphone off in the background, unreadable readings never shown). Any further raise needs the owner's approval.",
   "staffScreensGzipBytes": {
-    "/": 132613,
-    "/my-shifts": 132613,
-    "/scheduling": 132613,
-    "/profile": 132613,
-    "/login": 132613,
-    "/join": 132613,
-    "/welcome": 132613
+    "/": 135913,
+    "/my-shifts": 135913,
+    "/scheduling": 135913,
+    "/profile": 135913,
+    "/login": 135913,
+    "/join": 135913,
+    "/welcome": 135913
   }
 }

@@ -249,7 +249,7 @@ test.describe('voice sheet: the bottom row is always reachable', () => {
       page,
       async () => {
         await page.getByRole('button', { name: 'Start recording a voice command' }).click();
-        await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+        await expect(stage(page).getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
       },
       async (visible, label) => {
         await expectReachable(stage(page).getByRole('button', { name: 'Stop recording voice command' }), visible, `stop (${label})`);

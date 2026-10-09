@@ -91,11 +91,21 @@ type Action =
       weekStart: string;
       /** Shifts this publish changes (new or edited since the last publish) and the people it notifies. */
       counts?: { shiftsChanging: number; peopleNotified: number };
+      /** What the publish acts on (rotaActions.publishFingerprint): Confirm publishes only if it still matches. */
+      fingerprint?: string;
       confidence: number;
       summary: string;
     }
   | { intent: 'APPLY_ROTA_TEMPLATE'; templateId: string | null; templateName: string; weekStart: string; confidence: number; summary: string }
-  | { intent: 'POST_ANNOUNCEMENT'; content: string; confidence: number; summary: string }
+  | {
+      intent: 'POST_ANNOUNCEMENT';
+      content: string;
+      /** How many people are notified, and a fingerprint of who (communicationActions.announcementAudience). */
+      recipients?: number;
+      fingerprint?: string;
+      confidence: number;
+      summary: string;
+    }
   | { intent: 'POST_SHOUTOUT'; targetUserId: string; targetUserName: string; content: string; confidence: number; summary: string };
 
 /** A question answered by the server (no Confirm, never executed). */
@@ -144,9 +154,15 @@ export type ChoosableIntent = Action & { details?: ReadingDetails };
 
 /** What each tool is for, and which arguments it reads. Shown to the model, filtered by role. */
 export const TOOL_GUIDE: Record<IntentType | 'DECLINED', { does: string; args: string }> = {
-  MARK_AVAILABILITY: { does: 'mark the caller unavailable, or preferring a day off, on one day', args: 'day, availability' },
+  MARK_AVAILABILITY: {
+    does: 'mark the caller unavailable, or preferring a day off, on one day',
+    args: 'day, availability, person (only when the words name someone other than the caller, as heard)',
+  },
   REQUEST_SWAP: { does: "ask a colleague to cover one of the caller's own shifts", args: 'person (the colleague), day (the shift), start (only if said), reason' },
-  REQUEST_TIME_OFF: { does: 'the caller asks for time off: one day, or a run of days', args: 'day (first day), endDay (last day, if more than one), reason' },
+  REQUEST_TIME_OFF: {
+    does: 'the caller asks for time off: one day, or a run of days',
+    args: 'day (first day), endDay (last day, if more than one), reason, person (only when the words name someone other than the caller, as heard)',
+  },
   QUERY_MY_SCHEDULE: { does: 'answer when the caller themself works (their own shifts only)', args: 'day or week (only if said)' },
   WHO_IS_WORKING: { does: 'say who is working today, tonight, or on a given day', args: 'day, period (only if said)' },
   WHO_IN_SECTION: { does: 'say who is in a floor section on a day', args: 'section, day, period (only if said)' },

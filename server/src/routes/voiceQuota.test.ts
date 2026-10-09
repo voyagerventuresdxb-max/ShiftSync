@@ -41,7 +41,8 @@ after(async () => {
 
 async function transcribe() {
   const form = new FormData();
-  form.append('audio', new Blob([new Uint8Array(Buffer.from('fake audio'))], { type: 'audio/webm' }), 'a.webm');
+  // 2 KB: big enough to pass the empty/too-short check that comes before any quota or model call.
+  form.append('audio', new Blob([new Uint8Array(Buffer.alloc(2048, 7))], { type: 'audio/webm' }), 'a.webm');
   const res = await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
   return { status: res.status, body: (await res.json()) as { error?: string; errorCode?: string } };
 }

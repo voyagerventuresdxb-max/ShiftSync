@@ -109,7 +109,7 @@ No token may be blue or purple (hue 180–330 with chroma 0.01 or more).
 | `--accent-subtle` | champagne at 12% | |
 | `--accent-foreground` (text on gold) | `#100d0a` | 16.2% 0.008 67 |
 | `--focus-ring` | champagne at 70% | |
-| `--disabled-bg` / `--disabled-fg` | bone at 10% / stone | the wizard's disabled-button fill, with a legible label |
+| `--disabled-opacity` | 0.5 | the shared buttons' disabled look: dimmed, not recoloured, no hover or press feedback, not-allowed cursor |
 | `--danger` | clay red `#da6d5d` | 65.9% 0.140 30 |
 | `--success` | sage `#92af83` | 72.0% 0.070 135 |
 | `--warning` | ochre `#de9f66` | 75.1% 0.105 62 |
@@ -133,8 +133,8 @@ floor plan's sections are told apart by their labels and by default/active/warni
 | Text on gold buttons: default / hover / pressed | 8.44 / 9.85 / 6.19 |
 | Text on the red button | 5.84 |
 | Focus ring against the surface | 4.07–4.65 |
-| Enabled gold fill against disabled fill | 5.13–6.97 |
-| Disabled label on its fill | 3.79–5.14 |
+| Enabled gold fill against disabled fill (disabled controls are exempt from WCAG) | 2.45–2.95 |
+| Disabled label on its dimmed fill | 2.88–3.14 |
 | Danger / success / warning text | 4.68–5.92 / 6.42–8.12 / 6.85–8.66 |
 | Chip labels: gold / sage / terracotta | 9.46 / 5.67 / 4.62 |
 

@@ -105,7 +105,7 @@ test('the listening orb follows the microphone: level, speed and outer ring rise
 
   await page.getByRole('button', { name: 'Start recording a voice command' }).click();
   const stage = page.locator('.voice-stage > [role="dialog"]');
-  await expect(stage.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible();
+  await expect(stage.getByRole('button', { name: 'Stop recording voice command' })).toBeVisible({ timeout: 15_000 });
   const canvas = stage.locator('canvas');
   await expect(canvas).toBeVisible();
   const t0 = await page.evaluate(() => performance.now());

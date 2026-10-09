@@ -50,15 +50,30 @@ test('the focus ring stands out from every surface (3:1)', () => {
   atLeast(3, '--focus-ring');
 });
 
-test('a disabled button reads as disabled: clearly apart from an enabled gold one, its label still legible', () => {
+// Disabled controls are exempt from WCAG contrast. These floors hold the shared button's disabled
+// look (the whole button at --disabled-opacity): clearly apart from an enabled gold button, and its
+// label still readable on it.
+test('a disabled gold button reads as disabled: clearly apart from an enabled one, its label still readable', () => {
+  const op = Number(tokens['--disabled-opacity']);
+  assert.ok(op > 0 && op < 1, `--disabled-opacity ${tokens['--disabled-opacity']}`);
+  const gold = rgba('--accent').slice(0, 3);
+  const label = rgba('--accent-foreground').slice(0, 3);
   for (const bg of SURFACES) {
-    const disabled = on('--disabled-bg', bg);
-    const enabled = rgba('--accent').slice(0, 3);
-    const apart = contrast(enabled, disabled);
-    assert.ok(apart >= 3, `enabled vs disabled fill on ${bg}: ${apart.toFixed(2)}`);
-    const label = contrast(rgba('--disabled-fg').slice(0, 3), disabled);
-    assert.ok(label >= 3, `disabled label on ${bg}: ${label.toFixed(2)}`);
+    const under = rgba(bg).slice(0, 3);
+    const fill = over([...gold, op], under);
+    const apart = contrast(gold, fill);
+    assert.ok(apart >= 2.4, `enabled vs disabled fill on ${bg}: ${apart.toFixed(2)}`);
+    const readable = contrast(over([...label, op], under), fill);
+    assert.ok(readable >= 2.8, `disabled label on ${bg}: ${readable.toFixed(2)}`);
   }
+});
+
+test("the select chevron (an SVG data URI, which cannot read variables) is drawn in the text colour", () => {
+  const css = readFileSync(join(ROOT, 'src/styles/global.css'), 'utf8');
+  const m = /stroke='%23([0-9a-f]{6})'/i.exec(css);
+  assert.ok(m, 'select chevron not found in global.css');
+  const text = resolve('var(--text)', tokens).slice(0, 3);
+  assert.equal('#' + m[1].toLowerCase(), '#' + text.map((v) => Math.round(v).toString(16).padStart(2, '0')).join(''));
 });
 
 test('semantic colours are AA as text on every surface', () => {

@@ -1,19 +1,21 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type ReadingDetails, type Unrecognized } from './intentSchema.js';
-import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, othersNamed, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
+import { MAX_PEOPLE_CHOICES, nameFits, namedForSomeone, normalizeName, othersNamed, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
 import { mentionedIn, periodSaid, type Term } from './vocabulary.js';
 import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt } from './prompts.js';
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
-import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
+import { getRotaPublishPreview, publishFingerprint } from '../lib/actions/rotaActions.js';
+import { announcementAudience } from '../lib/actions/communicationActions.js';
+import { prisma } from '../lib/prisma.js';
 import { bestMatch } from '../lib/textSimilarity.js';
 import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, textInputEstimate, withAiBudget } from '../lib/aiBudget.js';
 import { billedOutputTokens } from '../parsing/visionProvider.js';
 import { findOverlappingShift, shiftInstants } from '../lib/shiftRules.js';
 import { formatVenueTime } from '../lib/venueTime.js';
 import { buildContext, venueSpellingHint, type VenueContext } from './context.js';
-import { dayLabel, missingPerson, NOT_FOUND, normalizeToolCall, resolveToolCall, type Reading, type ToolCall } from './tools.js';
+import { dayLabel, missingPerson, NOT_FOUND, normalizeToolCall, OWN_DAYS_ONLY, resolveToolCall, someoneElsesDays, venueWords, type Reading, type ToolCall } from './tools.js';
 
 export { buildContext, dayLabel };
 export type { VenueContext };
@@ -184,6 +186,7 @@ async function resolveCall(call: ToolCall, ctx: VenueContext, user: Caller, tran
     let checked: ParsedIntent = r;
     if (checked.intent === 'PUBLISH_ROTA') checked = await refinePublishRotaResponse(checked, user.locationId);
     else if (checked.intent === 'APPLY_ROTA_TEMPLATE') checked = await refineApplyRotaTemplateResponse(checked, ctx.rotaTemplates ?? []);
+    else if (checked.intent === 'POST_ANNOUNCEMENT') checked = await refineAnnouncementResponse(checked, user);
     return checkAgainstContext(checked, ctx, user, timezone, transcript);
   };
   if (resolved.kind === 'reading') return check(resolved.reading);
@@ -243,7 +246,20 @@ export async function refinePublishRotaResponse(response: Extract<ParsedIntent, 
   }
   const s = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const summary = `This will publish ${s(shiftsChanging, 'new or changed shift', 'new or changed shifts')} for the week of ${week} and notify ${s(staffCount, 'person', 'people')} — confirm?`;
-  return { ...response, counts: { shiftsChanging, peopleNotified: staffCount }, summary };
+  const fingerprint = await publishFingerprint(prisma, locationId, weekStart);
+  return { ...response, counts: { shiftsChanging, peopleNotified: staffCount }, fingerprint, summary };
+}
+
+/**
+ * An announcement's preview says how many people it notifies (everyone active at the venue but the
+ * author), counted here, never by the app; the fingerprint lets Confirm check nobody joined or left.
+ */
+export async function refineAnnouncementResponse(
+  response: Extract<ParsedIntent, { intent: 'POST_ANNOUNCEMENT' }>,
+  caller: { id: string; locationId: string },
+): Promise<ParsedIntent> {
+  const { recipients, fingerprint } = await announcementAudience(prisma, caller.locationId, caller.id);
+  return { ...response, recipients, fingerprint };
 }
 
 const TEMPLATE_MATCH_THRESHOLD = 0.6;
@@ -375,17 +391,16 @@ const SELF_ONLY = new Set<string>(['MARK_AVAILABILITY', 'REQUEST_TIME_OFF']);
 /**
  * "Give Omar next Friday off": time off and availability are always the caller's own, so a reading
  * of one whose words name someone else would book the caller's days, not that person's. It is
- * asked, never offered. Null when the words name nobody else.
+ * asked, never offered: a teammate is "not Omar's"; a name that is nobody on the team ("Give
+ * Zebulon next Friday off") is "I couldn't find Zebulon", asking who they meant. Null when the
+ * words name nobody else. `notNames`: the venue's own words (sections, roles), never a name.
  */
-export function selfOnlyNamesOther(r: ParsedIntent, transcript: string, staff: StaffEntry[], callerId: string): Unrecognized | null {
+export function selfOnlyNamesOther(r: ParsedIntent, transcript: string, staff: StaffEntry[], callerId: string, notNames: string[] = []): Unrecognized | null {
   if (!SELF_ONLY.has(r.intent) || !transcript.trim()) return null;
   const named = othersNamed(staff, transcript, callerId);
-  if (!named.length) return null;
+  if (!named.length) return someoneElsesDays(namedForSomeone(transcript, notNames), staff, callerId, transcript);
   const who = named[0]!.fullName.split(/\s+/)[0]!;
-  return clarify(
-    "To change someone else's days, use the rota. By voice, time off and availability are for your own days only.",
-    `That would book your own days off, not ${who}'s.`,
-  );
+  return clarify(OWN_DAYS_ONLY, `That would book your own days off, not ${who}'s.`);
 }
 
 /**
@@ -411,8 +426,14 @@ export async function checkAgainstContext(
   }
   const mismatch = weekdayMismatch(transcript, response);
   if (mismatch) return mismatch;
-  const notYours = selfOnlyNamesOther(response, transcript, ctx.staffDirectory, caller.id);
+  const notYours = selfOnlyNamesOther(response, transcript, ctx.staffDirectory, caller.id, venueWords(ctx));
   if (notYours) return notYours;
+  // A new shift with nobody on it, though the words say who it is for ("a shift for Zebulon"): that
+  // name is looked up like any other, never dropped into an open shift.
+  if (response.intent === 'CREATE_SHIFT' && !response.userId && !response.targetUserName?.trim()) {
+    const heard = namedForSomeone(transcript, venueWords(ctx))[0];
+    if (heard) response = { ...response, userId: null, targetUserName: heard };
+  }
   // "Move Alex's shift to 7pm": a name that is whose shift it already is names no new person.
   if (response.intent === 'EDIT_SHIFT' && response.userId === null && response.targetUserName?.trim()) {
     const { shiftId } = response;

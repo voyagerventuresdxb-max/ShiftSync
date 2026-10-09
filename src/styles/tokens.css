@@ -85,9 +85,9 @@
   --accent-foreground: var(--ink-cta);
   --focus-ring: color-mix(in srgb, var(--champagne) 70%, transparent);
 
-  /* ---- Disabled controls: no gold, quieter fill, text still legible ---- */
-  --disabled-bg: color-mix(in srgb, var(--bone) 10%, transparent);
-  --disabled-fg: var(--stone);
+  /* ---- Disabled shared buttons (.btn): dimmed, not recoloured, so the label stays readable and
+     nothing moves; no hover or press feedback (global.css). ---- */
+  --disabled-opacity: 0.5;
 
   /* ---- Semantic ---- */
   --danger: var(--clay-red);

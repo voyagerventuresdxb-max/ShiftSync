@@ -409,8 +409,15 @@ select:-webkit-autofill {
   transition: filter 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   filter: brightness(1.1);
+}
+
+/* Disabled looks disabled: dimmer, no hover or press feedback (the press scale above already skips
+   :disabled), a not-allowed cursor. Opacity only, so the text stays readable and nothing moves. */
+.btn:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
 }
 
 .btn-primary {
@@ -424,7 +431,7 @@ select:-webkit-autofill {
   border: 1px solid var(--border);
 }
 
-.btn-ghost:hover {
+.btn-ghost:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--text-secondary);
 }
@@ -557,6 +564,21 @@ select:-webkit-autofill {
 .staff-directory-input-inline {
   width: 100%;
   min-width: 10rem;
+}
+
+/* Safari draws a native <select> as a white button that ignores the dark background, leaving the
+   off-white text nearly unreadable. Its own look is turned off (on an iPhone, a tap still opens the
+   system picker) and a chevron in the text colour marks it as a choice; the list is dark too. */
+select.staff-directory-input,
+select.app-select {
+  -webkit-appearance: none;
+  appearance: none;
+  color-scheme: dark;
+  padding-right: 2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23efeae0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 0.75rem;
 }
 
 /* ---------------------------------------------------------------------- */

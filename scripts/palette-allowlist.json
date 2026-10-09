@@ -6,5 +6,6 @@
   { "file": "android/app/src/main/res/values/ic_launcher_background.xml", "literal": "#FFFFFF", "reason": "background of the placeholder Android launcher icon; changes with the app-icon artwork, not the palette" },
   { "file": "src/lib/cssToken.ts", "literal": "#c9a66b", "reason": "canvas fallback before the stylesheet can be read; equals --accent (tested)" },
   { "file": "src/lib/cssToken.ts", "literal": "rgb", "reason": "builds canvas colour strings from tokens read at runtime" },
-  { "file": "src/components/InviteLinkPanel.tsx", "literal": "bg-white", "reason": "QR codes need a white quiet zone to scan reliably" }
+  { "file": "src/components/InviteLinkPanel.tsx", "literal": "bg-white", "reason": "QR codes need a white quiet zone to scan reliably" },
+  { "file": "src/styles/global.css", "literal": "%23efeae0", "reason": "select chevron is an SVG data URI, which cannot read CSS variables; equals --text (tested)" }
 ]
