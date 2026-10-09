@@ -49,7 +49,7 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
 17. [x] **Android build:** fixed by #135 (merged 2026-10-07, run 13).
 18. [ ] **Run 12 follow-ups** from the run 12 chat report: two items that need your decision before
     the next run (one on the rota stack, one security follow-up).
-19. [ ] **Run 13 decision — roster import (#140):** its holdout gate was not met (one dense photo
+19. [x] **Run 13 decision — roster import (#140):** done: #140 is merged and deployed (run 14B; marked done in run 17). History: its holdout gate was not met (one dense photo
     roster, one footer fragment, three shifted shifts; details in [`AUTONOMOUS_RUN.md`](AUTONOMOUS_RUN.md)
     run 13). Either accept that risk and have the next run merge #133 → #139 → #140 and deploy the
     API once, or ask for another round first. Until then production keeps the old importer and the
@@ -71,3 +71,12 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
     those readings, so the voice confirm sheet can show it as it does for shifts and shout-outs.
 23. [ ] **Live captions on iPhone:** revisit when an iOS Capacitor project exists (in a Safari tab
     they would need Apple's speech recognition, which is not available to Home Screen web apps).
+24. [ ] **Voice asks too often for shift times:** use the venue's own shift patterns to guess AM/PM
+    and offer two tappable options.
+25. [ ] **Voice cannot schedule dates more than two weeks ahead.**
+26. [ ] **One server quota test fails only under heavy machine load** (passes alone).
+27. [ ] **Slim the staff bundle** (lazy-load admin-only code). Its budget was raised once, to
+    146.0 kB gzip, on 2026-10-09 (run 17); any further raise needs your approval.
+28. [ ] **Make the confirm-key claim transactional for every Confirm action.** Today the voice
+    Confirm key is claimed in its own write just before the change (accepted in run 17): a
+    command whose outcome is unknown is refused, never repeated.
