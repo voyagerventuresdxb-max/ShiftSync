@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The page token (--bg in src/styles/tokens.css): window and splash background, so the
+         native shell never shows white before the web view paints. -->
+    <color name="shell_background">#0d0b09</color>
+</resources>

@@ -3,7 +3,7 @@
  * Renders the home-screen / PWA icons from the EXISTING logo mark
  * (public/shiftsync-mark.svg) — no new artwork. The mark is a 2:1 wordless
  * infinity stroke, so each icon is a square of the app background
- * (--bg, #0F0F12) with the mark centred at 70% of the width: that keeps the
+ * (--bg, #0d0b09) with the mark centred at 70% of the width: that keeps the
  * whole stroke inside the 80%-diameter safe circle a maskable icon can be
  * cropped to, so nothing is cut off on Android, and iOS (which applies its
  * own rounded corners) shows the same composition.
@@ -26,7 +26,7 @@ const svg = readFileSync(join(root, 'public', 'shiftsync-mark.svg'));
 const outDir = join(root, 'public', 'icons');
 mkdirSync(outDir, { recursive: true });
 
-const BACKGROUND = { r: 0x0f, g: 0x0f, b: 0x12, alpha: 1 }; // --bg
+const BACKGROUND = { r: 0x0d, g: 0x0b, b: 0x09, alpha: 1 }; // --bg (src/styles/tokens.css)
 const MARK_WIDTH_RATIO = 0.7;
 
 async function render(size, filename) {

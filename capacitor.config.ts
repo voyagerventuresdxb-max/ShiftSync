@@ -10,6 +10,9 @@ const config: CapacitorConfig = {
   appId: 'ae.shiftsync.app',
   appName: 'ShiftSync',
   webDir: 'dist',
+  // The WebView's own background, shown before the first paint and behind overscroll: the
+  // page token (--bg in src/styles/tokens.css), so a cold start never flashes white.
+  backgroundColor: '#0d0b09',
   server: {
     androidScheme: 'https',
     cleartext: httpApi,
