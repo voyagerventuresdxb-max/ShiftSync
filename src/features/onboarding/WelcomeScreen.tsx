@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LiquidGlassSphere } from './LiquidSphere';
+import { StatusOrb } from '../../components/StatusOrb';
 import './onboarding.css';
 
 /**
@@ -14,10 +14,9 @@ import './onboarding.css';
  * path — hold completing goes straight to a hold→settled crossfade — so it's
  * not ported. The prototype's HOLD-phase center mass is a three.js
  * ShaderGradient WebGL mesh loaded at runtime from a CDN; that dependency
- * doesn't fit this app's locked stack (no three.js), so `LiquidGlassSphere`
- * (the prototype's own portable SVG-filter sphere, otherwise only used in
- * the dead "formed" phase) fills that role instead — same warm liquid-glass
- * material, no WebGL/CDN dependency. The phone-bezel/iOS-status-bar/home-
+ * doesn't fit this app's locked stack (no three.js), so the voice sheet's
+ * gold dot orb (`StatusOrb`, its own lazily loaded download) fills that role
+ * instead: calm at rest, "working" while the icons are taken in. The phone-bezel/iOS-status-bar/home-
  * indicator chrome and the prototype's design-review scaffolding (palette
  * swatches, motion-token docs, phase-jump buttons) are presentation-only and
  * are not part of the real product screen, so they're dropped too.
@@ -448,8 +447,6 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
 
   // ── Derived render values (hold phase) ──
   const p = holdProgress;
-  const sphereWaviness = 1 - p * 0.45;
-  const sphereBodyOpacity = 0.42 + p * 0.33;
 
   const iconStyles = ICON_DEFS.map(({ angleDeg, stagger }) => {
     const local = Math.max(0, Math.min(1, (p - stagger) / (1 - stagger)));
@@ -569,7 +566,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                 width: 340,
                 height: 340,
                 borderRadius: '50%',
-                background: `radial-gradient(circle,color-mix(in srgb, var(--champagne-hi) ${((0.42 + p * 0.2) * 100).toFixed(1)}%, transparent) 0%,color-mix(in srgb, var(--champagne) ${((0.24 + p * 0.1) * 100).toFixed(1)}%, transparent) 28%,color-mix(in srgb, var(--champagne) 8%, transparent) 58%,color-mix(in srgb, var(--champagne) 0%, transparent) 82%)`,
+                background: `radial-gradient(circle,color-mix(in srgb, var(--champagne-hi) ${((0.12 + p * 0.08) * 100).toFixed(1)}%, transparent) 0%,color-mix(in srgb, var(--champagne) ${((0.08 + p * 0.05) * 100).toFixed(1)}%, transparent) 28%,color-mix(in srgb, var(--champagne) 4%, transparent) 58%,color-mix(in srgb, var(--champagne) 0%, transparent) 82%)`,
                 filter: `blur(${(22 - p * 6).toFixed(1)}px)`,
                 mixBlendMode: 'screen',
                 opacity: (0.85 + p * 0.15).toFixed(3),
@@ -596,7 +593,7 @@ export default function WelcomeScreen({ onContinue }: { onContinue: () => void }
                 justifyContent: 'center',
               }}
             >
-              <LiquidGlassSphere size={200} waviness={sphereWaviness} opacity={sphereBodyOpacity} active={holdActive} />
+              <StatusOrb phase={holdActive ? 'working' : 'rest'} size={200} />
             </div>
             <div
               style={{

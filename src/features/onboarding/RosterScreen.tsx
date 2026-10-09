@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
-import { uploadRoster, ApiError, type UploadResponse } from '../../api/schedules';
+import { uploadRoster, ApiError, type UploadResponse, type UploadStage } from '../../api/schedules';
 import { useIdentity } from '../../state/IdentityContext';
 import { useOnboardingState } from '../../state/OnboardingStateContext';
 import OnboardingScreenShell from './OnboardingScreenShell';
 import { ReadingProgress } from '../rosterReview/ReadingProgress';
 import { newUploadId, rosterFileKind, type RosterFileKind } from '../rosterReview/uploadProgress';
+import { StatusOrb } from '../../components/StatusOrb';
+import type { StatusOrbPhase } from '../../lib/statusOrb';
 
 /**
  * Onboarding · 03 · Roster — ported from `ShiftSync Roster.dc.html`.
@@ -79,11 +81,14 @@ export default function RosterScreen({
   const photoInputRef = useRef<HTMLInputElement>(null);
   // The file being read, so "Send to the AI reader" doesn't make the manager pick it again.
   const pickedRef = useRef<{ file: File; viaPhoto: boolean } | null>(null);
+  // The read's current stage (from the progress steps below), for the orb: reading, then matching.
+  const [stage, setStage] = useState<UploadStage | null>(null);
 
   const handlePick = async (file: File, pickedViaPhoto: boolean, aiConsent = false) => {
     pickedRef.current = { file, viaPhoto: pickedViaPhoto };
     setViaPhoto(pickedViaPhoto);
     const uploadId = newUploadId();
+    setStage(null);
     setZone({ phase: 'uploading', fileName: file.name, uploadId, kind: rosterFileKind(file) });
     if (!session) {
       setZone({ phase: 'error', fileName: file.name, message: 'You need to be signed in to upload a roster.' });
@@ -132,6 +137,19 @@ export default function RosterScreen({
     setUploadResult(null);
     onSkip();
   };
+
+  const orbPhase: StatusOrbPhase | null =
+    zone.phase === 'uploading'
+      ? stage === 'matching' || stage === 'done'
+        ? 'connecting'
+        : 'working'
+      : zone.phase === 'ready'
+        ? 'done'
+        : zone.phase === 'error'
+          ? 'problem'
+          : zone.phase === 'consent'
+            ? 'rest'
+            : null;
 
   const fileZoneFilled = ready && !zone.viaPhoto;
   const photoZoneFilled = ready && zone.viaPhoto;
@@ -377,8 +395,17 @@ export default function RosterScreen({
         )}
       </div>
 
+      {orbPhase && (
+        <div style={{ display: 'flex', justifyContent: 'center' }} data-testid="roster-orb">
+          <StatusOrb phase={orbPhase} size={orbPhase === 'done' || orbPhase === 'problem' ? 72 : 112} />
+          <p className="sr-only" role="status" aria-live="polite">
+            {zone.phase === 'ready' ? 'Roster read. Continue to review it.' : zone.phase === 'error' ? zone.message : ''}
+          </p>
+        </div>
+      )}
+
       {zone.phase === 'uploading' && (
-        <ReadingProgress key={zone.uploadId} className="rr-onboarding" token={session?.token} uploadId={zone.uploadId} fileKind={zone.kind} />
+        <ReadingProgress key={zone.uploadId} className="rr-onboarding" token={session?.token} uploadId={zone.uploadId} fileKind={zone.kind} onStage={setStage} />
       )}
 
       {(zone.phase === 'consent' || (zone.phase === 'ready' && zone.result.escalation)) && (

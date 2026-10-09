@@ -150,8 +150,9 @@ left as they are; the app's tokens do not use them for text.
   the review step's green tick and amber warning, which moved to sage and ochre. The QR code and
   invite link differ only because the test server ran on another port, and the welcome sphere
   only by animation frame.
-- **The onboarding sphere** (`LiquidSphere.tsx`) is allowlisted until the gold dot orb (#148)
-  replaces it.
+- **The onboarding sphere** (`LiquidSphere.tsx`) has since been replaced by the gold dot orb
+  (#148). That orb draws with the gold token, and its fallback ring uses `var(--accent)`. The
+  screenshots in this document predate that change.
 - **The QR code** keeps a white background, which scanners need.
 - **The floor-plan image** is the venue's own upload and is shown as uploaded. In the
   measurements its pixels (a cool grey test image) account for the 17% "blue-shifted" share on
