@@ -2,8 +2,23 @@
 
 ## 1. FRONTEND DESIGN SYSTEM
 - Avoid generic AI UI ("AI slop"). Use distinct, intentional, luxury visual choices.
-- Target Palette: Dark Luxury Speakeasy (#0F0F12 background, charcoal card surfaces #1A1A22, soft gold typography #E5A93C).
-- Zero-eye-strain dark mode: use dark-gray surfaces (#121212, #1E1E1E, #181818), off-white text (#E0E0E0), muted/desaturated accents, surface elevation over shadows, opacity-based text hierarchy (87/60/38%), and a light-mode toggle for accessibility.
+- Palette: one warm black-and-gold palette (the onboarding wizard's), defined ONLY in `src/styles/tokens.css`.
+  - Surfaces: warm near-black page `#0d0b09`, cards `#14110d`, raised `#1e1913`, highest `#29231c`.
+  - Text: bone `#efeae0`; stone `#9a9184` for secondary and muted text.
+  - Borders: bone hairlines.
+  - Accent: champagne gold `#c9a66b` (hover `#d9b37a`, pressed `#ac8d58`).
+  - Semantic colours stay inside the same warm family: clay-red danger, sage success, ochre warning, cream-gold info.
+  - No blue or purple anywhere.
+- Never hard-code a colour.
+  - Use the tokens: Tailwind classes such as `bg-surface`, `text-muted-foreground` and `border-border`, or `var(--token)`.
+  - Canvas code reads tokens at runtime through `src/lib/cssToken.ts`.
+  - `scripts/palette.mjs` runs in `npm run build` and `npm test`. It fails on any colour literal outside `tokens.css`; the few exceptions, each with its reason, are in `scripts/palette-allowlist.json`. It also fails on any token outside the measured OKLCH ranges: neutrals hue 60–95, chroma ≤ 0.03; gold hue 74–92, chroma 0.05–0.10. Evidence: `docs/color-evidence.md`.
+- Zero-eye-strain dark mode:
+  - warm dark surfaces, with elevation over shadows;
+  - bone off-white text and muted, desaturated accents;
+  - WCAG AA for every text pair (`scripts/palette-contrast.test.mjs`);
+  - opacity-based text hierarchy;
+  - a light-mode toggle for accessibility. It is not built yet; if added, it is a second set of values in `tokens.css`.
 - Use intentional spacing, high contrast, and smooth micro-interactions (e.g., dynamic glass filling, soft modal transitions).
 - The roster is a live, interactive object, not a static export. Never render schedules as static images.
 

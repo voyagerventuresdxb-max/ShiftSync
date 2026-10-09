@@ -74,6 +74,3 @@ Everything else is done or tracked in [`launch-checklist.md`](launch-checklist.m
 24. [ ] **App icon on Android:** the launcher icon is still the Capacitor placeholder (blue on white); it
     needs the ShiftSync icon artwork. The splash and window background already use the warm page
     colour ([`color-evidence.md`](color-evidence.md)).
-25. [ ] **AGENTS.md palette line:** §1 still names the old colours (`#0F0F12`, `#1A1A22`, `#E5A93C`).
-    The app now uses the onboarding palette from `src/styles/tokens.css`; update the line so future
-    work does not reintroduce the old values (the build's palette check would also stop them).
