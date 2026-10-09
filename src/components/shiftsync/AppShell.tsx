@@ -14,7 +14,7 @@ import { canConfirmVoiceIntent, VOICE_ROLE_REFUSAL } from '../../../shared/voice
 import { hasVoiceConsent, saveVoiceConsent } from '@/lib/voiceConsent';
 import { isSilent, startLevelMeter } from '@/lib/audioLevel';
 import { choosableFor } from '@/lib/voiceChoices';
-import { NOTHING_HEARD, UNSUPPORTED, alreadyDone, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
+import { BACKGROUNDED, NOTHING_HEARD, UNSUPPORTED, alreadyDone, micProblem, offlineProblem, requestProblem, type VoiceProblem } from '@/lib/voiceErrors';
 import { voiceExamples } from '@/lib/voiceExamples';
 import type { VoiceOrigin } from '@/lib/voiceSteps';
 import { voiceContextLine, voiceStageMode, type VoiceCloseAction, type VoiceStageState } from '@/lib/voiceStage';
@@ -23,7 +23,8 @@ import { VoiceStage } from '@/components/shiftsync/VoiceStage';
 import { loadVoiceOrb } from '@/components/shiftsync/voiceOrbChunk';
 
 // Loaded with the first voice result, then kept mounted (its close animation needs it).
-const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceCommandSheet })));
+// The confirm sheet behind its own reading check and error boundary (both in this lazy chunk).
+const VoiceCommandSheet = lazy(() => import('@/components/shiftsync/SafeVoiceCommandSheet').then((m) => ({ default: m.SafeVoiceCommandSheet })));
 const VoiceConsentSheet = lazy(() => import('@/components/shiftsync/VoiceCommandSheet').then((m) => ({ default: m.VoiceConsentSheet })));
 
 /**
@@ -170,6 +171,8 @@ export function AppShell() {
     asked?: ParsedIntent;
   } | null>(null);
   const [voiceExecuting, setVoiceExecuting] = useState(false);
+  // The real guard against a second Confirm: two taps in the same instant both pass a state check.
+  const voiceExecutingRef = useRef(false);
   const [voiceReparsing, setVoiceReparsing] = useState(false);
   const [voiceSheetNeeded, setVoiceSheetNeeded] = useState(false);
   const [voiceConsentOpen, setVoiceConsentOpen] = useState(false);
@@ -347,6 +350,19 @@ export function AppShell() {
     setVoiceOn(false);
   }, [clearMaxDurationTimer]);
 
+  useEffect(() => {
+    // An app switch or a locked screen while recording: the microphone goes off and the clip is
+    // dropped unsent, as when the sheet is closed; the sheet says so when the app comes back.
+    const onVisibility = () => {
+      if (document.visibilityState !== 'hidden' || !mediaRecorderRef.current) return;
+      discardRecordingRef.current = true;
+      stopVoiceRecording();
+      openComposer(BACKGROUNDED);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [stopVoiceRecording, openComposer]);
+
   const startVoiceRecording = useCallback(async () => {
     // Synchronous guard first: everything below this line is async, and a
     // second tap during the permission prompt must be a hard no-op.
@@ -360,12 +376,19 @@ export function AppShell() {
       return;
     }
     setVoiceBanner(null);
+    setVoiceHeard('');
     voiceStartingRef.current = true;
     setVoiceStarting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
       });
+      // The app went to the background while the microphone was starting: let it go at once.
+      if (document.visibilityState === 'hidden') {
+        stream.getTracks().forEach((t) => t.stop());
+        openComposer(BACKGROUNDED);
+        return;
+      }
       const mimeType = pickRecorderMimeType();
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       const meter = startLevelMeter(stream, (level) => {
@@ -468,6 +491,17 @@ export function AppShell() {
     setVoiceExecProblem(null);
   }, []);
 
+  // A reading the sheet can't draw, or an error while drawing it: the sheet closes, the words go back in the box.
+  const voiceTranscript = voiceResult?.transcript ?? '';
+  const handleVoiceUnreadable = useCallback(
+    (problem: VoiceProblem) => {
+      setVoiceResult(null);
+      setVoiceExecProblem(null);
+      openComposer(problem, voiceTranscript);
+    },
+    [voiceTranscript, openComposer],
+  );
+
   // A "which did you mean?" choice only swaps in that reading; its own Confirm still executes it.
   const handleVoiceChoose = useCallback((option: ParsedIntent) => {
     setVoiceExecProblem(null);
@@ -479,12 +513,13 @@ export function AppShell() {
   }, []);
 
   const handleVoiceConfirm = useCallback(async () => {
-    if (!voiceResult) return;
+    if (!voiceResult || voiceExecutingRef.current) return;
     if (!session) {
       setVoiceBanner({ kind: 'error', message: 'Sign in to use voice commands.' });
       setVoiceResult(null);
       return;
     }
+    voiceExecutingRef.current = true;
     setVoiceExecuting(true);
     setVoiceExecProblem(null);
     const done = () => {
@@ -518,6 +553,7 @@ export function AppShell() {
         setVoiceResult(null);
       }
     } finally {
+      voiceExecutingRef.current = false;
       setVoiceExecuting(false);
     }
   }, [voiceResult, session]);
@@ -653,6 +689,7 @@ export function AppShell() {
                 origin={voiceResult.origin}
                 examples={examples}
                 problem={voiceExecProblem}
+                onUnreadable={handleVoiceUnreadable}
               />
             </Suspense>
           )}

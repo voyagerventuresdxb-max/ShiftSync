@@ -417,15 +417,23 @@ function sharedFirstNameOnly(person: StaffEntry, staff: StaffEntry[], transcript
  * name two people share still asks. Two or more named: "Who did you mean?" with them. None named:
  * nobody to look up, so the caller picks from the team. Never a guess.
  */
-function resolvePronoun(staff: StaffEntry[], transcript: string, callerId: string): PersonResolution {
+/**
+ * The staff (never the caller) the transcript names: a word of their name said word for word, or
+ * the same name spelled another way (never a sound-alike). "Thanks Omar Farouk" names Omar Farouk
+ * only, not an Omar Haddad named just by a word Omar Farouk's name also covers.
+ */
+export function othersNamed(staff: StaffEntry[], transcript: string, callerId: string): StaffEntry[] {
   const said = tokens(transcript).filter((w) => !PRONOUNS.has(w) && !SELF_WORDS.has(w));
   const folded = new Set(said.map(foldName));
   const saidOf = (p: StaffEntry) => new Set(nameWords(p).filter((w) => w.length >= 3 && folded.has(foldName(w))).map(foldName));
   const matched = staff.filter((p) => p.id !== callerId).map((p) => ({ p, words: saidOf(p) })).filter((m) => m.words.size > 0);
-  // "Thanks Omar Farouk": Omar Haddad is named only by a word Omar Farouk's name also covers, so he isn't meant.
-  const named = matched
-    .filter((m) => !matched.some((o) => o !== m && o.words.size > m.words.size && [...m.words].every((w) => o.words.has(w))))
-    .map((m) => m.p);
+  return matched.filter((m) => !matched.some((o) => o !== m && o.words.size > m.words.size && [...m.words].every((w) => o.words.has(w)))).map((m) => m.p);
+}
+
+function resolvePronoun(staff: StaffEntry[], transcript: string, callerId: string): PersonResolution {
+  const said = tokens(transcript).filter((w) => !PRONOUNS.has(w) && !SELF_WORDS.has(w));
+  const folded = new Set(said.map(foldName));
+  const named = othersNamed(staff, transcript, callerId);
   if (named.length === 1) {
     // The words of their name as said, in order ("Layla", "Layla Nasser"), looked up like any name.
     const words = nameWords(named[0]!).filter((w) => folded.has(foldName(w)));

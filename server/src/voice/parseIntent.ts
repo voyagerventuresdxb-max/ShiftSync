@@ -1,7 +1,7 @@
 import { GoogleGenAI, ApiError, ThinkingLevel } from '@google/genai';
 import type { SystemRole } from '@prisma/client';
 import { allowedIntentsFor, intentSchemaFor, type ChoosableIntent, type ParsedIntent, type ReadingDetails, type Unrecognized } from './intentSchema.js';
-import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
+import { MAX_PEOPLE_CHOICES, nameFits, normalizeName, othersNamed, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
 import { mentionedIn, periodSaid, type Term } from './vocabulary.js';
 import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt } from './prompts.js';
@@ -369,6 +369,25 @@ export function weekdayMismatch(transcript: string, response: ParsedIntent): Par
 
 const PAST_DATE = clarify('Pick a day from today onwards.', 'That day has already passed. Which day did you mean?');
 
+/** Readings that are always about the caller's own days: they carry no person. */
+const SELF_ONLY = new Set<string>(['MARK_AVAILABILITY', 'REQUEST_TIME_OFF']);
+
+/**
+ * "Give Omar next Friday off": time off and availability are always the caller's own, so a reading
+ * of one whose words name someone else would book the caller's days, not that person's. It is
+ * asked, never offered. Null when the words name nobody else.
+ */
+export function selfOnlyNamesOther(r: ParsedIntent, transcript: string, staff: StaffEntry[], callerId: string): Unrecognized | null {
+  if (!SELF_ONLY.has(r.intent) || !transcript.trim()) return null;
+  const named = othersNamed(staff, transcript, callerId);
+  if (!named.length) return null;
+  const who = named[0]!.fullName.split(/\s+/)[0]!;
+  return clarify(
+    "To change someone else's days, use the rota. By voice, time off and availability are for your own days only.",
+    `That would book your own days off, not ${who}'s.`,
+  );
+}
+
 /**
  * Propose-time backstop: the confirm sheet must never offer something /execute would refuse, or
  * that the caller didn't say. Everything here is deterministic and checked against the caller's
@@ -392,6 +411,8 @@ export async function checkAgainstContext(
   }
   const mismatch = weekdayMismatch(transcript, response);
   if (mismatch) return mismatch;
+  const notYours = selfOnlyNamesOther(response, transcript, ctx.staffDirectory, caller.id);
+  if (notYours) return notYours;
   // "Move Alex's shift to 7pm": a name that is whose shift it already is names no new person.
   if (response.intent === 'EDIT_SHIFT' && response.userId === null && response.targetUserName?.trim()) {
     const { shiftId } = response;

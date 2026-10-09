@@ -56,6 +56,13 @@ export const NOTHING_HEARD: VoiceProblem = {
   message: "I didn't hear anything. Hold the phone a little closer and try again, or type your command below.",
 };
 
+/** The app went to the background (an app switch, a locked screen) while the microphone was on or starting. */
+export const BACKGROUNDED: VoiceProblem = {
+  kind: 'failed',
+  title: 'Recording stopped',
+  message: 'The app went to the background, so the microphone was turned off and nothing was sent. Tap the mic to try again, or type your command below.',
+};
+
 /** Offline before anything was recorded or sent. */
 export function offlineProblem(stage: VoiceStage | 'record'): VoiceProblem {
   const message =

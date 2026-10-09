@@ -23,6 +23,7 @@ import { checkDatabaseHost } from '../../src/lib/testVenueCleanup.js';
 import { describeVoiceConfig } from '../../src/lib/aiConfig.js';
 import type { ParsedIntent } from '../../src/voice/intentSchema.js';
 import { CORPUS, type VoiceCase } from './corpus.js';
+import { MATRIX, expandText } from './matrix.js';
 import { cleanupFixture, seedFixture, snapshot, type Fixture } from './fixture.js';
 import { CALLER, scoreCase, type CaseScore } from './score.js';
 import { wordErrorRate } from './wer.js';
@@ -109,7 +110,7 @@ interface Row {
 
 async function runCase(fx: Fixture, c: VoiceCase, transcriptOverride?: string): Promise<Row> {
   const tok = await token(fx, c.role);
-  const transcript = transcriptOverride ?? c.text;
+  const transcript = transcriptOverride ?? expandText(fx.today, c.text);
   const before = await snapshot(prisma, [fx.locationId, fx.otherLocationId]);
   const { value, usd, ms } = await guarded('parse', c.id, worst('voice_intent', 6_000), () => parseIntent(tok, transcript));
   const after = await snapshot(prisma, [fx.locationId, fx.otherLocationId]);
@@ -133,6 +134,8 @@ async function runCase(fx: Fixture, c: VoiceCase, transcriptOverride?: string): 
 }
 
 function selectCases(spec: string): VoiceCase[] {
+  // The Run 16 command matrix (matrix.ts): all of it, or from a case id on (matrix:m050).
+  if (spec === 'matrix' || spec.startsWith('matrix:')) return MATRIX.filter((c) => !spec.includes(':') || c.id >= spec.slice(7));
   if (spec.startsWith('sample:')) {
     // sample:<per intent> — that many positive cases per intent (spread across the list), every
     // safety negative (role, injection, cross-venue, silence, non-English, compound), and two of
@@ -152,7 +155,7 @@ function selectCases(spec: string): VoiceCase[] {
     return picked;
   }
   const ids = new Set(spec.split(','));
-  return CORPUS.filter((c) => ids.has(c.id));
+  return [...CORPUS, ...MATRIX].filter((c) => ids.has(c.id));
 }
 
 async function main() {
@@ -170,13 +173,13 @@ async function main() {
       for (const c of selectCases(arg)) {
         const row = await runCase(fx, c);
         rows.push(row);
-        appendFileSync(outFile, `${JSON.stringify({ ...row, text: c.text })}\n`);
+        appendFileSync(outFile, `${JSON.stringify({ ...row, text: expandText(fx.today, c.text) })}\n`);
         console.log(`${row.caseId} ${row.score?.ok ? 'ok ' : 'MISS'} ${row.expected} → ${row.got} ${row.parseMs}ms $${row.parseUsd.toFixed(4)}`);
       }
     } else {
       const manifest = JSON.parse(readFileSync(arg, 'utf8')) as { clipId: string; file: string; caseId: string; voice: string; snr: string }[];
       for (const clip of manifest) {
-        const c = CORPUS.find((x) => x.id === clip.caseId)!;
+        const c = [...CORPUS, ...MATRIX].find((x) => x.id === clip.caseId)!;
         const tok = await token(fx, c.role);
         const t = await guarded('transcribe', clip.clipId, worst('voice_transcribe', 4_000), () => transcribe(tok, readFileSync(clip.file)));
         const transcript = t.value.transcript ?? '';

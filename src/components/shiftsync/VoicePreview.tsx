@@ -178,7 +178,13 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
         </>
       );
     case 'POST_ANNOUNCEMENT':
-      return <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />;
+      // Posting notifies the whole team (the one full-roster fan-out): said before Confirm, as publish does.
+      return (
+        <>
+          <AnnouncementCard as="div" body={intent.content} meta={`${viewerName} · ${formatStamp(new Date().toISOString())} · just now`} />
+          <p className="mt-2 text-xs text-foreground/60">Everyone at your venue gets this as a notification.</p>
+        </>
+      );
     case 'CREATE_SHIFT': {
       const person = d?.person ?? null;
       // A split shift: both parts spelled out in full, each on its own line.
@@ -199,7 +205,8 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
       return (
         <Line
           lead={iconLead(<Plane className="h-4 w-4" />)}
-          title={`Time off · ${days === 1 ? '1 day' : `${days} days`}`}
+          // Always the caller's own days (a voice time-off request carries no person): said on the card.
+          title={`Your time off · ${days === 1 ? '1 day' : `${days} days`}`}
           detail={[when, ...(intent.reason ? [`Reason: ${intent.reason}`] : [])]}
           tag={<Tag>Request</Tag>}
         />
