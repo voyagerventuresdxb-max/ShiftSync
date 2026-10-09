@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite",
     "dev:all": "concurrently -k -n api,web -c blue,green \"npm:server:dev\" \"npm:dev\"",
-    "build": "prisma generate && tsc -b && vite build && node scripts/check-bundle-size.mjs",
+    "build": "node scripts/palette.mjs && prisma generate && tsc -b && vite build && node scripts/check-bundle-size.mjs",
     "bundle:check": "node scripts/check-bundle-size.mjs",
+    "palette:check": "node scripts/palette.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

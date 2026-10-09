@@ -1,0 +1,11 @@
+[
+  { "file": "index.html", "literal": "#0d0b09", "reason": "theme-color meta tag cannot read CSS variables; equals --bg (scripts/palette-contrast.test.mjs)" },
+  { "file": "public/manifest.webmanifest", "literal": "#0d0b09", "reason": "web manifest background/theme colour cannot read CSS variables; equals --bg (tested)" },
+  { "file": "capacitor.config.ts", "literal": "#0d0b09", "reason": "native WebView background before first paint; equals --bg (tested)" },
+  { "file": "android/app/src/main/res/values/colors.xml", "literal": "#0d0b09", "reason": "Android window/splash background; equals --bg (tested)" },
+  { "file": "android/app/src/main/res/values/ic_launcher_background.xml", "literal": "#FFFFFF", "reason": "background of the placeholder Android launcher icon; changes with the app-icon artwork, not the palette" },
+  { "file": "src/lib/cssToken.ts", "literal": "#c9a66b", "reason": "canvas fallback before the stylesheet can be read; equals --accent (tested)" },
+  { "file": "src/lib/cssToken.ts", "literal": "rgb", "reason": "builds canvas colour strings from tokens read at runtime" },
+  { "file": "src/components/InviteLinkPanel.tsx", "literal": "bg-white", "reason": "QR codes need a white quiet zone to scan reliably" },
+  { "file": "src/features/onboarding/LiquidSphere.tsx", "reason": "onboarding sphere replaced by the gold dot orb (PR #148); this entry goes when that is merged" }
+]
