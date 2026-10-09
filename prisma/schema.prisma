@@ -397,6 +397,29 @@ model VoiceInteractionLog {
   @@map("voice_interaction_logs")
 }
 
+/// One voice Confirm, by the key the app made for that preview: a retry with the same key gets the
+/// stored answer and runs nothing twice. Claimed (PENDING) before the change, finished (DONE /
+/// FAILED) after it; a key whose outcome is unknown is never run again. Expires after 24 h.
+/// No foreign keys on purpose: rows are swept by expiry, and nothing else depends on them.
+model VoiceConfirmation {
+  id             String   @id @default(cuid())
+  key            String
+  locationId     String   @map("location_id")
+  userId         String   @map("user_id")
+  intent         String
+  status         String
+  responseStatus Int?     @map("response_status")
+  responseBody   Json?    @map("response_body")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  expiresAt      DateTime @map("expires_at")
+
+  @@unique([locationId, userId, key])
+  @@index([key])
+  @@index([expiresAt])
+  @@map("voice_confirmations")
+}
+
 enum AttendanceStatus {
   PRESENT
   LATE

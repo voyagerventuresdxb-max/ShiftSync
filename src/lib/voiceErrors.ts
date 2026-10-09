@@ -78,6 +78,18 @@ export function offlineProblem(stage: VoiceStage | 'record'): VoiceProblem {
  * /execute refused a second run of the same command (same voiceLogId): the first Confirm already
  * did it, even though its answer never arrived (timeout, dropped connection). Treated as done.
  */
+/** Confirm was refused because what the preview showed changed since (a shift edited, someone joined): nothing was sent. */
+export function previewChanged(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.errorCode === 'voice_preview_changed';
+}
+
+/** Shown above the fresh preview after a refused Confirm (previewChanged). */
+export const PREVIEW_CHANGED: VoiceProblem = {
+  kind: 'failed',
+  title: 'Things changed',
+  message: 'Things changed since that preview, so nothing was sent. This is the latest: check it and confirm again.',
+};
+
 export function alreadyDone(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409 && err.errorCode === 'voice_already_executed';
 }
@@ -122,9 +134,15 @@ export function requestProblem(err: unknown, { stage, online }: { stage: VoiceSt
         message: own ?? "The voice assistant isn't available right now. Nothing changed — try again in a few minutes.",
       };
     }
+    // Refused by the server before any model call: an empty or too-short recording, or one too long.
+    if (err.errorCode === 'voice_audio_too_short') return { kind: 'no_speech', title: "Didn't hear anything", message: err.message };
+    if (err.errorCode === 'voice_audio_too_long') return { kind: 'failed', title: 'Recording too long', message: err.message };
     if (err.status === 422 && err.errorCode === 'voice_no_speech') {
       return { kind: 'no_speech', title: "Didn't hear a command", message: err.message };
     }
+    // The same Confirm again, but the first one may have gone through: never "Didn't go through".
+    if (err.errorCode === 'voice_confirm_unknown') return { kind: 'failed', title: 'Not sure it went through', message: err.message };
+    if (err.errorCode === 'voice_confirm_in_progress') return { kind: 'failed', title: 'Still going through', message: err.message };
     return { kind: 'failed', title: stage === 'execute' ? "Didn't go through" : "Couldn't read that", message: err.message };
   }
   return {
