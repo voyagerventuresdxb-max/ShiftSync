@@ -430,6 +430,49 @@ export function othersNamed(staff: StaffEntry[], transcript: string, callerId: s
   return matched.filter((m) => !matched.some((o) => o !== m && o.words.size > m.words.size && [...m.words].every((w) => o.words.has(w)))).map((m) => m.p);
 }
 
+/** Words that can sit where a person's name would ("give ___ Friday off") but name nobody. */
+const NOT_NAMES = new Set([
+  'us', 'we', 'my', 'mine', 'our', 'you', 'your', 'yourself', 'everyone', 'everybody', 'someone', 'somebody', 'nobody', 'anyone', 'anybody',
+  'staff', 'team', 'people', 'crew', 'a', 'an', 'the', 'this', 'that', 'these', 'those', 'next', 'last', 'every', 'each', 'all', 'some', 'any',
+  'no', 'one', 'another', 'other', 'today', 'tomorrow', 'tonight', 'yesterday', 'morning', 'afternoon', 'evening', 'night', 'week', 'weekend',
+  'day', 'days', 'shift', 'shifts', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'january', 'february',
+  'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'eid', 'ramadan', 'christmas', 'diwali',
+  'easter', 'holi', 'onam', 'new', 'off', 'out', 'up', 'down', 'on', 'in', 'at', 'for', 'from', 'to', 'it', 'as', 'and', 'or', 'please',
+  'time', 'leave', 'holiday', 'holidays', 'vacation', 'unavailable', 'available', 'free', 'open', 'extra', 'double', 'split', 'lunch',
+  'dinner', 'brunch', 'breakfast', 'service', 'opening', 'closing', 'close', 'early', 'late', 'am', 'pm', 'noon', 'midnight', 'shout',
+  'shoutout', 'thanks', 'thank', 'kudos', 'well', 'great', 'good', 'nice', 'job', 'sick', 'annual', 'half', 'full', 'whole', 'two', 'three',
+]);
+const NAME = String.raw`([\p{L}][\p{L}'’-]*)`;
+/** Where a command names who it is for: "give/book/mark/put X…", "time off for X", "X's day off", "X needs…", "…for Xavier". */
+const NAMED_FOR = [
+  new RegExp(String.raw`(?:^|[^\p{L}])(?:give|book|mark|put|let|grant|schedule|set|sign|assign|add|move|send)\s+${NAME}`, 'giu'),
+  new RegExp(String.raw`(?:off|leave|holiday|vacation|shift|availability|cover)\s+for\s+${NAME}`, 'giu'),
+  new RegExp(String.raw`${NAME}['’]s\s+(?:day|days|time|shift|shifts|availability|leave|holiday)(?![\p{L}])`, 'giu'),
+  new RegExp(String.raw`(?:^|[.!?]\s+)${NAME}\s+(?:needs|wants|is|isn['’]t|can['’]t|cannot|won['’]t|will|would|has|asked|requested|requests|should|could)(?![\p{L}])`, 'giu'),
+  // A capitalised word after "for" ("on Friday for Xavier"): the speech engine capitalises names.
+  new RegExp(String.raw`(?:^|[^\p{L}])for\s+(\p{Lu}[\p{L}'’-]*)`, 'gu'),
+];
+
+/**
+ * Names said as who a command is for, whoever they are — on the team or not ("Give Zebulon next
+ * Friday off" → "Zebulon"). Pronouns, "me" and words that only sit in that place ("give next
+ * Friday off") are not names; neither are the venue's own words (`notNames`: sections, roles).
+ * A backstop for when the model leaves the person out: a name said is looked up, never dropped.
+ */
+export function namedForSomeone(transcript: string, notNames: Iterable<string> = []): string[] {
+  const skip = new Set([...notNames].flatMap((t) => tokens(t)));
+  const found: string[] = [];
+  for (const re of NAMED_FOR) {
+    for (const m of transcript.matchAll(re)) {
+      const word = m[1]!.replace(/['’]s$/i, '');
+      const n = normalizeName(word);
+      if (!n || n.length < 2 || NOT_NAMES.has(n) || SELF_WORDS.has(n) || PRONOUNS.has(n) || skip.has(n) || /^i['’]/i.test(word)) continue;
+      if (!found.some((f) => normalizeName(f) === n)) found.push(word);
+    }
+  }
+  return found;
+}
+
 function resolvePronoun(staff: StaffEntry[], transcript: string, callerId: string): PersonResolution {
   const said = tokens(transcript).filter((w) => !PRONOUNS.has(w) && !SELF_WORDS.has(w));
   const folded = new Set(said.map(foldName));
