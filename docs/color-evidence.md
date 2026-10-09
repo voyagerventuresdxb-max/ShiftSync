@@ -166,6 +166,23 @@ left as they are; the app's tokens do not use them for text.
 - **There is no light theme** and no `prefers-color-scheme` rules. Adding one is a product
   decision, not a palette fix.
 
+## The voice sheet and confirm sheets
+
+These show the biggest visible change. The orb, the record/stop button and the Confirm button
+move from the brighter old gold `#e5a93c` to the champagne token `#c9a66b`. The hue stays the
+same; the gold loses about a third of its chroma. Measured in close-up crops (Chromium, 390 px;
+every one of the 29 voice states was captured before and after with no failures):
+
+| Element | Before (hue, chroma, lightness) | After |
+|---|---|---|
+| Confirm button fill | 78, 0.139, 77% | 80, 0.087, 74% |
+| Stop button while listening | 79, 0.130, 73% | 80, 0.083, 72% |
+| Orb dots while listening | 79, 0.097, 56% | 80, 0.064, 56% |
+
+Whole-screen gold, listening: chroma 0.122 → 0.079. The voice sheet's dark pixels: hue 286 →
+68, blue-shifted 98% → 0%. The orb still reads the gold token at runtime, so it follows any
+future token change.
+
 ## After the change (Step 6)
 
 Every in-app token is now one of the reference values, so the screens converge on the
