@@ -132,7 +132,9 @@ test('the listening orb follows the microphone: level, speed and outer ring rise
   }
   const ink: { at: number; ink: number }[] = [];
   const frames = new Map([[1.2, '1-silent'], [3.2, '2-loud'], [6.2, '3-silent-after']]);
-  for (let at = 0.2; at <= 6.8; at = Math.round((at + 0.2) * 10) / 10) {
+  // Long enough for the whole recording (2 s silent, 2 s loud, 3 s silent) however late the fake
+  // microphone started relative to t0.
+  for (let at = 0.2; at <= 8.4; at = Math.round((at + 0.2) * 10) / 10) {
     const now = await page.evaluate(() => performance.now());
     const wait = t0 + at * 1000 - now;
     if (wait > 0) await page.waitForTimeout(wait);
@@ -152,10 +154,18 @@ test('the listening orb follows the microphone: level, speed and outer ring rise
     const inkIn = ink.filter((s) => s.at >= from && s.at <= to);
     return { frames: fs.length, level: mean('level'), rate: mean('rate'), ring: mean('ring'), ringInk: inkIn.reduce((a, s) => a + s.ink, 0) / Math.max(1, inkIn.length) };
   };
-  const silentBefore = between(0.6, 1.8);
-  const loud = between(2.6, 3.8);
-  const silentAfter = between(5.0, 6.6);
-  const summary = { silentBefore, loud, silentAfter };
+  // The windows follow the recording itself, not fixed times from t0: the fake microphone starts
+  // playing when it opens, a variable moment before t0, so fixed windows sometimes straddled the
+  // loud part. Loud = from shortly after the level first rises past 0.3 to shortly before it last does.
+  const loudFrames = probe.filter((f) => f.level > 0.3);
+  expect(loudFrames.length, 'the loud part of the recording reached the orb').toBeGreaterThan(10);
+  const onset = (loudFrames[0]!.t - t0) / 1000;
+  const offset = (loudFrames[loudFrames.length - 1]!.t - t0) / 1000;
+  // Frames from before t0 count too: the orb was already listening while the Stop button appeared.
+  const silentBefore = between(onset - 1.4, onset - 0.3);
+  const loud = between(onset + 0.3, offset - 0.3);
+  const silentAfter = between(offset + 1.0, offset + 2.6);
+  const summary = { onset, offset, silentBefore, loud, silentAfter };
   if (keepEvidence) writeFileSync(`${EVIDENCE}/mic-follow-result.json`, JSON.stringify({ summary, ink, probeFrames: probe.length }, null, 2));
   console.log(`[mic-follow] ${JSON.stringify(summary)}`);
 
