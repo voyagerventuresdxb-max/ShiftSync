@@ -176,8 +176,9 @@ onboarding measurements:
   covers buttons and pins, so its larger filled areas read slightly richer.
 - **Coverage:** 66 of 71 in-app screens fall inside hue 66–84 and chroma ≤ 0.013. The other 5
   sit at hue 63–64 and are explained:
-  - three floor-plan screens, where the uploaded image dominates;
-  - two error screens, where the clay-red error message pulls the dark-pixel hue warmer.
+  - two floor-plan screens, where the uploaded image dominates;
+  - three error states (floor plan, people, the voice microphone problem), where the clay-red
+    message pulls the dark-pixel hue warmer.
 
 None of the 5 is blue.
 - **Remaining "off-palette blue" pixels** average 0.02% (max 0.06%). They are the colour fringes
@@ -185,6 +186,23 @@ None of the 5 is blue.
 
 The tables below come from the same measurement runs.
 
+### Every engine and width
+
+Screens counted before / after. A screen is left out when the capture failed or did not land on the intended screen. In this harness the People screens stall in WebKit with the mocked API, both before and after, and WebKit sometimes treated the mocked session as signed out. Those cases are listed per row. On desktop (1280), the three floor-plan screens account for the 9%: there the venue's uploaded plan image (a cool grey test image) fills much of the view. Every other desktop screen measures hue 72–84 with 0% blue-shifted.
+
+| Viewport | Side | Screens | Dark-neutral hue mean (min–max) before → after | Blue-shifted before → after | Gold chroma before → after | Not captured or landed elsewhere (either run) |
+|---|---|---|---|---|---|---|
+| chromium-390 | onboarding | 8 / 8 | 74 (72–78) → 74 (72–78) | 0% → 0% | 0.065 → 0.065 |  |
+| chromium-390 | in-app | 71 / 71 | 289 (280–322) → 72 (63–80) | 90% → 1% | 0.115 → 0.076 | — |
+| webkit-390 | onboarding | 5 / 8 | 74 (73–76) → 74 (72–78) | 0% → 0% | 0.070 → 0.066 |  |
+| webkit-390 | in-app | 67 / 67 | 289 (279–321) → 72 (64–77) | 90% → 1% | 0.114 → 0.075 | onboarding-invite-team, people-owner, people-staff, people-empty, people-error, onboarding-account (not rendered yet), onboarding-welcome (not rendered yet) |
+| chromium-360 | onboarding | 8 / 8 | 74 (72–78) → 74 (72–78) | 0% → 0% | 0.065 → 0.065 |  |
+| chromium-360 | in-app | 71 / 71 | 289 (279–321) → 72 (63–80) | 90% → 1% | 0.115 → 0.076 | — |
+| webkit-360 | onboarding | 2 / 2 | 73 (73–73) → 73 (73–73) | 0% → 0% | 0.061 → 0.061 |  |
+| webkit-360 | in-app | 67 / 66 | 289 (278–320) → 72 (66–77) | 90% → 1% | 0.114 → 0.075 | onboarding-invite-team, people-owner, people-staff, people-empty, people-error, onboarding-invite (landed on /login), onboarding-review (landed on /login), onboarding-roster-attached (landed on /login), onboarding-roster (landed on /login), onboarding-venue (landed on /login), floor-plan-empty (not rendered yet), floor-plan-error (not rendered yet) |
+| chromium-1280 | in-app | 12 / 12 | 289 (287–294) → 63 (13–84) | 90% → 9% | 0.112 → 0.078 | — |
+
+### Chromium 390, per screen
 
 **Before: pixel buckets per side (Chromium, 390 px, 79 screens)**
 
@@ -236,7 +254,7 @@ The tables below come from the same measurement runs.
 | my-shifts-empty | state | 288 / 0.0125 / 90% | 79 / 0.121 | 75 / 0.0089 / 0% | 80 / 0.078 |
 | my-shifts-staff | app | 289 / 0.0128 / 89% | 79 / 0.116 | 73 / 0.0091 / 0% | 77 / 0.077 |
 | notifications-open | state | 294 / 0.0109 / 72% | 79 / 0.100 | 75 / 0.0099 / 0% | 80 / 0.068 |
-| offline-home | state | 291 / 0.0127 / 85% | 80 / 0.106 | 72 / 0.0094 / 0% | 80 / 0.076 |
+| offline-home | state | 291 / 0.0127 / 85% | 80 / 0.106 | 70 / 0.0099 / 0% | 74 / 0.077 |
 | offline-my-shifts | state | 292 / 0.0129 / 85% | 80 / 0.106 | 72 / 0.0097 / 0% | 72 / 0.078 |
 | people-empty | state | 288 / 0.0143 / 92% | 78 / 0.112 | 75 / 0.0103 / 0% | 80 / 0.076 |
 | people-error | state | 308 / 0.0155 / 69% | 78 / 0.132 | 64 / 0.0121 / 0% | 80 / 0.084 |
@@ -367,4 +385,3 @@ The tables below come from the same measurement runs.
 | voice-preview-understanding | #0f0f12 | #0f0f12 (17.0% 0.006 286) | #1a1a20 (22.0% 0.013 285) | #c5c5c5 (82.3% 0.001 —) | #8c8c8d (64.0% 0.002 —) | #e5a93c (77.3% 0.139 78) | #ba8a34 (66.5% 0.117 79) | — |
 | voice-preview-which-one | #0f0f12 | #0f0f12 (17.0% 0.006 286) | #2a2a36 (29.0% 0.022 285) | #c6c6c7 (82.8% 0.001 —) | #909093 (65.5% 0.005 286) | #e5a93c (77.3% 0.139 78) | — | — |
 | voice-preview-which-one-chosen | #0f0f12 | #0f0f12 (17.0% 0.006 286) | #2a2a36 (29.0% 0.022 285) | #c6c6c7 (82.8% 0.001 —) | #909093 (65.5% 0.005 286) | #e5a93c (77.3% 0.139 78) | #e5a93c (77.3% 0.139 78) | — |
-
