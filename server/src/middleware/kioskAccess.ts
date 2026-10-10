@@ -18,9 +18,10 @@ declare global {
 const KIOSK_REFUSED = { error: 'This screen needs a current kiosk link — ask a manager to share it again.', errorCode: 'kiosk_link_required' };
 
 /**
- * Gate for the four venue reads a kiosk screen makes — `GET /api/shifts/:locationId`,
- * `GET /api/shifts/:locationId/publish-status`, `GET /api/announcements/:locationId`
- * and `GET /api/shoutouts/:locationId` — and for no other route.
+ * Gate for the venue reads a kiosk screen makes — `GET /api/shifts/:locationId`,
+ * `GET /api/shifts/:locationId/publish-status`, `GET /api/announcements/:locationId`,
+ * `GET /api/shoutouts/:locationId` and (rota builder v2) `GET /api/weeks/:locationId/:weekStart`,
+ * which answers a kiosk with the published view — and for no other route.
  *
  * With an Authorization header: a session of THAT venue (`requireSession` +
  * `assertOwnsLocation`, so another venue's session gets 403). Without one: the
