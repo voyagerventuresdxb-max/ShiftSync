@@ -593,7 +593,7 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         if (intent.userId && !(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
         if (isPastVenueDay(intent.date, timezone)) return refuse(400, PAST);
         const ranges: TimeRange[] = [{ start: intent.start, end: intent.end }, ...(intent.second ? [{ start: intent.second.start, end: intent.second.end }] : [])];
-        if (!validateRanges(ranges)) return refuse(400, ranges.length === 2 ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
+        if (!validateRanges(ranges)) return refuse(400, intent.second ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
         const weekStart = mondayOf(intent.date);
         const outcome = await applyVoicePatches({
           locationId,
@@ -626,7 +626,8 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
           if (intent.second !== undefined) ranges = [{ start: intent.start ?? first.start, end: intent.end ?? first.end }, ...(intent.second ? [{ start: intent.second.start, end: intent.second.end }] : [])];
           else if (current.length === 2) ranges = [{ start: intent.start ?? first.start, end: first.end }, { start: last.start, end: intent.end ?? last.end }];
           else ranges = [{ start: intent.start ?? first.start, end: intent.end ?? first.end }];
-          if (!validateRanges(ranges)) return refuse(400, ranges.length === 2 ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
+          const split = ranges.length === 2;
+          if (!validateRanges(ranges)) return refuse(400, split ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
         }
         // Custom times drop the old type's name; a named type keeps it.
         const timing = ranges ? { ranges, shiftTypeId: intent.shiftTypeId ?? null } : {};
