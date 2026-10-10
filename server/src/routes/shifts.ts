@@ -1,15 +1,17 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
+import { DEFAULT_VENUE_TIMEZONE } from '../parsing/normalize.js';
 import { formatVenueTime } from '../lib/venueTime.js';
 import { isMondayIso, WEEK_START_NOT_MONDAY_ERROR } from '../lib/venueWeek.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
-import { createShift, deleteShift, updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
-import { findActiveVenueRole, findVenueUser, shiftInstants } from '../lib/shiftRules.js';
+import { updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { findActiveVenueRole, findVenueUser } from '../lib/shiftRules.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
+import { applyWeekPatch } from '../lib/actions/weekActions.js';
+import { mondayOf, type WeekPatchOp, type WeekPatchResult } from '../../../shared/rotaWeek.js';
 import { onBehalfUserId } from '../lib/onBehalf.js';
 import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
 
@@ -72,10 +74,32 @@ async function venueTimezone(locationId: string): Promise<string> {
 }
 
 /**
+ * Rota builder v2: every mutation here is a one-op patch on the shift's week
+ * (lib/actions/weekActions.ts), so the legacy Shift Editor and the new week
+ * grid share one rule set and one version counter. These routes present no
+ * `expectedVersion` (the old client has none), which weekActions logs once.
+ * A refusal maps to the status the old client already handles: an unknown
+ * id → 404 (as the pre-v2 lookups did), a collision with another shift, a
+ * leave or a pending request → 409, anything else about the request → 422.
+ */
+function sendPatchFailure(res: Response, result: Exclude<WeekPatchResult, { result: 'ok' }>): void {
+  if (result.result === 'version_conflict') {
+    res.status(409).json({ error: 'The week changed while you were editing — reload and try again.', errorCode: 'version_conflict' });
+    return;
+  }
+  const { refusal, message } = result;
+  const notFound = refusal === 'unknown_shift' || refusal === 'unknown_person' || refusal === 'unknown_role' || refusal === 'unknown_shift_type';
+  const conflict = refusal === 'already_has_shift' || refusal === 'overlap' || refusal === 'person_on_leave' || refusal === 'pending_request' || refusal === 'leave_over_shift';
+  res.status(notFound ? 404 : conflict ? 409 : 422).json({ error: message, refusal });
+}
+
+/**
  * GET /api/shifts/:locationId?weekStart=YYYY-MM-DD — the 7 days starting weekStart.
  * A session of this venue gets every shift, drafts included. A kiosk screen
  * (the venue's current `X-Kiosk-Token`, see middleware/kioskAccess.ts) gets
  * only PUBLISHED shifts, as `shiftToKioskDto`. A venue id alone gets 401.
+ * CANCELLED rows (a published shift removed but not yet re-published, see
+ * weekActions) are never listed: to this client they are gone.
  */
 shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
@@ -91,7 +115,7 @@ shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) =>
     const kiosk = req.kioskLocationId !== undefined;
     const timezone = await venueTimezone(locationId);
     const shifts = await prisma.shift.findMany({
-      where: { locationId, date: { gte: start, lt: end }, ...(kiosk ? { status: 'PUBLISHED' as const } : {}) },
+      where: { locationId, date: { gte: start, lt: end }, status: kiosk ? ('PUBLISHED' as const) : { not: 'CANCELLED' as const } },
       include: SHIFT_INCLUDE,
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
     });
@@ -118,6 +142,10 @@ shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) =>
  * self : ...` branch below is now unreachable (no STAFF session can pass
  * `requireManager`) and kept only as defense in depth, matching this
  * codebase's existing style at every other on-behalf-of site.
+ *
+ * The shift itself is written by a one-op week patch (see sendPatchFailure);
+ * `breakMinutes`/`briefingNote`/`sidework` are legacy, manager-only fields
+ * outside the week document, applied to the new row right after.
  */
 shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
   try {
@@ -146,17 +174,16 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
     if (userId && !(await findVenueUser(userId, locationId))) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
 
     const timezone = await venueTimezone(locationId);
-    const { startTime, endTime } = shiftInstants(date, start, end, timezone);
-
-    const created = await withAuditedTransaction(
-      prisma,
-      (tx) =>
-        createShift(
-          { locationId, roleId, userId, createdById, date: new Date(`${date}T00:00:00.000Z`), startTime, endTime, breakMinutes, managerNotes: briefingNote, sidework, status: 'DRAFT' } as unknown as Parameters<typeof createShift>[0],
-          tx,
-        ),
-      (shift) => ({ locationId, actorId: createdById, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id }),
-    );
+    const result = await applyWeekPatch({
+      locationId,
+      weekStart: mondayOf(date),
+      actorId: createdById,
+      source: 'grid',
+      patch: { ops: [{ op: 'create', userId, roleId, date, ranges: [{ start, end }] }] },
+    });
+    if (result.result !== 'ok') return sendPatchFailure(res, result);
+    const shiftId = result.results[0]!.shiftId!;
+    const created = await updateShift(shiftId, { breakMinutes, managerNotes: briefingNote, sidework });
     return res.status(201).json({ shift: shiftToDto(created, timezone) });
   } catch (err) {
     console.error('[shifts.create] failed', err);
@@ -169,15 +196,22 @@ shiftsRouter.post('/', requireSession, requireManager, async (req, res) => {
  * `requireManager`-gated (2026-09-05, same fix as POST /, above — see its
  * comment and MEMORY.md). `actorId` in the body is honored for whichever
  * MANAGER/OWNER is acting (same "Viewing" on-behalf-of pattern as POST /).
+ *
+ * Who/when fields go through a one-op week patch on the shift's current
+ * week (a move to another week is refused `outside_week`: the old client
+ * never offered one); the legacy manager-only fields are written directly.
  */
 shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await prisma.shift.findUnique({ where: { id } });
+    const found = await prisma.shift.findUnique({ where: { id } });
+    // A soft-cancelled shift is gone as far as this client is concerned: the same 404 as a missing one.
+    const existing = found && found.status !== 'CANCELLED' ? found : null;
     if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
 
     const timezone = await venueTimezone(existing.locationId);
-    const data: Record<string, unknown> = {};
+    const op: Extract<WeekPatchOp, { op: 'update' }> = { op: 'update', shiftId: id };
+    let touchesWeek = false;
     // Same existence + same-location checks POST / already applies — without
     // these, PATCH could silently reassign a shift to a role/user from a
     // different location, or hit a raw FK-violation 500 instead of a clean 404.
@@ -185,38 +219,53 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       const roleId = String(req.body.roleId);
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role || role.locationId !== existing.locationId) return res.status(404).json({ error: `Role "${roleId}" not found.` });
-      data.roleId = roleId;
+      op.roleId = roleId;
+      touchesWeek = true;
     }
     if (req.body?.userId !== undefined) {
       if (req.body.userId) {
         const userId = String(req.body.userId);
         const user = await prisma.user.findUnique({ where: { id: userId } });
         if (!user || user.locationId !== existing.locationId) return res.status(404).json({ error: `Staff member "${userId}" not found.` });
-        data.userId = userId;
+        op.userId = userId;
       } else {
-        data.userId = null;
+        op.userId = null;
       }
+      touchesWeek = true;
     }
-    if (req.body?.breakMinutes !== undefined) data.breakMinutes = Number(req.body.breakMinutes);
-    if (req.body?.briefingNote !== undefined) data.managerNotes = req.body.briefingNote ? String(req.body.briefingNote) : null;
-    if (req.body?.sidework !== undefined) data.sidework = Array.isArray(req.body.sidework) ? req.body.sidework.map(String) : [];
+    const legacy: Prisma.ShiftUpdateInput = {};
+    if (req.body?.breakMinutes !== undefined) legacy.breakMinutes = Number(req.body.breakMinutes);
+    if (req.body?.briefingNote !== undefined) legacy.managerNotes = req.body.briefingNote ? String(req.body.briefingNote) : null;
+    if (req.body?.sidework !== undefined) legacy.sidework = Array.isArray(req.body.sidework) ? req.body.sidework.map(String) : [];
 
-    const nextDate = req.body?.date !== undefined ? String(req.body.date) : existing.date.toISOString().slice(0, 10);
-    const nextStart = req.body?.start !== undefined ? String(req.body.start) : formatVenueTime(existing.startTime, timezone);
-    const nextEnd = req.body?.end !== undefined ? String(req.body.end) : formatVenueTime(existing.endTime, timezone);
-    if (req.body?.date !== undefined || req.body?.start !== undefined || req.body?.end !== undefined) {
-      const overnight = nextEnd <= nextStart;
-      data.date = new Date(`${nextDate}T00:00:00.000Z`);
-      data.startTime = combineDateAndTime(nextDate, nextStart, timezone);
-      data.endTime = combineDateAndTime(nextDate, nextEnd, timezone, overnight);
+    if (req.body?.date !== undefined) {
+      op.date = String(req.body.date);
+      touchesWeek = true;
+    }
+    if (req.body?.start !== undefined || req.body?.end !== undefined) {
+      const nextStart = req.body?.start !== undefined ? String(req.body.start) : formatVenueTime(existing.startTime, timezone);
+      const nextEnd = req.body?.end !== undefined ? String(req.body.end) : formatVenueTime(existing.endTime, timezone);
+      op.ranges = [{ start: nextStart, end: nextEnd }];
+      touchesWeek = true;
     }
 
     const actorId = await onBehalfUserId(req, res, 'actorId');
     if (!actorId) return;
+    if (touchesWeek) {
+      const result = await applyWeekPatch({
+        locationId: existing.locationId,
+        weekStart: mondayOf(existing.date.toISOString().slice(0, 10)),
+        actorId,
+        source: 'grid',
+        patch: { ops: [op] },
+      });
+      if (result.result !== 'ok') return sendPatchFailure(res, result);
+    }
     const updated = await withAuditedTransaction(
       prisma,
-      (tx) => updateShift(id, data as Prisma.ShiftUpdateInput, tx),
-      () => ({ locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id }),
+      (tx) => updateShift(id, legacy, tx),
+      // The week patch audits the who/when change itself; a legacy-only edit still gets its own row.
+      () => (touchesWeek ? null : { locationId: existing.locationId, actorId, shiftId: id, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: id }),
     );
     return res.status(200).json({ shift: shiftToDto(updated, timezone) });
   } catch (err) {
@@ -225,16 +274,26 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
   }
 });
 
-/** DELETE /api/shifts/:id — body (optional): { actorId }. `requireManager`-gated (2026-09-05, same fix as POST /, above); same on-behalf-of rule as PATCH. */
+/**
+ * DELETE /api/shifts/:id — body (optional): { actorId }. `requireManager`-gated (2026-09-05, same fix as POST /, above); same on-behalf-of rule as PATCH.
+ * A draft is removed outright; a published shift is soft-cancelled (hidden from every list) so the next publish can tell the person — see weekActions.
+ */
 shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await prisma.shift.findUnique({ where: { id } });
+    const found = await prisma.shift.findUnique({ where: { id } });
+    const existing = found && found.status !== 'CANCELLED' ? found : null;
     if (!ownedOrNotFound(req, res, existing, `Shift "${id}" not found.`)) return;
     const actorId = await onBehalfUserId(req, res, 'actorId');
     if (!actorId) return;
-    // Audit-before-delete, in one transaction (shared with voice's CANCEL_SHIFT).
-    await deleteShift({ id, locationId: existing.locationId, actorId });
+    const result = await applyWeekPatch({
+      locationId: existing.locationId,
+      weekStart: mondayOf(existing.date.toISOString().slice(0, 10)),
+      actorId,
+      source: 'grid',
+      patch: { ops: [{ op: 'delete', shiftId: id }] },
+    });
+    if (result.result !== 'ok') return sendPatchFailure(res, result);
     return res.status(204).send();
   } catch (err) {
     console.error('[shifts.delete] failed', err);
@@ -247,6 +306,10 @@ shiftsRouter.delete('/:id', requireSession, requireManager, async (req, res) => 
  * `requireManager`-gated (2026-09-05, same fix as POST /, above). `locationId`
  * comes from the session, and `createdById` in the body is honored for
  * whichever MANAGER/OWNER is acting — same rules as POST /.
+ *
+ * One week patch per distinct week in the batch (a week is the unit of
+ * versioning), each all-or-nothing; a batch spanning weeks is therefore
+ * atomic per week, not across them.
  */
 shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
   try {
@@ -263,6 +326,10 @@ shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
     // thrown mid-transaction after some rows may already have committed.
     for (const r of rows) {
       if (!r?.roleId) return res.status(400).json({ error: 'Every row in shifts must include a roleId.' });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.date ?? ''))) return res.status(400).json({ error: 'Every row in shifts must include a date, as YYYY-MM-DD.' });
+      if (!/^\d{2}:\d{2}$/.test(String(r.start ?? '')) || !/^\d{2}:\d{2}$/.test(String(r.end ?? ''))) {
+        return res.status(400).json({ error: 'Every row in shifts must include start/end, as HH:MM.' });
+      }
     }
     const roleIds: string[] = [...new Set(rows.map((r) => String(r.roleId)))];
     const userIds: string[] = [...new Set(rows.map((r) => (r.userId ? String(r.userId) : null)).filter((v): v is string => v !== null))];
@@ -284,25 +351,30 @@ shiftsRouter.post('/bulk', requireSession, requireManager, async (req, res) => {
     }
 
     const timezone = await venueTimezone(locationId);
-    const created = await prisma.$transaction(
-      rows.map((r) => {
-        const overnight = r.end <= r.start;
-        return prisma.shift.create({
-          data: {
-            locationId,
-            roleId: String(r.roleId),
-            userId: r.userId ? String(r.userId) : null,
-            createdById,
-            date: new Date(`${r.date}T00:00:00.000Z`),
-            startTime: combineDateAndTime(r.date, r.start, timezone),
-            endTime: combineDateAndTime(r.date, r.end, timezone, overnight),
-            breakMinutes: r.breakMinutes ?? 0,
-            status: 'DRAFT',
-          },
-          include: SHIFT_INCLUDE,
-        });
-      }),
-    );
+    const byWeek = new Map<string, BulkShiftRow[]>();
+    for (const r of rows) {
+      const weekStart = mondayOf(r.date);
+      byWeek.set(weekStart, [...(byWeek.get(weekStart) ?? []), r]);
+    }
+    const createdIds: string[] = [];
+    for (const [weekStart, weekRows] of byWeek) {
+      const result = await applyWeekPatch({
+        locationId,
+        weekStart,
+        actorId: createdById,
+        source: 'bulk',
+        patch: {
+          ops: weekRows.map((r): WeekPatchOp => ({ op: 'create', userId: r.userId ? String(r.userId) : null, roleId: String(r.roleId), date: r.date, ranges: [{ start: r.start, end: r.end }] })),
+        },
+      });
+      if (result.result !== 'ok') return sendPatchFailure(res, result);
+      for (const [i, r] of weekRows.entries()) {
+        const shiftId = result.results[i]!.shiftId!;
+        createdIds.push(shiftId);
+        if (r.breakMinutes) await prisma.shift.update({ where: { id: shiftId }, data: { breakMinutes: r.breakMinutes } });
+      }
+    }
+    const created = await prisma.shift.findMany({ where: { id: { in: createdIds } }, include: SHIFT_INCLUDE, orderBy: [{ date: 'asc' }, { startTime: 'asc' }] });
     return res.status(201).json({ shifts: created.map((s) => shiftToDto(s, timezone)), createdCount: created.length });
   } catch (err) {
     console.error('[shifts.bulk] failed', err);
@@ -349,6 +421,9 @@ shiftsRouter.post('/:locationId/publish', requireSession, requireManager, async 
  * GET /api/shifts/:locationId/publish-status?weekStart=YYYY-MM-DD
  * A session of this venue, or a kiosk screen with the venue's current kiosk
  * token (same gate as the GET above): a publish timestamp and a count.
+ * Reads the v2 week row when the week has one (its version vs published
+ * version is the authoritative "edited since publish"), else the legacy
+ * RotaPublish comparison.
  */
 shiftsRouter.get('/:locationId/publish-status', requireSessionOrKioskToken, async (req, res) => {
   try {
@@ -360,6 +435,17 @@ shiftsRouter.get('/:locationId/publish-status', requireSessionOrKioskToken, asyn
     end.setUTCDate(end.getUTCDate() + 7);
 
     const publish = await prisma.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
+    const week = await prisma.rotaWeek.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
+    if (week?.publishedAt) {
+      const pendingRows = await prisma.shift.count({
+        where: { locationId, date: { gte: start, lt: end }, OR: [{ status: 'DRAFT' }, { status: 'CANCELLED' }, { editedSincePublish: true }] },
+      });
+      return res.status(200).json({
+        publishedAt: week.publishedAt.toISOString(),
+        notifiedCount: publish?.notifiedCount ?? 0,
+        hasUnpublishedChanges: pendingRows > 0 || week.version !== week.publishedVersion,
+      });
+    }
     if (!publish) return res.status(200).json({ publishedAt: null, notifiedCount: 0, hasUnpublishedChanges: false });
 
     const changedCount = await prisma.shift.count({

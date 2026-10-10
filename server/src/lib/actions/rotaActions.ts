@@ -1,7 +1,7 @@
 import { writeAuditLog } from '../auditLog.js';
 import { prisma } from '../prisma.js';
-import { withAuditedTransaction } from '../auditLog.js';
-import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
+import { applyWeekPatch, snapshotWeek } from './weekActions.js';
+import type { WeekPatchOp, WeekPatchRefusal } from '../../../../shared/rotaWeek.js';
 
 interface TemplateEntry {
   dayOffset: number;
@@ -31,7 +31,7 @@ export async function getRotaPublishPreview(
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
   const shiftGroups = await prisma.shift.groupBy({
     by: ['userId'],
-    where: { locationId, date: { gte: weekStart, lt: weekEnd } },
+    where: { locationId, date: { gte: weekStart, lt: weekEnd }, status: { not: 'CANCELLED' } },
     _count: true,
   });
   const shiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
@@ -79,7 +79,7 @@ export async function publishRota(input: {
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
   const shiftGroups = await prisma.shift.groupBy({
     by: ['userId'],
-    where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
+    where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd }, status: { not: 'CANCELLED' } },
     _count: true,
   });
   const shiftCount = shiftGroups.reduce((sum, g) => sum + g._count, 0);
@@ -98,10 +98,19 @@ export async function publishRota(input: {
       create: { locationId: input.locationId, weekStart: input.weekStart, publishedAt, publishedById: input.publishedById, notifiedCount },
       update: { publishedAt, publishedById: input.publishedById, notifiedCount },
     });
+    const inWeek = { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } };
+    // Rota builder v2: a CANCELLED row is a published shift the manager removed, waiting for a publish to
+    // tell the person — never resurrected here; it goes once the new snapshot (below) no longer lists it.
+    await tx.shift.deleteMany({ where: { ...inWeek, status: 'CANCELLED' } });
     await tx.shift.updateMany({
-      where: { locationId: input.locationId, date: { gte: input.weekStart, lt: weekEnd } },
-      data: { status: 'PUBLISHED', updatedAt: publishedAt },
+      where: inWeek,
+      data: { status: 'PUBLISHED', updatedAt: publishedAt, editedSincePublish: false },
     });
+    await tx.shift.updateMany({ where: { ...inWeek, publishedAt: null }, data: { publishedAt } });
+    await tx.rotaLeave.updateMany({ where: { ...inWeek, status: 'DRAFT' }, data: { status: 'PUBLISHED', updatedAt: publishedAt } });
+    // Keep the v2 week row in step (version, state, snapshot), so the new grid's diff and "unpublished
+    // changes" dot agree with what this legacy publish just told staff.
+    await snapshotWeek(tx, input.locationId, weekIso, { publishedById: input.publishedById, publishedAt });
     // The publish is a venue-wide event staff act on; it gets its own audit
     // row (REST and voice both land here), committed with the publish itself.
     await writeAuditLog(tx, {
@@ -126,14 +135,21 @@ export type ApplyRotaTemplateResult =
   | { result: 'ok'; createdCount: number; templateName: string }
   | { result: 'template_not_found'; message: string }
   | { result: 'invalid_role'; roleId: string; message: string }
-  | { result: 'invalid_user'; userId: string; message: string };
+  | { result: 'invalid_user'; userId: string; message: string }
+  /** The week patch refused an entry (a person already on that day, on leave, a past day…) or the week moved. */
+  | { result: 'refused'; refusal: WeekPatchRefusal | 'version_conflict'; message: string };
 
 /**
- * Raw apply — exactly the `withAuditedTransaction(...)` call
- * `routes/rotaTemplates.ts`'s `POST /:id/apply` made inline before this
- * extraction, including the per-entry role/user existence + same-location
- * validation, moved IN from the caller for the same no-duplicate-validation
- * reason as `publishRota` above (spec §2.3).
+ * Applies a template as ONE week patch (source 'template', lib/actions/
+ * weekActions.ts): every entry becomes a `create` op, so the week's version
+ * bumps once, the one-shift-per-person-day and leave rules hold, and a
+ * refused entry rolls the whole apply back — a half-applied template is
+ * worse than none. The per-entry role/user existence + same-location checks
+ * stay here so the result kinds this action's callers (routes/rotaTemplates.ts,
+ * routes/voice.ts) already map keep their meaning.
+ *
+ * A template entry's `note` was the manager-only `managerNotes` before v2; the
+ * week patch has only the staff-visible `note` (≤ 80 chars), so it lands there.
  */
 export async function applyRotaTemplate(input: {
   templateId: string;
@@ -169,57 +185,36 @@ export async function applyRotaTemplate(input: {
     }
   }
 
-  const location = await prisma.location.findUnique({ where: { id: template.locationId }, select: { timezone: true } });
-  const timezone = location?.timezone || DEFAULT_VENUE_TIMEZONE;
+  // POST /api/rota-templates already rejects an empty `entries` array, but a template written straight to
+  // the database (or a stale one) must not bump the week's version or write audit rows for nothing.
+  if (entries.length === 0) return { result: 'ok', createdCount: 0, templateName: template.name };
 
-  const created = await withAuditedTransaction(
-    prisma,
-    async (tx) => {
-      // Sequential, not Promise.all: `tx` is bound to a single reserved DB
-      // connection (see routes/rotaTemplates.ts's original comment).
-      const rows: { id: string }[] = [];
-      for (const e of entries) {
-        const date = new Date(input.weekStart);
-        date.setUTCDate(date.getUTCDate() + e.dayOffset);
-        const dateStr = date.toISOString().slice(0, 10);
-        const overnight = e.end <= e.start;
-        rows.push(
-          await tx.shift.create({
-            data: {
-              locationId: template.locationId,
-              roleId: e.roleId,
-              userId: e.userId,
-              createdById: input.createdById,
-              date,
-              startTime: combineDateAndTime(dateStr, e.start, timezone),
-              endTime: combineDateAndTime(dateStr, e.end, timezone, overnight),
-              managerNotes: e.note ?? null,
-              status: 'DRAFT',
-            },
-          }),
-        );
-      }
-      return rows;
+  const weekStart = input.weekStart.toISOString().slice(0, 10);
+  const ops = entries.map((e): WeekPatchOp => {
+    const date = new Date(input.weekStart);
+    date.setUTCDate(date.getUTCDate() + e.dayOffset);
+    return {
+      op: 'create',
+      userId: e.userId ? String(e.userId) : null,
+      roleId: String(e.roleId),
+      date: date.toISOString().slice(0, 10),
+      ranges: [{ start: e.start, end: e.end }],
+      note: e.note ? e.note.slice(0, 80) : null,
+    };
+  });
+  // `createdById` is the recorded actor (Shift.createdById and the audit rows) when it differs from
+  // actorId only in the on-behalf-of case, which the audit note names.
+  const result = await applyWeekPatch({
+    locationId: template.locationId,
+    weekStart,
+    actorId: input.createdById,
+    source: 'template',
+    patch: {
+      ops,
+      note: `Applied template "${template.name}"${input.actorId !== input.createdById ? ` (by ${input.actorId} on behalf of ${input.createdById})` : ''}`,
     },
-    // Currently unreachable — POST /api/rota-templates already rejects an
-    // empty `entries` array at creation time, so `entries`/`rows` here can
-    // never legitimately be empty — but guarded anyway, matching the
-    // identical `count > 0 ? {...} : null` convention schedules.ts's confirm
-    // route and floorPlan.ts's publish route already use for this exact
-    // shape of no-op, so a future second write path into this action (or a
-    // stale/corrupted template) can't silently write a false SHIFT_CREATED
-    // audit row claiming shifts were created when none were.
-    (rows) =>
-      rows.length > 0
-        ? {
-            locationId: template.locationId,
-            actorId: input.actorId,
-            action: 'SHIFT_CREATED',
-            entityType: 'Shift',
-            entityId: rows[0].id,
-            note: `Applied template "${template.name}" to week ${input.weekStart.toISOString().slice(0, 10)} — created ${rows.length} shift(s)`,
-          }
-        : null,
-  );
-  return { result: 'ok', createdCount: created.length, templateName: template.name };
+  });
+  if (result.result === 'version_conflict') return { result: 'refused', refusal: 'version_conflict', message: 'The week changed while the template was being applied — try again.' };
+  if (result.result === 'refused') return { result: 'refused', refusal: result.refusal, message: `Entry ${result.op + 1}: ${result.message}` };
+  return { result: 'ok', createdCount: result.results.length, templateName: template.name };
 }

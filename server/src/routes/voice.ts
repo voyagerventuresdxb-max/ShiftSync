@@ -500,6 +500,14 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
           const msg = `That swap request was already ${result.status.toLowerCase()}.`;
           return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
         }
+        // Rota builder v2 person-day rules: the cover cannot take the shift as the week stands.
+        if (result.result === 'target_on_leave' || result.result === 'target_has_shift') {
+          const msg =
+            result.result === 'target_on_leave'
+              ? 'The covering staff member is on leave that day, so this request cannot be approved.'
+              : 'The covering staff member already has a shift that day, so this request cannot be approved.';
+          return respond(409, { error: msg }, 'REJECTED_VALIDATION', msg);
+        }
         // decideSwapRequest already writes its own AuditLog row (SWAP_APPROVED/
         // SWAP_DECLINED) inside its transaction — append the voice transcript by
         // writing a SECOND, linked row rather than mutating the first, keeping
@@ -723,6 +731,8 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         if (isPastVenueDay(weekEnd, timezone)) return refuse(400, 'That week has already passed.');
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
         const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
+        // The week patch refused an entry (someone already on that day, on leave…): nothing was applied.
+        if (result.result === 'refused') return respond(409, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         if (result.result !== 'ok') {
           return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }

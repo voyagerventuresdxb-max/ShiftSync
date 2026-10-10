@@ -10,6 +10,7 @@ import { pushRouter } from './routes/push.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { swapRequestsRouter } from './routes/swapRequests.js';
 import { shiftsRouter } from './routes/shifts.js';
+import { weeksRouter } from './routes/weeks.js';
 import { rotaTemplatesRouter } from './routes/rotaTemplates.js';
 import { attendanceRouter } from './routes/attendance.js';
 import { eightySixRouter } from './routes/eightySix.js';
@@ -88,6 +89,7 @@ export function createApp() {
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/swap-requests', swapRequestsRouter);
   app.use('/api/shifts', shiftsRouter);
+  app.use('/api/weeks', weeksRouter);
   app.use('/api/rota-templates', rotaTemplatesRouter);
   app.use('/api/attendance', attendanceRouter);
   app.use('/api/eighty-six', eightySixRouter);

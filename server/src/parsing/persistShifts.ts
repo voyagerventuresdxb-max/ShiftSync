@@ -3,6 +3,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from './normalize.js';
+import { snapshotWeek } from '../lib/actions/weekActions.js';
+import { validateRanges, type TimeRange } from '../../../shared/rotaWeek.js';
 import { canonicalRoleName, nameKey, personNameKey, stripRoleOrdinal, TEAM_MEMBER_ROLE_NAME } from './resolveRows.js';
 import type { PreviewRow } from './types.js';
 import type {
@@ -314,7 +316,7 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
   }
 
   // What these people already work around those days (cancelled shifts don't count).
-  const onRota = new Map<string, { date: string; start: Date; end: Date }[]>();
+  const onRota = new Map<string, { date: string; start: Date; end: Date; ranges: TimeRange[] | null }[]>();
   const knownUserIds = [...new Set(planned.filter((p) => p.plan.existing).map((p) => p.userId))];
   const dates = planned.map((p) => p.date).sort();
   if (knownUserIds.length > 0 && dates.length > 0) {
@@ -328,11 +330,14 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
           lte: new Date(`${addDaysIso(dates[dates.length - 1]!, 1)}T00:00:00.000Z`),
         },
       },
-      select: { userId: true, date: true, startTime: true, endTime: true },
+      select: { userId: true, date: true, startTime: true, endTime: true, ranges: true },
     });
     for (const s of existingShifts) {
       if (!s.userId) continue;
-      onRota.set(s.userId, [...(onRota.get(s.userId) ?? []), { date: s.date.toISOString().slice(0, 10), start: s.startTime, end: s.endTime }]);
+      onRota.set(s.userId, [
+        ...(onRota.get(s.userId) ?? []),
+        { date: s.date.toISOString().slice(0, 10), start: s.startTime, end: s.endTime, ranges: validateRanges(s.ranges) ? s.ranges : null },
+      ]);
     }
   }
 
@@ -340,33 +345,93 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
   const toCreate: PlannedShift[] = [];
   const overlaps: ImportOverlap[] = [];
   let skippedDuplicates = 0;
+  const overlapWith = (shift: PlannedShift, existing: { date: string; start: Date; end: Date }) => {
+    overlaps.push({
+      personKey: shift.plan.person.personKey,
+      name: shift.plan.existing?.fullName ?? shift.plan.pending?.name ?? shift.plan.person.name,
+      date: shift.date,
+      startTime: shift.row.startTime,
+      endTime: shift.row.endTime,
+      existing: { date: existing.date, startTime: wallClock(existing.start), endTime: wallClock(existing.end) },
+    });
+  };
   for (const shift of planned) {
     const mine = onRota.get(shift.userId) ?? [];
-    if (mine.some((s) => s.start.getTime() === shift.start.getTime() && s.end.getTime() === shift.end.getTime())) {
+    // Identical: the same instants, or one range of a (merged, split) shift already on the rota.
+    if (
+      mine.some(
+        (s) =>
+          (s.start.getTime() === shift.start.getTime() && s.end.getTime() === shift.end.getTime()) ||
+          (s.date === shift.date && s.ranges?.some((r) => r.start === shift.row.startTime && r.end === shift.row.endTime)),
+      )
+    ) {
       skippedDuplicates++;
       continue;
     }
     const clash = mine.find((s) => s.start < shift.end && shift.start < s.end);
     if (clash) {
-      overlaps.push({
-        personKey: shift.plan.person.personKey,
-        name: shift.plan.existing?.fullName ?? shift.plan.pending?.name ?? shift.plan.person.name,
-        date: shift.date,
-        startTime: shift.row.startTime,
-        endTime: shift.row.endTime,
-        existing: { date: clash.date, startTime: wallClock(clash.start), endTime: wallClock(clash.end) },
-      });
+      overlapWith(shift, clash);
       continue;
     }
-    mine.push({ date: shift.date, start: shift.start, end: shift.end });
+    // Rota builder v2: one live shift per person per day. A second (non-overlapping) shift on a day the
+    // person already works is reported like an overlap rather than written — merging into an existing
+    // row would silently rewrite a published shift.
+    const sameDay = mine.find((s) => s.date === shift.date);
+    if (sameDay) {
+      overlapWith(shift, sameDay);
+      continue;
+    }
+    mine.push({ date: shift.date, start: shift.start, end: shift.end, ranges: null });
     onRota.set(shift.userId, mine);
     toCreate.push(shift);
   }
 
+  // Rota builder v2 stores a split shift as ONE row with two ranges: two rows of this import on the same
+  // person-day become one shift (first start → last end); a third is reported like an overlap.
+  interface ShiftRow {
+    parts: PlannedShift[];
+    userId: string;
+    date: string;
+    roleId: string;
+    start: Date;
+    end: Date;
+    ranges: TimeRange[];
+    endsNextDay: boolean;
+  }
+  const rowsByPersonDay = new Map<string, ShiftRow>();
+  for (const shift of toCreate.slice().sort((a, b) => a.start.getTime() - b.start.getTime())) {
+    const key = `${shift.userId}|${shift.date}`;
+    const row = rowsByPersonDay.get(key);
+    if (!row) {
+      rowsByPersonDay.set(key, {
+        parts: [shift],
+        userId: shift.userId,
+        date: shift.date,
+        roleId: shift.roleId,
+        start: shift.start,
+        end: shift.end,
+        ranges: [{ start: shift.row.startTime, end: shift.row.endTime }],
+        endsNextDay: shift.row.overnight,
+      });
+      continue;
+    }
+    const merged = [...row.ranges, { start: shift.row.startTime, end: shift.row.endTime }];
+    if (!validateRanges(merged)) {
+      overlapWith(shift, { date: row.date, start: row.start, end: row.end });
+      continue;
+    }
+    row.parts.push(shift);
+    row.end = shift.end;
+    row.ranges = merged;
+    row.endsNextDay = shift.row.overnight;
+  }
+  const shiftRows = [...rowsByPersonDay.values()];
+  const publishedAt = new Date();
+
   const createdShifts =
-    toCreate.length > 0
+    shiftRows.length > 0
       ? await tx.shift.createManyAndReturn({
-          data: toCreate.map((s) => ({
+          data: shiftRows.map((s) => ({
             locationId,
             roleId: s.roleId,
             userId: s.userId,
@@ -374,24 +439,36 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
             date: new Date(`${s.date}T00:00:00.000Z`),
             startTime: s.start,
             endTime: s.end,
-            breakMinutes: s.row.breakMinutes,
-            managerNotes: s.row.managerNotes,
+            breakMinutes: s.parts[0]!.row.breakMinutes,
+            managerNotes: s.parts[0]!.row.managerNotes,
             status: 'PUBLISHED' as const,
+            ranges: s.ranges as unknown as Prisma.InputJsonValue,
+            endsNextDay: s.endsNextDay,
+            publishedAt,
           })),
-          select: { id: true, userId: true, startTime: true },
+          select: { id: true, userId: true, date: true },
         })
       : [];
-  // (userId, start) is unique among created shifts: identical and overlapping ones were filtered out above.
-  const shiftIdByKey = new Map(createdShifts.map((s) => [`${s.userId}|${s.startTime.toISOString()}`, s.id]));
-  const rows = toCreate.map((s) => ({
-    rowNumber: s.row.rowNumber,
-    shiftId: shiftIdByKey.get(`${s.userId}|${s.start.toISOString()}`)!,
-    userId: s.userId,
-    date: s.date,
-  }));
+  // (userId, date) is unique among created shifts: one row per person-day by construction.
+  const shiftIdByKey = new Map(createdShifts.map((s) => [`${s.userId}|${s.date.toISOString().slice(0, 10)}`, s.id]));
+  const rows = shiftRows.flatMap((s) =>
+    s.parts.map((part) => ({
+      rowNumber: part.row.rowNumber,
+      shiftId: shiftIdByKey.get(`${s.userId}|${s.date}`)!,
+      userId: s.userId,
+      date: s.date,
+    })),
+  );
 
+  // Imported rows are PUBLISHED straight away, so every week touched gets its v2 week row created/bumped
+  // and its published snapshot written: to the week grid's publish diff, an imported week is a published one.
+  for (const weekStart of [...new Set(shiftRows.map((s) => mondayOfIso(s.date)))].sort()) {
+    await snapshotWeek(tx, locationId, weekStart, { publishedById: input.actorId, publishedAt });
+  }
+
+  // Shifts created per person: every import row that became (part of) a written shift counts once.
   const createdPerPerson = new Map<string, number>();
-  for (const s of toCreate) createdPerPerson.set(s.plan.person.personKey, (createdPerPerson.get(s.plan.person.personKey) ?? 0) + 1);
+  for (const s of shiftRows) for (const part of s.parts) createdPerPerson.set(part.plan.person.personKey, (createdPerPerson.get(part.plan.person.personKey) ?? 0) + 1);
 
   // Two entries creating the same name share one new staff member: the first counts as created.
   const countedAsCreated = new Set<string>();

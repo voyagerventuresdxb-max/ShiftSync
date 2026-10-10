@@ -75,6 +75,11 @@ model Location {
   rosterReadings       RosterReadingCache[]
   rosterRoleAliases    RosterRoleAlias[]
   rosterNameAliases    RosterNameAlias[]
+  departments          Department[]
+  shiftTypes           ShiftType[]
+  rotaWeeks            RotaWeek[]
+  rotaLeaves           RotaLeave[]
+  departmentMinimums   DepartmentMinimum[]
 
   @@index([organizationId])
   @@map("locations")
@@ -96,16 +101,155 @@ model Role {
   name       String // e.g. Floor Staff, Bartender, Runner, Host, Chef
   colorTag   String? // UI chip color, hex
   isActive   Boolean  @default(true) @map("is_active")
+  // Rota builder v2: the department this scheduling role belongs to (Floor,
+  // Bar, Kitchen, Hosts…). Nullable so existing venues keep working until
+  // they group their roles; an ungrouped role shows under "Other".
+  departmentId String? @map("department_id")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
-  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  location   Location    @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   users    User[]
   shifts   Shift[]
   rosterAliases RosterRoleAlias[]
 
   @@unique([locationId, name])
+  @@index([departmentId])
   @@map("roles")
+}
+
+// ---------------------------------------------------------------------------
+// 2b. ROTA BUILDER v2 — departments, venue shift types, the week document
+// ---------------------------------------------------------------------------
+
+// A venue's grouping of roles for the week grid: Floor, Bar, Kitchen, Hosts.
+// `tint` is a chip-token name from tokens.css (gold | sage | clay | sand |
+// ochre | cream), never a hex — the palette gate forbids colour literals.
+model Department {
+  id         String   @id @default(cuid())
+  locationId String   @map("location_id")
+  name       String
+  tint       String   @default("gold")
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  location Location            @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  roles    Role[]
+  shifts   Shift[]
+  minimums DepartmentMinimum[]
+
+  @@unique([locationId, name])
+  @@map("departments")
+}
+
+// Venue-defined shift timings the manager drags onto the grid: Morning
+// 07:00–16:00, Mid, Evening 16:00–01:00 (ends next day), Split with two
+// ranges. `ranges` is `[{start:"HH:MM", end:"HH:MM"}]` with one or two
+// entries. A shift freezes its own start/end when created, so editing a type
+// never rewrites published history.
+model ShiftType {
+  id          String    @id @default(cuid())
+  locationId  String    @map("location_id")
+  name        String
+  ranges      Json
+  endsNextDay Boolean   @default(false) @map("ends_next_day")
+  tint        String    @default("gold")
+  sortOrder   Int       @default(0) @map("sort_order")
+  archivedAt  DateTime? @map("archived_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  shifts   Shift[]
+
+  @@unique([locationId, name])
+  @@index([locationId, sortOrder])
+  @@map("shift_types")
+}
+
+enum RotaWeekState {
+  DRAFT
+  PUBLISHED
+}
+
+// One row per (venue, Monday). `version` is the optimistic-concurrency token
+// every roster write (grid, voice, import, approvals) must present and bump;
+// `publishedSnapshot` is what staff currently see, so a publish can diff
+// against it per person (removals included). Created lazily by the first
+// write to a week.
+model RotaWeek {
+  id                String        @id @default(cuid())
+  locationId        String        @map("location_id")
+  weekStart         DateTime      @map("week_start") @db.Date
+  version           Int           @default(1)
+  state             RotaWeekState @default(DRAFT)
+  publishedVersion  Int?          @map("published_version")
+  publishedAt       DateTime?     @map("published_at")
+  publishedById     String?       @map("published_by_id")
+  publishedSnapshot Json?         @map("published_snapshot")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  publishedBy User?    @relation("RotaWeekPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+
+  @@unique([locationId, weekStart])
+  @@map("rota_weeks")
+}
+
+enum LeaveType {
+  DAY_OFF
+  ANNUAL_LEAVE
+  SICK_LEAVE
+  UNPAID_LEAVE
+  HALF_DAY
+}
+
+enum RotaLeaveStatus {
+  DRAFT
+  PUBLISHED
+}
+
+// A person-day status on the grid (Off, Annual leave, Sick, Unpaid, Half
+// day). Manager-set or created by an approved TimeOffRequest. One per
+// (user, date); a leave day never also holds a shift.
+model RotaLeave {
+  id            String          @id @default(cuid())
+  locationId    String          @map("location_id")
+  userId        String          @map("user_id")
+  createdById   String?         @map("created_by_id")
+  date          DateTime        @db.Date
+  type          LeaveType
+  status        RotaLeaveStatus @default(DRAFT)
+  timeOffRequestId String?      @map("time_off_request_id")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  user      User     @relation("RotaLeaveUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("RotaLeaveCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, date])
+  @@index([locationId, date])
+  @@map("rota_leaves")
+}
+
+// Optional per-department, per-weekday minimum headcount. Drives only the
+// "uncovered" flag in the coverage row; nothing blocks on it.
+model DepartmentMinimum {
+  id           String   @id @default(cuid())
+  locationId   String   @map("location_id")
+  departmentId String   @map("department_id")
+  weekday      Int // 0 = Sunday … 6 = Saturday
+  minHeadcount Int      @map("min_headcount")
+
+  location   Location   @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, weekday])
+  @@map("department_minimums")
 }
 
 model User {
@@ -188,6 +332,9 @@ model User {
   floorFeedbackSubmitted  FloorFeedback[]            @relation("FloorFeedbackSubmitter")
   floorFeedbackReviewed   FloorFeedback[]            @relation("FloorFeedbackReviewedBy")
   rosterNameAliases       RosterNameAlias[]
+  rotaWeeksPublished      RotaWeek[]                 @relation("RotaWeekPublishedBy")
+  rotaLeaves              RotaLeave[]                @relation("RotaLeaveUser")
+  rotaLeavesCreated       RotaLeave[]                @relation("RotaLeaveCreatedBy")
 
   @@index([locationId])
   @@index([roleId])
@@ -218,21 +365,39 @@ model Shift {
   status       ShiftStatus @default(DRAFT)
   managerNotes String?     @map("manager_notes") @db.Text // floor directives / side-work notes
   sidework     String[]    @default([]) @map("sidework") // discrete checklist items, e.g. ["Polish glassware", "Restock ice"]
+  // Rota builder v2. `shiftTypeId` names the venue timing the chip was made
+  // from (null for custom times or pre-v2 rows); `ranges` is the frozen copy
+  // of the type's 1–2 ranges so a split shift is ONE row; `note` is the ≤80
+  // char staff-visible line ("VIP buyout, dress code black"), distinct from
+  // the manager-only `managerNotes`; `publishedAt`/`editedSincePublish` back
+  // the gold "unpublished change" dot; `departmentId` lets a person who works
+  // in two departments be counted under the right one.
+  shiftTypeId        String?   @map("shift_type_id")
+  departmentId       String?   @map("department_id")
+  ranges             Json?
+  endsNextDay        Boolean   @default(false) @map("ends_next_day")
+  note               String?   @db.VarChar(80)
+  publishedAt        DateTime? @map("published_at")
+  editedSincePublish Boolean   @default(false) @map("edited_since_publish")
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
-  location  Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
-  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  assignee  User?    @relation("ShiftAssignee", fields: [userId], references: [id], onDelete: SetNull)
-  createdBy User?    @relation("ShiftCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  location   Location    @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  role       Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assignee   User?       @relation("ShiftAssignee", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy  User?       @relation("ShiftCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  shiftType  ShiftType?  @relation(fields: [shiftTypeId], references: [id], onDelete: SetNull)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
 
   swapRequests   ShiftSwapRequest[]
   attendanceLogs AttendanceLog[]
   auditLogs      AuditLog[]
 
   @@index([locationId, date])
+  @@index([locationId, date, status])
   @@index([userId])
   @@index([roleId])
+  @@index([shiftTypeId])
   @@map("shifts")
 }
 
@@ -344,6 +509,14 @@ enum AuditAction {
   KIOSK_LINK_CREATED
   KIOSK_LINK_REGENERATED
   KIOSK_LINK_REVOKED
+  LEAVE_MARKED
+  LEAVE_REMOVED
+  WEEK_PATCHED
+  WEEK_PUBLISHED
+  SHIFT_TYPE_CREATED
+  SHIFT_TYPE_UPDATED
+  SHIFT_TYPE_ARCHIVED
+  TIME_OFF_REQUESTED
 }
 
 model AuditLog {

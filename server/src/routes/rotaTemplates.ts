@@ -156,6 +156,9 @@ rotaTemplatesRouter.post('/:id/apply', requireSession, requireManager, async (re
 
     const start = new Date(`${weekStart}T00:00:00.000Z`);
     const result = await applyRotaTemplate({ templateId: id, weekStart: start, createdById, actorId: req.user!.id });
+    // Rota builder v2: the week patch refused an entry (someone already on that day, on leave, a past day) — the
+    // rota is as it was, nothing half-applied.
+    if (result.result === 'refused') return res.status(409).json({ error: result.message, refusal: result.refusal });
     if (result.result !== 'ok') {
       return res.status(404).json({ error: result.message });
     }

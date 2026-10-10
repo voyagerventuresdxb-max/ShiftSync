@@ -8,6 +8,8 @@ import { notifyUser } from '../push.js';
 import { getManagerIdsForLocation } from '../managers.js';
 import { formatVenueTime } from '../venueTime.js';
 import { DEFAULT_VENUE_TIMEZONE } from '../../parsing/normalize.js';
+import { applyWeekPatchIn, lockWeek, WeekPatchRefusedError, WeekVersionConflictError } from './weekActions.js';
+import { mondayOf, type WeekPatchOp } from '../../../../shared/rotaWeek.js';
 
 dayjs.extend(utc);
 
@@ -106,10 +108,17 @@ export async function createSwapRequest(
 }
 
 /**
- * Approves or declines a pending swap request. On approval, atomically
- * reassigns the shift to the target user — guarded against a TOCTOU race
- * where a different already-approved request reassigned the same shift
- * first (see `ShiftAlreadyReassignedError`).
+ * Approves or declines a pending swap request. On approval, reassigns the
+ * shift through the week patch (rota builder v2, lib/actions/weekActions.ts,
+ * source 'swap') inside this request's own status flip, so the week's
+ * version bumps and the person-day rules hold: the cover already working
+ * that day → `target_has_shift`, on blocking leave → `target_on_leave`. A
+ * SWAP-type request trades the two people's shifts on that day when the
+ * cover has one (three ops, via an open shift, because a person-day can hold
+ * only one live shift); COVER/DROP, or a SWAP where the cover is free, move
+ * the one shift. Still guarded against the TOCTOU race where a different
+ * already-approved request reassigned the same shift first (see
+ * `ShiftAlreadyReassignedError`).
  */
 export async function decideSwapRequest(input: {
   id: string;
@@ -119,6 +128,8 @@ export async function decideSwapRequest(input: {
   | { result: 'ok'; request: SwapRequestWithRelations }
   | { result: 'not_found' }
   | { result: 'conflict' }
+  | { result: 'target_on_leave' }
+  | { result: 'target_has_shift' }
   | { result: 'already_decided'; status: string }
 > {
   const existing = await prisma.shiftSwapRequest.findUnique({
@@ -126,17 +137,14 @@ export async function decideSwapRequest(input: {
     // Reuses SWAP_REQUEST_INCLUDE's own requestedBy/targetUser selects
     // (rather than retyping them) so there's only one place that says "which
     // fields does a swap-request read need" for those two relations — only
-    // `shift` differs here: just userId (the TOCTOU guard) and locationId
-    // (the audit entry) are read below, so a narrower select replaces
-    // SWAP_REQUEST_INCLUDE's own shift shape (date/startTime/endTime, needed
-    // for the DTO this function does NOT return) instead of a full
-    // `shift: true` (found by the 2026-09-05 performance audit; the
-    // duplication risk of hand-rolling all three relations separately was
-    // caught by its mandatory review).
+    // `shift` differs here: userId (the TOCTOU guard), locationId (the audit
+    // entry) and date (the week to patch) are read below, so a narrower
+    // select replaces SWAP_REQUEST_INCLUDE's own shift shape (found by the
+    // 2026-09-05 performance audit).
     include: {
       requestedBy: SWAP_REQUEST_INCLUDE.requestedBy,
       targetUser: SWAP_REQUEST_INCLUDE.targetUser,
-      shift: { select: { userId: true, locationId: true } },
+      shift: { select: { userId: true, locationId: true, date: true } },
     },
   });
   if (!existing) return { result: 'not_found' };
@@ -153,6 +161,8 @@ export async function decideSwapRequest(input: {
     input.decision === 'approved'
       ? `Approved · shift reassigned to ${existing.targetUser?.fullName ?? 'the proposed cover'}`
       : 'Declined';
+  const shiftDate = existing.shift.date.toISOString().slice(0, 10);
+  const weekStart = mondayOf(shiftDate);
 
   const updated = await withAuditedTransaction(
     prisma,
@@ -165,25 +175,41 @@ export async function decideSwapRequest(input: {
       });
       if (claimed.count === 0) throw new SwapAlreadyDecidedError();
 
-      // Atomic guard: only reassign the shift if it is still owned by the
-      // same user who requested the swap. This is the real source of truth
-      // against the TOCTOU race — two managers approving two different
-      // pending requests for the same shift can both pass the earlier
-      // informational `isRequestLocked` check (which only reflects what was
-      // true at read time), but only one `updateMany` here can ever match
-      // and actually flip `userId`.
       if (input.decision === 'approved' && existing.targetUserId) {
-        const reassigned = await tx.shift.updateMany({
-          where: { id: existing.shiftId, userId: existing.requestedById },
-          data: { userId: existing.targetUserId },
-        });
-        if (reassigned.count === 0) {
+        // Every writer of this week queues behind this lock (re-entrant for the patch below), so the
+        // ownership read is the real source of truth against the TOCTOU race: two managers approving two
+        // different pending requests for the same shift can both pass the informational `isRequestLocked`
+        // check above, but the second to get here sees the shift already moved and rolls back.
+        await lockWeek(tx, existing.shift.locationId, weekStart);
+        const current = await tx.shift.findUnique({ where: { id: existing.shiftId }, select: { userId: true, status: true } });
+        if (!current || current.status === 'CANCELLED' || current.userId !== existing.requestedById) {
           // Someone else's approval already moved this shift out from under
           // the original requester. Throwing here rolls back the whole
-          // transaction, so we do NOT let the status/audit writes below
+          // transaction, so we do NOT let the status/audit writes above
           // stand as if this approval had actually happened.
           throw new ShiftAlreadyReassignedError();
         }
+        const targetShift =
+          existing.type === 'SWAP'
+            ? await tx.shift.findFirst({
+                where: { userId: existing.targetUserId, locationId: existing.shift.locationId, date: existing.shift.date, status: { not: 'CANCELLED' } },
+                select: { id: true },
+              })
+            : null;
+        const ops: WeekPatchOp[] = targetShift
+          ? [
+              { op: 'update', shiftId: existing.shiftId, userId: null },
+              { op: 'update', shiftId: targetShift.id, userId: existing.requestedById },
+              { op: 'update', shiftId: existing.shiftId, userId: existing.targetUserId },
+            ]
+          : [{ op: 'update', shiftId: existing.shiftId, userId: existing.targetUserId }];
+        await applyWeekPatchIn(tx, {
+          locationId: existing.shift.locationId,
+          weekStart,
+          actorId: input.reviewedById,
+          source: 'swap',
+          patch: { ops, note: `Swap request ${input.id} approved` },
+        });
       }
 
       return tx.shiftSwapRequest.findUniqueOrThrow({ where: { id: input.id }, include: SWAP_REQUEST_INCLUDE });
@@ -197,13 +223,24 @@ export async function decideSwapRequest(input: {
       entityId: input.id,
       note: managerNote,
     }),
+    // The week patch inside reads the whole week document back; the 5s default is tight against a remote database.
+    { maxWait: 10_000, timeout: 20_000 },
   ).catch((err) => {
     if (err instanceof ShiftAlreadyReassignedError) return 'conflict' as const;
     if (err instanceof SwapAlreadyDecidedError) return 'already_decided' as const;
+    if (err instanceof WeekVersionConflictError) return 'conflict' as const;
+    if (err instanceof WeekPatchRefusedError) {
+      if (err.refusal === 'person_on_leave') return 'target_on_leave' as const;
+      if (err.refusal === 'already_has_shift' || err.refusal === 'overlap') return 'target_has_shift' as const;
+      // The shift vanished, the cover was deactivated, the day has passed…: nothing to reassign any more.
+      return 'conflict' as const;
+    }
     throw err;
   });
 
   if (updated === 'conflict') return { result: 'conflict' };
+  if (updated === 'target_on_leave') return { result: 'target_on_leave' };
+  if (updated === 'target_has_shift') return { result: 'target_has_shift' };
   if (updated === 'already_decided') {
     const now = await prisma.shiftSwapRequest.findUnique({ where: { id: input.id }, select: { status: true } });
     return { result: 'already_decided', status: now?.status ?? 'decided' };

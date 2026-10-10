@@ -202,6 +202,13 @@ swapRequestsRouter.patch('/:id', requireSession, requireManager, async (req, res
         error: 'This shift was already reassigned by another approved request — this one can no longer be approved.',
       });
     }
+    // Rota builder v2 person-day rules (lib/actions/weekActions.ts): the cover cannot take the shift as the week stands.
+    if (outcome.result === 'target_on_leave') {
+      return res.status(409).json({ error: 'The covering staff member is on leave that day — this request cannot be approved.', errorCode: 'target_on_leave' });
+    }
+    if (outcome.result === 'target_has_shift') {
+      return res.status(409).json({ error: 'The covering staff member already has a shift that day — this request cannot be approved.', errorCode: 'target_has_shift' });
+    }
 
     // Real delivery on top of the write above (never inside the transaction
     // — a push failure must not roll back the decision). Shared with

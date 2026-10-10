@@ -301,8 +301,12 @@ test('shifts.ts mutation routes still work normally for a real MANAGER session â
       assert.equal(del.status, 204, 'a real manager session must still be able to delete a shift');
     });
 
-    const remaining = await prisma.shift.findMany({ where: { locationId: location.id } });
-    assert.equal(remaining.length, 0, 'the created-then-deleted shift should leave nothing behind');
+    // Rota builder v2: deleting a PUBLISHED shift soft-cancels it (status CANCELLED, hidden from every
+    // list) so the next publish can tell the person it was removed; only the live view must be empty.
+    const remaining = await prisma.shift.findMany({ where: { locationId: location.id, status: { not: 'CANCELLED' } } });
+    assert.equal(remaining.length, 0, 'the created-then-deleted shift should leave nothing live behind');
+    const cancelled = await prisma.shift.findMany({ where: { locationId: location.id, status: 'CANCELLED' } });
+    assert.equal(cancelled.length, 1, 'a published shift that was deleted is kept as CANCELLED until the next publish');
   } finally {
     await prisma.shift.deleteMany({ where: { locationId: location.id } });
     await prisma.rotaPublish.deleteMany({ where: { locationId: location.id } });

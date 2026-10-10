@@ -10,6 +10,7 @@ import { createApp } from '../app.js';
 import { hashOtp, issueSession } from '../lib/identity.js';
 import { uploadCache } from '../store/uploadCache.js';
 import { uploadProgress } from '../store/uploadProgress.js';
+import { previewWeekPublish } from '../lib/actions/weekActions.js';
 
 /**
  * Cross-venue access matrix: every API route (and the two session-gated
@@ -87,6 +88,9 @@ interface Fx {
   ownerPhoneA: string;
   monday: string;
   tuesday: string;
+  /** A week no other control touches, holding one shift, for the v2 publish control (its fingerprint is fixed in `before`). */
+  pubWeek: string;
+  pubFingerprint: string;
 }
 
 let fx: Fx;
@@ -199,6 +203,11 @@ before(async () => {
   const pushEndpointA = `https://push.invalid/${TAG}/${randomUUID()}`;
   await prisma.pushSubscription.create({ data: { userId: staffA.id, endpoint: pushEndpointA, p256dh: 'test-key', auth: 'test-auth' } });
   const batchA = uploadCache.put(locA.id, null, []);
+  // Rota builder v2 publish needs the preview's fingerprint for exactly this week at exactly this version
+  // (1: no week row yet). Four weeks out so no other case or control changes it before the control runs.
+  const pubWeek = addDays(monday, 28);
+  await shift(staffA2.id, addDays(pubWeek, 2));
+  const pubFingerprint = (await previewWeekPublish({ locationId: locA.id, weekStart: pubWeek })).fingerprint;
   // An upload managerA's session is reading right now (schedules.ts tracks it the same way).
   const uploadA = randomUUID();
   uploadProgress.start(uploadA, { locationId: locA.id, sessionKey: createHash('sha256').update(tokens.managerA).digest('hex') });
@@ -209,7 +218,7 @@ before(async () => {
     annA: annA.id, annDel: annDel.id, shoutDel: shoutDel.id, imgA: imgA.id, imgFile, secA: secA.id, secDel: secDel.id,
     asgA: asgA.id, asgDel: asgDel.id, docA: docA.id, docFile, docDel: docDel.id, itemA: itemA.id, itemOnBehalf: itemOnBehalf.id,
     fbA: fbA.id, markA: markA.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
-    linkA: linkA.id, batchA, uploadA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday,
+    linkA: linkA.id, batchA, uploadA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday, pubWeek, pubFingerprint,
   };
 
   server = await new Promise<Server>((resolve) => {
@@ -458,6 +467,23 @@ const CASES: Case[] = [
     body: (f) => ({ weekStart: f.monday, publishedById: f.staffB }),
     refuse: ['managerA'],
   },
+  // weeks (rota builder v2)
+  { name: 'GET /api/weeks/:locationId/:weekStart', method: 'GET', path: (f) => `/api/weeks/${f.locA}/${f.monday}`, refuse: OUTSIDERS },
+  {
+    name: 'PATCH /api/weeks/:locationId/:weekStart',
+    method: 'PATCH',
+    path: (f) => `/api/weeks/${f.locA}/${f.monday}`,
+    body: (f) => ({ ops: [{ op: 'create', userId: f.staffA2, roleId: f.roleA, date: addDays(f.monday, 2), ranges: [{ start: '09:00', end: '12:00' }] }] }),
+    refuse: NOT_MANAGERS_OF_A,
+  },
+  { name: 'POST /api/weeks/:locationId/:weekStart/publish-preview', method: 'POST', path: (f) => `/api/weeks/${f.locA}/${f.monday}/publish-preview`, refuse: NOT_MANAGERS_OF_A },
+  {
+    name: 'POST /api/weeks/:locationId/:weekStart/publish',
+    method: 'POST',
+    path: (f) => `/api/weeks/${f.locA}/${f.pubWeek}/publish`,
+    body: (f) => ({ expectedVersion: 1, fingerprint: f.pubFingerprint }),
+    refuse: NOT_MANAGERS_OF_A,
+  },
   // shoutouts
   { name: 'GET /api/shoutouts/:locationId', method: 'GET', path: (f) => `/api/shoutouts/${f.locA}`, refuse: OUTSIDERS },
   { name: 'POST /api/shoutouts', method: 'POST', path: () => '/api/shoutouts', body: (f) => ({ employeeId: f.staffA2, note: `${TAG} nice` }), refuse: ['anon', 'deactivatedA', 'staffB', 'managerB'] },
@@ -614,6 +640,7 @@ test("nothing of venue A's changed after every refused request", async () => {
   assert.equal(await prisma.announcement.count({ where: { id: fx.annDel } }), 1);
   assert.equal(await prisma.shift.count({ where: { id: fx.shiftDel } }), 1);
   assert.equal(await prisma.shift.count({ where: { id: fx.shiftCancel } }), 1);
+  assert.equal(await prisma.rotaWeek.count({ where: { locationId: fx.locA, weekStart: new Date(`${fx.pubWeek}T00:00:00.000Z`) } }), 0, 'no refused week write created a week row');
   assert.equal(await prisma.shoutout.count({ where: { locationId: fx.locA, note: { contains: 'via voice' } } }), 0);
 });
 
@@ -691,6 +718,10 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'DELETE /api/shifts/:id'],
   ['managerA', 'POST /api/shifts/bulk'],
   ['managerA', 'POST /api/shifts/:locationId/publish'],
+  ['staffA', 'GET /api/weeks/:locationId/:weekStart'],
+  ['managerA', 'PATCH /api/weeks/:locationId/:weekStart'],
+  ['managerA', 'POST /api/weeks/:locationId/:weekStart/publish-preview'],
+  ['managerA', 'POST /api/weeks/:locationId/:weekStart/publish'],
   ['staffA', 'GET /api/shoutouts/:locationId'],
   ['staffA', 'POST /api/shoutouts'],
   ['managerA', 'DELETE /api/shoutouts/:id'],
