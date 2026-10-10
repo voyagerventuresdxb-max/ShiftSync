@@ -179,7 +179,9 @@ export async function publishRota(input: {
       where: inWeek,
       data: { status: 'PUBLISHED', updatedAt: publishedAt, editedSincePublish: false },
     });
-    await tx.shift.updateMany({ where: { ...inWeek, publishedAt: null }, data: { publishedAt } });
+    // `updatedAt` pinned again: Prisma's @updatedAt would stamp "now", and getRotaPublishPreview / the legacy
+    // publish-status read anything updated after `publishedAt` as changed since the publish.
+    await tx.shift.updateMany({ where: { ...inWeek, publishedAt: null }, data: { publishedAt, updatedAt: publishedAt } });
     await tx.rotaLeave.updateMany({ where: { ...inWeek, status: 'DRAFT' }, data: { status: 'PUBLISHED', updatedAt: publishedAt } });
     // Keep the v2 week row in step (version, state, snapshot), so the new grid's diff and "unpublished
     // changes" dot agree with what this legacy publish just told staff.

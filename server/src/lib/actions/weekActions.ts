@@ -1206,8 +1206,10 @@ export async function publishWeek(
       if (liveShifts === 0 && leaves === 0 && preview.changeCount === 0) return { result: 'empty', message: 'Nothing to publish for this week yet.' };
 
       const publishedAt = new Date();
-      await tx.shift.updateMany({ where: { ...inWeek, status: 'DRAFT' }, data: { status: 'PUBLISHED', publishedAt } });
-      await tx.shift.updateMany({ where: { ...inWeek, status: { not: 'CANCELLED' }, editedSincePublish: true }, data: { editedSincePublish: false } });
+      // `updatedAt` pinned to the publish instant (as the legacy publish does): the legacy readers
+      // (getRotaPublishPreview, GET …/publish-status) count a row updated after `publishedAt` as changed.
+      await tx.shift.updateMany({ where: { ...inWeek, status: 'DRAFT' }, data: { status: 'PUBLISHED', publishedAt, updatedAt: publishedAt } });
+      await tx.shift.updateMany({ where: { ...inWeek, status: { not: 'CANCELLED' }, editedSincePublish: true }, data: { editedSincePublish: false, updatedAt: publishedAt } });
       // Removals are now reflected by their absence from the new snapshot.
       await tx.shift.deleteMany({ where: { ...inWeek, status: 'CANCELLED' } });
       // `updatedAt` pinned to the publish instant: getWeekDoc reads a leave touched AFTER publishedAt as an
