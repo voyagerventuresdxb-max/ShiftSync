@@ -2,14 +2,27 @@ import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
+import type { TimeRange } from '../../shared/rotaWeek';
 
 export interface RotaTemplateDto {
   id: string;
   name: string;
   entryCount: number;
   createdAt: string;
+  /**
+   * The saved entries, when the server sends them (rota builder v2). With
+   * them the grid plans the template itself — fill or replace, one
+   * department, shift types kept — as ONE week patch; without them it falls
+   * back to the server's own apply (POST …/:id/apply, all departments).
+   */
+  entries?: TemplateEntryInput[];
 }
 
+/**
+ * One saved shift, weekday-relative. `start`/`end` (the first range) keep
+ * templates readable by the server's legacy apply; v2 adds the shift type,
+ * both ranges of a split and the department, which that apply ignores.
+ */
 export interface TemplateEntryInput {
   dayOffset: number;
   roleId: string;
@@ -17,6 +30,9 @@ export interface TemplateEntryInput {
   start: string;
   end: string;
   note?: string;
+  shiftTypeId?: string | null;
+  ranges?: TimeRange[];
+  departmentId?: string | null;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

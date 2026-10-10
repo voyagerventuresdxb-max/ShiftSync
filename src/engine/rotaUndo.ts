@@ -54,7 +54,7 @@ function restoreFields(prev: ShiftState): Omit<Extract<WeekPatchOp, { op: 'updat
 export function invertOps(
   before: Pick<WeekDocDto, 'shifts' | 'leaves'>,
   ops: WeekPatchOp[],
-  results: { op: number; shiftId?: string }[],
+  results: { op: number; tempId?: string; shiftId?: string; leaveId?: string }[],
 ): WeekPatchOp[] {
   const sim = simOf(before);
   const inverses: WeekPatchOp[][] = [];
