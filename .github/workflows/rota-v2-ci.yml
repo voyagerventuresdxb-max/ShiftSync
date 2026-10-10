@@ -41,34 +41,25 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Prisma generate
         run: npx prisma generate
-      - name: Bundle node_modules for offline dev sandboxes
-        if: always()
-        run: tar -czf deps.tgz node_modules
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: deps
-          path: deps.tgz
-          retention-days: 3
       - name: Migrate (public schema)
-        run: npx prisma migrate deploy
+        run: scripts/ci-step.sh "migrate" npx prisma migrate deploy
       - name: Migration drift
-        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "postgresql://dev:dev@localhost:5432/shiftsync_dev?schema=shadow_ci" --exit-code
+        run: scripts/ci-step.sh "drift" npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "postgresql://dev:dev@localhost:5432/shiftsync_dev?schema=shadow_ci" --exit-code --script
       - name: Typecheck (client + shared)
         if: always()
-        run: npx tsc --noEmit -p tsconfig.json
+        run: scripts/ci-step.sh "typecheck-client" npx tsc --noEmit -p tsconfig.json
       - name: Typecheck (server)
         if: always()
-        run: npm run server:typecheck
+        run: scripts/ci-step.sh "typecheck-server" npm run server:typecheck
       - name: Lint
         if: always()
-        run: npm run lint
+        run: scripts/ci-step.sh "lint" npm run lint
       - name: Unit tests
         if: always()
-        run: npm test
+        run: scripts/ci-step.sh "unit" npm test
       - name: Server tests
         if: always()
-        run: npm run test:server
+        run: scripts/ci-step.sh "server-tests" npm run test:server
       - name: Build
         if: always()
-        run: npm run build
+        run: scripts/ci-step.sh "build" npm run build
