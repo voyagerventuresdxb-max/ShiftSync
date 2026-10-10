@@ -565,7 +565,7 @@ export function ManagerPhoneRota(props: ManagerPhoneRotaProps) {
         </div>
       </div>
 
-      {view !== 'paint' && (
+      {view === 'day' && (
         <div role="group" aria-label="Week overview" className="grid grid-cols-7 gap-1">
           {strip.map((d, i) => (
             <button

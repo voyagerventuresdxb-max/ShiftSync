@@ -7,8 +7,8 @@ import { dayGroups, describeDay } from './phoneModel';
 /**
  * Phone Day view (Design board B3, "Phone-Day"): one day, people grouped by
  * department with their chip, open shifts under their department, and the
- * coverage line. Tapping a chip opens the shift detail; tapping anything else
- * opens the assign sheet.
+ * coverage line. Tapping a person opens the one-tap assign sheet; tapping an
+ * existing shift chip opens the shift detail (B4).
  */
 export function PhoneDayView(props: {
   week: WeekDocDto;
@@ -57,18 +57,19 @@ export function PhoneDayView(props: {
                 ? `${shiftAccessibleName({ personName: p.fullName, date, shift: s, types: week.shiftTypes })}. Tap to edit.`
                 : `${p.fullName}, ${longDate(date)}, ${describeDay(day, week.shiftTypes, week.clock)}${day.locked ? ', approved time off, locked' : ''}${day.pendingRequest ? ', time off requested' : ''}. Tap to assign.`;
               return (
-                <button
-                  key={p.id}
-                  type="button"
-                  aria-label={label}
-                  onClick={() => (s ? onShift(s) : onAssign(p.id, date))}
-                  className="grid min-h-14 w-full grid-cols-[34px_minmax(0,1fr)_150px] items-center gap-2.5 border-b border-border py-1.5 text-left"
-                >
-                  <span aria-hidden="true" className="inline-grid h-[34px] w-[34px] place-items-center rounded-full border border-border-strong bg-surface text-xs font-bold">
-                    {p.initials}
-                  </span>
-                  <span className="min-w-0 truncate text-[15px] font-semibold">{p.fullName}</span>
-                  <span className="flex min-w-0 flex-col gap-0.5" aria-hidden="true">
+                <div key={p.id} className="grid min-h-14 grid-cols-[minmax(0,1fr)_150px] items-center gap-2.5 border-b border-border py-1.5">
+                  <button
+                    type="button"
+                    aria-label={`${p.fullName}, ${longDate(date)}: ${describeDay(day, week.shiftTypes, week.clock)}. Assign.`}
+                    onClick={() => onAssign(p.id, date)}
+                    className="grid min-h-11 min-w-0 grid-cols-[34px_minmax(0,1fr)] items-center gap-2.5 text-left"
+                  >
+                    <span aria-hidden="true" className="inline-grid h-[34px] w-[34px] place-items-center rounded-full border border-border-strong bg-surface text-xs font-bold">
+                      {p.initials}
+                    </span>
+                    <span className="min-w-0 truncate text-[15px] font-semibold">{p.fullName}</span>
+                  </button>
+                  <button type="button" aria-label={label} onClick={() => (s ? onShift(s) : onAssign(p.id, date))} className="flex min-w-0 flex-col gap-0.5 text-left">
                     {s ? (
                       <ShiftChip shift={s} types={week.shiftTypes} clock={week.clock} weekPublished={weekPublished} />
                     ) : day.leave ? (
@@ -83,8 +84,8 @@ export function PhoneDayView(props: {
                         Off requested
                       </span>
                     )}
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
             {openShifts.map((s) => (
