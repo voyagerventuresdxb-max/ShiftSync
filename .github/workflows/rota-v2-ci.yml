@@ -1,0 +1,65 @@
+name: Rota v2 checks
+
+# Typecheck, unit and server tests for the rota builder v2 branch and its PR.
+# Runs against a throwaway Postgres service; never touches a deployed database.
+on:
+  push:
+    branches: ['feat/rota-builder-v2', 'feat/rota-builder-v2-**']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: rota-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: shiftsync_dev
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dev" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://dev:dev@localhost:5432/shiftsync_dev?schema=public
+      PUSH_TRANSPORT: record
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Prisma generate
+        run: npx prisma generate
+      - name: Migrate (public schema)
+        run: scripts/ci-step.sh "migrate" npx prisma migrate deploy
+      - name: Migration drift
+        run: scripts/ci-step.sh "drift" npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code --script
+      - name: Typecheck (client + shared)
+        if: always()
+        run: scripts/ci-step.sh "typecheck-client" npx tsc --noEmit -p tsconfig.json
+      - name: Typecheck (server)
+        if: always()
+        run: scripts/ci-step.sh "typecheck-server" npm run server:typecheck
+      - name: Lint
+        if: always()
+        run: scripts/ci-step.sh "lint" npm run lint
+      - name: Unit tests
+        if: always()
+        run: scripts/ci-step.sh "unit" npm test
+      - name: Server tests
+        if: always()
+        run: scripts/ci-step.sh "server-tests" npm run test:server
+      - name: Build
+        if: always()
+        run: scripts/ci-step.sh "build" npm run build
