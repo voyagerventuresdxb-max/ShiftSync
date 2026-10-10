@@ -67,7 +67,7 @@ export function Dock(props: {
       <button
         type="button"
         onClick={onEditTypes}
-        className="inline-flex min-h-10 items-center gap-1.5 rounded-[10px] px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-surface-raised hover:text-foreground"
+        className="hit-44 inline-flex min-h-10 items-center gap-1.5 rounded-[10px] px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-surface-raised hover:text-foreground"
       >
         <Settings2 aria-hidden="true" className="h-4 w-4" /> Shift types
       </button>
@@ -105,7 +105,7 @@ const DockItem = memo(function DockItem(p: {
         }
       }}
       className={cn(
-        'inline-flex min-h-10 shrink-0 touch-manipulation select-none items-center gap-2 whitespace-nowrap rounded-[10px] border border-border-strong bg-surface-raised pe-2.5 ps-1.5 text-[13px] font-semibold outline-none [-webkit-touch-callout:none] focus-visible:shadow-[0_0_0_2px_color-mix(in_oklab,var(--accent)_70%,transparent)]',
+        'hit-44 inline-flex min-h-10 shrink-0 touch-manipulation select-none items-center gap-2 whitespace-nowrap rounded-[10px] border border-border-strong bg-surface-raised pe-2.5 ps-1.5 text-[13px] font-semibold outline-none [-webkit-touch-callout:none] focus-visible:shadow-[0_0_0_2px_color-mix(in_oklab,var(--accent)_70%,transparent)]',
         p.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab',
         isDragging && 'shadow-lux ring-1 ring-accent',
       )}

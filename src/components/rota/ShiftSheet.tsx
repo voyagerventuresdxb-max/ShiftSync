@@ -26,7 +26,7 @@ import { tintSwatch } from './Dock';
  * confirm sheet first when they land on a pending time-off request).
  */
 
-export type ShiftSheetMode = { kind: 'edit'; shift: WeekShiftDto } | { kind: 'new'; date: IsoDate; userId: string | null };
+export type ShiftSheetMode = { kind: 'edit'; shift: WeekShiftDto } | { kind: 'new'; date: IsoDate; userId: string | null; shiftTypeId?: string };
 
 export interface SheetSubmit {
   ops: WeekPatchOp[];
@@ -55,8 +55,9 @@ export function ShiftSheet(props: {
   const shift = mode.kind === 'edit' ? mode.shift : null;
   const date = shift ? shift.date : mode.kind === 'new' ? mode.date : today;
   const startUser = shift ? shift.userId : mode.kind === 'new' ? mode.userId : null;
-  const firstType = shift ? shift.shiftTypeId : (types[0]?.id ?? null);
-  const initialRanges: TimeRange[] = shift ? shift.ranges : (types[0]?.ranges ?? [{ start: '09:00', end: '17:00' }]);
+  const preset = mode.kind === 'new' ? (types.find((t) => t.id === mode.shiftTypeId) ?? types[0]) : undefined;
+  const firstType = shift ? shift.shiftTypeId : (preset?.id ?? null);
+  const initialRanges: TimeRange[] = shift ? shift.ranges : (preset?.ranges ?? [{ start: '09:00', end: '17:00' }]);
 
   const [typeId, setTypeId] = useState<string | null>(firstType);
   const [ranges, setRanges] = useState<TimeRange[]>(initialRanges.map((r) => ({ ...r })));

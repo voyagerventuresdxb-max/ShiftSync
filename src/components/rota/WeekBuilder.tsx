@@ -207,7 +207,7 @@ export default function WeekBuilder({ locationId, weekStart, onWeekChange }: Wee
   }, [toast]);
   const announce = useCallback((msg: string) => {
     // A changed string re-announces even when the words repeat.
-    setLive((prev) => (prev === msg ? `${msg} ` : msg));
+    setLive((prev) => (prev === msg ? `${msg}\u00a0` : msg));
   }, []);
 
   // ------------------------------------------------------------------
@@ -440,7 +440,7 @@ export default function WeekBuilder({ locationId, weekStart, onWeekChange }: Wee
         };
         if (w.departments.length > 1) {
           // Ambiguous department: the shift sheet asks (Spec §4 "Open-shift drops ask which department").
-          setOverlay({ kind: 'sheet', mode: { kind: 'new', date: target.date, userId: null } });
+          setOverlay({ kind: 'sheet', mode: { kind: 'new', date: target.date, userId: null, shiftTypeId: source.shiftTypeId } });
           return false;
         }
         return pick(dept);
@@ -534,7 +534,7 @@ export default function WeekBuilder({ locationId, weekStart, onWeekChange }: Wee
       const p = parseCellId(id);
       const w = weekRef.current;
       if (!p || !w) return;
-      if (readOnly || p.date < today) return;
+      if (readOnly || p.date < today || activeTypes(w.shiftTypes).length === 0) return;
       const c = cellOf(indexWeek(w), p.date, p.userId);
       if (c.shifts.length === 0 || p.userId === null) setOverlay({ kind: 'sheet', mode: { kind: 'new', date: p.date, userId: p.userId } });
     },
