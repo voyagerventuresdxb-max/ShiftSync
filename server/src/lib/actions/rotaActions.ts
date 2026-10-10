@@ -37,8 +37,8 @@ export async function normalizeTemplateEntries(
 ): Promise<{ ok: true; entries: TemplateEntry[] } | { ok: false; message: string }> {
   if (!Array.isArray(raw) || raw.length === 0) return { ok: false, message: 'entries must be a non-empty array.' };
   if (raw.length > 500) return { ok: false, message: 'A template holds at most 500 entries.' };
-  const typeIds = new Set(
-    (await prisma.shiftType.findMany({ where: { locationId, archivedAt: null }, select: { id: true } })).map((t) => t.id),
+  const typeRanges = new Map(
+    (await prisma.shiftType.findMany({ where: { locationId, archivedAt: null }, select: { id: true, ranges: true } })).map((t): [string, TimeRange[] | null] => [t.id, validateRanges(t.ranges) ? t.ranges : null]),
   );
   const entries: TemplateEntry[] = [];
   for (const [i, value] of raw.entries()) {
@@ -53,14 +53,16 @@ export async function normalizeTemplateEntries(
       if (!validateRanges(e.ranges)) return { ok: false, message: `${where}: ranges must be 1–2 HH:MM ranges; only the last may cross midnight.` };
       ranges = e.ranges.map((r) => ({ start: r.start, end: r.end }));
     }
-    const start = typeof e.start === 'string' ? e.start : ranges ? ranges[0]!.start : undefined;
-    const end = typeof e.end === 'string' ? e.end : ranges ? ranges[ranges.length - 1]!.end : undefined;
-    if (!start || !end || !HHMM_RE.test(start) || !HHMM_RE.test(end)) return { ok: false, message: `${where}: start and end must be HH:MM.` };
     let shiftTypeId: string | null = null;
     if (e.shiftTypeId !== undefined && e.shiftTypeId !== null) {
-      if (typeof e.shiftTypeId !== 'string' || !typeIds.has(e.shiftTypeId)) return { ok: false, message: `${where}: shift type not found or archived.` };
+      if (typeof e.shiftTypeId !== 'string' || !typeRanges.has(e.shiftTypeId)) return { ok: false, message: `${where}: shift type not found or archived.` };
       shiftTypeId = e.shiftTypeId;
     }
+    // start/end for pre-v2 readers: given, else the saved ranges', else the type's current times.
+    const timing = ranges ?? (shiftTypeId ? typeRanges.get(shiftTypeId) : null) ?? null;
+    const start = typeof e.start === 'string' ? e.start : timing ? timing[0]!.start : undefined;
+    const end = typeof e.end === 'string' ? e.end : timing ? timing[timing.length - 1]!.end : undefined;
+    if (!start || !end || !HHMM_RE.test(start) || !HHMM_RE.test(end)) return { ok: false, message: `${where}: start and end must be HH:MM (or give ranges or a shift type).` };
     if (e.note !== undefined && e.note !== null && typeof e.note !== 'string') return { ok: false, message: `${where}: note must be text.` };
     if (e.shiftNote !== undefined && e.shiftNote !== null && (typeof e.shiftNote !== 'string' || e.shiftNote.trim().length > 80)) {
       return { ok: false, message: `${where}: shiftNote must be text of at most 80 characters.` };

@@ -848,5 +848,5 @@ test('every route the API mounts is covered by this matrix (or listed as public 
   const routes = listRoutes(createApp());
   assert.ok(routes.length > 90, `the route table looks incomplete (${routes.length})`);
   const missing = routes.filter((route) => !covered.has(route) && !PUBLIC.has(route) && !TOKEN_CAPABILITY.has(route));
-  assert.deepEqual(missing, [], 'add new routes to the access matrix');
+  assert.deepEqual(missing, [], `add new routes to the access matrix: ${missing.join(', ')}`);
 });

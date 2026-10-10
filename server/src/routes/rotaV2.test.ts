@@ -290,7 +290,7 @@ test('time off: staff file for themselves, duplicates and past days are refused,
   assert.equal(again.body.result, 'not_pending');
   assert.ok(await prisma.auditLog.findFirst({ where: { locationId, action: 'TIME_OFF_DECLINED', entityId: id } }));
   const notice = await prisma.notification.findFirst({ where: { userId: personA, title: 'Time off declined' }, orderBy: { createdAt: 'desc' } });
-  assert.ok(notice?.body.startsWith('Time off declined: '), notice?.body);
+  assert.ok(notice?.body.startsWith('Time off declined: '), notice?.body ?? 'no notice');
   assert.equal((await getWeek(tokens.manager, week)).body.leaves.length, 0, 'a decline leaves the grid as it was');
 });
 
@@ -325,7 +325,7 @@ test('approving time off: the shift becomes an open shift, the days lock, past d
   assert.equal(locked.body.refusal, 'person_on_leave');
   assert.ok(await prisma.auditLog.findFirst({ where: { locationId, action: 'TIME_OFF_APPROVED', entityId: id } }));
   const notice = await prisma.notification.findFirst({ where: { userId: personB, title: 'Time off approved' } });
-  assert.ok(notice?.body.startsWith('Time off approved: '), notice?.body);
+  assert.ok(notice?.body.startsWith('Time off approved: '), notice?.body ?? 'no notice');
 
   // A request that started two days ago: only today and later become leave.
   const today = venueToday(TZ);

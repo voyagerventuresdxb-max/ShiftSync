@@ -13,7 +13,9 @@ import { issueSession } from '../lib/identity.js';
  */
 const prisma = new PrismaClient();
 const TAG = '__swapdecide-test__';
-const day = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
+// Rota builder v2 allows one live shift per person per day, so every fixture shift gets a day of its own.
+let dayOffset = 14;
+const nextDay = () => new Date(Date.now() + dayOffset++ * 86_400_000).toISOString().slice(0, 10);
 
 let locationId = '';
 let roleId = '';
@@ -30,6 +32,7 @@ async function withServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
 }
 
 async function freshRequest() {
+  const day = nextDay();
   const shift = await prisma.shift.create({
     data: { locationId, roleId, userId: ids.requester, date: new Date(`${day}T00:00:00.000Z`), startTime: new Date(`${day}T05:00:00.000Z`), endTime: new Date(`${day}T13:00:00.000Z`), status: 'PUBLISHED' },
   });

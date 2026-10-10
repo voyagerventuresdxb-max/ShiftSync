@@ -693,10 +693,13 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
   const audit = (entry: { action: 'SHIFT_CREATED' | 'SHIFT_UPDATED' | 'SHIFT_DELETED' | 'LEAVE_MARKED' | 'LEAVE_REMOVED' | 'TIME_OFF_DECLINED'; entityType: string; entityId: string; shiftId?: string | null; note: string }) =>
     writeAuditLog(tx, { locationId, actorId, ...entry, note: `[${source}] ${entry.note}${patch.note ? ` — ${patch.note}` : ''}` });
 
-  /** A real day of this week that has not passed (imports may backfill the past). */
+  /**
+   * A real day of this week that has not passed. Imports may backfill the past; a swap approval may record a
+   * cover that already happened (as it always could before v2).
+   */
   const assertDay = (date: unknown, i: number): IsoDate => {
     if (!isRealDate(date) || !daySet.has(date)) throw refuse('outside_week', i, `Date "${String(date)}" is not in the week of ${weekStart}.`);
-    if (source !== 'import' && isPastVenueDay(date, tz)) throw refuse('past_day', i, `${date} has already passed.`);
+    if (source !== 'import' && source !== 'swap' && isPastVenueDay(date, tz)) throw refuse('past_day', i, `${date} has already passed.`);
     return date;
   };
   const normalizeNote = (note: string | null | undefined, i: number): string | null => {
