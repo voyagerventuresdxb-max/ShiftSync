@@ -26,6 +26,7 @@ import { createAnnouncement, createShoutout } from '../lib/actions/communication
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
 import { venueTimezoneFor } from '../lib/venueTime.js';
 import { applyVoicePatches, refusalReply, type VoicePatchOutcome, type VoiceWeekPatch } from '../voice/weekWrites.js';
+import { editedRanges } from '../voice/shiftTiming.js';
 import { mondayOf, validateRanges, type TimeRange } from '../../../shared/rotaWeek.js';
 
 export const voiceRouter = Router();
@@ -616,19 +617,10 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         if (intent.roleId !== undefined && !(await findActiveVenueRole(intent.roleId, locationId))) return refuse(404, `Role "${intent.roleId}" not found or no longer active.`);
         if (intent.userId && !(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
 
-        // New times, from the shift's own ranges: a split keeps its break unless the command
-        // reshaped it (a split type, a second part, or `second: null` to make it one range again).
+        // New times, from the shift's own ranges (a split keeps its break unless the command reshaped it).
         const current = shiftRangesOf(existing, timezone).ranges;
-        let ranges: TimeRange[] | undefined;
-        if (intent.start !== undefined || intent.end !== undefined || intent.second !== undefined || intent.shiftTypeId !== undefined) {
-          const first = current[0]!;
-          const last = current[current.length - 1]!;
-          if (intent.second !== undefined) ranges = [{ start: intent.start ?? first.start, end: intent.end ?? first.end }, ...(intent.second ? [{ start: intent.second.start, end: intent.second.end }] : [])];
-          else if (current.length === 2) ranges = [{ start: intent.start ?? first.start, end: first.end }, { start: last.start, end: intent.end ?? last.end }];
-          else ranges = [{ start: intent.start ?? first.start, end: intent.end ?? first.end }];
-          const split = ranges.length === 2;
-          if (!validateRanges(ranges)) return refuse(400, split ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
-        }
+        const ranges = editedRanges(current, intent);
+        if (ranges && !validateRanges(ranges)) return refuse(400, intent.second || current.length === 2 ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
         // Custom times drop the old type's name; a named type keeps it.
         const timing = ranges ? { ranges, shiftTypeId: intent.shiftTypeId ?? null } : {};
         const date = intent.date ?? currentDate;

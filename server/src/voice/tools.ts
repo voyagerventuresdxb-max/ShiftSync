@@ -18,6 +18,7 @@ import { parseSpokenTime, readOneTime, readShiftTimes, type ShiftTimes, type Tim
 import { coverage, mySchedule, pendingRequests, recentAnnouncements, whoInSection, whoIsOff, whoIsWorking } from './reads.js';
 import type { VenueContext } from './context.js';
 import { shiftRangesOf } from '../lib/actions/weekActions.js';
+import { shiftTypeFor, typeTimes } from './shiftTiming.js';
 
 /**
  * The model's answer under the tool contract: one tool and the arguments as heard (names, never
@@ -312,46 +313,6 @@ function resolveSection(heard: string, ctx: VenueContext): { kind: 'ids'; items:
   if (found.kind === 'one') return { kind: 'ids', items: [found.item] };
   if (found.kind === 'choice') return { kind: 'ids', items: found.items };
   return { kind: 'none' };
-}
-
-type ShiftTypeEntry = NonNullable<VenueContext['shiftTypes']>[number];
-type TypeLookup = { kind: 'none' } | { kind: 'types'; types: ShiftTypeEntry[] } | { kind: 'final'; intent: ParsedIntent };
-
-/** Every word of the type's name is in what was said ("the mid", "evening shift"). */
-function namesType(transcript: string, t: ShiftTypeEntry): boolean {
-  const said = new Set(normalizeName(transcript).split(' '));
-  const own = normalizeName(t.name).split(' ').filter(Boolean);
-  return own.length > 0 && own.every((w) => said.has(w));
-}
-
-/**
- * A named shift type ("put Omar on evening", "make Priya's Friday a split"): the venue's own
- * live types, looked up like a role or section. Without the argument, a new shift with no times
- * said may still name exactly one type in the caller's words ("a morning shift for Omar").
- */
-function shiftTypeFor(call: ToolCall, ctx: VenueContext, transcript: string, fromWords: boolean): TypeLookup {
-  const types = ctx.shiftTypes ?? [];
-  // Times said win: "Omar on evening, 5 to 1" is those times (a type word next to them only describes them).
-  if (call.args.start || call.args.end) return { kind: 'none' };
-  const heard = call.args.shiftType?.replace(/\bshifts?\b/gi, ' ').trim();
-  if (heard) {
-    const found = resolveTerm(heard, types.map((t) => ({ id: t.id, label: t.name })));
-    const ids = found.kind === 'one' ? [found.item.id] : found.kind === 'choice' ? found.items.map((i) => i.id) : [];
-    if (ids.length) return { kind: 'types', types: types.filter((t) => ids.includes(t.id)) };
-    const example = /split/i.test(heard) ? '"11 to 3 and 6 to 11"' : '"4pm to 1am"';
-    return { kind: 'final', intent: clarify(`Say the times instead, for example ${example}.`, `Your venue has no ${heard} shift type.`) };
-  }
-  if (fromWords && !call.args.start2 && transcript.trim()) {
-    const named = types.filter((t) => namesType(transcript, t));
-    if (named.length === 1) return { kind: 'types', types: named };
-  }
-  return { kind: 'none' };
-}
-
-/** A type's ranges as a reading's times: the first range in start/end, a split's second in `second`. */
-function typeTimes(t: ShiftTypeEntry): { start: string; end: string; second?: ShiftTimes } {
-  const [first, second] = t.ranges;
-  return { start: first!.start, end: first!.end, ...(second ? { second: { start: second.start, end: second.end } } : {}) };
 }
 
 /** "Closing", "opening" and "double", from the venue's own templates and upcoming shifts; null when it has none. */

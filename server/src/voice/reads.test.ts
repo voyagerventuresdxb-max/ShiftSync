@@ -2,9 +2,10 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Prisma, SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { shiftInstantsOf } from '../lib/actions/weekActions.js';
+import { OTHER_DEPARTMENT_ID, shiftInstantsOf } from '../lib/actions/weekActions.js';
 import type { TimeRange } from '../../../shared/rotaWeek.js';
-import { coverage, mySchedule, pendingRequests, spokenRanges, whoIsOff, whoIsWorking, type Caller } from './reads.js';
+import { coverage, mySchedule, pendingRequests, whoIsOff, whoIsWorking, type Caller } from './reads.js';
+import { OTHER_DEPARTMENT } from './readWords.js';
 import { buildContext, DECLINES_PENDING_REQUEST, resolveModelAnswer } from './parseIntent.js';
 import type { ParsedIntent } from './intentSchema.js';
 import type { VenueContext } from './context.js';
@@ -225,7 +226,7 @@ test('QUERY_MY_SCHEDULE: published shifts only, grouped by shift type, both rang
   assert.equal(eli.summary, 'Annual leave on Thursday. Sick on Wednesday. Off Monday, Tuesday, Friday, Saturday and Sunday.');
   const one = await mySchedule(caller('dev'), ctx(), { day: THU }, 0.9);
   assert.equal(one.summary, 'Thursday 6 March: Evening, 16 to 1 next day.');
-  assert.equal(spokenRanges([{ start: '11:30', end: '15:00' }]), '11:30 to 15');
+  assert.equal(OTHER_DEPARTMENT, OTHER_DEPARTMENT_ID, 'the words file names the same synthetic department as the week model');
 });
 
 test('PENDING_REQUESTS: pending time-off requests alongside swaps and marks; staff only their own', async () => {
