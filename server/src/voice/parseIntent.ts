@@ -6,11 +6,13 @@ import { mentionedIn, periodSaid, type Term } from './vocabulary.js';
 import { repeatsSentence, VOICE_ROLE_REFUSAL } from '../../../shared/voiceIntents.js';
 import { buildSystemPrompt } from './prompts.js';
 import { reportIfModelUnavailable, voiceClientOptions, voiceModel } from './model.js';
-import { getRotaPublishPreview } from '../lib/actions/rotaActions.js';
+import { previewWeekPublish } from '../lib/actions/weekActions.js';
+import { prisma } from '../lib/prisma.js';
+import { LEAVE_LABELS, leaveBlocksShifts, mondayOf } from '../../../shared/rotaWeek.js';
 import { bestMatch } from '../lib/textSimilarity.js';
 import { AiBudgetExceededError, MAX_OUTPUT_TOKENS, textInputEstimate, withAiBudget } from '../lib/aiBudget.js';
 import { billedOutputTokens } from '../parsing/visionProvider.js';
-import { findOverlappingShift, shiftInstants } from '../lib/shiftRules.js';
+import { findOverlappingShift, isRealDate, shiftInstants } from '../lib/shiftRules.js';
 import { formatVenueTime } from '../lib/venueTime.js';
 import { buildContext, venueSpellingHint, type VenueContext } from './context.js';
 import { dayLabel, missingPerson, NOT_FOUND, normalizeToolCall, resolveToolCall, type Reading, type ToolCall } from './tools.js';
@@ -223,27 +225,53 @@ export function normalizeHasAdditionalRequest(raw: Record<string, unknown>): boo
 }
 
 /**
- * PUBLISH_ROTA's confirm preview states exactly what the publish changes: the shifts that are new
- * or edited since the week was last published, and the people it notifies — recomputed from the
- * same queries `publishRota` uses, never the model's arithmetic. A week with nothing to publish,
- * or nothing changed since its last publish, is said so instead of offering a Confirm.
+ * PUBLISH_ROTA's confirm preview is the week model's own publish preview (weekActions
+ * `previewWeekPublish`, the same diff the grid's publish sheet shows): the person-day changes
+ * since the last publish, the people who will be told in the app, those who have no app yet, and
+ * the departments still short. The preview's `version` and `fingerprint` travel with the intent,
+ * so /execute publishes exactly this diff or nothing (`publishWeek`). A week with nothing to
+ * publish, or nothing changed since its last publish, is said so instead of offering a Confirm.
  */
 export async function refinePublishRotaResponse(response: Extract<ParsedIntent, { intent: 'PUBLISH_ROTA' }>, locationId: string): Promise<ParsedIntent> {
-  const weekStart = new Date(`${response.weekStart}T00:00:00.000Z`);
-  if (Number.isNaN(weekStart.getTime())) {
+  if (!isRealDate(response.weekStart)) {
     return { intent: 'UNRECOGNIZED', reason: WHICH_WEEK_HINT, summary: 'Which week should I publish?' };
   }
-  const { shiftCount, staffCount, shiftsChanging } = await getRotaPublishPreview(locationId, weekStart);
-  const week = dayLabel(response.weekStart);
-  if (shiftCount === 0) {
-    return { intent: 'UNRECOGNIZED', reason: `No shifts exist for the week of ${week} yet.`, summary: `There are no shifts scheduled for the week of ${week} yet — nothing to publish.` };
-  }
-  if (shiftsChanging === 0) {
-    return { intent: 'UNRECOGNIZED', reason: 'Change a shift first, then publish again.', summary: `The week of ${week} is already published, with no changes since.` };
+  const weekStart = mondayOf(response.weekStart);
+  const preview = await previewWeekPublish({ locationId, weekStart });
+  const week = dayLabel(weekStart);
+  if (preview.changeCount === 0) {
+    // No person-day changed — but open (unassigned) draft shifts and removals still publish.
+    const from = new Date(`${weekStart}T00:00:00.000Z`);
+    const to = new Date(from.getTime() + 7 * 86_400_000);
+    const inWeek = { locationId, date: { gte: from, lt: to } };
+    const live = await prisma.shift.count({ where: { ...inWeek, status: { not: 'CANCELLED' } } });
+    const unpublished = await prisma.shift.count({ where: { ...inWeek, OR: [{ status: 'DRAFT' }, { status: 'CANCELLED' }, { editedSincePublish: true }] } });
+    if (live === 0 && unpublished === 0) {
+      return { intent: 'UNRECOGNIZED', reason: `No shifts exist for the week of ${week} yet.`, summary: `There are no shifts scheduled for the week of ${week} yet — nothing to publish.` };
+    }
+    if (unpublished === 0) {
+      return { intent: 'UNRECOGNIZED', reason: 'Change a shift first, then publish again.', summary: `The week of ${week} is already published, with no changes since.` };
+    }
   }
   const s = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const summary = `This will publish ${s(shiftsChanging, 'new or changed shift', 'new or changed shifts')} for the week of ${week} and notify ${s(staffCount, 'person', 'people')} — confirm?`;
-  return { ...response, counts: { shiftsChanging, peopleNotified: staffCount }, summary };
+  const told = preview.notifiedCount === 0 ? 'tell nobody in the app' : `tell ${s(preview.notifiedCount, 'person', 'people')}`;
+  const what = preview.changeCount === 0 ? 'the open shifts' : s(preview.changeCount, 'change', 'changes');
+  const extras = [
+    ...(preview.noDeviceUserIds.length ? [`${s(preview.noDeviceUserIds.length, 'person has', 'people have')} no app yet, so tell them yourself.`] : []),
+    ...(preview.uncovered.length
+      ? [`Still short: ${preview.uncovered.slice(0, 3).map((u) => `${u.departmentName} on ${dayLabel(u.date)}`).join(', ')}${preview.uncovered.length > 3 ? ' and more' : ''}.`]
+      : []),
+  ];
+  const summary = `This will publish ${what} for the week of ${week} and ${told} — confirm?${extras.length ? ` ${extras.join(' ')}` : ''}`;
+  return {
+    ...response,
+    weekStart,
+    counts: { shiftsChanging: preview.changeCount, peopleNotified: preview.notifiedCount },
+    version: preview.version,
+    fingerprint: preview.fingerprint,
+    uncovered: preview.uncovered.length,
+    summary,
+  };
 }
 
 const TEMPLATE_MATCH_THRESHOLD = 0.6;
@@ -459,6 +487,22 @@ async function overlapQuestion(userId: string, date: string, start: string, end:
   return clarify(`That person already works ${when} then.`, `They already have a shift ${when} that overlaps. Pick another time or person.`);
 }
 
+/**
+ * The week model's person-day rule, asked before the Confirm rather than refused after it: one
+ * live shift per person per day, nobody scheduled onto approved leave (Day off and Half day give
+ * way), and a pending time-off request that day is said on the sheet — confirming then declines
+ * it, exactly as the grid's confirm sheet does (`overridePendingRequests`).
+ */
+async function personDay(userId: string, date: string, excludeShiftId?: string): Promise<{ question: ParsedIntent } | { pending: boolean }> {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  const other = await prisma.shift.findFirst({ where: { userId, date: d, status: { not: 'CANCELLED' }, ...(excludeShiftId ? { id: { not: excludeShiftId } } : {}) }, select: { id: true } });
+  if (other) return { question: clarify('Change that shift instead, or pick another day or person.', 'They already have a shift that day.') };
+  const leave = await prisma.rotaLeave.findUnique({ where: { userId_date: { userId, date: d } }, select: { type: true } });
+  if (leave && leaveBlocksShifts(leave.type)) return { question: clarify('Pick another day or person.', `They're on ${LEAVE_LABELS[leave.type].toLowerCase()} that day.`) };
+  const pending = await prisma.timeOffRequest.findFirst({ where: { userId, status: 'PENDING', startDate: { lte: d }, endDate: { gte: d } }, select: { id: true } });
+  return { pending: pending !== null };
+}
+
 /** The id, date and overlap checks behind `checkAgainstContext`, for a reading whose person is settled. */
 async function checkIds(response: Reading, ctx: VenueContext, caller: { id: string; locationId: string }, timezone: string): Promise<ParsedIntent> {
   const staff = new Set(ctx.staffDirectory.map((s) => s.id));
@@ -482,12 +526,16 @@ async function checkIds(response: Reading, ctx: VenueContext, caller: { id: stri
     case 'CREATE_SHIFT': {
       if (!activeRole(response.roleId)) return NOT_FOUND('role');
       if (response.userId !== null && !staff.has(response.userId)) return NOT_FOUND('person');
+      if (response.shiftTypeId !== undefined && !(ctx.shiftTypes ?? []).some((t) => t.id === response.shiftTypeId)) return NOT_FOUND('shift type');
       if (isPast(response.date)) return PAST_DATE;
       if (response.userId !== null) {
         for (const part of [response, ...(response.second ? [response.second] : [])]) {
           const clash = await overlapQuestion(response.userId, response.date, part.start, part.end, caller, timezone);
           if (clash) return clash;
         }
+        const day = await personDay(response.userId, response.date);
+        if ('question' in day) return day.question;
+        if (day.pending) return { ...response, overridePendingRequest: true };
       }
       return response;
     }
@@ -497,10 +545,18 @@ async function checkIds(response: Reading, ctx: VenueContext, caller: { id: stri
       if (response.roleId !== undefined && !activeRole(response.roleId)) return NOT_FOUND('role');
       if (typeof response.userId === 'string' && !staff.has(response.userId)) return NOT_FOUND('person');
       if (isPast(shift.date) || isPast(response.date)) return PAST_DATE;
+      if (response.shiftTypeId !== undefined && !(ctx.shiftTypes ?? []).some((t) => t.id === response.shiftTypeId)) return NOT_FOUND('shift type');
       const who = response.userId === undefined ? shift.assigneeId : response.userId;
       if (who) {
-        const clash = await overlapQuestion(who, response.date ?? shift.date, response.start ?? shift.start, response.end ?? shift.end, caller, timezone, shift.id);
+        const end = response.second ? response.second.end : (response.end ?? shift.end);
+        const clash = await overlapQuestion(who, response.date ?? shift.date, response.start ?? shift.start, end, caller, timezone, shift.id);
         if (clash) return clash;
+        // Only a shift landing on a new person-day claims it; editing the times of the same day does not.
+        if (who !== shift.assigneeId || (response.date !== undefined && response.date !== shift.date)) {
+          const day = await personDay(who, response.date ?? shift.date, shift.id);
+          if ('question' in day) return day.question;
+          if (day.pending) return { ...response, overridePendingRequest: true };
+        }
       }
       return response;
     }
@@ -565,6 +621,7 @@ function describeReading(r: Reading, ctx: VenueContext): ReadingDetails | undefi
     return role ? { personRole: role } : {};
   };
   const roleOf = (id: string) => (ctx.roles ?? []).find((x) => x.id === id)?.name;
+  const typeOf = (id: string | undefined) => (id ? { shiftType: (ctx.shiftTypes ?? []).find((t) => t.id === id)?.name ?? null } : {});
   switch (r.intent) {
     case 'POST_SHOUTOUT':
       return { person: nameOf(r.targetUserId), ...personRole(r.targetUserId) };
@@ -583,12 +640,13 @@ function describeReading(r: Reading, ctx: VenueContext): ReadingDetails | undefi
       return j ? { person: j.fullName } : undefined;
     }
     case 'CREATE_SHIFT':
-      return { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId), role: roleOf(r.roleId) };
+      return { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId), role: roleOf(r.roleId), ...typeOf(r.shiftTypeId) };
     case 'EDIT_SHIFT': {
       const s = (ctx.weekShifts ?? []).find((x) => x.id === r.shiftId);
       return {
         ...(r.userId !== undefined ? { person: r.userId ? nameOf(r.userId) : null, ...personRole(r.userId) } : {}),
         ...(r.roleId ? { role: roleOf(r.roleId) } : {}),
+        ...typeOf(r.shiftTypeId),
         ...(s ? { shift: { date: s.date, start: s.start, end: s.end, role: s.roleName, person: s.assigneeName } } : {}),
       };
     }
@@ -604,12 +662,19 @@ function describeReading(r: Reading, ctx: VenueContext): ReadingDetails | undefi
   }
 }
 
+/** Said on the sheet when Confirm will also decline the person's pending time-off request. */
+export const DECLINES_PENDING_REQUEST = 'They have asked for that day off and the request is still pending: confirming declines it.';
+
 /** The reading with its preview names and the server's own sentence. */
 function withDetails(r: Reading, ctx: VenueContext): Reading {
   const details = describeReading(r, ctx);
   const described = details ? { ...r, details } : r;
-  return { ...described, summary: serverSummary(described) ?? r.summary };
+  const summary = serverSummary(described) ?? r.summary;
+  const pending = (r.intent === 'CREATE_SHIFT' || r.intent === 'EDIT_SHIFT') && r.overridePendingRequest === true;
+  return { ...described, summary: pending && !summary.includes(DECLINES_PENDING_REQUEST) ? `${summary} ${DECLINES_PENDING_REQUEST}` : summary };
 }
+
+const article = (word: string) => (/^[aeiou]/i.test(word) ? 'an' : 'a');
 
 /** The sentence for the confirm sheet, written by the server from the resolved reading; null keeps the existing one. */
 function serverSummary(r: Reading): string | null {
@@ -619,10 +684,19 @@ function serverSummary(r: Reading): string | null {
       return `Cancel ${d.person ? `${d.person}'s` : 'the open'} ${d.role ? `${d.role} ` : ''}shift on ${dayLabel(d.date ?? '')}, ${d.start}–${d.end}.`;
     case 'REQUEST_TIME_OFF':
       return r.startDate === r.endDate ? `Ask for ${dayLabel(r.startDate)} off.` : `Ask for ${dayLabel(r.startDate)} to ${dayLabel(r.endDate)} off.`;
-    case 'CREATE_SHIFT':
-      return r.second
-        ? `Create a split ${d.role ? `${d.role} ` : ''}shift for ${d.person ?? 'nobody yet (open)'}, ${dayLabel(r.date)} ${r.start}–${r.end} and ${r.second.start}–${r.second.end}.`
-        : `Create a ${d.role ? `${d.role} ` : ''}shift for ${d.person ?? 'nobody yet (open)'}, ${dayLabel(r.date)} ${r.start}–${r.end}.`;
+    case 'CREATE_SHIFT': {
+      const times = `${r.start}–${r.end}${r.second ? ` and ${r.second.start}–${r.second.end}` : ''}`;
+      const kind = `${d.shiftType ? `${d.shiftType} ` : r.second ? 'split ' : ''}${d.role ? `${d.role} ` : ''}shift`;
+      return `Create ${article(kind)} ${kind} for ${d.person ?? 'nobody yet (open)'}, ${dayLabel(r.date)} ${times}.`;
+    }
+    case 'EDIT_SHIFT': {
+      // A new shift type or a split: say the whole new timing; other edits keep the reading's own sentence.
+      if (!r.shiftTypeId && r.second === undefined) return null;
+      const s = d.shift;
+      const whose = s ? `${s.person ? `${s.person}'s` : 'the open'} ${dayLabel(s.date)} shift` : 'that shift';
+      const times = `${r.start ?? s?.start}–${r.end ?? s?.end}${r.second ? ` and ${r.second.start}–${r.second.end}` : ''}`;
+      return `Change ${whose} to ${d.shiftType ? `${d.shiftType} ` : r.second ? 'a split, ' : ''}${times}${r.date ? ` on ${dayLabel(r.date)}` : ''}${'person' in d && d.person ? `, for ${d.person}` : ''}.`;
+    }
     default:
       return null;
   }

@@ -5,7 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { createApp } from '../app.js';
 import { issueSession } from '../lib/identity.js';
 import type { GoogleGenAI } from '@google/genai';
-import { __setVoiceIntentClientForTests } from '../voice/parseIntent.js';
+import { __setVoiceIntentClientForTests, refinePublishRotaResponse } from '../voice/parseIntent.js';
 import { venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 
 // These tests drive the real vision/voice code against a fake Gemini client. The AI spend cap
@@ -1778,7 +1778,7 @@ function postExecute(baseUrl: string, token: string, transcript: string, intent:
   });
 }
 
-test('POST /api/voice/execute: PUBLISH_ROTA — STAFF gets 403 and nothing moves; a MANAGER publishes exactly that week via publishRota', async () => {
+test('POST /api/voice/execute: PUBLISH_ROTA — STAFF gets 403 and nothing moves; a MANAGER publishes exactly that week via publishWeek', async () => {
   const { orgId, locationId, roleId } = await isolatedVenue('publish-rota');
   try {
     const manager = await prisma.user.create({ data: { locationId, fullName: 'Publish Manager', systemRole: 'MANAGER' } });
@@ -1789,7 +1789,9 @@ test('POST /api/voice/execute: PUBLISH_ROTA — STAFF gets 403 and nothing moves
         data: { locationId, roleId, userId, date: new Date(`${date}T00:00:00.000Z`), startTime: new Date(`${date}T14:00:00.000Z`), endTime: new Date(`${date}T22:00:00.000Z`) },
       });
     }
-    const intent = { intent: 'PUBLISH_ROTA', weekStart: '2031-03-03', confidence: 0.9, summary: 'This will publish 2 shifts across 2 staff members.' };
+    // What /parse-intent offers: the week model's publish preview, bound by version and fingerprint.
+    const intent = (await refinePublishRotaResponse({ intent: 'PUBLISH_ROTA', weekStart: '2031-03-03', confidence: 0.9, summary: 'x' }, locationId)) as unknown as Record<string, unknown>;
+    assert.equal(intent.intent, 'PUBLISH_ROTA');
 
     await withServer(async (baseUrl) => {
       const denied = await postExecute(baseUrl, await sessionFor(staffA.id), 'publish the rota', intent);
@@ -1799,8 +1801,9 @@ test('POST /api/voice/execute: PUBLISH_ROTA — STAFF gets 403 and nothing moves
 
       const res = await postExecute(baseUrl, await sessionFor(manager.id), 'publish the rota', intent);
       assert.equal(res.status, 200);
-      const body = (await res.json()) as { executed: boolean; result: { notifiedCount: number } };
-      assert.deepEqual([body.executed, body.result.notifiedCount], [true, 2]);
+      const body = (await res.json()) as { executed: boolean; result: { notifiedCount: number; noDeviceUserIds: string[] } };
+      // Staff A signed in above (the app is on a device), so is told in the app; staff B has no device yet.
+      assert.deepEqual([body.executed, body.result.notifiedCount, body.result.noDeviceUserIds], [true, 1, [staffB.id]]);
     });
 
     const shifts = await prisma.shift.findMany({ where: { locationId }, orderBy: { date: 'asc' } });

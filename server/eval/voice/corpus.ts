@@ -201,7 +201,10 @@ export const CORPUS: VoiceCase[] = [
   // "Twelve to eight" with no am/pm and no time-of-day word is noon–8pm or midnight–8am: asking is right too.
   c(M, 'filler', 'Um, can you add, like, a server shift Saturday, uh, twelve to eight, for Layla?', I('CREATE_SHIFT', { roleId: 'role:Server', userId: 'user:layla', date: 'dow:sat', start: 'time:12:00', end: 'time:20:00' }), { accept: [CLARIFY] }),
   c(M, 'relative-time', 'Add an open host shift tomorrow from five p.m. to eleven.', I('CREATE_SHIFT', { roleId: 'role:Host', userId: 'null', date: 'date:+1', start: 'time:17:00', end: 'time:23:00' })),
-  c(M, 'relative-time', 'Create a shift for Priya on Thursday, 10:00 to 14:00, as a host.', I('CREATE_SHIFT', { roleId: 'role:Host', userId: 'user:priya', date: 'dow:thu', start: 'time:10:00', end: 'time:14:00' })),
+  // One live shift per person per day (rota v2): on a weekday where Priya's fixture shift falls on that Thursday, asking is right.
+  c(M, 'relative-time', 'Create a shift for Priya on Thursday, 10:00 to 14:00, as a host.', I('CREATE_SHIFT', { roleId: 'role:Host', userId: 'user:priya', date: 'dow:thu', start: 'time:10:00', end: 'time:14:00' }), {
+    accept: [CLARIFY],
+  }),
   c(M, 'partial', 'Create a shift for Alex on Friday.', CLARIFY),
   c(M, 'partial', 'Put Maricel on as bartender Friday from 8 until closing.', CLARIFY, { accept: [I('CREATE_SHIFT', { roleId: 'role:Bartender', userId: 'user:maricel', date: 'dow:fri' })] }),
   c(M, 'past', 'Create a server shift for Omar yesterday from 9 to 5.', CLARIFY, {
@@ -211,7 +214,9 @@ export const CORPUS: VoiceCase[] = [
     adversarial: { intent: 'CREATE_SHIFT', args: { roleId: 'role:Server', userId: 'user:alex', date: 'date:+1', start: 'time:19:00', end: 'time:00:00' } },
   }),
   c(M, 'homophone', 'Create a bar tender shift for our June on Sunday from noon to 8.', I('CREATE_SHIFT', { roleId: 'role:Bartender', userId: 'user:arjun', date: 'dow:sun', start: 'time:12:00', end: 'time:20:00' }), { accept: [CLARIFY] }),
-  c(M, 'name-style', 'Create a server shift for Jun-Jun Ramos on Thursday from 4 to midnight.', I('CREATE_SHIFT', { roleId: 'role:Server', userId: 'user:junjun', date: 'dow:thu', start: 'time:16:00', end: 'time:00:00' })),
+  c(M, 'name-style', 'Create a server shift for Jun-Jun Ramos on Thursday from 4 to midnight.', I('CREATE_SHIFT', { roleId: 'role:Server', userId: 'user:junjun', date: 'dow:thu', start: 'time:16:00', end: 'time:00:00' }), {
+    accept: [CLARIFY],
+  }),
   c(M, 'unknown-entity', 'Create a chef shift for Omar tomorrow 10 to 6.', CLARIFY, {
     adversarial: { intent: 'CREATE_SHIFT', args: { roleId: 'fake:id', userId: 'user:omar', date: 'date:+1', start: 'time:10:00', end: 'time:18:00' } },
     executeMustFail: true,

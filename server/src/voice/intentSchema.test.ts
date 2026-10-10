@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { STAFF_INTENTS, MANAGER_INTENTS, TOOL_ARG_NAMES, intentSchemaFor } from './intentSchema.js';
+import { STAFF_INTENTS, MANAGER_INTENTS, READ_VOICE_INTENTS, TOOL_ARG_NAMES, intentSchemaFor } from './intentSchema.js';
+import { isReadVoiceIntent } from '../../../shared/voiceIntents.js';
 
 type Schema = {
   properties: Record<string, { enum?: string[]; nullable?: boolean; properties?: Record<string, { nullable?: boolean; description?: string }>; required?: string[]; items?: { properties: Record<string, unknown>; required: string[]; propertyOrdering: string[] } }>;
@@ -48,5 +49,20 @@ test('every top-level key is required and ordered: the tool first, its arguments
     const items = schema.properties.alternatives!.items!;
     assert.deepEqual([...items.required].sort(), Object.keys(items.properties).sort());
     assert.deepEqual([...items.propertyOrdering].sort(), Object.keys(items.properties).sort());
+  }
+});
+
+test('the rota reads WHO_IS_OFF and COVERAGE are questions every role may ask; shift types and departments are arguments as heard', () => {
+  for (const role of ['STAFF', 'MANAGER', 'OWNER'] as const) {
+    const schema = intentSchemaFor(role) as unknown as Schema;
+    assert.ok(schema.properties.tool!.enum!.includes('WHO_IS_OFF'), `${role}: WHO_IS_OFF`);
+    assert.ok(schema.properties.tool!.enum!.includes('COVERAGE'), `${role}: COVERAGE`);
+    const args = schema.properties.args!.properties!;
+    assert.match(args.shiftType!.description!, /named shift as said/);
+    assert.match(args.department!.description!, /COVERAGE: a department as said/);
+  }
+  for (const intent of ['WHO_IS_OFF', 'COVERAGE']) {
+    assert.ok((READ_VOICE_INTENTS as readonly string[]).includes(intent));
+    assert.ok(isReadVoiceIntent(intent));
   }
 });

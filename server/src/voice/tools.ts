@@ -15,8 +15,9 @@ import {
 import { MAX_PEOPLE_CHOICES, normalizeName, resolvePerson, type PersonResolution, type StaffEntry } from './people.js';
 import { periodSaid, resolveTerm, type Term } from './vocabulary.js';
 import { parseSpokenTime, readOneTime, readShiftTimes, type ShiftTimes, type TimesReading } from './times.js';
-import { mySchedule, pendingRequests, recentAnnouncements, whoInSection, whoIsWorking } from './reads.js';
+import { coverage, mySchedule, pendingRequests, recentAnnouncements, whoInSection, whoIsOff, whoIsWorking } from './reads.js';
 import type { VenueContext } from './context.js';
+import { shiftRangesOf } from '../lib/actions/weekActions.js';
 
 /**
  * The model's answer under the tool contract: one tool and the arguments as heard (names, never
@@ -112,6 +113,7 @@ const ASK: Record<string, string> = {
   templateName: 'which template',
   content: 'what should it say',
   change: 'what should change',
+  'second part': 'when the second part starts and ends',
 };
 const ASK_PERSON: Record<string, string> = { REQUEST_SWAP: 'who should cover it', ASSIGN_SECTION: 'who', POST_SHOUTOUT: 'who is it for' };
 const WHAT: Record<string, string> = {
@@ -236,6 +238,8 @@ async function venueShiftsOn(ctx: VenueContext, caller: ToolCaller, iso: string)
     assigneeId: s.userId,
     assigneeName: s.assignee?.fullName ?? null,
     status: s.status,
+    ranges: shiftRangesOf(s, ctx.timezone).ranges,
+    shiftTypeId: s.shiftTypeId,
   }));
   const known = new Set((ctx.weekShifts ??= []).map((s) => s.id));
   for (const s of shifts) if (!known.has(s.id)) ctx.weekShifts.push(s);
@@ -308,6 +312,46 @@ function resolveSection(heard: string, ctx: VenueContext): { kind: 'ids'; items:
   if (found.kind === 'one') return { kind: 'ids', items: [found.item] };
   if (found.kind === 'choice') return { kind: 'ids', items: found.items };
   return { kind: 'none' };
+}
+
+type ShiftTypeEntry = NonNullable<VenueContext['shiftTypes']>[number];
+type TypeLookup = { kind: 'none' } | { kind: 'types'; types: ShiftTypeEntry[] } | { kind: 'final'; intent: ParsedIntent };
+
+/** Every word of the type's name is in what was said ("the mid", "evening shift"). */
+function namesType(transcript: string, t: ShiftTypeEntry): boolean {
+  const said = new Set(normalizeName(transcript).split(' '));
+  const own = normalizeName(t.name).split(' ').filter(Boolean);
+  return own.length > 0 && own.every((w) => said.has(w));
+}
+
+/**
+ * A named shift type ("put Omar on evening", "make Priya's Friday a split"): the venue's own
+ * live types, looked up like a role or section. Without the argument, a new shift with no times
+ * said may still name exactly one type in the caller's words ("a morning shift for Omar").
+ */
+function shiftTypeFor(call: ToolCall, ctx: VenueContext, transcript: string, fromWords: boolean): TypeLookup {
+  const types = ctx.shiftTypes ?? [];
+  // Times said win: "Omar on evening, 5 to 1" is those times (a type word next to them only describes them).
+  if (call.args.start || call.args.end) return { kind: 'none' };
+  const heard = call.args.shiftType?.replace(/\bshifts?\b/gi, ' ').trim();
+  if (heard) {
+    const found = resolveTerm(heard, types.map((t) => ({ id: t.id, label: t.name })));
+    const ids = found.kind === 'one' ? [found.item.id] : found.kind === 'choice' ? found.items.map((i) => i.id) : [];
+    if (ids.length) return { kind: 'types', types: types.filter((t) => ids.includes(t.id)) };
+    const example = /split/i.test(heard) ? '"11 to 3 and 6 to 11"' : '"4pm to 1am"';
+    return { kind: 'final', intent: clarify(`Say the times instead, for example ${example}.`, `Your venue has no ${heard} shift type.`) };
+  }
+  if (fromWords && !call.args.start2 && transcript.trim()) {
+    const named = types.filter((t) => namesType(transcript, t));
+    if (named.length === 1) return { kind: 'types', types: named };
+  }
+  return { kind: 'none' };
+}
+
+/** A type's ranges as a reading's times: the first range in start/end, a split's second in `second`. */
+function typeTimes(t: ShiftTypeEntry): { start: string; end: string; second?: ShiftTimes } {
+  const [first, second] = t.ranges;
+  return { start: first!.start, end: first!.end, ...(second ? { second: { start: second.start, end: second.end } } : {}) };
 }
 
 /** "Closing", "opening" and "double", from the venue's own templates and upcoming shifts; null when it has none. */
@@ -426,6 +470,11 @@ export async function resolveToolCall(call: ToolCall, ctx: VenueContext, caller:
       return final(declined(a.category, caller.systemRole, confidence));
     case 'WHO_IS_WORKING':
       return final(await whoIsWorking(caller, ctx, { day: day(a.day), period: (a.period as 'AM' | 'PM' | undefined) ?? periodSaid(transcript) }, confidence));
+    case 'WHO_IS_OFF':
+      return final(await whoIsOff(caller, ctx, { day: day(a.day) }, confidence));
+    case 'COVERAGE':
+      // "Are we short on bar Saturday?": the model may file "bar" as a section; a department is meant.
+      return final(await coverage(caller, ctx, { day: day(a.day), department: a.department ?? a.section ?? null }, confidence));
     case 'QUERY_MY_SCHEDULE':
       return final(await mySchedule(caller, ctx, { day: day(a.day), week: day(a.week) }, confidence));
     case 'PENDING_REQUESTS':
@@ -516,6 +565,20 @@ export async function resolveToolCall(call: ToolCall, ctx: VenueContext, caller:
         const own = p.kind === 'one' ? ctx.staffDirectory.find((s) => s.id === p.person.id)?.roleId : null;
         if (own && (ctx.roles ?? []).some((r) => r.id === own && r.isActive !== false)) roleIds = [own];
       }
+      const typed = shiftTypeFor(call, ctx, transcript, true);
+      if (typed.kind === 'final') return typed;
+      if (typed.kind === 'types') {
+        const missingParts = [...missingOf(call, ['day']), ...(roleIds.length ? [] : ['role'])];
+        if (missingParts.length) return final(askFor(call.tool, missingParts, call, ctx, caller, transcript));
+        const readings: Reading[] = [];
+        for (const roleId of roleIds) {
+          for (const t of typed.types) {
+            readings.push({ intent: 'CREATE_SHIFT', roleId, date: a.day!, ...typeTimes(t), shiftTypeId: t.id, userId: null, ...(person ? { targetUserName: person } : {}), ...base });
+          }
+        }
+        if (readings.length === 1) return one(readings[0]!);
+        return { kind: 'choices', readings: readings.slice(0, MAX_CHOICES + 1), summary: roleIds.length > 1 ? 'Which role did you mean?' : 'Which shift did you mean?' };
+      }
       const times = newShiftTimes(call, ctx, roleIds.length === 1 ? roleIds[0]! : null, transcript);
       const missing = [...missingOf(call, ['day']), ...(times.kind === 'missing' ? times.fields : []), ...(roleIds.length ? [] : ['role'])];
       if (missing.length) {
@@ -551,13 +614,59 @@ export async function resolveToolCall(call: ToolCall, ctx: VenueContext, caller:
       if (lookup.kind === 'final') return lookup;
       if (!isEdit) return shiftChoice(lookup.shifts.map((s): Reading => ({ intent: 'CANCEL_SHIFT', shiftId: s.id, ...base })), lookup);
 
-      const changes = a.start || a.end || day(a.newDay) || a.role || a.newPerson || a.unassign;
+      const changes = a.start || a.end || a.start2 || a.end2 || a.shiftType || day(a.newDay) || a.role || a.newPerson || a.unassign;
       if (!changes) return final(askFor(call.tool, ['change'], call, ctx, caller, transcript));
       let roleIds: (string | undefined)[] = [undefined];
       if (a.role) {
         const found = resolveRole(a.role, ctx);
         if (found.kind === 'none') return final(clarify(AGAIN, `I couldn't find a ${a.role} role at your venue.`));
         roleIds = found.ids;
+      }
+      const who = a.unassign ? { userId: null } : a.newPerson ? { userId: null, targetUserName: a.newPerson } : {};
+      const moved = day(a.newDay) ? { date: a.newDay } : {};
+      // "Make Priya's Friday a split" / "put her on evening instead": the venue type's own times.
+      const typed = shiftTypeFor(call, ctx, transcript, false);
+      if (typed.kind === 'final') return typed;
+      if (typed.kind === 'types') {
+        const readings: Reading[] = [];
+        for (const s of lookup.shifts) {
+          for (const roleId of roleIds) {
+            for (const t of typed.types) {
+              const times = typeTimes(t);
+              // A split becoming a one-range type says so (`second: null`), so the second range goes.
+              const second = times.second ?? ((s.ranges?.length ?? 1) > 1 ? null : undefined);
+              readings.push({
+                intent: 'EDIT_SHIFT',
+                shiftId: s.id,
+                ...(roleId ? { roleId } : {}),
+                ...moved,
+                start: times.start,
+                end: times.end,
+                ...(second !== undefined ? { second } : {}),
+                shiftTypeId: t.id,
+                ...who,
+                ...base,
+              });
+            }
+          }
+        }
+        return shiftChoice(readings, lookup);
+      }
+      // A split said with times: both parts, read like a new split shift's.
+      if (a.start2 || a.end2) {
+        if (!a.start || !a.end || !a.start2 || !a.end2) return final(askFor(call.tool, ['start', 'end'].filter((k) => !a[k as 'start' | 'end']).concat(a.start2 && a.end2 ? [] : ['second part']), call, ctx, caller, transcript));
+        const times = newShiftTimes(call, ctx, null, transcript);
+        if (times.kind === 'final') return times;
+        if (times.kind !== 'times') return final(askFor(call.tool, times.fields, call, ctx, caller, transcript));
+        const readings: Reading[] = [];
+        for (const s of lookup.shifts) {
+          for (const roleId of roleIds) {
+            for (const t of times.options) {
+              readings.push({ intent: 'EDIT_SHIFT', shiftId: s.id, ...(roleId ? { roleId } : {}), ...moved, start: t.first.start, end: t.first.end, ...(t.second ? { second: t.second } : {}), ...who, ...base });
+            }
+          }
+        }
+        return shiftChoice(readings, lookup);
       }
       const readings: Reading[] = [];
       for (const s of lookup.shifts) {
@@ -573,10 +682,10 @@ export async function resolveToolCall(call: ToolCall, ctx: VenueContext, caller:
               intent: 'EDIT_SHIFT',
               shiftId: s.id,
               ...(roleId ? { roleId } : {}),
-              ...(day(a.newDay) ? { date: a.newDay } : {}),
+              ...moved,
               ...(a.start ? { start: t.start } : {}),
               ...(a.end ? { end: t.end } : {}),
-              ...(a.unassign ? { userId: null } : a.newPerson ? { userId: null, targetUserName: a.newPerson } : {}),
+              ...who,
               ...base,
             });
           }

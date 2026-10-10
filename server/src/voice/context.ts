@@ -2,6 +2,8 @@ import type { SystemRole } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { formatVenueTime, venueToday, venueTimezoneFor } from '../lib/venueTime.js';
 import { buildVocabularyHint } from './transcribe.js';
+import { shiftRangesOf } from '../lib/actions/weekActions.js';
+import { validateRanges, type TimeRange } from '../../../shared/rotaWeek.js';
 
 /**
  * What the SERVER knows about the caller's venue while it resolves a voice command: the caller's
@@ -41,7 +43,12 @@ export interface VenueContext {
     assigneeId?: string | null;
     assigneeName: string | null;
     status?: string;
+    /** The shift's 1–2 ranges (a split has two); `start`/`end` above span them. */
+    ranges?: TimeRange[];
+    shiftTypeId?: string | null;
   }[];
+  /** Manager-tier only: the venue's live (not archived) shift types, for "put Omar on evening". */
+  shiftTypes?: { id: string; name: string; ranges: TimeRange[] }[];
   /** Every floor section at this venue. */
   floorSections?: { id: string; label: string }[];
   /** Manager-tier only: every saved rota template at this venue. */
@@ -134,6 +141,8 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
       take: 500,
     });
+    const types = await prisma.shiftType.findMany({ where: { locationId: user.locationId, archivedAt: null }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+    ctx.shiftTypes = types.flatMap((t) => (validateRanges(t.ranges) ? [{ id: t.id, name: t.name, ranges: t.ranges.map((r) => ({ start: r.start, end: r.end })) }] : []));
     ctx.weekShifts = venueShifts.map((s) => ({
       id: s.id,
       roleName: s.role.name,
@@ -144,6 +153,8 @@ export async function buildContext(user: { id: string; systemRole: SystemRole; f
       assigneeId: s.userId,
       assigneeName: s.assignee?.fullName ?? null,
       status: s.status,
+      ranges: shiftRangesOf(s, timezone).ranges,
+      shiftTypeId: s.shiftTypeId,
     }));
   }
 

@@ -72,6 +72,8 @@ const KIND: Record<string, string> = {
 const ANSWER_KIND: Record<string, string> = {
   QUERY_MY_SCHEDULE: 'Your schedule',
   WHO_IS_WORKING: "Who's working",
+  WHO_IS_OFF: "Who's off",
+  COVERAGE: 'Coverage',
   WHO_IN_SECTION: 'Sections',
   PENDING_REQUESTS: 'Requests',
   RECENT_ANNOUNCEMENTS: 'Announcements',

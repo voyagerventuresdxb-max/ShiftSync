@@ -184,11 +184,11 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
       // A split shift: both parts spelled out in full, each on its own line.
       const detail = intent.second
         ? [
-            [d?.role, 'Split shift, two parts'].filter(Boolean).join(' · '),
+            [d?.shiftType, d?.role, 'Split shift, two parts'].filter(Boolean).join(' · '),
             `1st: ${shiftWhen(intent.date, intent.start, intent.end)}`,
             `2nd: ${shiftWhen(intent.date, intent.second.start, intent.second.end)}`,
           ]
-        : [d?.role, shiftWhen(intent.date, intent.start, intent.end)].filter(Boolean).join(' · ');
+        : [d?.shiftType, d?.role, shiftWhen(intent.date, intent.start, intent.end)].filter(Boolean).join(' · ');
       return <Line lead={<Avatar name={person} />} title={person ?? 'Open shift'} role={person ? d?.personRole : null} detail={detail} tag={<Tag>Draft</Tag>} />;
     }
     case 'CANCEL_SHIFT':
@@ -219,7 +219,15 @@ function previewCard(intent: ParsedIntent, d: ReadingDetails | undefined, viewer
           lead={<Avatar name={person} />}
           title={person ?? 'Open shift'}
           role={person && d && 'person' in d ? d.personRole : null}
-          detail={[after.role, after.date && (after.start && after.end ? shiftWhen(after.date, after.start, after.end) : day(after.date))].filter(Boolean).join(' · ')}
+          detail={[
+            after.role,
+            d?.shiftType,
+            after.date && (after.start && after.end ? shiftWhen(after.date, after.start, after.end) : day(after.date)),
+            // A split: its second part, from the same Confirm (one shift, two ranges).
+            intent.second ? `2nd: ${intent.second.start}–${intent.second.end}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
           was={before ? [before.person ?? 'Open', shiftWhen(before.date, before.start, before.end)].join(' · ') : undefined}
           tag={<Tag tone="gold">Change</Tag>}
         />

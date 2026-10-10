@@ -11,7 +11,15 @@
  * executed): no Confirm. Every role may ask them; what each answer contains is scoped to the
  * caller's role and venue on the server (server/src/voice/reads.ts).
  */
-export const READ_VOICE_INTENTS = ['QUERY_MY_SCHEDULE', 'WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS'] as const;
+export const READ_VOICE_INTENTS = [
+  'QUERY_MY_SCHEDULE',
+  'WHO_IS_WORKING',
+  'WHO_IS_OFF',
+  'COVERAGE',
+  'WHO_IN_SECTION',
+  'PENDING_REQUESTS',
+  'RECENT_ANNOUNCEMENTS',
+] as const;
 
 export const STAFF_INTENTS = ['MARK_AVAILABILITY', 'REQUEST_SWAP', 'REQUEST_TIME_OFF', ...READ_VOICE_INTENTS] as const;
 

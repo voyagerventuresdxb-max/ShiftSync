@@ -15,15 +15,18 @@ import { SwapWindowClosedError } from '../lib/swapRequestPolicy.js';
 import { decideJoinRequest, JOIN_LINK_CHOICE_MESSAGE, JOIN_PHONE_TAKEN_ERROR } from '../lib/actions/joinActions.js';
 import { markAvailability } from '../lib/actions/availabilityActions.js';
 import { writeAuditLog, withAuditedTransaction } from '../lib/auditLog.js';
-import { createShift, deleteShift, updateShift } from '../lib/actions/shiftActions.js';
-import { findActiveVenueRole, findOverlappingShift, findVenueUser, isPastVenueDay, isRealDate, shiftInstants } from '../lib/shiftRules.js';
+import { SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
+import { findActiveVenueRole, findVenueUser, isPastVenueDay, isRealDate } from '../lib/shiftRules.js';
 import { isClockTime } from '../voice/times.js';
 import { upsertSectionAssignment } from '../lib/actions/sectionActions.js';
-import { publishRota, applyRotaTemplate } from '../lib/actions/rotaActions.js';
+import { applyRotaTemplate } from '../lib/actions/rotaActions.js';
+import { publishWeek, shiftRangesOf } from '../lib/actions/weekActions.js';
+import { createTimeOffRequest } from '../lib/actions/timeOffActions.js';
 import { createAnnouncement, createShoutout } from '../lib/actions/communicationActions.js';
-import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateInteractionOutcome } from '../voice/interactionLog.js';
-import { formatVenueTime, venueTimezoneFor } from '../lib/venueTime.js';
+import { venueTimezoneFor } from '../lib/venueTime.js';
+import { applyVoicePatches, refusalReply, type VoicePatchOutcome, type VoiceWeekPatch } from '../voice/weekWrites.js';
+import { mondayOf, validateRanges, type TimeRange } from '../../../shared/rotaWeek.js';
 
 export const voiceRouter = Router();
 
@@ -139,6 +142,8 @@ function validateIntentShape(intent: ParsedIntent): string | null {
       if (!isClockTime(intent.start) || !isClockTime(intent.end)) return 'start/end must be HH:MM.';
       if (intent.userId !== null && intent.userId !== undefined && !isNonEmptyString(intent.userId)) return 'userId must be an id or null.';
       if (intent.second !== undefined && (!intent.second || !isClockTime(intent.second.start) || !isClockTime(intent.second.end))) return 'second.start/second.end must be HH:MM.';
+      if (intent.shiftTypeId !== undefined && !isNonEmptyString(intent.shiftTypeId)) return 'shiftTypeId must be an id.';
+      if (intent.overridePendingRequest !== undefined && typeof intent.overridePendingRequest !== 'boolean') return 'overridePendingRequest must be true or false.';
       return null;
     }
     case 'EDIT_SHIFT': {
@@ -146,6 +151,10 @@ function validateIntentShape(intent: ParsedIntent): string | null {
       if (intent.date !== undefined && !isRealDate(intent.date)) return 'date must be a real calendar date (YYYY-MM-DD).';
       if (intent.start !== undefined && !isClockTime(intent.start)) return 'start must be HH:MM.';
       if (intent.end !== undefined && !isClockTime(intent.end)) return 'end must be HH:MM.';
+      if (intent.second !== undefined && intent.second !== null && (!isClockTime(intent.second.start) || !isClockTime(intent.second.end))) return 'second.start/second.end must be HH:MM.';
+      if (intent.shiftTypeId !== undefined && !isNonEmptyString(intent.shiftTypeId)) return 'shiftTypeId must be an id.';
+      if (intent.userId !== undefined && intent.userId !== null && !isNonEmptyString(intent.userId)) return 'userId must be an id or null.';
+      if (intent.overridePendingRequest !== undefined && typeof intent.overridePendingRequest !== 'boolean') return 'overridePendingRequest must be true or false.';
       return null;
     }
     case 'CANCEL_SHIFT':
@@ -163,6 +172,8 @@ function validateIntentShape(intent: ParsedIntent): string | null {
       if (!isIsoDate(intent.weekStart)) return 'weekStart must be a real calendar date (YYYY-MM-DD).';
       // The model is told weekStart is the Monday; never trust its arithmetic.
       if (!isMondayIso(intent.weekStart)) return WEEK_START_NOT_MONDAY_ERROR;
+      // What the confirm sheet showed: /parse-intent's publish preview, bound by version and fingerprint.
+      if (!Number.isInteger(intent.version) || !isNonEmptyString(intent.fingerprint)) return 'Ask again to see what this publish will change, then confirm.';
       return null;
     }
     case 'APPLY_ROTA_TEMPLATE': {
@@ -388,26 +399,28 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
     const timezone = await venueTimezoneFor(locationId);
     /** Every change is re-checked here, whatever /parse-intent offered: a hand-built body skips it. */
     const refuse = (status: number, msg: string) => respond(status, { error: msg }, 'REJECTED_VALIDATION', msg);
+    /** A week-patch refusal (or a week that kept moving): the voice sheet's wording and status; nothing was changed. */
+    const refusePatch = (outcome: Exclude<VoicePatchOutcome, { result: 'ok' }>) => {
+      const reply = outcome.result === 'refused' ? refusalReply(outcome.refusal, outcome.message) : refusalReply('version_conflict', '');
+      const errorCode = outcome.result === 'refused' ? outcome.refusal : 'version_conflict';
+      return respond(reply.status, { error: reply.error, errorCode }, 'REJECTED_VALIDATION', reply.error);
+    };
     const PAST = 'That day has already passed.';
 
     switch (intent.intent) {
       case 'REQUEST_TIME_OFF': {
         if (isPastVenueDay(intent.startDate, timezone)) return refuse(400, PAST);
-        // Time off is recorded as an "unavailable" mark for each day: the same rows (and audit
-        // entries) the availability route writes, which managers already see. All or nothing.
-        const days: string[] = [];
-        for (let d = intent.startDate; d <= intent.endDate; d = new Date(Date.parse(`${d}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10)) days.push(d);
+        // A real time-off request (rota v2): the same single writer as POST /api/time-off. It waits for a
+        // manager; approving it turns the days into leave through the week patch.
         const reason = typeof intent.reason === 'string' && intent.reason.trim() ? intent.reason.trim() : null;
-        const marks = await prisma.$transaction(async (tx) => {
-          const out = [];
-          for (const date of days) {
-            const { mark } = await markAvailability({ userId: actorId, date, type: 'UNAVAILABLE', note: reason ?? note }, tx);
-            await writeAuditLog(tx, { locationId, actorId, action: 'AVAILABILITY_MARKED', entityType: 'AvailabilityMark', entityId: mark.id, note });
-            out.push(mark);
-          }
-          return out;
-        });
-        return respond(201, { executed: true, result: { marks } }, 'EXECUTED');
+        const filed = await withAuditedTransaction(
+          prisma,
+          (tx) => createTimeOffRequest({ userId: actorId, startDate: intent.startDate, endDate: intent.endDate, reason }, tx),
+          (r) => (r.result === 'ok' ? { locationId, actorId, action: 'TIME_OFF_REQUESTED', entityType: 'TimeOffRequest', entityId: r.id, note } : null),
+        );
+        if (filed.result === 'duplicate') return respond(409, { error: filed.message, errorCode: 'time_off_duplicate' }, 'REJECTED_VALIDATION', filed.message);
+        if (filed.result === 'invalid') return refuse(400, filed.message);
+        return respond(201, { executed: true, result: { request: { id: filed.id, startDate: filed.startDate, endDate: filed.endDate, status: 'pending' } } }, 'EXECUTED');
       }
       case 'MARK_AVAILABILITY': {
         if (isPastVenueDay(intent.date, timezone)) return refuse(400, PAST);
@@ -573,86 +586,114 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         return respond(200, { executed: true, result: { status: result.status, userId: result.userId } }, 'EXECUTED');
       }
       case 'CREATE_SHIFT': {
-        // Same checks as POST /api/shifts (lib/shiftRules.ts), plus the ones voice adds: the
-        // person is active, the day hasn't passed, and nobody is double-booked.
+        // Friendly answers for what the week patch would also refuse, then the patch itself (source
+        // 'voice'): one shift, one or two ranges (a split is ONE shift with two ranges), the venue
+        // shift type when one was named.
         if (!(await findActiveVenueRole(intent.roleId, locationId))) return refuse(404, `Role "${intent.roleId}" not found or no longer active.`);
         if (intent.userId && !(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
         if (isPastVenueDay(intent.date, timezone)) return refuse(400, PAST);
-        const parts = [{ start: intent.start, end: intent.end }, ...(intent.second ? [intent.second] : [])].map((p) => shiftInstants(intent.date, p.start, p.end, timezone));
-        if (parts.length === 2 && parts[0]!.startTime < parts[1]!.endTime && parts[1]!.startTime < parts[0]!.endTime) return refuse(400, 'The two parts of a split shift overlap.');
-        if (intent.userId) {
-          for (const part of parts) {
-            if (await findOverlappingShift({ userId: intent.userId, locationId, ...part })) return refuse(409, 'That person already has a shift that overlaps.');
-          }
-        }
-        // A split shift is two shifts, created together or not at all, each with its audit row.
-        const created = await prisma.$transaction(async (tx) => {
-          const rows = [];
-          for (const part of parts) {
-            const shift = await createShift(
-              {
-                locationId,
-                roleId: intent.roleId,
-                userId: intent.userId,
-                createdById: actorId,
-                date: new Date(`${intent.date}T00:00:00.000Z`),
-                ...part,
-                breakMinutes: 0,
-                sidework: [],
-                status: 'DRAFT',
-              } as unknown as Parameters<typeof createShift>[0],
-              tx,
-            );
-            await writeAuditLog(tx, { locationId, actorId, shiftId: shift.id, action: 'SHIFT_CREATED', entityType: 'Shift', entityId: shift.id, note });
-            rows.push(shift);
-          }
-          return rows;
+        const ranges: TimeRange[] = [{ start: intent.start, end: intent.end }, ...(intent.second ? [{ start: intent.second.start, end: intent.second.end }] : [])];
+        if (!validateRanges(ranges)) return refuse(400, ranges.length === 2 ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
+        const weekStart = mondayOf(intent.date);
+        const outcome = await applyVoicePatches({
+          locationId,
+          actorId,
+          transcript,
+          patches: [{ weekStart, ops: [{ op: 'create', userId: intent.userId ?? null, roleId: intent.roleId, date: intent.date, ranges, ...(intent.shiftTypeId ? { shiftTypeId: intent.shiftTypeId } : {}) }] }],
+          overridePendingRequests: intent.overridePendingRequest === true,
         });
-        return respond(201, { executed: true, result: created.length === 1 ? created[0] : created }, 'EXECUTED');
+        if (outcome.result !== 'ok') return refusePatch(outcome);
+        const week = outcome.weeks[0]!;
+        const shift = await prisma.shift.findUnique({ where: { id: week.results[0]!.shiftId! }, include: SHIFT_INCLUDE });
+        return respond(201, { executed: true, result: { ...shift, version: week.version, declinedRequestIds: week.declinedRequestIds }, roster: { locationId, weekStart, version: week.version } }, 'EXECUTED');
       }
       case 'EDIT_SHIFT': {
         const existing = await prisma.shift.findUnique({ where: { id: intent.shiftId } });
-        if (!existing || existing.locationId !== locationId) return refuse(404, `Shift "${intent.shiftId}" not found.`);
+        if (!existing || existing.locationId !== locationId || existing.status === 'CANCELLED') return refuse(404, `Shift "${intent.shiftId}" not found.`);
         const currentDate = existing.date.toISOString().slice(0, 10);
         if (isPastVenueDay(currentDate, timezone) || (intent.date !== undefined && isPastVenueDay(intent.date, timezone))) return refuse(400, PAST);
-        const data: Record<string, unknown> = {};
-        if (intent.roleId !== undefined) {
-          // A removed role stays on old shifts, but nothing is moved onto it.
-          if (!(await findActiveVenueRole(intent.roleId, locationId))) return refuse(404, `Role "${intent.roleId}" not found or no longer active.`);
-          data.roleId = intent.roleId;
-        }
-        if (intent.userId !== undefined) {
-          if (intent.userId) {
-            if (!(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
-            data.userId = intent.userId;
-          } else {
-            data.userId = null;
-          }
-        }
-        const nextDate = intent.date ?? currentDate;
-        const next = shiftInstants(nextDate, intent.start ?? formatVenueTime(existing.startTime, timezone), intent.end ?? formatVenueTime(existing.endTime, timezone), timezone);
-        if (intent.date !== undefined || intent.start !== undefined || intent.end !== undefined) {
-          data.date = new Date(`${nextDate}T00:00:00.000Z`);
-          data.startTime = next.startTime;
-          data.endTime = next.endTime;
-        }
-        const assignee = intent.userId !== undefined ? intent.userId : existing.userId;
-        if (assignee && (await findOverlappingShift({ userId: assignee, locationId, ...next, excludeShiftId: existing.id }))) return refuse(409, 'That person already has a shift that overlaps.');
+        // A removed role stays on old shifts, but nothing is moved onto it.
+        if (intent.roleId !== undefined && !(await findActiveVenueRole(intent.roleId, locationId))) return refuse(404, `Role "${intent.roleId}" not found or no longer active.`);
+        if (intent.userId && !(await findVenueUser(intent.userId, locationId, { activeOnly: true }))) return refuse(404, `Staff member "${intent.userId}" not found.`);
 
-        const updated = await withAuditedTransaction(
-          prisma,
-          (tx) => updateShift(intent.shiftId, data as Parameters<typeof updateShift>[1], tx),
-          () => ({ locationId, actorId, shiftId: intent.shiftId, action: 'SHIFT_UPDATED', entityType: 'Shift', entityId: intent.shiftId, note }),
+        // New times, from the shift's own ranges: a split keeps its break unless the command
+        // reshaped it (a split type, a second part, or `second: null` to make it one range again).
+        const current = shiftRangesOf(existing, timezone).ranges;
+        let ranges: TimeRange[] | undefined;
+        if (intent.start !== undefined || intent.end !== undefined || intent.second !== undefined || intent.shiftTypeId !== undefined) {
+          const first = current[0]!;
+          const last = current[current.length - 1]!;
+          if (intent.second !== undefined) ranges = [{ start: intent.start ?? first.start, end: intent.end ?? first.end }, ...(intent.second ? [{ start: intent.second.start, end: intent.second.end }] : [])];
+          else if (current.length === 2) ranges = [{ start: intent.start ?? first.start, end: first.end }, { start: last.start, end: intent.end ?? last.end }];
+          else ranges = [{ start: intent.start ?? first.start, end: intent.end ?? first.end }];
+          if (!validateRanges(ranges)) return refuse(400, ranges.length === 2 ? 'The two parts of a split shift overlap.' : 'A shift must start and end at different times.');
+        }
+        // Custom times drop the old type's name; a named type keeps it.
+        const timing = ranges ? { ranges, shiftTypeId: intent.shiftTypeId ?? null } : {};
+        const date = intent.date ?? currentDate;
+        const fromWeek = mondayOf(currentDate);
+        const toWeek = mondayOf(date);
+        let patches: VoiceWeekPatch[];
+        if (fromWeek === toWeek) {
+          patches = [
+            {
+              weekStart: fromWeek,
+              ops: [
+                {
+                  op: 'update',
+                  shiftId: existing.id,
+                  ...(intent.userId !== undefined ? { userId: intent.userId } : {}),
+                  ...(intent.roleId !== undefined ? { roleId: intent.roleId } : {}),
+                  ...(intent.date !== undefined ? { date: intent.date } : {}),
+                  ...timing,
+                },
+              ],
+            },
+          ];
+        } else {
+          // Into another week: created there and removed here in one transaction, so each week's
+          // version, rules and publish diff stay its own (a published shift is told as removed).
+          const keepType = ranges ? intent.shiftTypeId : (existing.shiftTypeId ?? undefined);
+          patches = [
+            {
+              weekStart: toWeek,
+              ops: [
+                {
+                  op: 'create',
+                  userId: intent.userId !== undefined ? intent.userId : existing.userId,
+                  roleId: intent.roleId ?? existing.roleId,
+                  ...(intent.roleId === undefined ? { departmentId: existing.departmentId } : {}),
+                  date,
+                  ranges: ranges ?? current,
+                  ...(keepType ? { shiftTypeId: keepType } : {}),
+                  note: existing.note,
+                },
+              ],
+            },
+            { weekStart: fromWeek, ops: [{ op: 'delete', shiftId: existing.id }] },
+          ];
+        }
+        const outcome = await applyVoicePatches({ locationId, actorId, transcript, patches, overridePendingRequests: intent.overridePendingRequest === true });
+        if (outcome.result !== 'ok') return refusePatch(outcome);
+        const landed = outcome.weeks[0]!;
+        const shift = await prisma.shift.findUnique({ where: { id: landed.results[0]!.shiftId! }, include: SHIFT_INCLUDE });
+        return respond(
+          200,
+          { executed: true, result: { ...shift, version: landed.version, declinedRequestIds: landed.declinedRequestIds }, roster: { locationId, weekStart: toWeek, version: landed.version } },
+          'EXECUTED',
         );
-        return respond(200, { executed: true, result: updated }, 'EXECUTED');
       }
       case 'CANCEL_SHIFT': {
-        // The same removal as DELETE /api/shifts/:id (deleteShift), after the same venue check.
+        // The grid's delete: a draft goes, a published shift is removed at the next publish (and the person told then).
         const existing = await prisma.shift.findUnique({ where: { id: intent.shiftId } });
-        if (!existing || existing.locationId !== locationId) return refuse(404, `Shift "${intent.shiftId}" not found.`);
-        if (isPastVenueDay(existing.date.toISOString().slice(0, 10), timezone)) return refuse(400, 'That shift has already happened.');
-        await deleteShift({ id: existing.id, locationId, actorId, note });
-        return respond(200, { executed: true, result: { id: existing.id, cancelled: true } }, 'EXECUTED');
+        if (!existing || existing.locationId !== locationId || existing.status === 'CANCELLED') return refuse(404, `Shift "${intent.shiftId}" not found.`);
+        const date = existing.date.toISOString().slice(0, 10);
+        if (isPastVenueDay(date, timezone)) return refuse(400, 'That shift has already happened.');
+        const weekStart = mondayOf(date);
+        const outcome = await applyVoicePatches({ locationId, actorId, transcript, patches: [{ weekStart, ops: [{ op: 'delete', shiftId: existing.id }] }] });
+        if (outcome.result !== 'ok') return refusePatch(outcome);
+        const version = outcome.weeks[0]!.version;
+        return respond(200, { executed: true, result: { id: existing.id, cancelled: true, version }, roster: { locationId, weekStart, version } }, 'EXECUTED');
       }
       case 'ASSIGN_SECTION': {
         const section = await prisma.floorSection.findUnique({ where: { id: intent.sectionId } });
@@ -689,20 +730,20 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         return respond(201, { executed: true, result: assignment }, 'EXECUTED');
       }
       case 'PUBLISH_ROTA': {
-        const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
-        const result = await publishRota({ locationId, weekStart, publishedById: actorId });
-        if (result.result === 'not_found') {
-          return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        // Exactly the diff the confirm sheet showed: publishWeek recomputes it and compares the fingerprint.
+        const result = await publishWeek({ locationId, weekStart: intent.weekStart, actorId, expectedVersion: intent.version as number, fingerprint: intent.fingerprint as string });
+        if (result.result === 'version_conflict' || result.result === 'fingerprint_mismatch') {
+          const msg = 'The week changed since you asked. Ask again to see what publishing will change now.';
+          return respond(409, { error: msg, errorCode: 'week_changed' }, 'REJECTED_VALIDATION', msg);
         }
-        if (result.result === 'empty') {
-          return respond(400, { error: result.message }, 'REJECTED_VALIDATION', result.message);
-        }
-        // Same notification path as the REST route (routes/shifts.ts's
-        // publish endpoint) — never inside publishRota's own transaction.
-        void notifySchedulePublished(result.affectedUserIds, intent.weekStart);
+        if (result.result === 'empty') return refuse(400, result.message);
         return respond(
           200,
-          { executed: true, result: { publishedAt: result.publishedAt.toISOString(), notifiedCount: result.notifiedCount } },
+          {
+            executed: true,
+            result: { publishedAt: result.publishedAt, notifiedCount: result.notifiedCount, noDeviceUserIds: result.noDeviceUserIds, version: result.version },
+            roster: { locationId, weekStart: intent.weekStart, version: result.version },
+          },
           'EXECUTED',
         );
       }
@@ -732,7 +773,11 @@ voiceRouter.post('/execute', requireSession, voiceExecuteRateLimiter, async (req
         const weekStart = new Date(`${intent.weekStart}T00:00:00.000Z`);
         const result = await applyRotaTemplate({ templateId: intent.templateId as string, weekStart, createdById: actorId, actorId });
         // The week patch refused an entry (someone already on that day, on leave…): nothing was applied.
-        if (result.result === 'refused') return respond(409, { error: result.message }, 'REJECTED_VALIDATION', result.message);
+        // `message` names the entry ("Entry 3: …"), which is what the manager needs to fix the template.
+        if (result.result === 'refused') {
+          const msg = result.refusal === 'version_conflict' ? result.message : `Nothing was applied. ${result.message}`;
+          return respond(409, { error: msg, errorCode: `template_${result.refusal}` }, 'REJECTED_VALIDATION', msg);
+        }
         if (result.result !== 'ok') {
           return respond(404, { error: result.message }, 'REJECTED_VALIDATION', result.message);
         }

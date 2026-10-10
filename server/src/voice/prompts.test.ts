@@ -44,3 +44,12 @@ test('every key is asked for, null when unused', () => {
   assert.match(prompt, /Every key in the response is required/);
   assert.match(prompt, /unrecognizedReason, as one short, friendly sentence to the caller/);
 });
+
+test('the model is told which rota question is which, and that a named shift is a shift type', () => {
+  const staff = buildSystemPrompt('STAFF', ctx);
+  assert.match(staff, /who is off, on leave or sick → WHO_IS_OFF/);
+  assert.match(staff, /"is Saturday covered\?", "are we short on bar Saturday\?"\) → COVERAGE/);
+  assert.match(staff, /^- WHO_IS_OFF: /m);
+  assert.match(staff, /^- COVERAGE: /m);
+  assert.match(buildSystemPrompt('MANAGER', ctx), /put that word in shiftType/);
+});

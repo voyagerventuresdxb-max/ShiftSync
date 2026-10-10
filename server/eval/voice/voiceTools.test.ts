@@ -188,14 +188,18 @@ test('RECENT_ANNOUNCEMENTS: stored text that gives orders stays inert data; noth
   assert.equal((await execute('sam', r)).status, 400);
 });
 
-test('QUERY_MY_SCHEDULE: the caller\'s own shifts only, answered by the server', async () => {
-  const r = await parse('sam', "what's my schedule", call('QUERY_MY_SCHEDULE'));
+test('QUERY_MY_SCHEDULE: the caller\'s own PUBLISHED shifts only, answered by the server', async () => {
+  // Alex's shift tomorrow is published; Sam's two are still drafts, so they are not his schedule yet.
+  const r = await parse('alex', "what's my schedule", call('QUERY_MY_SCHEDULE'));
   const a = answerOf(r);
-  assert.equal(a.items.length, 2);
-  assert.match(r.summary, /^You have 2 shifts: /);
-  for (const key of Object.keys(PEOPLE) as PersonKey[]) if (key !== 'sam') assert.ok(!JSON.stringify(r).includes(PEOPLE[key].name.split(' ')[0]!));
-  const one = answerOf(await parse('sam', 'do I work tomorrow', call('QUERY_MY_SCHEDULE', { day: day(1) })));
-  assert.deepEqual(one.items.map((i) => i.secondary), ['17:00–01:00 · Bartender']);
+  assert.equal(a.items.length, 1);
+  assert.match(r.summary, /^You have 1 shift in the next 14 days\. .*18 to 2 next day\.$/);
+  for (const key of Object.keys(PEOPLE) as PersonKey[]) if (key !== 'alex') assert.ok(!JSON.stringify(r).includes(PEOPLE[key].name.split(' ')[0]!));
+  const one = answerOf(await parse('alex', 'do I work tomorrow', call('QUERY_MY_SCHEDULE', { day: day(1) })));
+  assert.deepEqual(one.items.map((i) => i.secondary), ['18:00–02:00 (+1) · Bartender']);
+  const sam = await parse('sam', "what's my schedule", call('QUERY_MY_SCHEDULE'));
+  assert.deepEqual(answerOf(sam).items, []);
+  assert.equal(sam.summary, 'You have no shifts in the next 14 days.');
 });
 
 // ---------------------------------------------------------------------------
@@ -246,9 +250,10 @@ test('CANCEL_SHIFT: the shift is found by person and day, previewed, and removed
   assert.equal((await execute('hannah', { ...r, shiftId: other.shift })).status, 404);
   const done = await execute('hannah', r, "cancel Priya's shift");
   assert.equal(done.status, 200);
+  // A draft is removed outright by the week patch (a published one would wait for the next publish).
   assert.equal(await prisma.shift.count({ where: { id: fx.shifts['priya+2'] } }), 0);
   const audit = await prisma.auditLog.findFirstOrThrow({ where: { locationId: fx.locationId, action: 'SHIFT_DELETED', entityId: fx.shifts['priya+2'] } });
-  assert.equal(audit.note, `[voice] "cancel Priya's shift"`);
+  assert.match(audit.note ?? '', /^\[voice\] .* — "cancel Priya's shift"$/);
 });
 
 test('CANCEL_SHIFT and EDIT_SHIFT: a shift that has already happened is refused at parse and at execute', async () => {
@@ -266,23 +271,28 @@ test('CANCEL_SHIFT and EDIT_SHIFT: a shift that has already happened is refused 
   }
 });
 
-test('REQUEST_TIME_OFF: staff ask for a run of days; it is recorded as unavailable marks, all or nothing; long or past runs are refused', async () => {
+test('REQUEST_TIME_OFF: staff ask for a run of days; it is filed as one pending time-off request; long, past or overlapping runs are refused', async () => {
   const r = await parse('sam', 'I need time off from the 10th to the 12th for a wedding', call('REQUEST_TIME_OFF', { day: day(10), endDay: day(12), reason: 'a wedding' }));
   assert.equal(r.intent, 'REQUEST_TIME_OFF');
   if (r.intent !== 'REQUEST_TIME_OFF') return;
   assert.deepEqual([r.startDate, r.endDate, r.reason], [day(10), day(12), 'a wedding']);
   const done = await execute('sam', r, 'time off');
   assert.equal(done.status, 201);
-  const marks = await prisma.availabilityMark.findMany({ where: { userId: fx.users.sam }, orderBy: { date: 'asc' } });
-  assert.deepEqual(marks.map((m) => [m.date.toISOString().slice(0, 10), m.type, m.note]), [10, 11, 12].map((n) => [day(n), 'UNAVAILABLE', 'a wedding']));
-  // More than 14 days is asked again; the past and a hand-built 20-day body are refused.
+  const requests = await prisma.timeOffRequest.findMany({ where: { userId: fx.users.sam } });
+  assert.deepEqual(
+    requests.map((q) => [q.startDate.toISOString().slice(0, 10), q.endDate.toISOString().slice(0, 10), q.status, q.reason]),
+    [[day(10), day(12), 'PENDING', 'a wedding']],
+  );
+  assert.equal(await prisma.availabilityMark.count({ where: { userId: fx.users.sam } }), 0, 'no availability marks any more');
+  // More than 14 days is asked again; the past, a hand-built 20-day body and an overlapping second request are refused.
   assert.equal((await parse('sam', 'a month off', call('REQUEST_TIME_OFF', { day: day(1), endDay: day(30) }))).intent, 'UNRECOGNIZED');
   assert.equal((await execute('sam', { intent: 'REQUEST_TIME_OFF', startDate: day(-2), endDate: day(-1), reason: null, confidence: 1, summary: 'x' })).status, 400);
   assert.equal((await execute('sam', { intent: 'REQUEST_TIME_OFF', startDate: day(1), endDate: day(20), reason: null, confidence: 1, summary: 'x' })).status, 400);
-  assert.equal(await prisma.availabilityMark.count({ where: { userId: fx.users.sam } }), 3);
+  assert.equal((await execute('sam', { intent: 'REQUEST_TIME_OFF', startDate: day(11), endDate: day(11), reason: null, confidence: 1, summary: 'x' })).status, 409);
+  assert.equal(await prisma.timeOffRequest.count({ where: { userId: fx.users.sam } }), 1);
 });
 
-test('split shift: CREATE_SHIFT with a second part creates both on one Confirm; an overlap in either part creates neither', async () => {
+test('split shift: CREATE_SHIFT with a second part creates ONE shift with two ranges; an overlap in either part creates nothing', async () => {
   const r = await parse('hannah', 'Layla on server, 11 to 3 and 6 to 11, four days from now', call('CREATE_SHIFT', { person: 'Layla', role: 'server', day: day(4), start: '11', end: '3', start2: '6', end2: '11' }));
   assert.equal(r.intent, 'CREATE_SHIFT');
   if (r.intent !== 'CREATE_SHIFT') return;
@@ -290,8 +300,12 @@ test('split shift: CREATE_SHIFT with a second part creates both on one Confirm; 
   assert.match(r.summary, /^Create a split Server shift for Layla Nasser, .* 11:00–15:00 and 18:00–23:00\.$/);
   const done = await execute('hannah', r, 'split');
   assert.equal(done.status, 201);
-  assert.equal(await prisma.shift.count({ where: { userId: fx.users.layla, date: new Date(`${day(4)}T00:00:00.000Z`) } }), 2);
-  assert.equal(await prisma.auditLog.count({ where: { locationId: fx.locationId, action: 'SHIFT_CREATED', note: '[voice] "split"' } }), 2);
+  const made = await prisma.shift.findMany({ where: { userId: fx.users.layla, date: new Date(`${day(4)}T00:00:00.000Z`) } });
+  assert.deepEqual(
+    made.map((s) => s.ranges),
+    [[{ start: '11:00', end: '15:00' }, { start: '18:00', end: '23:00' }]],
+  );
+  assert.equal(await prisma.auditLog.count({ where: { locationId: fx.locationId, action: 'SHIFT_CREATED', note: { endsWith: '— "split"' } } }), 1);
 
   // Omar works 10:00–18:00 the day after tomorrow: the second part overlaps, so nothing is created.
   const clash = await parse('hannah', 'Omar, server, 6 to 9am and 5 to 11pm, the day after tomorrow', call('CREATE_SHIFT', { person: 'Omar', role: 'server', day: day(2), start: '6am', end: '9am', start2: '5pm', end2: '11pm' }));
@@ -374,7 +388,11 @@ test('PUBLISH_ROTA: the preview counts only what this publish changes, and says 
   const r = await parse('hannah', "publish next week's rota", call('PUBLISH_ROTA', { week }));
   assert.equal(r.intent, 'PUBLISH_ROTA');
   if (r.intent !== 'PUBLISH_ROTA') return;
-  assert.ok(r.counts && r.counts.shiftsChanging > 0 && r.counts.peopleNotified > 0);
+  assert.ok(r.counts && r.counts.shiftsChanging > 0);
+  assert.ok(typeof r.version === 'number' && typeof r.fingerprint === 'string', 'the preview travels with the intent');
+  // A hand-built publish without the preview is refused; a stale fingerprint is the week having moved.
+  assert.equal((await execute('hannah', { ...r, version: undefined, fingerprint: undefined })).status, 400);
+  assert.equal((await execute('hannah', { ...r, fingerprint: 'stale' })).status, 409);
   assert.equal((await execute('hannah', r)).status, 200);
   const again = await parse('hannah', "publish next week's rota", call('PUBLISH_ROTA', { week }));
   assert.match(asked(again).summary, /already published, with no changes since/);

@@ -25,6 +25,8 @@ export interface ReadingDetails {
   cover?: string | null;
   /** CREATE_SHIFT/EDIT_SHIFT: the role name (EDIT_SHIFT: only when it changes). CANCEL_SHIFT: the shift's role. */
   role?: string | null;
+  /** CREATE_SHIFT/EDIT_SHIFT: the venue shift type the new times come from ("Evening"), when one was named. */
+  shiftType?: string | null;
   /** ASSIGN_SECTION: the section's label. */
   section?: string;
   /** The existing shift a reading refers to (REQUEST_SWAP, APPROVE/DECLINE_SWAP, EDIT_SHIFT). */
@@ -76,14 +78,43 @@ type Action =
       date: string;
       start: string;
       end: string;
-      /** A split shift: a second shift the same day, created with the first on one Confirm. */
+      /**
+       * A split shift: the second range of the SAME shift (one shift, two ranges — rota v2), so
+       * `start`–`end` is the first range. The field name is kept from when a split was two rows.
+       */
       second?: { start: string; end: string };
+      /** The venue shift type the times came from ("put Omar on evening"); absent for custom times. */
+      shiftTypeId?: string;
       userId: string | null;
       targetUserName?: string;
+      /**
+       * Set by the server at parse time when the person has a PENDING time-off request covering
+       * the day: the confirm sheet says the request will be declined, and Confirm is the
+       * manager's consent (`overridePendingRequests` on the week patch).
+       */
+      overridePendingRequest?: boolean;
       confidence: number;
       summary: string;
     }
-  | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; targetUserName?: string; confidence: number; summary: string }
+  | {
+      intent: 'EDIT_SHIFT';
+      shiftId: string;
+      roleId?: string;
+      date?: string;
+      /** New times. With `second` (or a split shift type) `start`–`end` is the first range. */
+      start?: string;
+      end?: string;
+      /** The second range of a split; null makes a split a single range again. */
+      second?: { start: string; end: string } | null;
+      /** The venue shift type the new times came from ("make Priya's Friday a split"). */
+      shiftTypeId?: string;
+      userId?: string | null;
+      targetUserName?: string;
+      /** As on CREATE_SHIFT: the new person has a pending time-off request that day, and Confirm declines it. */
+      overridePendingRequest?: boolean;
+      confidence: number;
+      summary: string;
+    }
   | { intent: 'CANCEL_SHIFT'; shiftId: string; confidence: number; summary: string }
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; targetUserName?: string; confidence: number; summary: string }
   | {
@@ -91,6 +122,14 @@ type Action =
       weekStart: string;
       /** Shifts this publish changes (new or edited since the last publish) and the people it notifies. */
       counts?: { shiftsChanging: number; peopleNotified: number };
+      /**
+       * The week version and diff fingerprint the preview was computed at (weekActions
+       * `previewWeekPublish`); /execute publishes only that exact diff (`publishWeek`).
+       */
+      version?: number;
+      fingerprint?: string;
+      /** Department-days still short after this publish, for the sheet's warning. */
+      uncovered?: number;
       confidence: number;
       summary: string;
     }
@@ -147,8 +186,16 @@ export const TOOL_GUIDE: Record<IntentType | 'DECLINED', { does: string; args: s
   MARK_AVAILABILITY: { does: 'mark the caller unavailable, or preferring a day off, on one day', args: 'day, availability' },
   REQUEST_SWAP: { does: "ask a colleague to cover one of the caller's own shifts", args: 'person (the colleague), day (the shift), start (only if said), reason' },
   REQUEST_TIME_OFF: { does: 'the caller asks for time off: one day, or a run of days', args: 'day (first day), endDay (last day, if more than one), reason' },
-  QUERY_MY_SCHEDULE: { does: 'answer when the caller themself works (their own shifts only)', args: 'day or week (only if said)' },
-  WHO_IS_WORKING: { does: 'say who is working today, tonight, or on a given day', args: 'day, period (only if said)' },
+  QUERY_MY_SCHEDULE: { does: 'answer when the caller themself works, or what they are doing this week (their own shifts only)', args: 'day or week (only if said)' },
+  WHO_IS_WORKING: { does: 'say who is working (on, in, scheduled) today, tonight, or on a given day', args: 'day, period (only if said)' },
+  WHO_IS_OFF: {
+    does: 'say who is off, not working, on leave or sick on a day ("who\'s off Thursday", "who is on leave tomorrow")',
+    args: 'day',
+  },
+  COVERAGE: {
+    does: 'say whether a day is fully staffed: "is Saturday covered", "are we short on bar Saturday", "do we have enough people tomorrow"',
+    args: 'day, department (only if said: "bar", "kitchen", "floor")',
+  },
   WHO_IN_SECTION: { does: 'say who is in a floor section on a day', args: 'section, day, period (only if said)' },
   PENDING_REQUESTS: { does: 'list pending swap requests and upcoming time off', args: 'none' },
   RECENT_ANNOUNCEMENTS: { does: 'read out the latest announcements and shout-outs', args: 'none' },
@@ -158,11 +205,11 @@ export const TOOL_GUIDE: Record<IntentType | 'DECLINED', { does: string; args: s
   DECLINE_JOIN: { does: 'decline a pending request to join the team', args: 'applicant (their name as said, if said)' },
   CREATE_SHIFT: {
     does: 'create a new shift, for a person or open; a split shift has a second part the same day',
-    args: 'person (omit for an open shift), role, day, start, end, start2 and end2 (the second part of a split shift)',
+    args: 'person (omit for an open shift), role, day, shiftType (a named shift such as "evening", "mid" or "split", instead of times), start, end, start2 and end2 (the second part of a split shift)',
   },
   EDIT_SHIFT: {
-    does: "change an existing shift's time, day, role or person",
-    args: "person (whose shift it is now; omit for an open shift), day (the shift's day), at (the shift's current start, only if said), start/end (new times), newDay, role (new role), newPerson (who takes it over), unassign (true to take the person off)",
+    does: "change an existing shift's time, type, day, role or person",
+    args: "person (whose shift it is now; omit for an open shift), day (the shift's day), at (the shift's current start, only if said), shiftType (a named shift it becomes: \"make Priya's Friday a split\"), start/end (new times), start2/end2 (the second part, for a split), newDay, role (new role), newPerson (who takes it over), unassign (true to take the person off)",
   },
   CANCEL_SHIFT: { does: 'remove (cancel) an existing shift', args: 'person (whose shift; omit for an open shift), day, start (only if said)' },
   ASSIGN_SECTION: { does: 'put a person in a floor section for a day and service', args: 'person, section, day, period, duty (an optional duty note)' },
@@ -188,6 +235,8 @@ const ARG_PROPERTIES = {
   section: str('A floor section as said ("the bar", "terrace").'),
   role: str('A job role as said ("bartender", "server").'),
   template: str('A saved rota template name as said.'),
+  shiftType: str('CREATE_SHIFT/EDIT_SHIFT: a named shift as said ("evening", "mid", "the morning shift", "a split"); times said as numbers go in start/end instead.'),
+  department: str('COVERAGE: a department as said ("bar", "kitchen", "floor").'),
   day: str('YYYY-MM-DD, read from the calendar in the instructions.'),
   endDay: str('REQUEST_TIME_OFF: the last day, YYYY-MM-DD.'),
   newDay: str('EDIT_SHIFT: the new day, YYYY-MM-DD.'),

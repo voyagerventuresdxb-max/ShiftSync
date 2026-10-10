@@ -19,7 +19,9 @@ import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
-export { ApiError };
+import { emitRosterChanged } from './weeks';
+import { READ_VOICE_INTENTS } from '../../shared/voiceIntents';
+export { ApiError, READ_VOICE_INTENTS };
 
 /** Names for the confirm sheet's preview, written by the server from the caller's own venue (never by the model). */
 export interface ReadingDetails {
@@ -28,6 +30,8 @@ export interface ReadingDetails {
   personRole?: string | null;
   cover?: string | null;
   role?: string;
+  /** CREATE_SHIFT/EDIT_SHIFT: the venue shift type the times come from ("Evening"). */
+  shiftType?: string | null;
   section?: string;
   shift?: { date: string; start: string; end: string; role?: string; person?: string | null };
 }
@@ -47,18 +51,41 @@ type Action =
       end: string;
       userId: string | null;
       targetUserName?: string;
-      /** A split shift: a second segment on the same day, created by the same Confirm. */
+      /** A split shift: the second range of the same shift, created by the same Confirm. */
       second?: { start: string; end: string };
+      shiftTypeId?: string;
+      /** Confirming also declines the person's pending time-off request for that day (the summary says so). */
+      overridePendingRequest?: boolean;
       confidence: number;
       summary: string;
     }
-  | { intent: 'EDIT_SHIFT'; shiftId: string; roleId?: string; date?: string; start?: string; end?: string; userId?: string | null; targetUserName?: string; confidence: number; summary: string }
+  | {
+      intent: 'EDIT_SHIFT';
+      shiftId: string;
+      roleId?: string;
+      date?: string;
+      start?: string;
+      end?: string;
+      /** The second range of a split; null makes it one range again. */
+      second?: { start: string; end: string } | null;
+      shiftTypeId?: string;
+      userId?: string | null;
+      targetUserName?: string;
+      overridePendingRequest?: boolean;
+      confidence: number;
+      summary: string;
+    }
   | { intent: 'ASSIGN_SECTION'; sectionId: string; staffId: string; shiftDate: string; period: 'AM' | 'PM'; dutyLabel: string | null; targetUserName?: string; confidence: number; summary: string }
   | {
       intent: 'PUBLISH_ROTA';
       weekStart: string;
       /** Only the shifts this publish actually changes, and only the people who will be notified (absent from older servers). */
       counts?: { shiftsChanging: number; peopleNotified: number };
+      /** The previewed week version and diff fingerprint, sent back unchanged so exactly that diff is published. */
+      version?: number;
+      fingerprint?: string;
+      /** Department-days still short. */
+      uncovered?: number;
       confidence: number;
       summary: string;
     }
@@ -76,7 +103,6 @@ export interface VoiceAnswer {
   emptyText: string;
 }
 
-export const READ_VOICE_INTENTS = ['WHO_IS_WORKING', 'WHO_IN_SECTION', 'PENDING_REQUESTS', 'RECENT_ANNOUNCEMENTS', 'QUERY_MY_SCHEDULE'] as const;
 export type ReadVoiceIntent = (typeof READ_VOICE_INTENTS)[number];
 
 type Read =
@@ -247,6 +273,13 @@ export async function parseVoiceIntent(
   });
 }
 
+/** What /execute answers; `roster` is the week a roster write moved, and its new version. */
+export interface VoiceExecuteResult {
+  executed: boolean;
+  result: unknown;
+  roster?: { locationId: string; weekStart: string; version: number };
+}
+
 /**
  * POST /api/voice/execute — body: { transcript, intent, voiceLogId }. The
  * "execute" half of confirm-before-execute. The real permission/shape
@@ -258,10 +291,14 @@ export async function executeVoiceIntent(
   transcript: string,
   intent: ParsedIntent,
   voiceLogId: string | null,
-): Promise<{ executed: boolean; result: unknown }> {
-  return request('/api/voice/execute', {
+): Promise<VoiceExecuteResult> {
+  const body = await request<VoiceExecuteResult>('/api/voice/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...withAuth(token) },
     body: JSON.stringify({ transcript, intent, voiceLogId }),
   });
+  // A roster write by voice moves the week like a drag on the grid: every open rota surface refetches.
+  const roster = body?.roster;
+  if (roster && typeof roster.weekStart === 'string' && typeof roster.version === 'number' && typeof window !== 'undefined') emitRosterChanged(roster);
+  return body;
 }

@@ -244,9 +244,17 @@ test('refinePublishRotaResponse: a non-empty week gets the exact recomputed shif
     assert.equal(result.intent, 'PUBLISH_ROTA');
     if (result.intent === 'PUBLISH_ROTA') {
       assert.equal(result.weekStart, weekStartStr, 'weekStart must survive the refinement unchanged');
-      // Every shift is a draft, so all four change; two distinct people have shifts and are notified.
-      assert.deepEqual(result.counts, { shiftsChanging: 4, peopleNotified: 2 });
-      assert.equal(result.summary, 'This will publish 4 new or changed shifts for the week of Mon 2 Nov and notify 2 people — confirm?');
+      // The week model's publish diff: one change per person-day (A twice, B once; the open shift is
+      // nobody's cell). Neither person has the app on a device, so nobody is told in the app, and the
+      // open Thursday shift leaves its (ungrouped, "Other") department short.
+      assert.deepEqual(result.counts, { shiftsChanging: 3, peopleNotified: 0 });
+      assert.equal(typeof result.version, 'number');
+      assert.match(result.fingerprint ?? '', /^[0-9a-f]{64}$/);
+      assert.equal(result.uncovered, 1);
+      assert.equal(
+        result.summary,
+        'This will publish 3 changes for the week of Mon 2 Nov and tell nobody in the app — confirm? 2 people have no app yet, so tell them yourself. Still short: Other on Thu 5 Nov.',
+      );
     }
   } finally {
     await prisma.shift.deleteMany({ where: { id: { in: shifts.map((s) => s.id) } } });
