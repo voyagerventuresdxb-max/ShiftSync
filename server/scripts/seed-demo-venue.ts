@@ -59,6 +59,24 @@ if (new Set(phones).size !== 3) usage('the three numbers must be different.');
 
 // Import after the host check: constructing the client is what connects.
 const { prisma } = await import('../src/lib/prisma.js');
+const { snapshotWeek } = await import('../src/lib/actions/weekActions.js');
+
+/**
+ * Rota builder v2: the venue's departments (with the seeded roles grouped under them) and shift types, as the
+ * week grid shows them. Tints are chip-token names, never colours. Generic names only.
+ */
+const DEPARTMENTS: { id: string; name: string; tint: string; roles: string[] }[] = [
+  { id: 'demo-dept-floor', name: 'Floor', tint: 'clay', roles: ['Supervisor', 'Server', 'Runner'] },
+  { id: 'demo-dept-bar', name: 'Bar', tint: 'gold', roles: ['Bartender'] },
+  { id: 'demo-dept-kitchen', name: 'Kitchen', tint: 'sage', roles: ['Chef'] },
+  { id: 'demo-dept-hosts', name: 'Hosts', tint: 'sand', roles: ['Host'] },
+];
+const SHIFT_TYPES: { id: string; name: string; ranges: { start: string; end: string }[]; tint: string }[] = [
+  { id: 'demo-type-morning', name: 'Morning', ranges: [{ start: '07:00', end: '16:00' }], tint: 'gold' },
+  { id: 'demo-type-mid', name: 'Mid', ranges: [{ start: '11:00', end: '20:00' }], tint: 'sand' },
+  { id: 'demo-type-evening', name: 'Evening', ranges: [{ start: '16:00', end: '01:00' }], tint: 'clay' },
+  { id: 'demo-type-split', name: 'Split', ranges: [{ start: '11:00', end: '15:00' }, { start: '18:00', end: '23:00' }], tint: 'ochre' },
+];
 
 const STAFF: { id: string; fullName: string; role: string; jobTitle: string; language: string }[] = [
   { id: 'demo-user-layla', fullName: 'Layla Haddad', role: 'Supervisor', jobTitle: 'Floor Supervisor', language: 'ar' },
@@ -95,6 +113,32 @@ async function main() {
     const role = await prisma.role.upsert({ where: { locationId_name: { locationId: location.id, name } }, update: { isActive: true }, create: { locationId: location.id, name } });
     roles.set(name, role.id);
   }
+
+  for (const [i, d] of DEPARTMENTS.entries()) {
+    const department = await prisma.department.upsert({
+      where: { locationId_name: { locationId: location.id, name: d.name } },
+      update: { tint: d.tint, sortOrder: i },
+      create: { id: d.id, locationId: location.id, name: d.name, tint: d.tint, sortOrder: i },
+    });
+    await prisma.role.updateMany({ where: { locationId: location.id, name: { in: d.roles } }, data: { departmentId: department.id } });
+  }
+  const typeIdByTimes = new Map<string, string>();
+  for (const [i, t] of SHIFT_TYPES.entries()) {
+    const endsNextDay = t.ranges[t.ranges.length - 1]!.end <= t.ranges[t.ranges.length - 1]!.start;
+    const type = await prisma.shiftType.upsert({
+      where: { locationId_name: { locationId: location.id, name: t.name } },
+      update: { ranges: t.ranges, endsNextDay, tint: t.tint, sortOrder: i, archivedAt: null },
+      create: { id: t.id, locationId: location.id, name: t.name, ranges: t.ranges, endsNextDay, tint: t.tint, sortOrder: i },
+    });
+    if (t.ranges.length === 1) typeIdByTimes.set(`${t.ranges[0]!.start}-${t.ranges[0]!.end}`, type.id);
+  }
+  // Saturday (weekday 6) needs at least three behind the bar; the coverage row flags anything less.
+  const barId = (await prisma.department.findUniqueOrThrow({ where: { locationId_name: { locationId: location.id, name: 'Bar' } } })).id;
+  await prisma.departmentMinimum.upsert({
+    where: { departmentId_weekday: { departmentId: barId, weekday: 6 } },
+    update: { minHeadcount: 3 },
+    create: { locationId: location.id, departmentId: barId, weekday: 6, minHeadcount: 3 },
+  });
 
   // The owner (you) and the staffer whose phone you'll sign in with on the second device.
   await prisma.user.upsert({
@@ -143,6 +187,9 @@ async function main() {
   // This week's rota, published. Re-running replaces this week's demo shifts.
   const { weekStart, start, end } = currentVenueWeek(TIMEZONE);
   await prisma.shift.deleteMany({ where: { locationId: location.id, date: { gte: start, lt: end } } });
+  // The v2 week row and leave statuses go with them, so the week is rebuilt (and re-snapshotted) from scratch.
+  await prisma.rotaLeave.deleteMany({ where: { locationId: location.id, date: { gte: start, lt: end } } });
+  await prisma.rotaWeek.deleteMany({ where: { locationId: location.id, weekStart: start } });
   let shiftCount = 0;
   for (const s of STAFF) {
     const days = WEEK[s.id]!;
@@ -164,6 +211,10 @@ async function main() {
           startTime: combineDateAndTime(iso, startHm, TIMEZONE),
           endTime: combineDateAndTime(iso, endHm, TIMEZONE, overnight),
           status: 'PUBLISHED',
+          ranges: [{ start: startHm, end: endHm }],
+          endsNextDay: overnight,
+          shiftTypeId: typeIdByTimes.get(slot) ?? null,
+          publishedAt: new Date(),
         },
       });
       shiftCount++;
@@ -175,6 +226,8 @@ async function main() {
     update: { publishedAt, publishedById: 'demo-user-owner', notifiedCount: STAFF.length },
     create: { locationId: location.id, weekStart: start, publishedAt, publishedById: 'demo-user-owner', notifiedCount: STAFF.length },
   });
+  // The week as staff were told it: version + published snapshot, so the grid's publish diff starts clean.
+  await prisma.$transaction((tx) => snapshotWeek(tx, location.id, weekStart, { publishedById: 'demo-user-owner', publishedAt }));
 
   // Something on Home: an announcement and a shoutout.
   await prisma.announcement.upsert({
@@ -200,6 +253,7 @@ async function main() {
   applicant  : Sara Nour — PENDING in Pending Approvals (the third number)
   week       : ${weekStart} published, ${shiftCount} shifts across ${STAFF.length} people
   sections   : ${sections.map((s) => s.label).join(', ')}
+  rota v2    : departments ${DEPARTMENTS.map((d) => d.name).join(', ')}; shift types ${SHIFT_TYPES.map((t) => t.name).join(', ')}; Saturday Bar minimum 3
   reminder   : the three numbers must be in ECHO_ALLOWED_PHONES (no SMS yet); see docs/pilot-checklist.md
 `);
 }

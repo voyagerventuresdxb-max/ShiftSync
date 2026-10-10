@@ -10,7 +10,7 @@ import { notifySchedulePublished } from '../lib/scheduleNotifications.js';
 import { updateShift, SHIFT_INCLUDE } from '../lib/actions/shiftActions.js';
 import { findActiveVenueRole, findVenueUser } from '../lib/shiftRules.js';
 import { publishRota } from '../lib/actions/rotaActions.js';
-import { applyWeekPatch } from '../lib/actions/weekActions.js';
+import { applyWeekPatch, shiftInstantsOf, toldShiftOf, toldSnapshotOf, type WeekSnapshot } from '../lib/actions/weekActions.js';
 import { mondayOf, type WeekPatchOp, type WeekPatchResult } from '../../../shared/rotaWeek.js';
 import { onBehalfUserId } from '../lib/onBehalf.js';
 import { requireSessionOrKioskToken } from '../middleware/kioskAccess.js';
@@ -99,7 +99,12 @@ function sendPatchFailure(res: Response, result: Exclude<WeekPatchResult, { resu
  * (the venue's current `X-Kiosk-Token`, see middleware/kioskAccess.ts) gets
  * only PUBLISHED shifts, as `shiftToKioskDto`. A venue id alone gets 401.
  * CANCELLED rows (a published shift removed but not yet re-published, see
- * weekActions) are never listed: to this client they are gone.
+ * weekActions) are never listed to a manager: to this client they are gone.
+ *
+ * Rota builder v2: a STAFF session gets the same published-only view as the
+ * kiosk (in the full DTO shape): every shift as staff were last told it
+ * (weekActions.toldShiftOf), so a draft or an unpublished edit never reaches
+ * staff through this older route either.
  */
 shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) => {
   try {
@@ -113,13 +118,41 @@ shiftsRouter.get('/:locationId', requireSessionOrKioskToken, async (req, res) =>
     end.setUTCDate(end.getUTCDate() + 7);
 
     const kiosk = req.kioskLocationId !== undefined;
+    const toldView = kiosk || req.user?.systemRole === 'STAFF';
     const timezone = await venueTimezone(locationId);
     const shifts = await prisma.shift.findMany({
-      where: { locationId, date: { gte: start, lt: end }, status: kiosk ? ('PUBLISHED' as const) : { not: 'CANCELLED' as const } },
+      where: { locationId, date: { gte: start, lt: end }, status: toldView ? { in: ['PUBLISHED', 'COMPLETED', 'CANCELLED'] } : { not: 'CANCELLED' } },
       include: SHIFT_INCLUDE,
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
     });
-    return res.status(200).json({ shifts: shifts.map((s) => (kiosk ? shiftToKioskDto(s, timezone) : shiftToDto(s, timezone))) });
+    if (!toldView) return res.status(200).json({ shifts: shifts.map((s) => shiftToDto(s, timezone)) });
+
+    const snapshots = new Map<string, WeekSnapshot | null>();
+    const told: { row: (typeof shifts)[number]; view: NonNullable<ReturnType<typeof toldShiftOf>> }[] = [];
+    for (const row of shifts) {
+      const week = mondayOf(row.date.toISOString().slice(0, 10));
+      if (!snapshots.has(week)) snapshots.set(week, await toldSnapshotOf(prisma, locationId, week, timezone));
+      const view = toldShiftOf(row, snapshots.get(week) ?? null, timezone);
+      if (view) told.push({ row, view });
+    }
+    // A shift reassigned since publish still shows under the person who was told it.
+    const otherIds = [...new Set(told.map((t) => t.view.userId).filter((id): id is string => id !== null && !told.some((t) => t.row.assignee?.id === id)))];
+    const names = new Map((await prisma.user.findMany({ where: { id: { in: otherIds }, locationId }, select: { id: true, fullName: true } })).map((u) => [u.id, u]));
+    for (const t of told) if (t.row.assignee) names.set(t.row.assignee.id, t.row.assignee);
+    const dtos = told
+      .map(({ row, view }) => {
+        const asTold = {
+          ...row,
+          ...shiftInstantsOf(view.date, view.ranges, timezone),
+          userId: view.userId,
+          assignee: view.userId ? (names.get(view.userId) ?? null) : null,
+          date: new Date(`${view.date}T00:00:00.000Z`),
+          status: 'PUBLISHED',
+        };
+        return kiosk ? shiftToKioskDto(asTold, timezone) : shiftToDto(asTold, timezone);
+      })
+      .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+    return res.status(200).json({ shifts: dtos });
   } catch (err) {
     console.error('[shifts.list] failed', err);
     return res.status(500).json({ error: 'Unexpected error while loading shifts.' });
@@ -219,8 +252,10 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       const roleId = String(req.body.roleId);
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role || role.locationId !== existing.locationId) return res.status(404).json({ error: `Role "${roleId}" not found.` });
-      op.roleId = roleId;
-      touchesWeek = true;
+      if (roleId !== existing.roleId) {
+        op.roleId = roleId;
+        touchesWeek = true;
+      }
     }
     if (req.body?.userId !== undefined) {
       if (req.body.userId) {
@@ -231,22 +266,29 @@ shiftsRouter.patch('/:id', requireSession, requireManager, async (req, res) => {
       } else {
         op.userId = null;
       }
-      touchesWeek = true;
+      if (op.userId === existing.userId) delete op.userId;
+      else touchesWeek = true;
     }
     const legacy: Prisma.ShiftUpdateInput = {};
     if (req.body?.breakMinutes !== undefined) legacy.breakMinutes = Number(req.body.breakMinutes);
     if (req.body?.briefingNote !== undefined) legacy.managerNotes = req.body.briefingNote ? String(req.body.briefingNote) : null;
     if (req.body?.sidework !== undefined) legacy.sidework = Array.isArray(req.body.sidework) ? req.body.sidework.map(String) : [];
 
-    if (req.body?.date !== undefined) {
+    // The old Shift Editor sends date/start/end back unchanged on every save: only a real change goes into the
+    // patch, so saving a split shift's break minutes doesn't collapse its two ranges into one.
+    if (req.body?.date !== undefined && String(req.body.date) !== existing.date.toISOString().slice(0, 10)) {
       op.date = String(req.body.date);
       touchesWeek = true;
     }
     if (req.body?.start !== undefined || req.body?.end !== undefined) {
-      const nextStart = req.body?.start !== undefined ? String(req.body.start) : formatVenueTime(existing.startTime, timezone);
-      const nextEnd = req.body?.end !== undefined ? String(req.body.end) : formatVenueTime(existing.endTime, timezone);
-      op.ranges = [{ start: nextStart, end: nextEnd }];
-      touchesWeek = true;
+      const currentStart = formatVenueTime(existing.startTime, timezone);
+      const currentEnd = formatVenueTime(existing.endTime, timezone);
+      const nextStart = req.body?.start !== undefined ? String(req.body.start) : currentStart;
+      const nextEnd = req.body?.end !== undefined ? String(req.body.end) : currentEnd;
+      if (nextStart !== currentStart || nextEnd !== currentEnd) {
+        op.ranges = [{ start: nextStart, end: nextEnd }];
+        touchesWeek = true;
+      }
     }
 
     const actorId = await onBehalfUserId(req, res, 'actorId');

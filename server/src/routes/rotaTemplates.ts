@@ -4,18 +4,9 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, requireManager, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
-import { applyRotaTemplate } from '../lib/actions/rotaActions.js';
+import { applyRotaTemplate, normalizeTemplateEntries, type TemplateEntry } from '../lib/actions/rotaActions.js';
 
 export const rotaTemplatesRouter = Router();
-
-interface TemplateEntry {
-  dayOffset: number;
-  roleId: string;
-  userId: string | null;
-  start: string;
-  end: string;
-  note?: string;
-}
 
 /**
  * GET /api/rota-templates/:locationId
@@ -60,7 +51,6 @@ rotaTemplatesRouter.post('/', requireSession, requireManager, async (req, res) =
   try {
     const locationId = req.user!.locationId;
     const name = String(req.body?.name ?? '').trim();
-    const entries = Array.isArray(req.body?.entries) ? (req.body.entries as TemplateEntry[]) : [];
     const createdById =
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
@@ -72,7 +62,11 @@ rotaTemplatesRouter.post('/', requireSession, requireManager, async (req, res) =
     }
 
     if (!name) return res.status(400).json({ error: 'name is required.' });
-    if (entries.length === 0) return res.status(400).json({ error: 'entries must be a non-empty array.' });
+    // Rota builder v2: entries may carry `shiftTypeId`, `ranges` and `shiftNote` (see TemplateEntry); every
+    // entry is checked and normalised here, so apply never meets a malformed one.
+    const normalized = await normalizeTemplateEntries(req.body?.entries, locationId);
+    if (!normalized.ok) return res.status(400).json({ error: normalized.message });
+    const { entries } = normalized;
 
     const created = await withAuditedTransaction(
       prisma,

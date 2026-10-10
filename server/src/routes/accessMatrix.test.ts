@@ -43,7 +43,7 @@ const TAG = '__access-matrix__';
 const UPLOADS = join(import.meta.dirname, '..', '..', 'uploads');
 
 type Actor = 'anon' | 'deactivatedA' | 'staffA' | 'managerA' | 'ownerA' | 'staffB' | 'managerB' | 'ownerB';
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 interface Fx {
   locA: string;
@@ -91,6 +91,11 @@ interface Fx {
   /** A week no other control touches, holding one shift, for the v2 publish control (its fingerprint is fixed in `before`). */
   pubWeek: string;
   pubFingerprint: string;
+  /** Rota builder v2 setup: a shift type to edit, one to archive, a department, a pending time-off request. */
+  typeA: string;
+  typeArch: string;
+  deptA: string;
+  toA: string;
 }
 
 let fx: Fx;
@@ -208,6 +213,11 @@ before(async () => {
   const pubWeek = addDays(monday, 28);
   await shift(staffA2.id, addDays(pubWeek, 2));
   const pubFingerprint = (await previewWeekPublish({ locationId: locA.id, weekStart: pubWeek })).fingerprint;
+  const typeA = await prisma.shiftType.create({ data: { locationId: locA.id, name: `${TAG} Mid`, ranges: [{ start: '11:00', end: '20:00' }], tint: 'sand' } });
+  const typeArch = await prisma.shiftType.create({ data: { locationId: locA.id, name: `${TAG} Retired`, ranges: [{ start: '06:00', end: '10:00' }], tint: 'cream' } });
+  const deptA = await prisma.department.create({ data: { locationId: locA.id, name: `${TAG} Floor`, tint: 'clay' } });
+  const toDay = new Date(`${addDays(monday, 10)}T00:00:00.000Z`);
+  const toA = await prisma.timeOffRequest.create({ data: { userId: staffA2.id, startDate: toDay, endDate: toDay, status: 'PENDING', expiresAt: new Date(toDay.getTime() + 86_400_000) } });
   // An upload managerA's session is reading right now (schedules.ts tracks it the same way).
   const uploadA = randomUUID();
   uploadProgress.start(uploadA, { locationId: locA.id, sessionKey: createHash('sha256').update(tokens.managerA).digest('hex') });
@@ -219,6 +229,7 @@ before(async () => {
     asgA: asgA.id, asgDel: asgDel.id, docA: docA.id, docFile, docDel: docDel.id, itemA: itemA.id, itemOnBehalf: itemOnBehalf.id,
     fbA: fbA.id, markA: markA.id, notifA: notifA.id, jrA: jrA.id, tplA: tplA.id, tplDel: tplDel.id, swapA: swapA.id,
     linkA: linkA.id, batchA, uploadA, pushEndpointA, ownerPhoneA: ownerA.phone!, monday, tuesday, pubWeek, pubFingerprint,
+    typeA: typeA.id, typeArch: typeArch.id, deptA: deptA.id, toA: toA.id,
   };
 
   server = await new Promise<Server>((resolve) => {
@@ -484,6 +495,50 @@ const CASES: Case[] = [
     body: (f) => ({ expectedVersion: 1, fingerprint: f.pubFingerprint }),
     refuse: NOT_MANAGERS_OF_A,
   },
+  // shift types, departments, time off (rota builder v2)
+  { name: 'GET /api/shift-types/:locationId', method: 'GET', path: (f) => `/api/shift-types/${f.locA}`, refuse: OUTSIDERS },
+  {
+    name: 'POST /api/shift-types/:locationId',
+    method: 'POST',
+    path: (f) => `/api/shift-types/${f.locA}`,
+    body: () => ({ name: `${TAG} Morning`, ranges: [{ start: '07:00', end: '16:00' }], tint: 'gold' }),
+    refuse: NOT_MANAGERS_OF_A,
+  },
+  {
+    name: 'POST /api/shift-types/:locationId/bulk',
+    method: 'POST',
+    path: (f) => `/api/shift-types/${f.locA}/bulk`,
+    body: () => ({ shiftTypes: [{ name: `${TAG} Evening`, ranges: [{ start: '16:00', end: '01:00' }], tint: 'clay' }] }),
+    refuse: NOT_MANAGERS_OF_A,
+  },
+  { name: 'PATCH /api/shift-types/:locationId/:id', method: 'PATCH', path: (f) => `/api/shift-types/${f.locA}/${f.typeA}`, body: () => ({ tint: 'sage' }), refuse: NOT_MANAGERS_OF_A },
+  { name: 'POST /api/shift-types/:locationId/:id/archive', method: 'POST', path: (f) => `/api/shift-types/${f.locA}/${f.typeArch}/archive`, refuse: NOT_MANAGERS_OF_A },
+  { name: 'GET /api/departments/:locationId', method: 'GET', path: (f) => `/api/departments/${f.locA}`, refuse: OUTSIDERS },
+  { name: 'POST /api/departments/:locationId', method: 'POST', path: (f) => `/api/departments/${f.locA}`, body: () => ({ name: `${TAG} Bar`, tint: 'gold' }), refuse: NOT_MANAGERS_OF_A },
+  {
+    name: 'PATCH /api/departments/:locationId/:id',
+    method: 'PATCH',
+    path: (f) => `/api/departments/${f.locA}/${f.deptA}`,
+    body: (f) => ({ tint: 'sage', roleIds: [f.roleA] }),
+    refuse: NOT_MANAGERS_OF_A,
+  },
+  {
+    name: 'PUT /api/departments/:locationId/:id/minimums',
+    method: 'PUT',
+    path: (f) => `/api/departments/${f.locA}/${f.deptA}/minimums`,
+    body: () => ({ minimums: [{ weekday: 6, minHeadcount: 2 }] }),
+    refuse: NOT_MANAGERS_OF_A,
+  },
+  { name: 'POST /api/time-off', method: 'POST', path: () => '/api/time-off', body: (f) => ({ startDate: addDays(f.monday, 15), endDate: addDays(f.monday, 16) }), refuse: ['anon', 'deactivatedA'] },
+  {
+    name: "POST /api/time-off (for another venue's person)",
+    method: 'POST',
+    path: () => '/api/time-off',
+    body: (f) => ({ userId: f.staffA, startDate: addDays(f.monday, 17), endDate: addDays(f.monday, 17) }),
+    refuse: ['staffB', 'managerB'],
+  },
+  { name: 'GET /api/time-off/:locationId', method: 'GET', path: (f) => `/api/time-off/${f.locA}?status=all`, refuse: OUTSIDERS },
+  { name: 'PATCH /api/time-off/:id', method: 'PATCH', path: (f) => `/api/time-off/${f.toA}`, body: () => ({ decision: 'decline' }), refuse: NOT_MANAGERS_OF_A },
   // shoutouts
   { name: 'GET /api/shoutouts/:locationId', method: 'GET', path: (f) => `/api/shoutouts/${f.locA}`, refuse: OUTSIDERS },
   { name: 'POST /api/shoutouts', method: 'POST', path: () => '/api/shoutouts', body: (f) => ({ employeeId: f.staffA2, note: `${TAG} nice` }), refuse: ['anon', 'deactivatedA', 'staffB', 'managerB'] },
@@ -642,6 +697,14 @@ test("nothing of venue A's changed after every refused request", async () => {
   assert.equal(await prisma.shift.count({ where: { id: fx.shiftCancel } }), 1);
   assert.equal(await prisma.rotaWeek.count({ where: { locationId: fx.locA, weekStart: new Date(`${fx.pubWeek}T00:00:00.000Z`) } }), 0, 'no refused week write created a week row');
   assert.equal(await prisma.shoutout.count({ where: { locationId: fx.locA, note: { contains: 'via voice' } } }), 0);
+  assert.equal((await prisma.shiftType.findUnique({ where: { id: fx.typeA } }))?.tint, 'sand', 'no refused PATCH changed the shift type');
+  assert.equal((await prisma.shiftType.findUnique({ where: { id: fx.typeArch } }))?.archivedAt, null, 'no refused archive landed');
+  assert.equal((await prisma.department.findUnique({ where: { id: fx.deptA } }))?.tint, 'clay', 'no refused PATCH changed the department');
+  assert.equal(await prisma.departmentMinimum.count({ where: { departmentId: fx.deptA } }), 0);
+  assert.equal((await prisma.timeOffRequest.findUnique({ where: { id: fx.toA } }))?.status, 'PENDING', 'no refused decision landed');
+  assert.equal(await prisma.timeOffRequest.count({ where: { user: { locationId: fx.locA }, id: { not: fx.toA } } }), 0, "nobody filed time off for venue A's people from outside");
+  assert.equal(await prisma.shiftType.count({ where: { locationId: fx.locA } }), 2);
+  assert.equal(await prisma.department.count({ where: { locationId: fx.locA } }), 1);
 });
 
 /**
@@ -722,6 +785,19 @@ const CONTROLS: [Actor, string][] = [
   ['managerA', 'PATCH /api/weeks/:locationId/:weekStart'],
   ['managerA', 'POST /api/weeks/:locationId/:weekStart/publish-preview'],
   ['managerA', 'POST /api/weeks/:locationId/:weekStart/publish'],
+  ['staffA', 'GET /api/shift-types/:locationId'],
+  ['managerA', 'POST /api/shift-types/:locationId'],
+  ['managerA', 'POST /api/shift-types/:locationId/bulk'],
+  ['managerA', 'PATCH /api/shift-types/:locationId/:id'],
+  ['managerA', 'POST /api/shift-types/:locationId/:id/archive'],
+  ['staffA', 'GET /api/departments/:locationId'],
+  ['managerA', 'POST /api/departments/:locationId'],
+  ['managerA', 'PATCH /api/departments/:locationId/:id'],
+  ['managerA', 'PUT /api/departments/:locationId/:id/minimums'],
+  ['staffA', 'POST /api/time-off'],
+  ['managerA', "POST /api/time-off (for another venue's person)"],
+  ['staffA', 'GET /api/time-off/:locationId'],
+  ['managerA', 'PATCH /api/time-off/:id'],
   ['staffA', 'GET /api/shoutouts/:locationId'],
   ['staffA', 'POST /api/shoutouts'],
   ['managerA', 'DELETE /api/shoutouts/:id'],

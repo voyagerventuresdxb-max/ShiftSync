@@ -1,15 +1,83 @@
 import { writeAuditLog } from '../auditLog.js';
 import { prisma } from '../prisma.js';
-import { applyWeekPatch, snapshotWeek } from './weekActions.js';
-import type { WeekPatchOp, WeekPatchRefusal } from '../../../../shared/rotaWeek.js';
+import { applyWeekPatch, lockWeek, snapshotWeek } from './weekActions.js';
+import { validateRanges, type TimeRange, type WeekPatchOp, type WeekPatchRefusal } from '../../../../shared/rotaWeek.js';
 
-interface TemplateEntry {
+/**
+ * One saved template slot. `start`/`end` are always present (pre-v2 readers and
+ * templates use them); rota builder v2 entries may also carry the venue shift
+ * type and the 1–2 ranges they were saved with, and the staff-visible note.
+ */
+export interface TemplateEntry {
   dayOffset: number;
   roleId: string;
   userId: string | null;
   start: string;
   end: string;
+  /** Manager-only briefing line (Shift.managerNotes), as before v2. */
   note?: string;
+  shiftTypeId?: string | null;
+  ranges?: TimeRange[];
+  /** The staff-visible shift note (≤ 80 characters). */
+  shiftNote?: string | null;
+}
+
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * Validates and normalises the entries of a template being saved (POST
+ * /api/rota-templates). A v2 entry may omit `start`/`end` when it has
+ * `ranges` (they are derived: first start, last end); a `shiftTypeId` must
+ * name a live shift type of this venue. Roles and people are checked when the
+ * template is applied, as before.
+ */
+export async function normalizeTemplateEntries(
+  raw: unknown,
+  locationId: string,
+): Promise<{ ok: true; entries: TemplateEntry[] } | { ok: false; message: string }> {
+  if (!Array.isArray(raw) || raw.length === 0) return { ok: false, message: 'entries must be a non-empty array.' };
+  if (raw.length > 500) return { ok: false, message: 'A template holds at most 500 entries.' };
+  const typeIds = new Set(
+    (await prisma.shiftType.findMany({ where: { locationId, archivedAt: null }, select: { id: true } })).map((t) => t.id),
+  );
+  const entries: TemplateEntry[] = [];
+  for (const [i, value] of raw.entries()) {
+    const e = (value ?? {}) as Record<string, unknown>;
+    const where = `Entry ${i + 1}`;
+    const dayOffset = e.dayOffset;
+    if (typeof dayOffset !== 'number' || !Number.isInteger(dayOffset) || dayOffset < 0 || dayOffset > 6) return { ok: false, message: `${where}: dayOffset must be 0 (Monday) to 6 (Sunday).` };
+    if (typeof e.roleId !== 'string' || !e.roleId) return { ok: false, message: `${where}: roleId is required.` };
+    if (e.userId !== undefined && e.userId !== null && typeof e.userId !== 'string') return { ok: false, message: `${where}: userId must be a string or null.` };
+    let ranges: TimeRange[] | undefined;
+    if (e.ranges !== undefined && e.ranges !== null) {
+      if (!validateRanges(e.ranges)) return { ok: false, message: `${where}: ranges must be 1–2 HH:MM ranges; only the last may cross midnight.` };
+      ranges = e.ranges.map((r) => ({ start: r.start, end: r.end }));
+    }
+    const start = typeof e.start === 'string' ? e.start : ranges ? ranges[0]!.start : undefined;
+    const end = typeof e.end === 'string' ? e.end : ranges ? ranges[ranges.length - 1]!.end : undefined;
+    if (!start || !end || !HHMM_RE.test(start) || !HHMM_RE.test(end)) return { ok: false, message: `${where}: start and end must be HH:MM.` };
+    let shiftTypeId: string | null = null;
+    if (e.shiftTypeId !== undefined && e.shiftTypeId !== null) {
+      if (typeof e.shiftTypeId !== 'string' || !typeIds.has(e.shiftTypeId)) return { ok: false, message: `${where}: shift type not found or archived.` };
+      shiftTypeId = e.shiftTypeId;
+    }
+    if (e.note !== undefined && e.note !== null && typeof e.note !== 'string') return { ok: false, message: `${where}: note must be text.` };
+    if (e.shiftNote !== undefined && e.shiftNote !== null && (typeof e.shiftNote !== 'string' || e.shiftNote.trim().length > 80)) {
+      return { ok: false, message: `${where}: shiftNote must be text of at most 80 characters.` };
+    }
+    entries.push({
+      dayOffset,
+      roleId: e.roleId,
+      userId: typeof e.userId === 'string' && e.userId ? e.userId : null,
+      start,
+      end,
+      ...(typeof e.note === 'string' && e.note.trim() ? { note: e.note.trim().slice(0, 1000) } : {}),
+      ...(shiftTypeId ? { shiftTypeId } : {}),
+      ...(ranges ? { ranges } : {}),
+      ...(typeof e.shiftNote === 'string' && e.shiftNote.trim() ? { shiftNote: e.shiftNote.trim() } : {}),
+    });
+  }
+  return { ok: true, entries };
 }
 
 /**
@@ -93,6 +161,9 @@ export async function publishRota(input: {
   const publishedAt = new Date();
   const weekIso = input.weekStart.toISOString().slice(0, 10);
   const publish = await prisma.$transaction(async (tx) => {
+    // The week's lock first (snapshotWeek below takes it again, re-entrantly): no grid patch may land between
+    // these writes and the snapshot, or the snapshot would record a draft nobody was told about.
+    await lockWeek(tx, input.locationId, weekIso);
     const row = await tx.rotaPublish.upsert({
       where: { locationId_weekStart: { locationId: input.locationId, weekStart: input.weekStart } },
       create: { locationId: input.locationId, weekStart: input.weekStart, publishedAt, publishedById: input.publishedById, notifiedCount },
@@ -148,8 +219,9 @@ export type ApplyRotaTemplateResult =
  * stay here so the result kinds this action's callers (routes/rotaTemplates.ts,
  * routes/voice.ts) already map keep their meaning.
  *
- * A template entry's `note` was the manager-only `managerNotes` before v2; the
- * week patch has only the staff-visible `note` (≤ 80 chars), so it lands there.
+ * An entry's `note` stays the manager-only `managerNotes` it was before v2;
+ * a v2 entry's `shiftNote` is the staff-visible note, `shiftTypeId`/`ranges`
+ * its timing (see TemplateEntry). People who have left get open shifts.
  */
 export async function applyRotaTemplate(input: {
   templateId: string;
@@ -174,14 +246,18 @@ export async function applyRotaTemplate(input: {
     }
   }
 
+  // People who have left (deactivated or deleted) since the template was saved: their slots are applied as
+  // open shifts rather than refusing the whole template (design B5: "shifts become open").
+  const departed = new Set<string>();
   if (userIds.length > 0) {
-    const users = await prisma.user.findMany({ where: { id: { in: userIds } } });
+    const users = await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, locationId: true, isActive: true, deletedAt: true } });
     const usersById = new Map(users.map((u) => [u.id, u]));
     for (const userId of userIds) {
       const user = usersById.get(userId);
       if (!user || user.locationId !== template.locationId) {
         return { result: 'invalid_user', userId, message: `Staff member "${userId}" not found.` };
       }
+      if (!user.isActive || user.deletedAt) departed.add(userId);
     }
   }
 
@@ -189,17 +265,27 @@ export async function applyRotaTemplate(input: {
   // the database (or a stale one) must not bump the week's version or write audit rows for nothing.
   if (entries.length === 0) return { result: 'ok', createdCount: 0, templateName: template.name };
 
+  // A v2 entry names its shift type; a type archived since the template was saved falls back to the saved times.
+  const liveTypeIds = new Set(
+    (await prisma.shiftType.findMany({ where: { locationId: template.locationId, archivedAt: null }, select: { id: true } })).map((t) => t.id),
+  );
   const weekStart = input.weekStart.toISOString().slice(0, 10);
   const ops = entries.map((e): WeekPatchOp => {
     const date = new Date(input.weekStart);
     date.setUTCDate(date.getUTCDate() + e.dayOffset);
+    const userId = e.userId && !departed.has(String(e.userId)) ? String(e.userId) : null;
+    const savedRanges = validateRanges(e.ranges) ? e.ranges : null;
+    const typeId = typeof e.shiftTypeId === 'string' && liveTypeIds.has(e.shiftTypeId) ? e.shiftTypeId : null;
     return {
       op: 'create',
-      userId: e.userId ? String(e.userId) : null,
+      userId,
       roleId: String(e.roleId),
       date: date.toISOString().slice(0, 10),
-      ranges: [{ start: e.start, end: e.end }],
-      note: e.note ? e.note.slice(0, 80) : null,
+      // A live type without saved ranges takes the type's current times; otherwise the saved times, labelled with
+      // the type when it still exists.
+      ...(typeId ? { shiftTypeId: typeId } : {}),
+      ...(typeId && !savedRanges ? {} : { ranges: savedRanges ?? [{ start: e.start, end: e.end }] }),
+      note: typeof e.shiftNote === 'string' && e.shiftNote.trim() ? e.shiftNote.trim().slice(0, 80) : null,
     };
   });
   // `createdById` is the recorded actor (Shift.createdById and the audit rows) when it differs from
@@ -216,5 +302,11 @@ export async function applyRotaTemplate(input: {
   });
   if (result.result === 'version_conflict') return { result: 'refused', refusal: 'version_conflict', message: 'The week changed while the template was being applied — try again.' };
   if (result.result === 'refused') return { result: 'refused', refusal: result.refusal, message: `Entry ${result.op + 1}: ${result.message}` };
+  // An entry's `note` is the manager-only briefing line it always was (Shift.managerNotes, outside the week
+  // document), written onto the new rows straight after the patch.
+  for (const [i, e] of entries.entries()) {
+    const shiftId = result.results[i]?.shiftId;
+    if (shiftId && typeof e.note === 'string' && e.note.trim()) await prisma.shift.update({ where: { id: shiftId }, data: { managerNotes: e.note.trim() } });
+  }
   return { result: 'ok', createdCount: result.results.length, templateName: template.name };
 }

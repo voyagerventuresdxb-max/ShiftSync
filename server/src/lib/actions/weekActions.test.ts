@@ -351,3 +351,34 @@ test('a reassignment is a change for both people, and moving a shift clears its 
     ],
   );
 });
+
+test('a week published before v2 starts from what staff were told: no row yet, the first edit lists only that change', async () => {
+  const week = nextWeek();
+  const tue = addDays(week, 1);
+  // Pre-v2 state: PUBLISHED rows (09:00–17:00 Dubai) and a legacy RotaPublish row, but no rota_weeks row.
+  const legacyShift = (userId: string, date: string, role: string) =>
+    prisma.shift.create({
+      data: { locationId, roleId: role, userId, date: new Date(`${date}T00:00:00.000Z`), startTime: new Date(`${date}T05:00:00.000Z`), endTime: new Date(`${date}T13:00:00.000Z`), status: 'PUBLISHED' },
+    });
+  const aShift = await legacyShift(personA, week, roleId);
+  await legacyShift(personB, tue, barRoleId);
+  await prisma.rotaPublish.create({ data: { locationId, weekStart: new Date(`${week}T00:00:00.000Z`), publishedAt: new Date(), publishedById: manager, notifiedCount: 2 } });
+
+  const before = await getWeekDoc({ locationId, weekStart: week, viewer: { role: 'MANAGER' } });
+  assert.equal(before.state, 'published');
+  assert.equal(before.publishedVersion, 1);
+  const untouched = await previewWeekPublish({ locationId, weekStart: week });
+  assert.equal(untouched.firstPublish, false, 'staff were already told this week');
+  assert.equal(untouched.changeCount, 0);
+
+  ok(await patch(week, [{ op: 'update', shiftId: aShift.id, ranges: [{ start: '10:00', end: '18:00' }] }], { expectedVersion: 1 }));
+  const row = await prisma.rotaWeek.findUniqueOrThrow({ where: { locationId_weekStart: { locationId, weekStart: new Date(`${week}T00:00:00.000Z`) } } });
+  assert.equal(row.state, 'PUBLISHED');
+  assert.equal(row.publishedVersion, 1);
+  assert.equal(row.version, 2);
+  const preview = await previewWeekPublish({ locationId, weekStart: week });
+  assert.deepEqual(preview.rows.map((r) => [r.userId, r.changes.length]), [[personA, 1]], 'only the edited person');
+  const staff = await getWeekDoc({ locationId, weekStart: week, viewer: { role: 'STAFF', userId: personB } });
+  assert.deepEqual(staff.shifts.find((s) => s.id === aShift.id)!.ranges, [{ start: '09:00', end: '17:00' }], 'staff keep the told times');
+  assert.equal(staff.shifts.length, 2);
+});

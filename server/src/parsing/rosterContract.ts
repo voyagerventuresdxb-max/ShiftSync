@@ -192,8 +192,10 @@ export interface ImportOverlap {
   date: string;
   startTime: string;
   endTime: string;
-  /** The shift already on the rota, in the venue's wall-clock time. */
+  /** The shift already on the rota, in the venue's wall-clock time (empty times when it is a leave, below). */
   existing: { date: string; startTime: string; endTime: string };
+  /** Rota builder v2: the day is already leave (annual, sick, unpaid, or from an approved request), not a shift. */
+  existingLeave?: 'DAY_OFF' | 'ANNUAL_LEAVE' | 'SICK_LEAVE' | 'UNPAID_LEAVE' | 'HALF_DAY';
 }
 
 /** One person's outcome on confirm. */

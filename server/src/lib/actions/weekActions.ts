@@ -192,10 +192,99 @@ async function deviceHolders(db: Db, userIds: string[]): Promise<Set<string>> {
   return new Set([...subs.map((s) => s.userId), ...sessions.map((s) => s.userId)]);
 }
 
-/** The week row, created lazily by the first writer (version 1). */
-async function findOrCreateWeekRow(tx: Prisma.TransactionClient, locationId: string, weekStart: IsoDate) {
+/**
+ * What staff of a week with no `rota_weeks` row were already told: a week
+ * published before v2 (a legacy RotaPublish row, or PUBLISHED rows the old
+ * roster import wrote without one). Null when nothing of the week was ever
+ * published. Used to seed the row's snapshot when it is first created, and
+ * by the publish preview / staff view of a week that has no row yet, so all
+ * three agree on what "unchanged since publish" means.
+ */
+async function legacyToldSnapshot(
+  db: Db,
+  locationId: string,
+  weekStart: IsoDate,
+  tz: string,
+): Promise<{ snapshot: WeekSnapshot; publishedAt: Date | null; publishedById: string | null } | null> {
+  const legacy = await db.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart: dateAt(weekStart) } } });
+  const snapshot = await buildSnapshot(db, locationId, weekStart, tz, { publishedOnly: true });
+  if (!legacy && Object.keys(snapshot.shifts).length === 0 && Object.keys(snapshot.leaves).length === 0) return null;
+  return { snapshot, publishedAt: legacy?.publishedAt ?? null, publishedById: legacy?.publishedById ?? null };
+}
+
+/**
+ * The week row, created lazily by the first writer (version 1). A week that
+ * was published before it had a row starts PUBLISHED at version 1 with what
+ * staff were told as its snapshot — otherwise the first v2 publish would
+ * treat every existing shift as new and notify everyone.
+ */
+async function findOrCreateWeekRow(tx: Prisma.TransactionClient, locationId: string, weekStart: IsoDate, tz: string) {
   const where = { locationId_weekStart: { locationId, weekStart: dateAt(weekStart) } };
-  return (await tx.rotaWeek.findUnique({ where })) ?? (await tx.rotaWeek.create({ data: { locationId, weekStart: dateAt(weekStart) } }));
+  const existing = await tx.rotaWeek.findUnique({ where });
+  if (existing) return existing;
+  const told = await legacyToldSnapshot(tx, locationId, weekStart, tz);
+  if (!told) return tx.rotaWeek.create({ data: { locationId, weekStart: dateAt(weekStart) } });
+  return tx.rotaWeek.create({
+    data: {
+      locationId,
+      weekStart: dateAt(weekStart),
+      state: 'PUBLISHED',
+      publishedVersion: 1,
+      publishedAt: told.publishedAt ?? new Date(),
+      publishedById: told.publishedById,
+      publishedSnapshot: told.snapshot as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * The version of one shift row that staff currently see: what the last
+ * publish told them (`publishedSnapshot`), not the manager's edits since —
+ * the design's rule that staff surfaces keep showing the published value
+ * until Publish (board E, "what in sync means"). A draft is never visible; a
+ * soft-cancelled (CANCELLED) or edited published shift shows its told
+ * version until the next publish. A published row the snapshot does not list
+ * (or a week with no snapshot at all) is shown as it stands.
+ */
+export function toldShiftOf(
+  row: {
+    id: string;
+    userId: string | null;
+    date: Date;
+    startTime: Date;
+    endTime: Date;
+    ranges: Prisma.JsonValue | null;
+    endsNextDay: boolean;
+    shiftTypeId: string | null;
+    note: string | null;
+    status: ShiftStatus;
+    editedSincePublish: boolean;
+  },
+  snapshot: WeekSnapshot | null,
+  tz: string,
+): { userId: string | null; date: IsoDate; ranges: TimeRange[]; endsNextDay: boolean; shiftTypeId: string | null; note: string | null } | null {
+  if (row.status === 'DRAFT') return null;
+  const told = snapshot?.shifts[row.id];
+  if (told && validateRanges(told.ranges)) {
+    return {
+      userId: told.userId ?? null,
+      date: told.date,
+      ranges: told.ranges.map((r) => ({ start: r.start, end: r.end })),
+      endsNextDay: rangesEndNextDay(told.ranges),
+      shiftTypeId: told.shiftTypeId ?? null,
+      note: told.note ?? null,
+    };
+  }
+  if (row.status === 'CANCELLED' || (snapshot && row.editedSincePublish)) return null;
+  const timing = shiftRangesOf(row, tz);
+  return { userId: row.userId, date: toIso(row.date), ranges: timing.ranges, endsNextDay: timing.endsNextDay, shiftTypeId: row.shiftTypeId, note: row.note };
+}
+
+/** The told snapshot of one week as staff surfaces should read it (see `toldShiftOf`). */
+export async function toldSnapshotOf(db: Db, locationId: string, weekStart: IsoDate, tz: string): Promise<WeekSnapshot | null> {
+  const row = await db.rotaWeek.findUnique({ where: { locationId_weekStart: { locationId, weekStart: dateAt(weekStart) } }, select: { publishedSnapshot: true } });
+  if (row) return readSnapshot(row.publishedSnapshot);
+  return (await legacyToldSnapshot(db, locationId, weekStart, tz))?.snapshot ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +327,12 @@ const SHIFT_ROW_SELECT = {
 
 /**
  * Assembles the WeekDocDto for one venue-week as `viewer` may see it: a
- * STAFF or KIOSK viewer gets PUBLISHED shifts and leaves only (and, for
- * STAFF, only their own requests); a manager gets drafts too, never
- * CANCELLED rows (those are pending removals the publish diff reports).
+ * STAFF or KIOSK viewer gets the week as it was last published — each
+ * shift and leave as staff were told it (`toldShiftOf`; drafts, edits and
+ * removals since publish stay invisible until the next publish), only their
+ * own requests and pending-request markers (kiosk: none), and no
+ * unpublished-changes flag; a manager gets the live rows, drafts included,
+ * never CANCELLED rows (those are pending removals the publish diff reports).
  */
 export async function getWeekDoc(input: { locationId: string; weekStart: IsoDate; viewer: WeekViewer }, db: Db = prisma): Promise<WeekDocDto> {
   const { locationId, weekStart, viewer } = input;
@@ -252,7 +344,9 @@ export async function getWeekDoc(input: { locationId: string; weekStart: IsoDate
 
   // Sequential, not Promise.all: `db` may be a transaction client bound to one connection.
   const weekRow = await db.rotaWeek.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
-  const legacyPublish = weekRow ? null : await db.rotaPublish.findUnique({ where: { locationId_weekStart: { locationId, weekStart: start } } });
+  // A week with no row yet: whatever was published before v2 is what staff were told.
+  const legacyTold = weekRow ? null : await legacyToldSnapshot(db, locationId, weekStart, tz);
+  const snapshot = weekRow ? readSnapshot(weekRow.publishedSnapshot) : (legacyTold?.snapshot ?? null);
   const departmentRows = await db.department.findMany({ where: { locationId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
   const roleRows = await db.role.findMany({ where: { locationId }, select: { id: true, name: true, departmentId: true, isActive: true }, orderBy: { name: 'asc' } });
   const shiftTypeRows = await db.shiftType.findMany({ where: { locationId } });
@@ -265,13 +359,14 @@ export async function getWeekDoc(input: { locationId: string; weekStart: IsoDate
     where: {
       locationId,
       date: { gte: start, lt: end },
-      status: staffView ? { in: ['PUBLISHED', 'COMPLETED'] } : { not: 'CANCELLED' },
+      // Staff need CANCELLED rows too: a removal they have not been told about yet still shows its told version.
+      status: staffView ? { in: ['PUBLISHED', 'COMPLETED', 'CANCELLED'] } : { not: 'CANCELLED' },
     },
     select: SHIFT_ROW_SELECT,
     orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
   });
   const leaveRows = await db.rotaLeave.findMany({
-    where: { locationId, date: { gte: start, lt: end }, ...(staffView ? { status: 'PUBLISHED' as const } : {}) },
+    where: { locationId, date: { gte: start, lt: end } },
     orderBy: [{ date: 'asc' }],
   });
   const pendingTimeOff = await db.timeOffRequest.findMany({
@@ -317,11 +412,35 @@ export async function getWeekDoc(input: { locationId: string; weekStart: IsoDate
     });
 
   // Shifts. A shift's department is its own, else its role's; null when neither has one (the client files it under "Other").
-  const shifts: WeekShiftDto[] = shiftRows.map((s): WeekShiftDto => {
+  // A staff or kiosk viewer gets each shift as they were last told it (`toldShiftOf`): drafts and unpublished edits
+  // never reach them, and a request id only when it is the viewer's own.
+  const pendingFor = (userId: string | null, date: IsoDate) =>
+    userId ? pendingTimeOff.find((r) => r.userId === userId && toIso(r.startDate) <= date && date <= toIso(r.endDate)) : undefined;
+  const shifts: WeekShiftDto[] = [];
+  for (const s of shiftRows) {
+    if (staffView) {
+      const told = toldShiftOf(s, snapshot, tz);
+      if (!told) continue;
+      const ownRequest = viewer.role === 'STAFF' && told.userId !== null && told.userId === viewer.userId;
+      shifts.push({
+        id: s.id,
+        userId: told.userId,
+        roleId: s.roleId,
+        departmentId: s.departmentId ?? s.role.departmentId,
+        shiftTypeId: told.shiftTypeId,
+        date: told.date,
+        ranges: told.ranges,
+        endsNextDay: told.endsNextDay,
+        note: told.note,
+        status: 'published',
+        editedSincePublish: false,
+        pendingRequestId: ownRequest ? (pendingFor(told.userId, told.date)?.id ?? null) : null,
+      });
+      continue;
+    }
     const date = toIso(s.date);
     const timing = shiftRangesOf(s, tz);
-    const pending = s.userId ? pendingTimeOff.find((r) => r.userId === s.userId && toIso(r.startDate) <= date && date <= toIso(r.endDate)) : undefined;
-    return {
+    shifts.push({
       id: s.id,
       userId: s.userId,
       roleId: s.roleId,
@@ -333,18 +452,36 @@ export async function getWeekDoc(input: { locationId: string; weekStart: IsoDate
       note: s.note,
       status: s.status === 'DRAFT' ? 'draft' : 'published',
       editedSincePublish: s.editedSincePublish,
-      pendingRequestId: pending?.id ?? null,
-    };
-  });
+      pendingRequestId: pendingFor(s.userId, date)?.id ?? null,
+    });
+  }
+  shifts.sort((a, b) => a.date.localeCompare(b.date) || (a.ranges[0]?.start ?? '').localeCompare(b.ranges[0]?.start ?? ''));
 
-  const leaves: WeekLeaveDto[] = leaveRows.map((l): WeekLeaveDto => ({
-    id: l.id,
-    userId: l.userId,
-    date: toIso(l.date),
-    type: l.type,
-    status: l.status === 'DRAFT' ? 'draft' : 'published',
-    fromRequest: l.timeOffRequestId !== null,
-  }));
+  // Leaves. Managers see every row; staff and kiosk see the told set — the snapshot's when the week has one (a
+  // leave added or cleared since publish is not theirs to see yet), else the PUBLISHED rows.
+  let leaves: WeekLeaveDto[];
+  if (staffView && snapshot) {
+    const liveByKey = new Map(leaveRows.map((l) => [leaveKey(l.userId, toIso(l.date)), l]));
+    leaves = [];
+    for (const [key, type] of Object.entries(snapshot.leaves)) {
+      const [userId, date] = key.split('|');
+      if (!userId || !date || !Object.hasOwn(LEAVE_LABELS, type)) continue;
+      const live = liveByKey.get(key);
+      leaves.push({ id: live?.id ?? `told:${key}`, userId, date, type, status: 'published', fromRequest: live ? live.timeOffRequestId !== null : false });
+    }
+    leaves.sort((a, b) => a.date.localeCompare(b.date));
+  } else {
+    leaves = leaveRows
+      .filter((l) => !staffView || l.status === 'PUBLISHED')
+      .map((l): WeekLeaveDto => ({
+        id: l.id,
+        userId: l.userId,
+        date: toIso(l.date),
+        type: l.type,
+        status: l.status === 'DRAFT' ? 'draft' : 'published',
+        fromRequest: l.timeOffRequestId !== null,
+      }));
+  }
 
   // People. `alsoDepartmentIds`: departments this person is scheduled under this week other than their own role's.
   const people: WeekPersonDto[] = userRows.map((u): WeekPersonDto => {
@@ -437,10 +574,12 @@ export async function getWeekDoc(input: { locationId: string; weekStart: IsoDate
     // TODO(rota-v2): no organisation-level clock setting exists yet; the Design canvas defaults to 24h.
     clock: '24h',
     version: weekRow?.version ?? 1,
-    state: weekRow ? (weekRow.state === 'PUBLISHED' ? 'published' : 'draft') : legacyPublish ? 'published' : 'draft',
-    publishedAt: (weekRow?.publishedAt ?? legacyPublish?.publishedAt)?.toISOString() ?? null,
-    publishedVersion: weekRow?.publishedVersion ?? null,
-    hasUnpublishedChanges: changedShifts > 0 || changedLeaves > 0 || versionDrift,
+    state: weekRow ? (weekRow.state === 'PUBLISHED' ? 'published' : 'draft') : legacyTold ? 'published' : 'draft',
+    publishedAt: (weekRow?.publishedAt ?? legacyTold?.publishedAt)?.toISOString() ?? null,
+    // A week published before v2 becomes version 1, published, the moment anything writes to it (findOrCreateWeekRow).
+    publishedVersion: weekRow?.publishedVersion ?? (legacyTold ? 1 : null),
+    // Whether the manager has unpublished work is the manager's business, not the staff view's.
+    hasUnpublishedChanges: !staffView && (changedShifts > 0 || changedLeaves > 0 || versionDrift),
     departments,
     shiftTypes,
     people,
@@ -463,15 +602,57 @@ let warnedMissingVersion = false;
  * that already hold a transaction (swapActions) use `applyWeekPatchIn`.
  */
 export async function applyWeekPatch(input: ApplyWeekPatchInput, client: typeof prisma = prisma): Promise<WeekPatchResult> {
+  let result: WeekPatchOk;
   try {
-    return await withAuditedTransaction(client, (tx) => applyWeekPatchIn(tx, input), () => null, PATCH_TX_OPTIONS);
+    result = await withAuditedTransaction(client, (tx) => applyWeekPatchIn(tx, input), () => null, PATCH_TX_OPTIONS);
   } catch (err) {
     if (err instanceof WeekPatchRefusedError) return { result: 'refused', refusal: err.refusal, op: err.op, message: err.message };
     if (err instanceof WeekVersionConflictError) {
       const week = await getWeekDoc({ locationId: input.locationId, weekStart: input.weekStart, viewer: input.viewer ?? MANAGER_VIEWER }, client);
       return { result: 'version_conflict', currentVersion: err.currentVersion, week };
     }
+    // The partial unique index `shifts_one_live_per_person_day` is the database's own guard for the person-day
+    // rule; every writer checks first under the week lock, so this only fires for a writer outside it.
+    if (isPersonDayViolation(err)) return { result: 'refused', refusal: 'already_has_shift', op: -1, message: 'That person already has a shift that day.' };
     throw err;
+  }
+  // After commit, never inside the transaction: a notice failure must not undo the patch.
+  if (result.declinedRequestIds.length > 0) await notifyTimeOffDecided(result.declinedRequestIds, 'declined', client);
+  return result;
+}
+
+function isPersonDayViolation(err: unknown): boolean {
+  const e = err as { code?: unknown; meta?: { target?: unknown; modelName?: unknown } } | null;
+  if (!e || e.code !== 'P2002') return false;
+  const target = JSON.stringify(e.meta?.target ?? '');
+  return target.includes('shifts_one_live_per_person_day') || (e.meta?.modelName === 'Shift' && target.includes('user_id') && target.includes('date'));
+}
+
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "Tue 14 Oct" from a YYYY-MM-DD, no timezone involved (the date IS the venue day). */
+function shortDay(iso: IsoDate): string {
+  const d = dateAt(iso);
+  return `${WEEKDAY_NAMES[d.getUTCDay()]} ${d.getUTCDate()} ${MONTH_NAMES[d.getUTCMonth()]}`;
+}
+
+/** "Tue 14 – Thu 16 Oct", "Thu 30 Oct – Mon 3 Nov", or "Tue 14 Oct" for one day. */
+export function dayRangeLabel(startIso: IsoDate, endIso: IsoDate): string {
+  if (startIso === endIso) return shortDay(startIso);
+  const start = dateAt(startIso);
+  const sameMonth = startIso.slice(0, 7) === endIso.slice(0, 7);
+  const head = sameMonth ? `${WEEKDAY_NAMES[start.getUTCDay()]} ${start.getUTCDate()}` : shortDay(startIso);
+  return `${head} – ${shortDay(endIso)}`;
+}
+
+/** Tells each requester their time-off request was approved or declined ("Time off approved: Tue 14 – Thu 16 Oct"). */
+export async function notifyTimeOffDecided(requestIds: string[], decision: 'approved' | 'declined', client: typeof prisma = prisma): Promise<void> {
+  const requests = await client.timeOffRequest.findMany({ where: { id: { in: requestIds } }, select: { userId: true, startDate: true, endDate: true } });
+  const word = decision === 'approved' ? 'approved' : 'declined';
+  for (const r of requests) {
+    const label = dayRangeLabel(toIso(r.startDate), toIso(r.endDate));
+    await notifyUser(r.userId, { title: `Time off ${word}`, body: `Time off ${word}: ${label}`, url: '/scheduling' });
   }
 }
 
@@ -491,7 +672,7 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
   const daySet = new Set(weekDays(weekStart));
 
   await lockWeek(tx, locationId, weekStart);
-  const week = await findOrCreateWeekRow(tx, locationId, weekStart);
+  const week = await findOrCreateWeekRow(tx, locationId, weekStart, tz);
   if (patch.expectedVersion !== undefined) {
     if (typeof patch.expectedVersion !== 'number' || patch.expectedVersion !== week.version) throw new WeekVersionConflictError(week.version);
   } else if (!warnedMissingVersion) {
@@ -566,17 +747,23 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
     if (other) throw refuse('already_has_shift', i, 'That person already has a shift that day.');
     const leave = await tx.rotaLeave.findUnique({ where: { userId_date: { userId, date: d } } });
     if (leave) {
-      if (leaveBlocksShifts(leave.type)) throw refuse('person_on_leave', i, `That person is on ${LEAVE_LABELS[leave.type].toLowerCase()} that day.`);
+      // Leave from an approved time-off request is locked whatever its type (B2 state 3a): the approval stands.
+      if (leaveBlocksShifts(leave.type) || leave.timeOffRequestId !== null) {
+        throw refuse('person_on_leave', i, `That person is on ${LEAVE_LABELS[leave.type].toLowerCase()} that day.`);
+      }
       await tx.rotaLeave.delete({ where: { id: leave.id } });
       await audit({ action: 'LEAVE_REMOVED', entityType: 'RotaLeave', entityId: leave.id, note: `${LEAVE_LABELS[leave.type]} on ${date} replaced by a shift` });
     }
     const pending = await tx.timeOffRequest.findFirst({ where: { userId, status: 'PENDING', startDate: { lte: d }, endDate: { gte: d } }, select: { id: true } });
     if (pending) {
       if (!patch.overridePendingRequests) throw refuse('pending_request', i, 'That person has a pending time-off request covering that day.');
-      await tx.timeOffRequest.update({
-        where: { id: pending.id },
+      // Conditional, like every other decision on a request: a concurrent approve/decline of the same request wins
+      // or loses cleanly instead of being overwritten.
+      const declined = await tx.timeOffRequest.updateMany({
+        where: { id: pending.id, status: 'PENDING' },
         data: { status: 'DECLINED', reviewedById: actorId, reviewedAt: new Date(), managerNote: 'Declined by scheduling' },
       });
+      if (declined.count === 0) throw refuse('pending_request', i, 'That time-off request was decided a moment ago — reload and try again.');
       if (!declinedRequestIds.includes(pending.id)) declinedRequestIds.push(pending.id);
       await audit({ action: 'TIME_OFF_DECLINED', entityType: 'TimeOffRequest', entityId: pending.id, note: `Declined by scheduling a shift on ${date}` });
     }
@@ -661,12 +848,16 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
           op.departmentId !== undefined ? op.departmentId : roleId !== shift.roleId ? roleDepartmentId : shift.departmentId,
           i,
         );
-        // Times: new ranges, or a new type's ranges, or (type cleared / untouched) the shift's own.
+        // Times: a (new) type's ranges, or new custom ranges, or the shift's own. Only a type named by THIS op is
+        // checked against the venue's live types: a shift keeps the label of a type archived since it was made.
         const current = shiftRangesOf(shift, tz);
+        const keptTypeId = op.shiftTypeId === null ? null : shift.shiftTypeId;
         const timing =
-          op.ranges !== undefined || typeof op.shiftTypeId === 'string'
-            ? await resolveTiming({ shiftTypeId: op.shiftTypeId === undefined ? shift.shiftTypeId : op.shiftTypeId, ranges: op.ranges }, i)
-            : { ranges: current.ranges, endsNextDay: current.endsNextDay, shiftTypeId: op.shiftTypeId === null ? null : shift.shiftTypeId };
+          typeof op.shiftTypeId === 'string'
+            ? await resolveTiming({ shiftTypeId: op.shiftTypeId, ranges: op.ranges }, i)
+            : op.ranges !== undefined
+              ? { ...(await resolveTiming({ ranges: op.ranges }, i)), shiftTypeId: keptTypeId }
+              : { ranges: current.ranges, endsNextDay: current.endsNextDay, shiftTypeId: keptTypeId };
         const note = op.note === undefined ? shift.note : normalizeNote(op.note, i);
         const { startTime, endTime } = shiftInstantsOf(date, timing.ranges, tz);
         const moved = userId !== shift.userId || date !== oldDate;
@@ -674,10 +865,10 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
           if (moved) await claimPersonDay(userId, date, shift.id, i);
           await assertNoOverlap(userId, startTime, endTime, shift.id, i);
         }
-        // TRADE-OFF: a published shift is edited in place, so staff see the new version at once rather than
-        // after the next publish. Holding the old version for staff would need a second table of pending
-        // versions; instead `editedSincePublish` marks the chip (gold dot) and the publish diff reports the
-        // change against `publishedSnapshot`, which still holds what staff were last TOLD.
+        // A published shift is edited in place; `editedSincePublish` marks the chip (gold dot) and
+        // `publishedSnapshot` still holds what staff were last TOLD — the staff view (getWeekDoc, my-shifts)
+        // reads that until the next publish. Readers of the live row (attendance, voice, the legacy kiosk
+        // list) see the edit at once: see docs/rota-builder-v2.md, "What staff see".
         await tx.shift.update({
           where: { id: shift.id },
           data: {
@@ -718,7 +909,7 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
       case 'setLeave': {
         const date = assertDay(op.date, i);
         if (!(await findVenueUser(op.userId, locationId, { activeOnly: true }, tx))) throw refuse('unknown_person', i, `Staff member "${op.userId}" not found.`);
-        if (!Object.hasOwn(LEAVE_LABELS, op.type)) throw refuse('bad_ranges', i, `Unknown leave type "${String(op.type)}".`);
+        if (typeof op.type !== 'string' || !Object.hasOwn(LEAVE_LABELS, op.type)) throw refuse('bad_leave_type', i, `Unknown leave type "${String(op.type)}".`);
         const type: LeaveTypeCode = op.type;
         const live = await tx.shift.findFirst({ where: { userId: op.userId, date: dateAt(date), status: { not: 'CANCELLED' } }, select: { id: true } });
         // A leave day never also holds a shift, whatever the type: remove or move the shift first.
@@ -784,14 +975,34 @@ export interface WeekSnapshot {
 
 const leaveKey = (userId: string, date: IsoDate) => `${userId}|${date}`;
 
-/** The live rows of a week (shifts not CANCELLED, every leave) in snapshot shape. */
-async function buildSnapshot(db: Db, locationId: string, weekStart: IsoDate, tz: string): Promise<WeekSnapshot> {
+/**
+ * The live rows of a week (shifts not CANCELLED, every leave) in snapshot shape. `publishedOnly`: only
+ * PUBLISHED/COMPLETED shifts and PUBLISHED leaves (what a pre-v2 week told staff). `shiftIds`: only those
+ * shifts and no leaves (the rows a roster import just published).
+ */
+async function buildSnapshot(
+  db: Db,
+  locationId: string,
+  weekStart: IsoDate,
+  tz: string,
+  opts: { publishedOnly?: boolean; shiftIds?: string[] } = {},
+): Promise<WeekSnapshot> {
   const { start, end } = calendarWeekRange(weekStart);
   const shifts = await db.shift.findMany({
-    where: { locationId, date: { gte: start, lt: end }, status: { not: 'CANCELLED' } },
+    where: {
+      locationId,
+      date: { gte: start, lt: end },
+      status: opts.publishedOnly ? { in: ['PUBLISHED', 'COMPLETED'] } : { not: 'CANCELLED' },
+      ...(opts.shiftIds ? { id: { in: opts.shiftIds } } : {}),
+    },
     select: { id: true, userId: true, date: true, startTime: true, endTime: true, ranges: true, endsNextDay: true, shiftTypeId: true, note: true },
   });
-  const leaves = await db.rotaLeave.findMany({ where: { locationId, date: { gte: start, lt: end } }, select: { userId: true, date: true, type: true } });
+  const leaves = opts.shiftIds
+    ? []
+    : await db.rotaLeave.findMany({
+        where: { locationId, date: { gte: start, lt: end }, ...(opts.publishedOnly ? { status: 'PUBLISHED' as const } : {}) },
+        select: { userId: true, date: true, type: true },
+      });
   const snapshot: WeekSnapshot = { shifts: {}, leaves: {} };
   for (const s of shifts) {
     const timing = shiftRangesOf(s, tz);
@@ -809,22 +1020,35 @@ function readSnapshot(value: Prisma.JsonValue | null | undefined): WeekSnapshot 
 
 /**
  * Records the week's live rows as its published snapshot and bumps the
- * version (the new version is the published one). Used by `publishWeek`, by
- * the legacy publish (rotaActions.publishRota) and by the roster import, so
- * an imported or legacy-published week diffs correctly afterwards. The caller
- * holds the transaction; `expectVersion` makes the bump conditional.
+ * version (the new version is the published one). Used by `publishWeek` and
+ * by the legacy publish (rotaActions.publishRota), which publish the whole
+ * week. The roster import passes `mergeShiftIds`: only the rows it just wrote
+ * as PUBLISHED join the existing snapshot, so a manager's drafts in the same
+ * week are not recorded as told (they would never be announced otherwise).
+ * The caller holds the transaction; `expectVersion` makes the bump conditional.
  */
 export async function snapshotWeek(
   tx: Prisma.TransactionClient,
   locationId: string,
   weekStart: IsoDate,
-  opts: { publishedById?: string | null; expectVersion?: number; publishedAt?: Date } = {},
+  opts: { publishedById?: string | null; expectVersion?: number; publishedAt?: Date; mergeShiftIds?: string[] } = {},
 ): Promise<{ id: string; version: number; publishedAt: Date }> {
   const tz = await venueTimezoneIn(tx, locationId);
   await lockWeek(tx, locationId, weekStart);
-  const row = await findOrCreateWeekRow(tx, locationId, weekStart);
+  const row = await findOrCreateWeekRow(tx, locationId, weekStart, tz);
   if (opts.expectVersion !== undefined && row.version !== opts.expectVersion) throw new WeekVersionConflictError(row.version);
-  const snapshot = await buildSnapshot(tx, locationId, weekStart, tz);
+  let snapshot: WeekSnapshot;
+  if (opts.mergeShiftIds) {
+    snapshot = readSnapshot(row.publishedSnapshot) ?? { shifts: {}, leaves: {} };
+    const added = await buildSnapshot(tx, locationId, weekStart, tz, { shiftIds: opts.mergeShiftIds });
+    for (const [id, s] of Object.entries(added.shifts)) {
+      snapshot.shifts[id] = s;
+      // A person-day holds a shift or a leave, never both.
+      if (s.userId) delete snapshot.leaves[leaveKey(s.userId, s.date)];
+    }
+  } else {
+    snapshot = await buildSnapshot(tx, locationId, weekStart, tz);
+  }
   const publishedAt = opts.publishedAt ?? new Date();
   const version = row.version + 1;
   const updated = await tx.rotaWeek.updateMany({
@@ -860,7 +1084,8 @@ export async function previewWeekPublish(input: { locationId: string; weekStart:
   if (!isMondayIso(weekStart)) throw new Error(WEEK_START_NOT_MONDAY_ERROR);
   const tz = await venueTimezoneIn(db, locationId);
   const row = await db.rotaWeek.findUnique({ where: { locationId_weekStart: { locationId, weekStart: dateAt(weekStart) } } });
-  const published = readSnapshot(row?.publishedSnapshot);
+  // No row yet: a week published before v2 diffs against what it told staff (the row will be seeded with exactly that).
+  const published = row ? readSnapshot(row.publishedSnapshot) : ((await legacyToldSnapshot(db, locationId, weekStart, tz))?.snapshot ?? null);
   const current = await buildSnapshot(db, locationId, weekStart, tz);
   const typeNames = new Map((await db.shiftType.findMany({ where: { locationId }, select: { id: true, name: true } })).map((t) => [t.id, t.name]));
 
@@ -930,11 +1155,6 @@ export async function previewWeekPublish(input: { locationId: string; weekStart:
   };
 }
 
-/** "Tue 14 Oct" from a YYYY-MM-DD, no timezone involved (the date IS the venue day). */
-function shortDay(iso: IsoDate): string {
-  return dateAt(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-}
-
 /** The notification line for one person: the days and before→after, or a count when it would not fit. */
 export function publishNoticeBody(row: PublishDiffRow, weekStart: IsoDate, firstPublish: boolean): string {
   const limit = 140;
@@ -968,9 +1188,9 @@ export async function publishWeek(
   const outcome = await withAuditedTransaction<PublishOutcome>(
     client,
     async (tx) => {
-      await venueTimezoneIn(tx, locationId);
+      const tz = await venueTimezoneIn(tx, locationId);
       await lockWeek(tx, locationId, weekStart);
-      const row = await findOrCreateWeekRow(tx, locationId, weekStart);
+      const row = await findOrCreateWeekRow(tx, locationId, weekStart, tz);
       if (row.version !== input.expectedVersion) throw new WeekVersionConflictError(row.version);
       const preview = await previewWeekPublish({ locationId, weekStart }, tx);
       if (preview.fingerprint !== input.fingerprint) return { result: 'fingerprint_mismatch', preview };

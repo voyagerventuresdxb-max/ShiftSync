@@ -230,7 +230,8 @@ export async function decideSwapRequest(input: {
     if (err instanceof SwapAlreadyDecidedError) return 'already_decided' as const;
     if (err instanceof WeekVersionConflictError) return 'conflict' as const;
     if (err instanceof WeekPatchRefusedError) {
-      if (err.refusal === 'person_on_leave') return 'target_on_leave' as const;
+      // A pending time-off request for that day counts as leave here: approving a swap never declines someone's request.
+      if (err.refusal === 'person_on_leave' || err.refusal === 'pending_request') return 'target_on_leave' as const;
       if (err.refusal === 'already_has_shift' || err.refusal === 'overlap') return 'target_has_shift' as const;
       // The shift vanished, the cover was deactivated, the day has passed…: nothing to reassign any more.
       return 'conflict' as const;

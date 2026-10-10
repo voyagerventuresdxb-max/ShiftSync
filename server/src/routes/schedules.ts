@@ -22,6 +22,7 @@ import { requireSession, requireManager, ownedOrNotFound, bearerToken } from '..
 import { rosterUploadRateLimiter } from '../middleware/rateLimit.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
 import { notifySchedulePublished, mondayOfWeek } from '../lib/scheduleNotifications.js';
+import { proposeShiftTypes } from '../parsing/proposeShiftTypes.js';
 
 const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -232,6 +233,14 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
     if (uploadId) uploadProgress.advance(uploadId, 'matching');
     const { previewRows, summary, people } = await resolveRowsAgainstDatabase(prisma, locationId, result.rows, { readPeople: result.people });
     const batchId = uploadCache.put(locationId, null, previewRows, { people });
+    // Rota builder v2: the timings this roster uses that the venue has no shift type for yet, named from the
+    // in-file legend where it has one (parsing/proposeShiftTypes.ts). Accepted through POST /api/shift-types/:id/bulk.
+    const venueTypes = await prisma.shiftType.findMany({ where: { locationId }, select: { name: true, ranges: true, archivedAt: true } });
+    const proposedShiftTypes = proposeShiftTypes(
+      result.rows,
+      legend,
+      venueTypes.map((t) => ({ name: t.name, ranges: t.ranges, archived: t.archivedAt !== null })),
+    );
 
     return res.status(200).json({
       batchId,
@@ -244,6 +253,7 @@ schedulesRouter.post('/upload', requireSession, requireManager, rosterUploadRate
       anomalies,
       leaveRecords,
       legend,
+      proposedShiftTypes,
       // Reading (rosterContract.ts): every person read (people with no shifts included), rows
       // that couldn't be read, the week the roster prints, and what each reader did.
       readPeople: result.people ?? [],

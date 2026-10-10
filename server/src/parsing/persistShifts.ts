@@ -3,8 +3,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import { combineDateAndTime, DEFAULT_VENUE_TIMEZONE } from './normalize.js';
-import { snapshotWeek } from '../lib/actions/weekActions.js';
-import { validateRanges, type TimeRange } from '../../../shared/rotaWeek.js';
+import { lockWeek, snapshotWeek } from '../lib/actions/weekActions.js';
+import { leaveBlocksShifts, validateRanges, type LeaveTypeCode, type TimeRange } from '../../../shared/rotaWeek.js';
 import { canonicalRoleName, nameKey, personNameKey, stripRoleOrdinal, TEAM_MEMBER_ROLE_NAME } from './resolveRows.js';
 import type { PreviewRow } from './types.js';
 import type {
@@ -315,6 +315,11 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
     }
   }
 
+  // Rota builder v2: every week this import touches is locked (in date order, the order every multi-week writer
+  // takes them) before reading what is on the rota, so a grid edit cannot land a shift on one of these
+  // person-days between the read below and the write.
+  for (const weekStart of [...new Set(planned.map((p) => mondayOfIso(p.date)))].sort()) await lockWeek(tx, locationId, weekStart);
+
   // What these people already work around those days (cancelled shifts don't count).
   const onRota = new Map<string, { date: string; start: Date; end: Date; ranges: TimeRange[] | null }[]>();
   const knownUserIds = [...new Set(planned.filter((p) => p.plan.existing).map((p) => p.userId))];
@@ -338,6 +343,27 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
         ...(onRota.get(s.userId) ?? []),
         { date: s.date.toISOString().slice(0, 10), start: s.startTime, end: s.endTime, ranges: validateRanges(s.ranges) ? s.ranges : null },
       ]);
+    }
+  }
+
+  // Leave already on those days. Annual / sick / unpaid leave, and any leave from an approved time-off request,
+  // keeps the day: the imported shift is reported back like an overlap. A day off or half day gives way to it.
+  const leaveByPersonDay = new Map<string, { id: string; type: LeaveTypeCode; locked: boolean }>();
+  if (knownUserIds.length > 0 && dates.length > 0) {
+    const leaves = await tx.rotaLeave.findMany({
+      where: {
+        locationId,
+        userId: { in: knownUserIds },
+        date: { gte: new Date(`${dates[0]!}T00:00:00.000Z`), lte: new Date(`${dates[dates.length - 1]!}T00:00:00.000Z`) },
+      },
+      select: { id: true, userId: true, date: true, type: true, timeOffRequestId: true },
+    });
+    for (const l of leaves) {
+      leaveByPersonDay.set(`${l.userId}|${l.date.toISOString().slice(0, 10)}`, {
+        id: l.id,
+        type: l.type,
+        locked: leaveBlocksShifts(l.type) || l.timeOffRequestId !== null,
+      });
     }
   }
 
@@ -371,6 +397,19 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
     const clash = mine.find((s) => s.start < shift.end && shift.start < s.end);
     if (clash) {
       overlapWith(shift, clash);
+      continue;
+    }
+    const leave = leaveByPersonDay.get(`${shift.userId}|${shift.date}`);
+    if (leave?.locked) {
+      overlaps.push({
+        personKey: shift.plan.person.personKey,
+        name: shift.plan.existing?.fullName ?? shift.plan.pending?.name ?? shift.plan.person.name,
+        date: shift.date,
+        startTime: shift.row.startTime,
+        endTime: shift.row.endTime,
+        existing: { date: shift.date, startTime: '', endTime: '' },
+        existingLeave: leave.type,
+      });
       continue;
     }
     // Rota builder v2: one live shift per person per day. A second (non-overlapping) shift on a day the
@@ -428,6 +467,10 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
   const shiftRows = [...rowsByPersonDay.values()];
   const publishedAt = new Date();
 
+  // A day off / half day on a person-day that now holds an imported shift goes: a person-day is one or the other.
+  const yieldedLeaveIds = shiftRows.map((s) => leaveByPersonDay.get(`${s.userId}|${s.date}`)?.id).filter((id): id is string => id !== undefined);
+  if (yieldedLeaveIds.length > 0) await tx.rotaLeave.deleteMany({ where: { id: { in: yieldedLeaveIds } } });
+
   const createdShifts =
     shiftRows.length > 0
       ? await tx.shift.createManyAndReturn({
@@ -460,10 +503,16 @@ export async function persistRosterImport(tx: Tx, input: RosterImportInput): Pro
     })),
   );
 
-  // Imported rows are PUBLISHED straight away, so every week touched gets its v2 week row created/bumped
-  // and its published snapshot written: to the week grid's publish diff, an imported week is a published one.
-  for (const weekStart of [...new Set(shiftRows.map((s) => mondayOfIso(s.date)))].sort()) {
-    await snapshotWeek(tx, locationId, weekStart, { publishedById: input.actorId, publishedAt });
+  // Imported rows are PUBLISHED straight away, so every week touched gets its v2 week row created/bumped and
+  // the imported rows added to its published snapshot (staff were told these): to the week grid's publish diff
+  // they are published, while a manager's drafts in the same week still wait for Publish.
+  const createdIdsByWeek = new Map<string, string[]>();
+  for (const s of createdShifts) {
+    const weekStart = mondayOfIso(s.date.toISOString().slice(0, 10));
+    createdIdsByWeek.set(weekStart, [...(createdIdsByWeek.get(weekStart) ?? []), s.id]);
+  }
+  for (const weekStart of [...createdIdsByWeek.keys()].sort()) {
+    await snapshotWeek(tx, locationId, weekStart, { publishedById: input.actorId, publishedAt, mergeShiftIds: createdIdsByWeek.get(weekStart)! });
   }
 
   // Shifts created per person: every import row that became (part of) a written shift counts once.

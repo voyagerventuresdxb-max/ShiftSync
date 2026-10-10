@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { requireSession, assertOwnsLocation, ownedOrNotFound } from '../middleware/requireSession.js';
 import { withAuditedTransaction } from '../lib/auditLog.js';
+import { findClockInShift } from '../lib/clockInShift.js';
 
 export const attendanceRouter = Router();
 
@@ -23,6 +24,12 @@ class AlreadyClockedInError extends Error {}
  * session naming a different staff member (same on-behalf-of rule as
  * shifts.ts's POST /) — a STAFF session can only ever clock itself in. The
  * effective target user must belong to the caller's own venue.
+ *
+ * Rota builder v2: with no `shiftId`, the log is tied to the person's
+ * PUBLISHED shift for the venue day (lib/clockInShift.ts: start-day rule;
+ * before 06:00 last night's unfinished cross-midnight shift wins), so the
+ * weekly-hours screen never has to read the rota. No such shift: the log is
+ * recorded without one, as before.
  */
 attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
   try {
@@ -30,15 +37,17 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
       req.user!.systemRole === 'STAFF'
         ? req.user!.id
         : (req.body?.userId ? String(req.body.userId).trim() : '') || req.user!.id;
-    const shiftId = req.body?.shiftId ? String(req.body.shiftId).trim() : null;
+    const sentShiftId = req.body?.shiftId ? String(req.body.shiftId).trim() : null;
 
     const user = await prisma.user.findUnique({ where: { id: effectiveUserId } });
     if (!ownedOrNotFound(req, res, user, `Staff member "${effectiveUserId}" not found.`)) return;
 
-    if (shiftId) {
-      const shift = await prisma.shift.findUnique({ where: { id: shiftId } });
-      if (!ownedOrNotFound(req, res, shift, `Shift "${shiftId}" not found.`)) return;
+    if (sentShiftId) {
+      const shift = await prisma.shift.findUnique({ where: { id: sentShiftId } });
+      if (!ownedOrNotFound(req, res, shift, `Shift "${sentShiftId}" not found.`)) return;
     }
+    const shiftId =
+      sentShiftId ?? (await findClockInShift({ userId: effectiveUserId, locationId: user.locationId, now: new Date(), tz: await venueTimezoneFor(user.locationId) }));
 
     // RACE CLOSED. The real enforcement is a DB-level partial unique index
     // (`attendance_logs_one_open_per_user`, prisma/migrations/
@@ -103,7 +112,7 @@ attendanceRouter.post('/clock-in', requireSession, async (req, res) => {
         throw err;
       });
     if (!log) return res.status(409).json({ error: 'Already clocked in — clock out first.' });
-    return res.status(201).json({ id: log.id, clockInAt: log.clockInAt!.toISOString(), clockOutAt: null });
+    return res.status(201).json({ id: log.id, clockInAt: log.clockInAt!.toISOString(), clockOutAt: null, shiftId: log.shiftId });
   } catch (err) {
     console.error('[attendance.clockIn] failed', err);
     return res.status(500).json({ error: 'Unexpected error while clocking in.' });
