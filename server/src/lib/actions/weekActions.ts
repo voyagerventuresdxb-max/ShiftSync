@@ -718,7 +718,7 @@ export async function applyWeekPatchIn(tx: Prisma.TransactionClient, input: Appl
       case 'setLeave': {
         const date = assertDay(op.date, i);
         if (!(await findVenueUser(op.userId, locationId, { activeOnly: true }, tx))) throw refuse('unknown_person', i, `Staff member "${op.userId}" not found.`);
-        if (!Object.hasOwn(LEAVE_LABELS, op.type)) throw refuse('bad_leave_type', i, `Unknown leave type "${String(op.type)}".`);
+        if (!Object.hasOwn(LEAVE_LABELS, op.type)) throw refuse('bad_ranges', i, `Unknown leave type "${String(op.type)}".`);
         const type: LeaveTypeCode = op.type;
         const live = await tx.shift.findFirst({ where: { userId: op.userId, date: dateAt(date), status: { not: 'CANCELLED' } }, select: { id: true } });
         // A leave day never also holds a shift, whatever the type: remove or move the shift first.
