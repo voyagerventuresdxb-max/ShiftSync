@@ -45,6 +45,12 @@ jobs:
         run: scripts/ci-step.sh "migrate" npx prisma migrate deploy
       - name: Migration drift
         run: scripts/ci-step.sh "drift" npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code --script
+      # `npm run test:server` runs through scripts/with-branch-schema.mjs, which points the tests at the
+      # branch's own schema (dev_<branch>), not `public` — so that schema must be migrated and carry the
+      # minimal seed the suite expects (one location, roles, users), exactly like a developer's db:setup.
+      - name: Migrate + seed (branch schema used by server tests)
+        if: always()
+        run: scripts/ci-step.sh "migrate-branch-schema" bash -c 'node scripts/with-branch-schema.mjs "npx prisma migrate deploy" && npm run db:seed'
       - name: Typecheck (client + shared)
         if: always()
         run: scripts/ci-step.sh "typecheck-client" npx tsc --noEmit -p tsconfig.json

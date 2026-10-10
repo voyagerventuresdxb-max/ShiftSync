@@ -21,7 +21,7 @@ if [ $code -ne 0 ]; then
     # enough to tell a new failure from a pre-existing environment one.
     { echo "TOTALS:"; grep '^# \(tests\|suites\|pass\|fail\|cancelled\|skipped\|todo\)' "$clean";
       echo; echo "FAILING FILES:"; grep '^not ok [0-9]* - /' "$clean" | sed -e 's#^not ok [0-9]* - .*/\(server\|src\|scripts\|shared\)/#\1/#';
-      echo; echo "ERRORS (count, message):"; grep -E "^ +error: " "$clean" | sed -e 's/^ *error: *//' -e 's/^\(.\{160\}\).*/\1…/' | sort | uniq -c | sort -rn | head -60;
+      echo; echo "ERRORS (count, message):"; awk '/^ +error: [|>]-?$/ { if ((getline nxt) > 0) { sub(/^ +/, "", nxt); print nxt }; next } /^ +error: / { sub(/^ +error: */, ""); print }' "$clean" | sed -e 's/^\(.\{160\}\).*/\1…/' | sort | uniq -c | sort -rn | head -60;
       echo; echo "FAILING TESTS:"; grep '^ *not ok' "$clean" | grep -v '^not ok [0-9]* - /' | sed -e 's/^ *not ok [0-9]* - //' -e 's/^\(.\{100\}\).*/\1…/' | head -200; } >"$digest"
   else
     tail -n 140 "$clean" >"$digest"
