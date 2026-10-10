@@ -24,7 +24,7 @@ test('a type nobody has is asked as times; times said win over a type word; no t
   assert.ok(none.kind === 'final' && none.intent.intent === 'UNRECOGNIZED');
   assert.ok(none.kind === 'final' && none.intent.summary === 'Your venue has no brunch shift type.');
   const split = shiftTypeFor({ args: { shiftType: 'split' } }, { shiftTypes: [] }, 'x', false);
-  assert.ok(split.kind === 'final' && 'reason' in split.intent && /11 to 3 and 6 to 11/.test(split.intent.reason));
+  assert.ok(split.kind === 'final' && split.intent.intent === 'UNRECOGNIZED' && /11 to 3 and 6 to 11/.test(split.intent.reason));
   assert.equal(shiftTypeFor({ args: { shiftType: 'evening', start: '5', end: '1' } }, ctx, 'Omar on evening, 5 to 1', true).kind, 'none');
   assert.equal(shiftTypeFor({ args: {} }, ctx, 'Omar on bartender Thursday', true).kind, 'none');
 });
