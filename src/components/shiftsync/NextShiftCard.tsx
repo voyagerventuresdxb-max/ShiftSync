@@ -2,8 +2,12 @@ import { Link } from 'react-router-dom';
 import { CalendarClock } from 'lucide-react';
 import { formatShiftDate, useMyShifts } from '../../state/useMyShifts';
 import { offlineLabel } from '../../lib/offlineCache';
+import { myShiftLabels } from '../rota/staff/myShiftLabels';
 
-/** Home's "Your next shift" for a signed-in staff member; shows the offline copy, labelled, when the network is down. */
+/**
+ * Home's "Your next shift" for a signed-in staff member; shows the offline copy, labelled, when the network is down.
+ * With a v2 server it also names the shift type, shows both parts of a split, "+1" for a cross-midnight end and the note.
+ */
 export function NextShiftCard() {
   const { shifts, loading, error, offlineSince } = useMyShifts();
   const next = shifts[0];
@@ -26,12 +30,23 @@ export function NextShiftCard() {
           ) : error ? (
             <p className="hint mt-1">{error}</p>
           ) : next ? (
-            <p className="mt-1 text-sm">
-              <span className="font-medium">{formatShiftDate(next.date)}</span> · {next.roleName} ·{' '}
-              <span data-testid="next-shift-time">
-                {next.startLabel}–{next.endLabel}
-              </span>
-            </p>
+            (() => {
+              const l = myShiftLabels(next);
+              return (
+                <>
+                  <p className="mt-1 text-sm">
+                    <span className="font-medium">{formatShiftDate(next.date)}</span> · {l.typeName ? `${l.typeName} · ` : ''}
+                    {next.roleName} · <span data-testid="next-shift-time">{l.times}</span>
+                    {l.nextDay && (
+                      <span className="rota-next-day ml-1" title="Ends next day">
+                        +1
+                      </span>
+                    )}
+                  </p>
+                  {l.note && <p className="mt-1 text-xs text-muted-foreground">{l.note}</p>}
+                </>
+              );
+            })()
           ) : (
             <p className="hint mt-1">No upcoming shifts scheduled yet.</p>
           )}

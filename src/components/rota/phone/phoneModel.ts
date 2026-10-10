@@ -1,16 +1,19 @@
 import {
   LEAVE_LABELS,
   formatRange,
+  rangesEndNextDay,
   weekDays,
   type IsoDate,
   type LeaveTypeCode,
+  type ShiftTint,
   type ShiftTypeDto,
+  type TimeRange,
   type WeekDocDto,
   type WeekLeaveDto,
   type WeekPatchOp,
   type WeekShiftDto,
 } from '../../../../shared/rotaWeek';
-import { codeOf, dayOfMonth, isWeekend, leaveNeedsClearing, longDate, shortTimes, shortWeekday, typeCodes, type PersonDay } from '../staff/weekModel';
+import { OTHER_DEPARTMENT, codeOf, dayOfMonth, groupPeople, isWeekend, leaveNeedsClearing, longDate, shortTimes, shortWeekday, typeCodes, type DeptGroup, type PersonDay } from '../staff/weekModel';
 
 /**
  * Pure model for the manager phone views (Design board B3): what a one-tap
@@ -328,4 +331,50 @@ export function batchOps(pending: PendingPaint[], dayOf: (userId: string, date: 
     cells.push(snapshotOf(day));
   }
   return { ops, cells };
+}
+
+/** "Mid · 11:00–20:00 +1" for the confirm sheet. */
+export function shiftLine(name: string, ranges: TimeRange[], clock: '12h' | '24h'): string {
+  return `${name} · ${ranges.map((r) => formatRange(r, clock)).join(' · ')}${rangesEndNextDay(ranges) ? ' (+1)' : ''}`;
+}
+
+/** What a person-day held, for the confirm sheet's "Replaces" line; null when it was empty. */
+export function replacesLine(day: PersonDay, week: Pick<WeekDocDto, 'shiftTypes' | 'clock'>): string | null {
+  if (day.shifts.length === 0 && !day.leave) return null;
+  if (day.shifts.length === 0 && day.leave) return LEAVE_LABELS[day.leave.type];
+  return describeDay(day, week.shiftTypes, week.clock);
+}
+
+/**
+ * The Day view's sections: people by department, plus that day's open
+ * shifts filed under their own department — a department with only open
+ * shifts (nobody on its team yet) still gets a section.
+ */
+export function dayGroups(week: Pick<WeekDocDto, 'departments' | 'people' | 'shifts'>, date: IsoDate): { group: DeptGroup; open: WeekShiftDto[] }[] {
+  const out = groupPeople(week).map((group) => ({ group, open: [] as WeekShiftDto[] }));
+  for (const s of week.shifts) {
+    if (s.userId !== null || s.date !== date) continue;
+    const id = s.departmentId ?? OTHER_DEPARTMENT;
+    let entry = out.find((e) => e.group.id === id);
+    if (!entry) {
+      const d = week.departments.find((x) => x.id === id);
+      entry = { group: { id, name: d?.name ?? 'Other', tint: d?.tint ?? 'cream', people: [] }, open: [] };
+      const at = d ? out.findIndex((e) => (week.departments.find((x) => x.id === e.group.id)?.sortOrder ?? Infinity) > d.sortOrder) : -1;
+      if (at >= 0) out.splice(at, 0, entry);
+      else out.push(entry);
+    }
+    entry.open.push(s);
+  }
+  return out;
+}
+
+/** The brushes: the venue's live shift types, then the statuses and Erase (B3 paint palette). */
+export function brushesOf(week: Pick<WeekDocDto, 'shiftTypes'>): { action: CellAction; name: string; tint: ShiftTint | null }[] {
+  return [
+    ...week.shiftTypes.filter((t) => !t.archivedAt).map((t) => ({ action: { kind: 'type', shiftTypeId: t.id } as CellAction, name: t.name, tint: t.tint })),
+    { action: { kind: 'leave', type: 'DAY_OFF' }, name: 'Day off', tint: null },
+    { action: { kind: 'leave', type: 'ANNUAL_LEAVE' }, name: 'Leave', tint: null },
+    { action: { kind: 'leave', type: 'SICK_LEAVE' }, name: 'Sick', tint: null },
+    { action: { kind: 'erase' }, name: 'Erase', tint: null },
+  ];
 }

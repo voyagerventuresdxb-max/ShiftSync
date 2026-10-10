@@ -7,9 +7,10 @@ import { apiFetch } from './http';
 import { ApiError } from './schedules';
 import { withAuth } from './identity';
 import { apiUrl } from '../lib/apiUrl';
+import type { MyShiftV2Fields } from '../../shared/rotaWeek';
 export { ApiError };
 
-export interface MyShiftEntry {
+interface MyShiftEntryV1 {
   id: string;
   date: string;
   startTime: string;
@@ -20,6 +21,14 @@ export interface MyShiftEntry {
   roleName: string;
   status: 'DRAFT' | 'PUBLISHED' | 'COMPLETED' | 'CANCELLED';
 }
+
+/**
+ * Rota builder v2 adds the shift type's name, both ranges of a split, the
+ * "ends next day" flag and the staff-visible note (shared/rotaWeek.ts
+ * `MyShiftV2Fields`). Optional here: an older server omits them and every
+ * screen still reads exactly as before.
+ */
+export type MyShiftEntry = MyShiftEntryV1 & Partial<MyShiftV2Fields>;
 
 /** GET /api/my-shifts — session-resolved via the Bearer token. */
 export async function fetchMyShifts(token: string): Promise<{ pendingApproval: boolean; shifts: MyShiftEntry[] }> {

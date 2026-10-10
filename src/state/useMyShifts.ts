@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useIdentity } from './IdentityContext';
 import { fetchMyShifts, ApiError, type MyShiftEntry } from '../api/myShifts';
+import { onRosterChanged } from '../api/weeks';
 import { isNetworkFailure, loadOffline, saveOffline } from '../lib/offlineCache';
 
 /** "Mon 5 Oct" from a YYYY-MM-DD venue calendar day — pure calendar math, no timezone conversion. */
@@ -19,7 +20,9 @@ interface MyShiftsData {
  * card). Live data is kept as this person's offline copy; when a fetch fails
  * for lack of network, that copy is shown instead with `offlineSince` set to
  * when it was saved, so the screen can say so. Refetches when the device
- * comes back online. A 401 signs out, as before.
+ * comes back online, on window focus and on the roster-changed signal; a
+ * refetch never flips the screen back to "Loading…". A 401 signs out, as
+ * before.
  */
 export function useMyShifts(): MyShiftsData & { loading: boolean; error: string | null; offlineSince: string | null } {
   const { session, logout } = useIdentity();
@@ -29,10 +32,22 @@ export function useMyShifts(): MyShiftsData & { loading: boolean; error: string 
   const [offlineSince, setOfflineSince] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
 
+  // Refetch when the device comes back online, when the window regains focus
+  // (another device may have published), and when any rota surface in this
+  // tab changes the roster (a publish, an approval — Design board E).
   useEffect(() => {
-    const onOnline = () => setReloadTick((n) => n + 1);
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
+    const reload = () => setReloadTick((n) => n + 1);
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') reload();
+    };
+    window.addEventListener('online', reload);
+    window.addEventListener('focus', onFocus);
+    const offRoster = onRosterChanged(reload);
+    return () => {
+      window.removeEventListener('online', reload);
+      window.removeEventListener('focus', onFocus);
+      offRoster();
+    };
   }, []);
 
   useEffect(() => {

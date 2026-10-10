@@ -5,6 +5,7 @@ import { personDay } from '../staff/weekModel';
 import { demoWeek, leave, shift } from '../staff/testWeek';
 import {
   batchOps,
+  dayGroups,
   needsConfirm,
   opsForAction,
   pushUndo,
@@ -223,4 +224,19 @@ test('paint tiles: code letter and short times', () => {
   );
   assert.equal(tileFor(personDay(w, 'b', THU), w.shiftTypes).code, 'Sk');
   assert.equal(tileFor(personDay(w, 'c', THU), w.shiftTypes).tone, 'empty');
+});
+
+test('day sections: open shifts sit under their department, even one with nobody on it', () => {
+  const w = demoWeek({
+    people: demoWeek().people.filter((p) => p.departmentId === 'floor'),
+    shifts: [shift(null, THU, 'e', [{ start: '16:00', end: '01:00' }], { departmentId: 'bar' }), shift(null, THU, 'm', [{ start: '07:00', end: '16:00' }]), shift(null, '2026-10-09', 'm', [{ start: '07:00', end: '16:00' }])],
+  });
+  const sections = dayGroups(w, THU);
+  assert.deepEqual(
+    sections.map((s) => [s.group.name, s.group.people.length, s.open.length]),
+    [
+      ['Floor', 2, 1],
+      ['Bar', 0, 1],
+    ],
+  );
 });
