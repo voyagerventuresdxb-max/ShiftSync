@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
 import { CalendarClock } from 'lucide-react';
-import { formatShiftDate, useMyShifts } from '../../state/useMyShifts';
+import { useMyShifts } from '../../state/useMyShifts';
 import { offlineLabel } from '../../lib/offlineCache';
-import { myShiftLabels } from '../rota/staff/myShiftLabels';
+import { ShiftLine } from '../rota/staff/MyShiftLine';
 
 /**
  * Home's "Your next shift" for a signed-in staff member; shows the offline copy, labelled, when the network is down.
@@ -30,23 +30,7 @@ export function NextShiftCard() {
           ) : error ? (
             <p className="hint mt-1">{error}</p>
           ) : next ? (
-            (() => {
-              const l = myShiftLabels(next);
-              return (
-                <>
-                  <p className="mt-1 text-sm">
-                    <span className="font-medium">{formatShiftDate(next.date)}</span> · {l.typeName ? `${l.typeName} · ` : ''}
-                    {next.roleName} · <span data-testid="next-shift-time">{l.times}</span>
-                    {l.nextDay && (
-                      <span className="rota-next-day ml-1" title="Ends next day">
-                        +1
-                      </span>
-                    )}
-                  </p>
-                  {l.note && <p className="mt-1 text-xs text-muted-foreground">{l.note}</p>}
-                </>
-              );
-            })()
+            <ShiftLine shift={next} testId="next-shift-time" className="mt-1 text-sm" />
           ) : (
             <p className="hint mt-1">No upcoming shifts scheduled yet.</p>
           )}

@@ -70,6 +70,14 @@ interface RunInput {
   noUndo?: boolean;
 }
 
+/** The handlers deferred work calls back into (always this render's versions). */
+interface LatestHandlers {
+  applyAction: (userId: string, d: IsoDate, action: CellAction, opts?: { override?: boolean; stroke?: string | null }) => Promise<unknown>;
+  saveDetail: (shift: WeekShiftDto, edit: ShiftEdit, override?: boolean) => void;
+  openConfirmFor: (userId: string, d: IsoDate, action: CellAction, stroke: string | null) => void;
+  flushPaint: () => void;
+}
+
 const TOAST_MS = 6000;
 const OFFLINE_WRITE = 'You are offline. Changes to the rota are paused until you are back.';
 
@@ -486,7 +494,7 @@ export function ManagerPhoneRota(props: ManagerPhoneRotaProps) {
     });
   };
 
-  const latest = useRef({ applyAction, saveDetail, openConfirmFor, flushPaint });
+  const latest = useRef<LatestHandlers>({ applyAction, saveDetail, openConfirmFor, flushPaint });
   latest.current = { applyAction, saveDetail, openConfirmFor, flushPaint };
 
   // Leaving the screen sends whatever paint is still waiting.

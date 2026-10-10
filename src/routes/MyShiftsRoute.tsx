@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useIdentity } from '../state/IdentityContext';
 import { ApiError } from '../api/myShifts';
-import { formatShiftDate, useMyShifts } from '../state/useMyShifts';
+import { useMyShifts } from '../state/useMyShifts';
 import { offlineLabel } from '../lib/offlineCache';
 import { fetchAvailability, setAvailability, removeAvailability, type AvailabilityMarkDto } from '../api/availability';
 import { currentWeekStart } from '../engine/weekStart';
@@ -10,7 +10,7 @@ import { weekDates, weekdayOf } from '../engine/rosterView';
 import { Announcements } from '../components/shiftsync/Announcements';
 import { Shoutouts } from '../components/shiftsync/Shoutouts';
 import { cn } from '../lib/utils';
-import { myShiftLabels } from '../components/rota/staff/myShiftLabels';
+import { ShiftLine } from '../components/rota/staff/MyShiftLine';
 
 export default function MyShiftsContent() {
   const { session } = useIdentity();
@@ -63,21 +63,11 @@ export default function MyShiftsContent() {
           <p className="hint">No upcoming shifts scheduled yet.</p>
         ) : (
           <ul className="mt-3 space-y-2">
-            {shifts.map((s) => {
-              const l = myShiftLabels(s);
-              return (
-                <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
-                  <span className="font-medium">{formatShiftDate(s.date)}</span> · {l.typeName ? `${l.typeName} · ` : ''}
-                  {s.roleName} · <span data-testid="my-shift-time">{l.times}</span>
-                  {l.nextDay && (
-                    <span className="rota-next-day ml-1" title="Ends next day">
-                      +1
-                    </span>
-                  )}
-                  {l.note && <span className="mt-0.5 block text-xs text-muted-foreground">{l.note}</span>}
-                </li>
-              );
-            })}
+            {shifts.map((s) => (
+              <li key={s.id} className="rounded-lg border border-border px-3 py-2 text-sm">
+                <ShiftLine shift={s} testId="my-shift-time" />
+              </li>
+            ))}
           </ul>
         )}
       </section>
