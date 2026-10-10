@@ -198,7 +198,7 @@ export function ShiftTypeEditor(props: {
                         ],
                 })
               }
-              className="h-5 w-9 accent-[var(--accent)]"
+              className="h-5 w-9 accent-accent"
             />
           </label>
           <div>

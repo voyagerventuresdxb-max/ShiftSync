@@ -179,13 +179,13 @@ export function WeekGrid(props: WeekGridProps) {
                       tabIndex={-1}
                       onClick={() => props.onCoverageJump(d, s.departmentId)}
                       aria-label={`Uncovered: ${s.label.replace('−', 'needs ')} on ${dayMonth(d)}. Show.`}
-                      className="hit-44 inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] px-[7px] py-px text-[10px] font-bold uppercase leading-[1.4] tracking-[0.06em] text-[var(--rota-ochre)]"
+                      className="hit-44 inline-flex items-center gap-1 rounded-full border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] px-[7px] py-px text-[10px] font-bold uppercase leading-[1.4] tracking-[0.06em] text-[color:var(--rota-ochre)]"
                     >
                       <AlertTriangle aria-hidden="true" className="h-[11px] w-[11px]" />
                       {s.label}
                     </button>
                   ))}
-                  {cov.short.length > 2 && <span className="text-[10px] font-bold text-[var(--rota-ochre)]">+{cov.short.length - 2}</span>}
+                  {cov.short.length > 2 && <span className="text-[10px] font-bold text-[color:var(--rota-ochre)]">+{cov.short.length - 2}</span>}
                 </span>
               )}
             </div>
@@ -249,9 +249,9 @@ export function WeekGrid(props: WeekGridProps) {
               className="sticky start-0 z-[2] flex min-h-11 items-center gap-2.5 bg-surface px-2.5 text-[13px] font-bold tracking-[0.04em]"
             >
               <ChevronDown aria-hidden="true" className={cn('h-4 w-4 text-muted-foreground motion-safe:transition-transform', collapsed.open && '-rotate-90')} />
-              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full border border-dashed border-[var(--rota-ochre)]" />
+              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full border border-dashed border-[color:var(--rota-ochre)]" />
               <span>Open shifts</span>
-              <span className={cn('text-xs font-semibold', openShifts.length ? 'text-[var(--rota-ochre)]' : 'text-muted-foreground')}>{openShifts.length} uncovered</span>
+              <span className={cn('text-xs font-semibold', openShifts.length ? 'text-[color:var(--rota-ochre)]' : 'text-muted-foreground')}>{openShifts.length} uncovered</span>
             </button>
           </div>
         </div>
@@ -277,7 +277,7 @@ function PersonRow(props: WeekGridProps & { person: WeekPersonDto | null }) {
           title={person ? `Select ${person.fullName}'s week` : 'Select the open-shifts row'}
           className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 text-left"
         >
-          {person ? avatar(person.initials || initialsOf(person.fullName), compact || tablet ? 'h-7 w-7 text-[11px]' : undefined) : avatar('+', 'border-dashed text-[var(--rota-ochre)]')}
+          {person ? avatar(person.initials || initialsOf(person.fullName), compact || tablet ? 'h-7 w-7 text-[11px]' : undefined) : avatar('+', 'border-dashed text-[color:var(--rota-ochre)]')}
           <span className="flex min-w-0 flex-col">
             <span className={cn('truncate font-semibold', compact ? 'text-[13px]' : 'text-sm')} title={name}>
               {person ? person.fullName : 'Unassigned'}
@@ -405,7 +405,7 @@ const GridCell = memo(function GridCell(p: CellProps) {
           onOpen={p.onChipOpen}
         />
       ))}
-      {contents.shifts.length > visible.length && <span className="text-[11px] font-semibold text-[var(--rota-ochre)]">+{contents.shifts.length - visible.length} more</span>}
+      {contents.shifts.length > visible.length && <span className="text-[11px] font-semibold text-[color:var(--rota-ochre)]">+{contents.shifts.length - visible.length} more</span>}
       {leave && (
         <StatusChip
           type={leave.type}

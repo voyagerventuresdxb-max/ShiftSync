@@ -193,7 +193,7 @@ export function TemplatesDialog(props: {
                     ] as const
                   ).map(([value, text]) => (
                     <label key={value} className={cn('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 text-sm', mode === value ? 'border-accent bg-accent/10' : 'border-border-strong bg-surface')}>
-                      <input type="radio" name="template-mode" checked={mode === value} onChange={() => setMode(value)} className="accent-[var(--accent)]" />
+                      <input type="radio" name="template-mode" checked={mode === value} onChange={() => setMode(value)} className="accent-accent" />
                       {text}
                     </label>
                   ))}

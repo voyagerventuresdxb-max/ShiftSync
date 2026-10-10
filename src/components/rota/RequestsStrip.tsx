@@ -85,11 +85,11 @@ export function RequestsStrip(props: {
 
   const head = (initials: string, title: string, sub: string, pill: React.ReactNode, ochre = false) => (
     <div className="flex min-w-0 items-center gap-2.5">
-      <span aria-hidden="true" className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-full border bg-surface text-xs font-bold', ochre ? 'border-dashed border-[var(--rota-ochre)] text-[var(--rota-ochre)]' : 'border-border-strong')}>
+      <span aria-hidden="true" className={cn('grid h-8 w-8 shrink-0 place-items-center rounded-full border bg-surface text-xs font-bold', ochre ? 'border-dashed border-[color:var(--rota-ochre)] text-[color:var(--rota-ochre)]' : 'border-border-strong')}>
         {initials}
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className={cn('truncate text-[13px] font-semibold', ochre && 'text-[var(--rota-ochre)]')}>{title}</span>
+        <span className={cn('truncate text-[13px] font-semibold', ochre && 'text-[color:var(--rota-ochre)]')}>{title}</span>
         <span className="truncate text-xs text-muted-foreground">{sub}</span>
       </span>
       {pill}
@@ -99,7 +99,7 @@ export function RequestsStrip(props: {
     <span
       className={cn(
         'shrink-0 rounded-full border px-[7px] py-px text-[10px] font-bold uppercase leading-[1.4] tracking-[0.06em]',
-        tone === 'ochre' && 'border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] text-[var(--rota-ochre)]',
+        tone === 'ochre' && 'border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] text-[color:var(--rota-ochre)]',
         tone === 'gold' && 'border-accent/55 text-accent',
         tone === 'sage' && 'border-success/55 text-success',
       )}

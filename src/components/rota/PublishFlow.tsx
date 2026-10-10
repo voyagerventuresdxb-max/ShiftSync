@@ -168,7 +168,7 @@ export function PublishFlow(props: {
           )}
           {urgent.map((r) => (
             <p key={r.userId} className="flex items-start gap-2 rounded-xl border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] p-3 text-sm">
-              <PhoneCall aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-[var(--rota-ochre)]" />
+              <PhoneCall aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--rota-ochre)]" />
               {r.fullName.split(/\s+/)[0]}’s shift starts in under 24 h. They get an in-app notice now; call them too.
             </p>
           ))}
@@ -291,7 +291,7 @@ export function PublishFlow(props: {
                 <span
                   className={cn(
                     'shrink-0 rounded-full border px-[7px] py-px text-[10px] font-bold uppercase tracking-[0.06em]',
-                    isUrgent ? 'border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] text-[var(--rota-ochre)]' : 'border-accent/55 text-accent',
+                    isUrgent ? 'border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] text-[color:var(--rota-ochre)]' : 'border-accent/55 text-accent',
                   )}
                 >
                   {isUrgent ? 'Urgent' : data.firstPublish ? `${r.changes.length} new` : plural(r.changes.length, 'change')}
@@ -306,16 +306,16 @@ export function PublishFlow(props: {
           })}
           {data.uncovered.map((u) => (
             <li key={`${u.date}-${u.departmentId}`} className="flex min-w-0 items-center gap-3 rounded-xl border border-[color-mix(in_oklab,var(--rota-ochre)_45%,transparent)] p-3">
-              <span aria-hidden="true" className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-[var(--rota-ochre)] text-xs font-bold text-[var(--rota-ochre)]">
+              <span aria-hidden="true" className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-dashed border-[color:var(--rota-ochre)] text-xs font-bold text-[color:var(--rota-ochre)]">
                 !
               </span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-[var(--rota-ochre)]">Still uncovered</p>
+                <p className="truncate text-sm font-semibold text-[color:var(--rota-ochre)]">Still uncovered</p>
                 <p className="text-xs text-muted-foreground">
                   {shortDay(u.date)} · {u.departmentName} needs {u.short} more
                 </p>
               </div>
-              <span className="shrink-0 rounded-full border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] px-[7px] py-px text-[10px] font-bold uppercase tracking-[0.06em] text-[var(--rota-ochre)]">Open</span>
+              <span className="shrink-0 rounded-full border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] px-[7px] py-px text-[10px] font-bold uppercase tracking-[0.06em] text-[color:var(--rota-ochre)]">Open</span>
             </li>
           ))}
         </ul>

@@ -188,7 +188,7 @@ export function ShiftSheet(props: {
     <Dialog title={title} eyebrow={shift ? 'Shift' : userId ? 'Assign' : 'Open shift'} onClose={onClose} width="md" dismissable={!busy}>
       <div className="space-y-4">
         <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-raised p-3">
-          <span aria-hidden="true" className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full border bg-surface text-xs font-bold', person ? 'border-border-strong' : 'border-dashed border-[var(--rota-ochre)] text-[var(--rota-ochre)]')}>
+          <span aria-hidden="true" className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-full border bg-surface text-xs font-bold', person ? 'border-border-strong' : 'border-dashed border-[color:var(--rota-ochre)] text-[color:var(--rota-ochre)]')}>
             {person?.initials ?? '+'}
           </span>
           <div className="min-w-0 flex-1">
@@ -279,7 +279,7 @@ export function ShiftSheet(props: {
               <span className="text-sm font-semibold">Split shift</span>
               <span className="text-xs text-muted-foreground">Two time ranges in one shift</span>
             </span>
-            <input type="checkbox" role="switch" checked={split} onChange={toggleSplit} className="h-5 w-9 accent-[var(--accent)]" />
+            <input type="checkbox" role="switch" checked={split} onChange={toggleSplit} className="h-5 w-9 accent-accent" />
           </label>
         </div>
 

@@ -89,7 +89,7 @@ export function CopyWeekDialog(props: {
         : `${nameOf(a.userId)} · ${a.reason === 'leave' ? 'on leave' : 'asked for time off'} ${a.dates.map(shortDay).join(', ')}`;
     return (
       <li key={`${a.userId}-${a.reason}`} className="flex items-start gap-2.5 rounded-xl border border-border bg-surface-raised p-3">
-        <span className="mt-0.5 shrink-0 rounded-full border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] px-[7px] py-px text-[10px] font-bold uppercase tracking-[0.06em] text-[var(--rota-ochre)]">{pill}</span>
+        <span className="mt-0.5 shrink-0 rounded-full border border-[color-mix(in_oklab,var(--rota-ochre)_55%,transparent)] px-[7px] py-px text-[10px] font-bold uppercase tracking-[0.06em] text-[color:var(--rota-ochre)]">{pill}</span>
         <span className="min-w-0">
           <span className="block text-sm font-semibold">{who}</span>
           <span className="block text-xs text-muted-foreground">
@@ -136,7 +136,7 @@ export function CopyWeekDialog(props: {
                 ] as const
               ).map(([value, text]) => (
                 <label key={value} className={cn('flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border px-3 text-sm', mode === value ? 'border-accent bg-accent/10' : 'border-border-strong bg-surface-raised')}>
-                  <input type="radio" name="copy-mode" value={value} checked={mode === value} onChange={() => setMode(value)} className="accent-[var(--accent)]" />
+                  <input type="radio" name="copy-mode" value={value} checked={mode === value} onChange={() => setMode(value)} className="accent-accent" />
                   {text}
                 </label>
               ))}
@@ -144,7 +144,7 @@ export function CopyWeekDialog(props: {
           </fieldset>
           <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-surface-raised px-3 text-sm">
             Copy day-off statuses too
-            <input type="checkbox" role="switch" checked={copyStatuses} onChange={(e) => setCopyStatuses(e.target.checked)} className="h-5 w-9 accent-[var(--accent)]" />
+            <input type="checkbox" role="switch" checked={copyStatuses} onChange={(e) => setCopyStatuses(e.target.checked)} className="h-5 w-9 accent-accent" />
           </label>
           {(plan.skippedPast > 0 || plan.keptExisting > 0 || plan.dropped > 0) && (
             <p className="text-xs text-muted-foreground">
