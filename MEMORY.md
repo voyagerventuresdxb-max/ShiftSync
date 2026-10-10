@@ -916,3 +916,16 @@
 ## Next Sprint Goals (#52 follow-ups — need a human with Railway access, before 2026-12-01)
 - [ ] Run `docs/railway-deploy-procedure.md` §3 on a duplicated non-prod environment. Record whether a failed healthcheck keeps the previous deploy serving with the uploads volume attached (the docs don't say). Then do the §3.5 production cutover and close #52.
 - [ ] Set `NODE_ENV=production` explicitly on `shiftsync-api`. Switch push on per `docs/push-go-live.md` (one VAPID pair per environment, real-phone test on Android + iPhone after #43).
+
+## Rota builder v2 — server (2026-10-10, branch `feat/rota-builder-v2-server`)
+- [x] **Week model reviewed and finished.** One document per (venue, Monday): `shifts` + `rota_leaves`, versioned by `rota_weeks.version`; every roster writer goes through `weekActions.applyWeekPatch(In)` under the per-week advisory lock (multi-week writers — roster import, time-off approval — lock in date order). Full contract and runbook: `docs/rota-builder-v2.md`.
+  - **Staff see what they were told:** `toldShiftOf` renders shifts/leaves from `published_snapshot` for STAFF/kiosk in `GET /api/weeks`, `GET /api/my-shifts` and the legacy `GET /api/shifts`; managers see live rows. A week published before v2 is adopted (PUBLISHED, v1, snapshot of its PUBLISHED rows) on its first write.
+  - **New routes:** `/api/shift-types/:locationId` (GET, POST, `/bulk`, PATCH `/:id`, POST `/:id/archive`), `/api/departments/:locationId` (GET, POST, PATCH `/:id`, PUT `/:id/minimums`), `/api/time-off` (POST, GET `/:locationId`, PATCH `/:id` — approve turns that person's shifts into open shifts and marks locked leave through the week patch). All in `accessMatrix.test.ts`.
+  - **Also:** `/api/my-shifts` adds `MyShiftV2Fields`, published only; clock-in auto-matches the published shift (`lib/clockInShift.ts`, start-day rule, 00:00–06:00 prefers last night's unfinished shift); upload returns `proposedShiftTypes` (`parsing/proposeShiftTypes.ts`); template entries take `shiftTypeId`/`ranges`/`shiftNote`; demo seed adds departments, shift types, a Saturday Bar minimum.
+  - **Migration `20261010010000_rota_builder_v2`** aborts on duplicate live person-days; the park → deploy → fold SQL runbook in the doc was verified on a scratch Postgres.
+  - **CI:** `rota-v2-ci.yml` now migrates + seeds the branch schema `test:server` uses (it pointed at an empty `dev_<branch>` schema before, so ~500 DB tests failed on missing tables) and no longer sets `PUSH_TRANSPORT=record`; `scripts/ci-step.sh` splits its digest over several annotations.
+
+## Next Sprint Goals (rota builder v2 server follow-ups)
+- [ ] Voice reads/writes onto the week model (WHO_IS_OFF, COVERAGE, REQUEST_TIME_OFF via `createTimeOffRequest`), told view for staff voice reads.
+- [ ] A route to reverse an approved time-off request; audit actions for department/minimum changes.
+- [ ] Attendance / floor-plan readers on the told view if pilots find the live-row behaviour confusing.
