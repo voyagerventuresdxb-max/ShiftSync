@@ -6,6 +6,7 @@ import { registerNativeBackButton } from './lib/nativeBack';
 import { installKeyboardInsetScroll } from './lib/keyboardInset';
 import './styles/global.css';
 import './styles/tailwind.css';
+import './styles/rota.css';
 
 // Safe to call unconditionally on every load — registering a service
 // worker never prompts the user for anything. The actual push-permission

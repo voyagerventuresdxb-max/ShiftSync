@@ -1,0 +1,98 @@
+/*
+ * Rota builder v2 chip tints. Built ONLY from the app's colour variables
+ * (no literals), so this file passes PR #150's palette gate unchanged and
+ * picks up its champagne/sage/clay values automatically once it merges.
+ * Design: canvas boards A1 (tokens) and A3 (rota components).
+ */
+:root {
+  --rota-gold: var(--accent);
+  --rota-sage: var(--success);
+  --rota-clay: color-mix(in oklab, var(--danger) 55%, var(--accent));
+  --rota-ochre: color-mix(in oklab, var(--accent) 60%, var(--danger));
+  --rota-sand: color-mix(in oklab, var(--text) 60%, var(--accent));
+  --rota-cream: var(--text);
+}
+
+/* Working shift chip: tinted fill + border, bone text. Markers stay inside the border. */
+.rota-chip {
+  --tint: var(--rota-gold);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 6px 7px 6px 8px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--tint) 40%, transparent);
+  background: color-mix(in oklab, var(--tint) 22%, transparent);
+  color: var(--text);
+  line-height: 1.2;
+  text-align: left;
+}
+.rota-chip[data-tint='gold'] { --tint: var(--rota-gold); }
+.rota-chip[data-tint='sage'] { --tint: var(--rota-sage); }
+.rota-chip[data-tint='clay'] { --tint: var(--rota-clay); }
+.rota-chip[data-tint='ochre'] { --tint: var(--rota-ochre); }
+.rota-chip[data-tint='sand'] { --tint: var(--rota-sand); background: color-mix(in oklab, var(--tint) 14%, transparent); }
+.rota-chip[data-tint='cream'] { --tint: var(--rota-cream); background: color-mix(in oklab, var(--tint) 10%, transparent); }
+.rota-chip[data-open='true'] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--rota-ochre) 70%, transparent);
+  color: var(--rota-ochre);
+}
+.rota-chip[data-ghost='true'] { opacity: 0.5; border-style: dashed; }
+.rota-chip[data-compact='true'] { min-height: 34px; padding: 3px 7px 3px 8px; line-height: 1.15; }
+.rota-chip__name { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; white-space: nowrap; min-width: 0; padding-right: 8px; }
+.rota-chip__time { display: flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 500; color: color-mix(in oklab, var(--text) 86%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rota-chip[data-compact='true'] .rota-chip__name { font-size: 12px; }
+.rota-chip[data-compact='true'] .rota-chip__time { font-size: 11px; }
+.rota-next-day { font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em; padding: 0 3px; border-radius: 4px; background: color-mix(in oklab, var(--text) 14%, transparent); color: var(--text); line-height: 1.45; }
+.rota-edited-dot { position: absolute; right: 6px; top: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 25%, transparent); }
+
+/* Status chips: outlines, hatch, half-fill — never a solid fill, so "not working" reads even in greyscale. */
+.rota-status {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 6px 14px 6px 10px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in oklab, var(--text) 18%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.25;
+}
+.rota-status[data-compact='true'] { min-height: 34px; padding: 3px 14px 3px 8px; font-size: 10px; }
+.rota-status[data-type='ANNUAL_LEAVE'] { border: 1px solid color-mix(in oklab, var(--rota-sand) 55%, transparent); color: var(--rota-sand); background: color-mix(in oklab, var(--rota-sand) 8%, transparent); }
+.rota-status[data-type='SICK_LEAVE'] { border: 1px solid color-mix(in oklab, var(--rota-clay) 65%, transparent); color: var(--rota-clay); }
+.rota-status[data-type='UNPAID_LEAVE'] { border: 1px solid color-mix(in oklab, var(--text) 18%, transparent); background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in oklab, var(--text) 7%, transparent) 5px 7px); }
+.rota-status[data-type='HALF_DAY'] { border: 1px solid color-mix(in oklab, var(--rota-gold) 35%, transparent); color: var(--text); background: linear-gradient(90deg, color-mix(in oklab, var(--rota-gold) 22%, transparent) 0 50%, transparent 50%); }
+.rota-status[data-requested='true'] { border: 1px dashed color-mix(in oklab, var(--rota-ochre) 75%, transparent); color: var(--rota-ochre); }
+
+/* Cell states (board A3). */
+.rota-cell { position: relative; display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; min-height: 64px; padding: 6px; box-sizing: border-box; }
+.rota-cell[data-today='true'] { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+.rota-cell[data-weekend='true'] { background: color-mix(in oklab, var(--text) 3.5%, transparent); }
+.rota-cell[data-today='true'][data-weekend='true'] { background: color-mix(in oklab, var(--accent) 8%, transparent); }
+.rota-cell[data-selected='true'] { box-shadow: inset 0 0 0 2px var(--accent); }
+.rota-cell[data-highlight='true'] { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in oklab, var(--accent) 14%, transparent); }
+.rota-cell[data-drop='ok'] { box-shadow: inset 0 0 0 2px var(--success); background: color-mix(in oklab, var(--success) 10%, transparent); }
+.rota-cell[data-drop='conflict'] { box-shadow: inset 0 0 0 2px var(--rota-ochre); background: color-mix(in oklab, var(--rota-ochre) 8%, transparent); }
+.rota-cell[data-drop='invalid'] { box-shadow: inset 0 0 0 2px var(--danger); background: color-mix(in oklab, var(--danger) 6%, transparent); }
+.rota-cell[data-uncovered='true'] { background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in oklab, var(--rota-ochre) 7%, transparent) 6px 8px); }
+.rota-cell[data-compact='true'] { min-height: 44px; padding: 4px; gap: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rota-chip, .rota-status, .rota-cell { transition: none !important; animation: none !important; }
+}

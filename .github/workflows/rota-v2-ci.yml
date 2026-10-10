@@ -4,7 +4,7 @@ name: Rota v2 checks
 # Runs against a throwaway Postgres service; never touches a deployed database.
 on:
   push:
-    branches: [feat/rota-builder-v2]
+    branches: ['feat/rota-builder-v2', 'feat/rota-builder-v2-**']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
       - name: Migrate (public schema)
         run: scripts/ci-step.sh "migrate" npx prisma migrate deploy
       - name: Migration drift
-        run: scripts/ci-step.sh "drift" npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "postgresql://dev:dev@localhost:5432/shiftsync_dev?schema=shadow_ci" --exit-code --script
+        run: scripts/ci-step.sh "drift" npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code --script
       - name: Typecheck (client + shared)
         if: always()
         run: scripts/ci-step.sh "typecheck-client" npx tsc --noEmit -p tsconfig.json
