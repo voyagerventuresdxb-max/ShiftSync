@@ -340,3 +340,83 @@ export function addDays(iso: IsoDate, n: number): IsoDate {
 export function weekDays(weekStart: IsoDate): IsoDate[] {
   return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 }
+
+// ---------------------------------------------------------------------------
+// Supporting endpoints (rota builder v2). Server: routes/shiftTypes.ts,
+// routes/departments.ts, routes/timeOff.ts. Client: src/api/rotaSetup.ts.
+// All venue-scoped by the caller's session; writes are manager-only except
+// POST /api/time-off (staff file for themselves).
+// ---------------------------------------------------------------------------
+
+/** GET /api/shift-types/:locationId → { shiftTypes }. POST same path → { shiftType }. */
+export interface ShiftTypeInput {
+  name: string;
+  ranges: TimeRange[];
+  tint: ShiftTint;
+  sortOrder?: number;
+}
+/** PATCH /api/shift-types/:locationId/:id (partial ShiftTypeInput) → { shiftType }; POST …/:id/archive → { shiftType }. */
+export type ShiftTypePatch = Partial<ShiftTypeInput>;
+/**
+ * POST /api/shift-types/:locationId/bulk { shiftTypes: ShiftTypeInput[] } → { shiftTypes }.
+ * Accepts the roster import's proposals in one go; a name that already exists is skipped, not duplicated.
+ */
+export interface ProposedShiftType extends ShiftTypeInput {
+  /** How many imported cells used these exact times. */
+  count: number;
+}
+
+/** GET /api/departments/:locationId → { departments, minimums }. */
+export interface DepartmentMinimumDto {
+  departmentId: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekday: number;
+  minHeadcount: number;
+}
+/** POST /api/departments/:locationId { name, tint } → { department }; PATCH …/:id { name?, tint?, sortOrder?, roleIds? } → { department }. */
+export interface DepartmentInput {
+  name: string;
+  tint: ShiftTint;
+  sortOrder?: number;
+  /** Replaces the set of roles grouped under this department. */
+  roleIds?: string[];
+}
+/** PUT /api/departments/:locationId/:id/minimums { minimums: { weekday, minHeadcount }[] } → { minimums }. */
+
+/** POST /api/time-off { userId?, startDate, endDate, reason? } → { request }. Staff may only file for themselves. */
+export interface TimeOffRequestDto {
+  id: string;
+  userId: string;
+  fullName: string;
+  startDate: IsoDate;
+  endDate: IsoDate;
+  reason: string | null;
+  status: 'pending' | 'approved' | 'declined';
+  createdAt: string;
+  reviewedAt: string | null;
+  managerNote: string | null;
+}
+/** GET /api/time-off/:locationId?status=pending|all → { requests }. Staff see only their own. */
+/**
+ * PATCH /api/time-off/:id { decision, leaveType?, note? } (manager) →
+ * 200 { result: 'ok', request, versions: { [weekStart]: version } } | 409 { result: 'not_pending' } | 422 { result: 'refused', message }.
+ * Approve: every day of the range becomes a RotaLeave (default ANNUAL_LEAVE) through the week patch — any shift on
+ * those days becomes an open shift in the same version bump — and the requester is told.
+ */
+export interface TimeOffDecisionInput {
+  decision: 'approve' | 'decline';
+  leaveType?: LeaveTypeCode;
+  note?: string | null;
+}
+
+/**
+ * GET /api/my-shifts (existing route) — v2 adds these fields to each item so
+ * the staff week, next-shift card and kiosk can show the type, both ranges of
+ * a split, the "+1" marker and the staff-visible note. Published shifts only.
+ */
+export interface MyShiftV2Fields {
+  shiftTypeName: string | null;
+  ranges: TimeRange[];
+  endsNextDay: boolean;
+  note: string | null;
+}
